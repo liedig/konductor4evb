@@ -14,96 +14,108 @@ All domain details and all domain registration requests and their status SHALL b
 
 ### Requirement: Domain management events
 
-The domain management capability SHALL emit the following events. Each event SHALL have a well-defined type (or name), a consistent payload, and a defined emitter (control plane API layer or domain-creation workflow). Events SHALL be emitted on the event bus or channel designated for control plane domain lifecycle so that workflows and subscribers can react.
+The domain management capability SHALL emit the following events. Each event SHALL have a well-defined type (or name), a consistent payload, and a defined emitter (control plane command handler or domain-creation workflow). Events SHALL be emitted on the event bus or channel designated for control plane domain lifecycle so that workflows and subscribers can react. Command outcome events (`*Succeeded` / `*Failed`) are the primary mechanism by which callers learn the result of write operations.
 
 #### Events emitted by the control plane
 
 | Event type | When emitted | Purpose | Minimum payload |
 |------------|----------------|---------|------------------|
-| `DomainRegistrationRequested` | After a register-domain request is accepted and persisted with status PendingApproval | Audit and optional approval-workflow triggers | `requestId`, `domainId` or `domainName`, `ownerAccountId`, `requestedAt`, `requestedBy` |
-| `DomainRegistrationApproved` | After an authorized approver approves a request in PendingApproval state | Triggers the domain resource-creation workflow (e.g., Step Functions) | `requestId`, `domainId`, `domainName`, `ownerAccountId`, `approvedAt`, `approvedBy` |
+| `RegisterDomainSucceeded` | After the register-domain command is successfully processed | Confirms domain registration was accepted; callers subscribe to learn the outcome | `requestId`, `domainId`, `domainName`, `ownerAccountId`, `status`, `createdAt` |
+| `RegisterDomainFailed` | After the register-domain command fails (e.g., duplicate name, validation error) | Surfaces processing failure to callers and audit | `domainName`, `ownerAccountId`, `reason`, `failedAt` |
+| `DomainRegistrationApproved` | After an authorized approver approves a request in PendingApproval state | Triggers the domain resource-creation workflow | `requestId`, `domainId`, `domainName`, `ownerAccountId`, `approvedAt`, `approvedBy` |
 | `DomainRegistrationRejected` | After an authorized approver rejects a request in PendingApproval state | Audit and notifications; no resource workflow triggered | `requestId`, `domainId`, `domainName`, `rejectedAt`, `rejectedBy`, optional `reason` |
-| `DomainUpdated` | After a domain’s mutable metadata or configuration is successfully updated (e.g., description, tags, suspend/resume) | Audit and downstream sync | `domainId`, `updatedAt`, `updatedBy`, optional summary of changed fields |
-| `DomainDeletionRequested` | After a delete-domain request is accepted and soft-delete or cleanup is initiated | Audit and cleanup workflows | `domainId`, `requestedAt`, `requestedBy`, optional `forceDelete` |
-| `DomainDeleted` | After a domain is permanently removed (e.g., after retention window or cleanup completed) | Audit and downstream cleanup | `domainId`, `deletedAt` |
+| `UpdateDomainSucceeded` | After the update-domain command is successfully processed | Confirms domain update was applied | `domainId`, `updatedAt`, `changedFields` |
+| `UpdateDomainFailed` | After the update-domain command fails (e.g., domain not found, invalid state transition) | Surfaces processing failure to callers and audit | `domainId`, `reason`, `failedAt` |
+| `DomainDeactivated` | After a domain transitions to DEACTIVATED status | Audit, notifications, downstream cleanup | `domainId`, `domainName`, `ownerAccountId`, `deactivatedAt`, `deactivatedBy`, `previousStatus` |
+| `DecideRegistrationSucceeded` | After the decide-registration command is successfully processed | Confirms decision was recorded and Step Functions callback sent | `requestId`, `decision`, `decidedAt` |
+| `DecideRegistrationFailed` | After the decide-registration command fails (e.g., request not found, expired task token) | Surfaces processing failure to callers and audit | `requestId`, `reason`, `failedAt` |
 
 #### Events emitted by the domain-creation workflow
 
 | Event type | When emitted | Purpose | Minimum payload |
 |------------|----------------|---------|------------------|
-| `DomainCreationStarted` | When the Step Functions (or equivalent) workflow begins execution for an approved request | Visibility and metrics | `requestId`, `domainId`, `workflowExecutionId`, `startedAt` |
-| `DomainCreationSucceeded` | When the workflow completes successfully and all resources are provisioned | Control plane consumes this to set domain to Active and persist resource ARNs | `requestId`, `domainId`, `workflowExecutionId`, `completedAt`, `resourceArns` (event buses, schema registry, DLQ, etc.) |
-| `DomainCreationFailed` | When the workflow fails (step failure, timeout, or AWS API error) | Control plane consumes this to set domain to failed and persist error detail | `requestId`, `domainId`, `workflowExecutionId`, `failedAt`, `errorCode`, `errorMessage`, optional `failedStep` |
+| `DomainCreationStarted` | When the Step Functions workflow begins execution for an approved request | Visibility and metrics | `requestId`, `domainId`, `workflowExecutionId`, `startedAt` |
+| `DomainCreationSucceeded` | When the workflow completes successfully and all resources are provisioned | Control plane consumes this to set domain to Active and persist resource ARNs | `requestId`, `domainId`, `workflowExecutionId`, `completedAt`, `resourceArns` |
+| `DomainCreationFailed` | When the workflow fails | Control plane consumes this to set domain to failed with error detail | `requestId`, `domainId`, `workflowExecutionId`, `failedAt`, `errorCode`, `errorMessage`, optional `failedStep` |
 
 #### Scenario: Control plane emits approval event and workflow is triggered
 
 - **WHEN** a registration request is approved
 - **THEN** the control plane SHALL emit `DomainRegistrationApproved` with the minimum payload above
-- **AND THEN** the domain-creation workflow (e.g., Step Functions) SHALL be invoked in response to this event so that resource provisioning runs asynchronously
+- **AND THEN** the domain-creation workflow SHALL be invoked in response to this event so that provisioning runs asynchronously
 
 #### Scenario: Workflow emits completion events consumed by control plane
 
 - **WHEN** the domain-creation workflow completes (success or failure)
 - **THEN** the workflow SHALL emit `DomainCreationSucceeded` or `DomainCreationFailed` with the minimum payload above
-- **AND THEN** the control plane SHALL consume that event and update the domain record in DynamoDB accordingly (Active with resource ARNs, or failed with error details)
+- **AND THEN** the control plane SHALL consume that event and update the domain record in DynamoDB accordingly
+
+#### Scenario: Deactivation event emitted
+
+- **WHEN** a domain transitions to DEACTIVATED status
+- **THEN** the control plane SHALL emit a `DomainDeactivated` event with the minimum payload defined above
+- **AND THEN** downstream consumers SHALL be able to react to the deactivation
+
+#### Scenario: Command outcome events emitted for write operations
+
+- **WHEN** a write command (register, update, decide) is processed by the command handler
+- **THEN** the handler SHALL emit either a `*Succeeded` or `*Failed` outcome event to the control plane bus
+- **AND THEN** callers and downstream systems SHALL subscribe to these events to learn the result of their commands
 
 ### Requirement: Register Domain
 
-Domain management is an administrative function of the control plane. The control plane SHALL assume it already has the necessary permissions to create cross-account resources. Platform teams SHALL be able to request registration of a new domain. Each request SHALL go through an approval process; only after approval SHALL the resource-creation workflow be triggered. All domain details and request state SHALL be stored in DynamoDB.
+Domain management is an administrative function of the control plane. Platform teams SHALL be able to request registration of a new domain by submitting a command that is processed asynchronously. The API SHALL accept the command and return immediately; the outcome SHALL be communicated via an EventBridge event. Each request SHALL go through an approval process; only after approval SHALL the resource-creation workflow be triggered. All domain details and request state SHALL be stored in DynamoDB.
 
-#### Scenario: Registration request submitted and stored
+#### Scenario: Registration command accepted and enqueued
 
 - **WHEN** an authorized administrator calls the register-domain API with a valid domain name, description, owner account, and optional tags
-- **THEN** the control plane SHALL validate the request against naming and uniqueness rules
-- **AND THEN** persist the registration request in DynamoDB with a status indicating it is pending approval (e.g., PendingApproval) and return a domain identifier or request identifier and that status
-- **AND THEN** not emit any workflow-triggering event until the request has been approved
+- **THEN** API Gateway SHALL validate the request structure and enqueue the command to the domains SQS queue
+- **AND THEN** the API SHALL return `202 Accepted` with `{"message":"OK"}`
+- **AND THEN** the caller SHALL NOT receive a synchronous domain ID or request ID in the response
+
+#### Scenario: Registration command processed and succeeded event emitted
+
+- **WHEN** the domain command handler processes a register-domain message from the queue
+- **THEN** the handler SHALL validate business rules (naming, uniqueness)
+- **AND THEN** persist the registration request in DynamoDB with status PendingApproval
+- **AND THEN** start the approval Step Functions workflow
+- **AND THEN** emit `RegisterDomainSucceeded` to the control plane event bus
+
+#### Scenario: Registration command fails business validation
+
+- **WHEN** the domain command handler processes a register-domain message and a business rule is violated (e.g., duplicate domain name)
+- **THEN** the handler SHALL emit `RegisterDomainFailed` to the control plane event bus with the reason
+- **AND THEN** NOT persist any domain record or start any workflow
+
+#### Scenario: Registration request rejected due to structural validation
+
+- **WHEN** a caller invokes the register-domain API with missing required fields or invalid field formats
+- **THEN** API Gateway SHALL reject the request synchronously with `400 Bad Request`
+- **AND THEN** the malformed request SHALL NOT be enqueued
 
 #### Scenario: Registration request approved and workflow initiated
 
 - **WHEN** a registration request in pending-approval state is approved by an authorized approver
-- **THEN** the control plane SHALL update the request record in DynamoDB to a status that indicates provisioning has started (e.g., Approved or Creating)
-- **AND THEN** emit an event that initiates the domain-creation workflow (e.g., an AWS Step Functions workflow) so that provisioning of event buses, schema registry, dead letter queue, IAM and resource policies, and monitoring is performed asynchronously
+- **THEN** the control plane SHALL update the request record in DynamoDB and emit `DomainRegistrationApproved`
+- **AND THEN** the domain-creation workflow SHALL be triggered
 
 #### Scenario: Registration request rejected during approval
 
-- **WHEN** a registration request in pending-approval state is rejected by an authorized approver
-- **THEN** the control plane SHALL update the request record in DynamoDB to a rejected status
-- **AND THEN** not emit any workflow-triggering event
-- **AND THEN** the domain SHALL remain non-active and list-pending-domain-activations (and describe) SHALL reflect the rejected status
-
-#### Scenario: Registration request rejected due to validation
-
-- **WHEN** a caller invokes the register-domain API with an invalid name, duplicate name, or malformed metadata
-- **THEN** the control plane SHALL reject the request synchronously
-- **AND THEN** persist no record in DynamoDB and emit no workflow-triggering event
-- **AND THEN** return a clear error that identifies which fields are invalid
-
-#### Scenario: Caller not authorized to register domains
-
-- **WHEN** a caller who lacks permission to perform domain management operations invokes the register-domain API
-- **THEN** the control plane SHALL reject the request
-- **AND THEN** return an access-denied error without emitting any event or creating any state
+- **WHEN** a registration request in pending-approval state is rejected
+- **THEN** the control plane SHALL update the request record to rejected status
+- **AND THEN** emit `DomainRegistrationRejected`
 
 #### Scenario: Workflow completes successfully
 
-- **WHEN** the domain-creation workflow (e.g., Step Functions) completes successfully
-- **THEN** the workflow SHALL emit a success event that the control plane consumes
-- **AND THEN** the control plane SHALL update the domain record in DynamoDB to Active and attach resource identifiers (event buses, schema registry, DLQ, dashboards, policies)
-- **AND THEN** describe-domain and list-domains SHALL reflect the domain as Active with full metadata and resource ARNs
+- **WHEN** the domain-creation workflow completes successfully
+- **THEN** the workflow SHALL emit `DomainCreationSucceeded`
+- **AND THEN** the control plane SHALL update the domain record to Active with resource ARNs
 
 #### Scenario: Workflow fails
 
-- **WHEN** the domain-creation workflow fails (e.g., a step times out or an AWS API call fails)
-- **THEN** the workflow SHALL emit a failure event that the control plane consumes
-- **AND THEN** the control plane SHALL update the domain record in DynamoDB to a failed state and retain enough detail (e.g., error code, message, step) for operators to diagnose and retry or abandon
-- **AND THEN** describe-domain (or a dedicated get-operation API) SHALL expose the failure reason and current status so that administrators can correct configuration and retry registration if applicable
-
-#### Scenario: Long-running provisioning and status visibility
-
-- **WHEN** the domain-creation workflow runs longer than the target SLO (e.g., 5 minutes for 95% of cases)
-- **THEN** the control plane SHALL continue the workflow in the background
-- **AND THEN** expose the current status (e.g., Creating) and, when available, workflow execution identifiers via describe-domain or a dedicated operation-status API
-- **AND THEN** emit metrics and logs so that platform teams can detect and investigate slow provisioning
+- **WHEN** the domain-creation workflow fails
+- **THEN** the workflow SHALL emit `DomainCreationFailed`
+- **AND THEN** the control plane SHALL update the domain record to a failed state with error details
 
 ### Requirement: List Domains
 
@@ -158,51 +170,33 @@ Users SHALL be able to retrieve detailed information about a specific domain, in
 
 ### Requirement: Update Domain
 
-Domain owners SHALL be able to update mutable domain metadata and configuration while preserving domain identity and enforcing governance.
+Domain owners SHALL be able to update mutable domain metadata and configuration, including deactivation, by submitting a command that is processed asynchronously. The API SHALL accept the command and return immediately; the outcome SHALL be communicated via an EventBridge event.
 
-#### Scenario: Update domain metadata
+#### Scenario: Update command accepted and enqueued
 
-- **WHEN** a domain owner calls the update-domain API with changes to description, tags, or contact information
-- **THEN** the control plane SHALL validate that the caller is authorized to manage the domain
-- **AND THEN** apply updates within a short, bounded time
-- **AND THEN** make updated values visible via list-domains and describe-domain
+- **WHEN** a domain owner calls the update-domain API with valid fields
+- **THEN** API Gateway SHALL validate the request structure and enqueue the command to the domains SQS queue
+- **AND THEN** the API SHALL return `202 Accepted` with `{"message":"OK"}`
 
-#### Scenario: Suspend and resume domain
+#### Scenario: Update command processed and succeeded event emitted
 
-- **WHEN** a domain owner calls the update-domain API to disable or suspend a domain
-- **THEN** the control plane SHALL stop routing new events for that domain while preserving existing configuration and history
-- **AND THEN** reflect the suspended status in domain metadata and metrics
-- **AND WHEN** the owner re-enables the domain
-- **THEN** the control plane SHALL resume event routing and update status and metrics accordingly
+- **WHEN** the domain command handler processes an update-domain message
+- **THEN** the handler SHALL apply the changes to DynamoDB
+- **AND THEN** emit `UpdateDomainSucceeded` to the control plane event bus
+
+#### Scenario: Update command fails
+
+- **WHEN** the domain command handler processes an update-domain message and the update cannot be applied (e.g., domain not found, invalid state transition)
+- **THEN** the handler SHALL emit `UpdateDomainFailed` with the reason
+
+#### Scenario: Deactivate domain via update command
+
+- **WHEN** a domain owner sends an update command with `desiredStatus: DEACTIVATED`
+- **THEN** the handler SHALL transition the domain to DEACTIVATED, remove PutEvent permissions, and emit `DomainDeactivated`
+- **AND THEN** also emit `UpdateDomainSucceeded`
 
 #### Scenario: Attempt to modify immutable domain attributes
 
-- **WHEN** a caller attempts to change immutable fields such as domain name or owner account
-- **THEN** the control plane SHALL reject the update request
-- **AND THEN** return a clear error that explains which fields cannot be modified
-
-### Requirement: Delete Domain
-
-Domain owners SHALL be able to delete domains only when there are no dependencies or resources associated with the services used by that domain. Deletion SHALL be blocked until all such dependencies and resources are removed or released; governance may allow a force-delete path in exceptional cases. Data retention and soft-delete behavior SHALL apply when deletion is permitted.
-
-#### Scenario: Delete domain when no dependencies or associated resources exist
-
-- **WHEN** a domain owner calls the delete-domain API and the domain has no dependencies or resources associated with the services used (e.g., no active subscriptions, no rules or targets still referencing the domain, no outstanding resources in EventBridge, schema registry, or other integrated services)
-- **THEN** the control plane SHALL validate ownership and preconditions
-- **AND THEN** perform a controlled cleanup of domain resources including event buses, schema registry, dead letter queues, monitoring artifacts, and IAM or resource policies
-- **AND THEN** retain necessary logs and DLQ messages for the configured retention period
-
-#### Scenario: Prevent deletion when dependencies or associated resources exist
-
-- **WHEN** a domain owner calls the delete-domain API and the domain has one or more dependencies or resources still associated with the services used (e.g., active subscriptions, rules, targets, or other resources in EventBridge or related services)
-- **THEN** the control plane SHALL reject the request by default
-- **AND THEN** return a clear error that identifies the blocking dependencies or resources (e.g., subscription count, resource types) so that the owner can remove them and retry
-- **AND THEN** allow deletion only after those dependencies or resources have been removed, unless governance explicitly permits a force-delete path
-
-#### Scenario: Soft delete and recovery window
-
-- **WHEN** a domain is deleted according to governance rules
-- **THEN** the control plane SHALL treat the domain as soft-deleted for a defined retention window
-- **AND THEN** prevent new publish or subscribe operations during this window
-- **AND THEN** allow recovery of the domain configuration and resources within the window if supported by the implementation
-- **AND THEN** permanently remove domain configuration and resources after the window has expired
+- **WHEN** a caller attempts to change immutable fields such as domain name or owner account via structural validation at API Gateway
+- **THEN** if the schema enforces this, API Gateway SHALL reject with `400 Bad Request`
+- **AND THEN** the command SHALL NOT be enqueued
