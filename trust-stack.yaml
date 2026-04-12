@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EventBridge Control Plane Trust Stack.
+  Deploy this template in each application account to allow the control plane
+  to create and manage domain resources (event buses, DLQs) in this account.
+
+Parameters:
+  ControlPlaneRoleArn:
+    Type: String
+    Description: ARN of the control plane execution role in the platform account (from control plane stack outputs)
+  ProvisioningWorkflowRoleArn:
+    Type: String
+    Description: ARN of the provisioning workflow role in the platform account (from control plane stack outputs)
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  Organization:
+    Type: String
+    Description: Organization identifier (must match control plane configuration)
+  NamespacePrefix:
+    Type: String
+    Default: "*"
+    Description: Namespace prefix for resource scoping (e.g., "prod-acme-*")
+
+Resources:
+  ControlPlaneTrustRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-${Organization}-cp-trust-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Ref ControlPlaneRoleArn
+                - !Ref ProvisioningWorkflowRoleArn
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBusManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:CreateEventBus
+                  - events:DeleteEventBus
+                  - events:DescribeEventBus
+                  - events:PutPermission
+                  - events:RemovePermission
+                Resource:
+                  - !Sub "arn:aws:events:*:${AWS::AccountId}:event-bus/${Environment}-${Organization}-*"
+        - PolicyName: DlqManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:SetQueueAttributes
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                Resource:
+                  - !Sub "arn:aws:sqs:*:${AWS::AccountId}:${Environment}-${Organization}-*"
+        - PolicyName: BusToBusRoleManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${Environment}-${Organization}-b2b-*"
+
+Outputs:
+  TrustRoleArn:
+    Description: ARN of the trust role for the control plane
+    Value: !GetAtt ControlPlaneTrustRole.Arn
+  TrustRoleName:
+    Description: Name of the trust role
+    Value: !Ref ControlPlaneTrustRole
