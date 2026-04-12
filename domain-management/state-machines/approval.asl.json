@@ -1,0 +1,157 @@
+{
+  "Comment": "Domain registration approval workflow with human-in-the-loop",
+  "StartAt": "PersistTaskToken",
+  "States": {
+    "PersistTaskToken": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${RegistrationRequestsTable}",
+        "Key": {
+          "requestId": {
+            "S.$": "$.requestId"
+          }
+        },
+        "UpdateExpression": "SET taskToken = :token",
+        "ExpressionAttributeValues": {
+          ":token": {
+            "S.$": "$$.Task.Token"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "WaitForApproval"
+    },
+    "WaitForApproval": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:sfn:sendTaskSuccess.waitForTaskToken",
+      "HeartbeatSeconds": 604800,
+      "Parameters": {
+        "TaskToken.$": "$$.Task.Token"
+      },
+      "Next": "CheckDecision",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "Next": "EmitRejectedEvent"
+        }
+      ]
+    },
+    "CheckDecision": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.approved",
+          "BooleanEquals": true,
+          "Next": "UpdateStatusApproved"
+        }
+      ],
+      "Default": "UpdateStatusRejected"
+    },
+    "UpdateStatusApproved": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${RegistrationRequestsTable}",
+        "Key": {
+          "requestId": {
+            "S.$": "$.requestId"
+          }
+        },
+        "UpdateExpression": "SET #s = :status, approvedBy = :approvedBy, approvedAt = :approvedAt",
+        "ExpressionAttributeNames": {
+          "#s": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "APPROVED"
+          },
+          ":approvedBy": {
+            "S.$": "$.decidedBy"
+          },
+          ":approvedAt": {
+            "S.$": "$$.State.EnteredTime"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "EmitApprovedEvent"
+    },
+    "UpdateStatusRejected": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem",
+      "Parameters": {
+        "TableName": "${RegistrationRequestsTable}",
+        "Key": {
+          "requestId": {
+            "S.$": "$.requestId"
+          }
+        },
+        "UpdateExpression": "SET #s = :status, rejectedBy = :rejectedBy, rejectedAt = :rejectedAt, rejectionReason = :reason",
+        "ExpressionAttributeNames": {
+          "#s": "status"
+        },
+        "ExpressionAttributeValues": {
+          ":status": {
+            "S": "REJECTED"
+          },
+          ":rejectedBy": {
+            "S.$": "$.decidedBy"
+          },
+          ":rejectedAt": {
+            "S.$": "$$.State.EnteredTime"
+          },
+          ":reason": {
+            "S.$": "$.reason"
+          }
+        }
+      },
+      "ResultPath": null,
+      "Next": "EmitRejectedEvent"
+    },
+    "EmitApprovedEvent": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Parameters": {
+        "Entries": [
+          {
+            "EventBusName": "${ControlPlaneEventBus}",
+            "Source": "controlplane.domain-management",
+            "DetailType": "DomainRegistrationApproved",
+            "Detail": {
+              "requestId.$": "$.requestId",
+              "domainId.$": "$.domainId",
+              "domainName.$": "$.domainName",
+              "ownerAccountId.$": "$.ownerAccountId",
+              "approvedBy.$": "$.decidedBy",
+              "approvedAt.$": "$$.State.EnteredTime"
+            }
+          }
+        ]
+      },
+      "End": true
+    },
+    "EmitRejectedEvent": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::events:putEvents",
+      "Parameters": {
+        "Entries": [
+          {
+            "EventBusName": "${ControlPlaneEventBus}",
+            "Source": "controlplane.domain-management",
+            "DetailType": "DomainRegistrationRejected",
+            "Detail": {
+              "requestId.$": "$.requestId",
+              "domainId.$": "$.domainId",
+              "domainName.$": "$.domainName",
+              "rejectedBy.$": "$.decidedBy",
+              "rejectedAt.$": "$$.State.EnteredTime",
+              "reason.$": "$.reason"
+            }
+          }
+        ]
+      },
+      "End": true
+    }
+  }
+}

@@ -1,0 +1,564 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: EventBridge Control Plane
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+  Organization:
+    Type: String
+    Description: Organization identifier used in resource naming
+  NamespacePattern:
+    Type: String
+    Default: "{env}-{org}-{domain}"
+    Description: Configurable namespace convention for resource naming
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Architectures: [arm64]
+    Timeout: 30
+    MemorySize: 256
+    Tracing: Active
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        ORGANIZATION: !Ref Organization
+        NAMESPACE_PATTERN: !Ref NamespacePattern
+        DOMAINS_TABLE: !Ref DomainsTable
+        REGISTRATION_REQUESTS_TABLE: !Ref RegistrationRequestsTable
+        CONTROL_PLANE_EVENT_BUS: !Ref ControlPlaneEventBus
+        APPROVAL_STATE_MACHINE_ARN: !Ref ApprovalWorkflow
+        DOMAINS_COMMAND_QUEUE_URL: !Ref DomainsCommandQueue
+        REGISTRATIONS_COMMAND_QUEUE_URL: !Ref RegistrationsCommandQueue
+
+Resources:
+  # ---- EventBridge ----
+  ControlPlaneEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub "${Environment}-${Organization}-control-plane-bus"
+
+  # ---- DynamoDB ----
+  DomainsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "${Environment}-${Organization}-domains"
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: domainId
+          AttributeType: S
+        - AttributeName: domainName
+          AttributeType: S
+        - AttributeName: ownerAccountId
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+
+      KeySchema:
+        - AttributeName: domainId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: by-name
+          KeySchema:
+            - AttributeName: domainName
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: by-owner
+          KeySchema:
+            - AttributeName: ownerAccountId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: by-status
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+
+  RegistrationRequestsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub "${Environment}-${Organization}-registration-requests"
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: requestId
+          AttributeType: S
+        - AttributeName: domainId
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: requestId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: by-domain
+          KeySchema:
+            - AttributeName: domainId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: by-status
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  # ---- Dead Letter Queue (read Lambda functions) ----
+  LambdaDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${Environment}-${Organization}-lambda-dlq"
+      MessageRetentionPeriod: 1209600
+
+  # ---- Command Queues ----
+  DomainsCommandDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${Environment}-${Organization}-domains-command-dlq"
+      MessageRetentionPeriod: 1209600
+
+  DomainsCommandQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${Environment}-${Organization}-domains-command-queue"
+      VisibilityTimeout: 30
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt DomainsCommandDlq.Arn
+        maxReceiveCount: 3
+
+  RegistrationsCommandDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${Environment}-${Organization}-registrations-command-dlq"
+      MessageRetentionPeriod: 1209600
+
+  RegistrationsCommandQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${Environment}-${Organization}-registrations-command-queue"
+      VisibilityTimeout: 30
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt RegistrationsCommandDlq.Arn
+        maxReceiveCount: 3
+
+  # ---- CloudWatch Log Groups ----
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/${Environment}-${Organization}-control-plane-api"
+      RetentionInDays: 30
+
+  ListDomainsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-list-domains"
+      RetentionInDays: 30
+
+  DescribeDomainLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-describe-domain"
+      RetentionInDays: 30
+
+  ListPendingActivationsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-list-pending-activations"
+      RetentionInDays: 30
+
+  # ---- IAM ----
+  # Dedicated trust-anchor role referenced by trust-stack.yaml ControlPlaneRoleArn parameter.
+  # Not used as a Lambda execution role; cross-account provisioning is handled by Step Functions.
+  ControlPlaneTrustAnchorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-${Organization}-cp-function-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CrossAccountAssumeRole
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource:
+                  - !Sub "arn:aws:iam::*:role/${Environment}-${Organization}-cp-trust-role"
+
+  ControlPlaneApiSqsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-${Organization}-apigw-sqs-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SendToCommandQueues
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueAttributes
+                Resource:
+                  - !GetAtt DomainsCommandQueue.Arn
+                  - !GetAtt RegistrationsCommandQueue.Arn
+
+  # ---- API Gateway ----
+  ControlPlaneApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "${Environment}-${Organization}-control-plane-api"
+      StageName: !Ref Environment
+      TracingEnabled: true
+      EndpointConfiguration:
+        Type: REGIONAL
+      Auth:
+        DefaultAuthorizer: AWS_IAM
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: ./api/openapi.yaml
+
+  # ---- Domain Management Functions (Read) ----
+  ListDomainsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ListDomainsLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "${Environment}-${Organization}-list-domains"
+      CodeUri: ./domain-management/functions/list-domains
+      Handler: bootstrap
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:Query, dynamodb:Scan]
+              Resource:
+                - !GetAtt DomainsTable.Arn
+                - !Sub "${DomainsTable.Arn}/index/*"
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ControlPlaneApi
+            Path: /domains
+            Method: GET
+
+  DescribeDomainFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: DescribeDomainLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "${Environment}-${Organization}-describe-domain"
+      CodeUri: ./domain-management/functions/describe-domain
+      Handler: bootstrap
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ControlPlaneApi
+            Path: /domains/{domainId}
+            Method: GET
+
+  ListPendingActivationsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ListPendingActivationsLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "${Environment}-${Organization}-list-pending-activations"
+      CodeUri: ./domain-management/functions/list-pending-activations
+      Handler: bootstrap
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:Query]
+              Resource:
+                - !GetAtt RegistrationRequestsTable.Arn
+                - !Sub "${RegistrationRequestsTable.Arn}/index/*"
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ControlPlaneApi
+            Path: /domains/registrations
+            Method: GET
+
+  # ---- Command Handler Functions ----
+  DomainCommandHandlerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-domain-command-handler"
+      RetentionInDays: 30
+
+  DomainCommandHandlerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: DomainCommandHandlerLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "${Environment}-${Organization}-domain-command-handler"
+      CodeUri: ./domain-management/functions/domain-command-handler
+      Handler: bootstrap
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:Query]
+              Resource:
+                - !GetAtt DomainsTable.Arn
+                - !Sub "${DomainsTable.Arn}/index/*"
+                - !GetAtt RegistrationRequestsTable.Arn
+            - Effect: Allow
+              Action: [events:PutEvents]
+              Resource: !GetAtt ControlPlaneEventBus.Arn
+            - Effect: Allow
+              Action: [events:RemovePermission]
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Environment}-${Organization}-*"
+            - Effect: Allow
+              Action: [states:StartExecution]
+              Resource: !Ref ApprovalWorkflow
+            - Effect: Allow
+              Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+              Resource: !GetAtt DomainsCommandQueue.Arn
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt DomainsCommandQueue.Arn
+            BatchSize: 1
+
+  RegistrationCommandHandlerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-registration-command-handler"
+      RetentionInDays: 30
+
+  RegistrationCommandHandlerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: RegistrationCommandHandlerLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "${Environment}-${Organization}-registration-command-handler"
+      CodeUri: ./domain-management/functions/registration-command-handler
+      Handler: bootstrap
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+              Resource: !GetAtt RegistrationRequestsTable.Arn
+            - Effect: Allow
+              Action: [states:SendTaskSuccess, states:SendTaskFailure]
+              Resource: !Ref ApprovalWorkflow
+            - Effect: Allow
+              Action: [events:PutEvents]
+              Resource: !GetAtt ControlPlaneEventBus.Arn
+            - Effect: Allow
+              Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+              Resource: !GetAtt RegistrationsCommandQueue.Arn
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt RegistrationsCommandQueue.Arn
+            BatchSize: 1
+
+  # ---- Step Functions ----
+  ApprovalWorkflowRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-${Organization}-approval-wf-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ApprovalWorkflowPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !GetAtt RegistrationRequestsTable.Arn
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource:
+                  - !GetAtt ControlPlaneEventBus.Arn
+
+  ApprovalWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub "${Environment}-${Organization}-domain-approval"
+      Role: !GetAtt ApprovalWorkflowRole.Arn
+      DefinitionUri: ./domain-management/state-machines/approval.asl.json
+      DefinitionSubstitutions:
+        RegistrationRequestsTable: !Ref RegistrationRequestsTable
+        ControlPlaneEventBus: !GetAtt ControlPlaneEventBus.Arn
+
+  ProvisioningWorkflowRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Environment}-${Organization}-provisioning-wf-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ProvisioningWorkflowPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:CreateEventBus
+                  - events:DeleteEventBus
+                  - events:DescribeEventBus
+                  - events:PutPermission
+                  - events:RemovePermission
+                  - events:PutEvents
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Environment}-${Organization}-*"
+              - Effect: Allow
+                Action:
+                  - schemas:CreateRegistry
+                  - schemas:DeleteRegistry
+                  - schemas:PutResourcePolicy
+                Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Environment}-${Organization}-*"
+              - Effect: Allow
+                Action:
+                  - sqs:CreateQueue
+                  - sqs:DeleteQueue
+                  - sqs:SetQueueAttributes
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Environment}-${Organization}-*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutDashboard
+                  - cloudwatch:DeleteDashboards
+                Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Environment}-${Organization}-*"
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
+                Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Environment}-${Organization}-*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !GetAtt DomainsTable.Arn
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource:
+                  - !Sub "arn:aws:iam::*:role/${Environment}-${Organization}-cp-trust-role"
+
+  ProvisioningWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub "${Environment}-${Organization}-domain-provisioning"
+      Role: !GetAtt ProvisioningWorkflowRole.Arn
+      DefinitionUri: ./domain-management/state-machines/provisioning.asl.json
+      DefinitionSubstitutions:
+        DomainsTable: !Ref DomainsTable
+        ControlPlaneEventBus: !GetAtt ControlPlaneEventBus.Arn
+        Environment: !Ref Environment
+        Organization: !Ref Organization
+        NamespacePattern: !Ref NamespacePattern
+      Events:
+        DomainApproved:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref ControlPlaneEventBus
+            Pattern:
+              detail-type:
+                - DomainRegistrationApproved
+
+Outputs:
+  ApiEndpoint:
+    Description: Control Plane API endpoint
+    Value: !Sub "https://${ControlPlaneApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+  ControlPlaneEventBusArn:
+    Description: Control Plane EventBridge bus ARN
+    Value: !GetAtt ControlPlaneEventBus.Arn
+  DomainsTableName:
+    Description: Domains DynamoDB table name
+    Value: !Ref DomainsTable
+  RegistrationRequestsTableName:
+    Description: Registration Requests DynamoDB table name
+    Value: !Ref RegistrationRequestsTable
+  ControlPlaneFunctionRoleArn:
+    Description: Trust-anchor role ARN (pass as ControlPlaneRoleArn to trust-stack.yaml)
+    Value: !GetAtt ControlPlaneTrustAnchorRole.Arn
+  ProvisioningWorkflowRoleArn:
+    Description: Provisioning workflow role ARN (pass as ProvisioningWorkflowRoleArn to trust-stack.yaml)
+    Value: !GetAtt ProvisioningWorkflowRole.Arn
+  LambdaDlqUrl:
+    Description: Lambda Dead Letter Queue URL for monitoring failed async invocations
+    Value: !Ref LambdaDlq

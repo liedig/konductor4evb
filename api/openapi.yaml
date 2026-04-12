@@ -1,0 +1,467 @@
+openapi: "3.0.1"
+info:
+  title: EventBridge Control Plane API
+  version: "1.0.0"
+  description: Control plane for managing AWS EventBridge domains, subscriptions, and cross-account event routing.
+
+x-amazon-apigateway-request-validators:
+  validate-body:
+    validateRequestBody: true
+    validateRequestParameters: false
+
+paths:
+  /domains:
+    post:
+      operationId: RegisterDomain
+      summary: Register a new domain
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterDomainRequest"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAccepted"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: POST
+        credentials:
+          Fn::GetAtt: [ControlPlaneApiSqsRole, Arn]
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainsCommandQueue.QueueName}"
+        requestParameters:
+          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+        requestTemplates:
+          application/json: "Action=SendMessage&MessageBody=$input.body&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+        responses:
+          default:
+            statusCode: "202"
+            responseTemplates:
+              application/json: '{"message":"OK"}'
+        passthroughBehavior: never
+    get:
+      operationId: ListDomains
+      summary: List domains
+      parameters:
+        - name: ownerAccountId
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: nextToken
+          in: query
+          schema:
+            type: string
+        - name: maxResults
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 100
+      responses:
+        "200":
+          description: List of domains
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListDomainsResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListDomainsFunction.Arn}/invocations"
+
+  /domains/{domainId}:
+    get:
+      operationId: GetDomain
+      summary: Get domain details
+      parameters:
+        - name: domainId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Domain details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainDetail"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeDomainFunction.Arn}/invocations"
+    put:
+      operationId: UpdateDomain
+      summary: Update domain metadata or status
+      x-amazon-apigateway-request-validator: validate-body
+      parameters:
+        - name: domainId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDomainRequest"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAccepted"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: POST
+        credentials:
+          Fn::GetAtt: [ControlPlaneApiSqsRole, Arn]
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainsCommandQueue.QueueName}"
+        requestParameters:
+          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+        requestTemplates:
+          application/json: "Action=SendMessage&MessageBody={\"domainId\":\"$input.params('domainId')\",\"body\":$input.json('$')}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+        responses:
+          default:
+            statusCode: "202"
+            responseTemplates:
+              application/json: '{"message":"OK"}'
+        passthroughBehavior: never
+
+  /domains/registrations:
+    get:
+      operationId: ListRegistrationRequests
+      summary: List domain registration requests
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING_APPROVAL, APPROVED, CREATING, FAILED, REJECTED]
+        - name: nextToken
+          in: query
+          schema:
+            type: string
+        - name: maxResults
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 100
+      responses:
+        "200":
+          description: List of registration requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListRegistrationRequestsResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListPendingActivationsFunction.Arn}/invocations"
+
+  /domains/registrations/{requestId}/decision:
+    post:
+      operationId: DecideRegistrationRequest
+      summary: Accept or reject a domain registration request
+      x-amazon-apigateway-request-validator: validate-body
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecisionRequest"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAccepted"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: POST
+        credentials:
+          Fn::GetAtt: [ControlPlaneApiSqsRole, Arn]
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${RegistrationsCommandQueue.QueueName}"
+        requestParameters:
+          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+        requestTemplates:
+          application/json: "Action=SendMessage&MessageBody={\"requestId\":\"$input.params('requestId')\",\"body\":$input.json('$')}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+        responses:
+          default:
+            statusCode: "202"
+            responseTemplates:
+              application/json: '{"message":"OK"}'
+        passthroughBehavior: never
+
+components:
+  schemas:
+    CommandAccepted:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "OK"
+
+    RegisterDomainRequest:
+      type: object
+      required: [domainName, ownerAccountId]
+      properties:
+        domainName:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$"
+          maxLength: 64
+        description:
+          type: string
+          maxLength: 256
+        ownerAccountId:
+          type: string
+          pattern: "^[0-9]{12}$"
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+
+    RegistrationRequestResponse:
+      type: object
+      properties:
+        requestId:
+          type: string
+        domainId:
+          type: string
+        domainName:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    DomainSummary:
+      type: object
+      properties:
+        domainId:
+          type: string
+        domainName:
+          type: string
+        description:
+          type: string
+        ownerAccountId:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    DomainDetail:
+      type: object
+      properties:
+        domainId:
+          type: string
+        domainName:
+          type: string
+        description:
+          type: string
+        ownerAccountId:
+          type: string
+        status:
+          type: string
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+        resourceArns:
+          $ref: "#/components/schemas/DomainResourceArns"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    DomainResourceArns:
+      type: object
+      properties:
+        platformEventBusArn:
+          type: string
+        appEventBusArn:
+          type: string
+        schemaRegistryArn:
+          type: string
+        subscriptionDlqArn:
+          type: string
+        integrationDlqArn:
+          type: string
+        dashboardArn:
+          type: string
+
+    UpdateDomainRequest:
+      type: object
+      properties:
+        description:
+          type: string
+          maxLength: 256
+        tags:
+          type: object
+          additionalProperties:
+            type: string
+        desiredStatus:
+          type: string
+          enum: [ACTIVE, SUSPENDED, DEACTIVATED]
+
+    ListDomainsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DomainSummary"
+        nextToken:
+          type: string
+
+    ListRegistrationRequestsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegistrationRequestResponse"
+        nextToken:
+          type: string
+
+    DecisionRequest:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [ACCEPT, REJECT]
+        reason:
+          type: string
+          maxLength: 512
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        requestId:
+          type: string
+        reason:
+          type: string
+          enum: [unknownOperation, cannotParse, fieldValidationFailed, other]
+        fieldList:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              message:
+                type: string
