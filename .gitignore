@@ -184,3 +184,6 @@ Cargo.lock
 # Ignore all local history of files
 .history
 .ionide
+
+### SAM ###
+**/.aws-sam
