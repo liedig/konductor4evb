@@ -1,0 +1,89 @@
+use anyhow::{Context, Result};
+use lambda_runtime::{service_fn, Error, LambdaEvent};
+use serde_json::{json, Value};
+use std::env;
+
+use control_plane_common::api;
+use control_plane_common::dynamodb::{attr_to_string_map, get_m, get_s, s};
+use control_plane_common::error::ControlPlaneError;
+use control_plane_common::models::ApiError;
+
+async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
+    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let ddb = aws_sdk_dynamodb::Client::new(&config);
+    let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
+
+    let domain_id = match api::path_param(&event.payload, "domainId") {
+        Some(id) => id,
+        None => {
+            return Ok(api::from_control_plane_error(&api::validation_error(
+                "Missing domainId path parameter",
+            )));
+        }
+    };
+
+    let result = ddb
+        .get_item()
+        .table_name(&table)
+        .key("domainId", s(&domain_id))
+        .send()
+        .await;
+
+    match result {
+        Ok(output) => match output.item {
+            Some(item) => {
+                let resource_arns = get_m(&item, "resourceArns").map(|arns| {
+                    json!({
+                        "platformEventBusArn": get_s(arns, "platformEventBusArn"),
+                        "appEventBusArn": get_s(arns, "appEventBusArn"),
+                        "schemaRegistryArn": get_s(arns, "schemaRegistryArn"),
+                        "subscriptionDlqArn": get_s(arns, "subscriptionDlqArn"),
+                        "integrationDlqArn": get_s(arns, "integrationDlqArn"),
+                        "dashboardArn": get_s(arns, "dashboardArn"),
+                    })
+                });
+
+                Ok(api::success_response(
+                    200,
+                    &json!({
+                        "domainId": get_s(&item, "domainId"),
+                        "domainName": get_s(&item, "domainName"),
+                        "description": get_s(&item, "description"),
+                        "ownerAccountId": get_s(&item, "ownerAccountId"),
+                        "status": get_s(&item, "status"),
+                        "tags": attr_to_string_map(&item, "tags"),
+                        "resourceArns": resource_arns,
+                        "createdAt": get_s(&item, "createdAt"),
+                        "updatedAt": get_s(&item, "updatedAt"),
+                    }),
+                ))
+            }
+            None => Ok(api::from_control_plane_error(
+                &ControlPlaneError::DomainNotFound { domain_id },
+            )),
+        },
+        Err(e) => {
+            tracing::error!("DynamoDB error: {e:?}");
+            Ok(api::error_response(
+                500,
+                ApiError {
+                    code: "InternalServerException".to_string(),
+                    message: "Failed to get domain".to_string(),
+                    request_id: None,
+                    reason: None,
+                    field_list: None,
+                },
+            ))
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
+    lambda_runtime::run(service_fn(handler)).await
+}
