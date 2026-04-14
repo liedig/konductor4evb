@@ -139,3 +139,170 @@ fn cors_headers() -> HashMap<&'static str, &'static str> {
     headers.insert("Content-Type", "application/json");
     headers
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::ControlPlaneError;
+    use serde_json::json;
+
+    #[test]
+    fn success_response_returns_status_and_body() {
+        let body = json!({"id": "123"});
+        let resp = success_response(200, &body);
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(resp["headers"]["Content-Type"], "application/json");
+
+        let parsed_body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(parsed_body["id"], "123");
+    }
+
+    #[test]
+    fn success_response_accepts_different_status_codes() {
+        let resp = success_response(201, &json!({}));
+        assert_eq!(resp["statusCode"], 201);
+    }
+
+    #[test]
+    fn error_mapping_domain_not_found_returns_404() {
+        let err = ControlPlaneError::DomainNotFound {
+            domain_id: "abc".to_string(),
+        };
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 404);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["code"], "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn error_mapping_request_not_found_returns_404() {
+        let err = ControlPlaneError::RequestNotFound {
+            request_id: "abc".to_string(),
+        };
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 404);
+    }
+
+    #[test]
+    fn error_mapping_domain_already_exists_returns_409() {
+        let err = ControlPlaneError::DomainAlreadyExists {
+            domain_name: "billing".to_string(),
+        };
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 409);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["code"], "ConflictException");
+    }
+
+    #[test]
+    fn error_mapping_validation_exception_returns_400() {
+        let err = validation_error("bad field");
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 400);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["code"], "ValidationException");
+        assert_eq!(body["message"], "bad field");
+    }
+
+    #[test]
+    fn error_mapping_access_denied_returns_403() {
+        let err = ControlPlaneError::AccessDenied;
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 403);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["code"], "AccessDeniedException");
+    }
+
+    #[test]
+    fn error_mapping_invalid_state_transition_returns_409() {
+        let err = ControlPlaneError::InvalidStateTransition {
+            current: "ACTIVE".to_string(),
+            target: "APPROVED".to_string(),
+        };
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 409);
+    }
+
+    #[test]
+    fn error_mapping_internal_error_returns_500() {
+        let err = ControlPlaneError::DynamoDb("timeout".to_string());
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 500);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["code"], "InternalServerException");
+        assert_eq!(body["message"], "An internal error occurred");
+    }
+
+    #[test]
+    fn error_response_includes_request_id() {
+        let err = ControlPlaneError::AccessDenied;
+        let resp = from_control_plane_error(&err);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert!(body["requestId"].is_string());
+        assert!(!body["requestId"].as_str().unwrap().is_empty());
+    }
+
+    #[test]
+    fn parse_body_deserializes_valid_json() {
+        let event = json!({"body": "{\"domainName\":\"billing\"}"});
+        let result: Result<Value, _> = parse_body(&event);
+        assert_eq!(result.unwrap()["domainName"], "billing");
+    }
+
+    #[test]
+    fn parse_body_defaults_to_empty_object_when_body_missing() {
+        let event = json!({});
+        let result: Result<Value, _> = parse_body(&event);
+        assert_eq!(result.unwrap(), json!({}));
+    }
+
+    #[test]
+    fn parse_body_returns_error_for_malformed_json() {
+        let event = json!({"body": "not json {"});
+        let result: Result<Value, _> = parse_body(&event);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ControlPlaneError::ValidationException { reason, .. } => {
+                assert_eq!(reason, crate::error::ValidationExceptionReason::CannotParse);
+            }
+            other => panic!("expected ValidationException, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn path_param_extracts_value() {
+        let event = json!({"pathParameters": {"domainId": "abc-123"}});
+        assert_eq!(path_param(&event, "domainId"), Some("abc-123".to_string()));
+    }
+
+    #[test]
+    fn path_param_returns_none_when_missing() {
+        let event = json!({});
+        assert_eq!(path_param(&event, "domainId"), None);
+    }
+
+    #[test]
+    fn path_param_returns_none_for_unknown_param() {
+        let event = json!({"pathParameters": {"other": "val"}});
+        assert_eq!(path_param(&event, "domainId"), None);
+    }
+
+    #[test]
+    fn query_param_extracts_value() {
+        let event = json!({"queryStringParameters": {"status": "ACTIVE"}});
+        assert_eq!(query_param(&event, "status"), Some("ACTIVE".to_string()));
+    }
+
+    #[test]
+    fn query_param_returns_none_when_missing() {
+        let event = json!({});
+        assert_eq!(query_param(&event, "status"), None);
+    }
+
+    #[test]
+    fn query_param_returns_none_for_unknown_param() {
+        let event = json!({"queryStringParameters": {"other": "val"}});
+        assert_eq!(query_param(&event, "status"), None);
+    }
+}

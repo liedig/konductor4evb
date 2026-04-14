@@ -40,20 +40,8 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .and_then(|v| v.as_str())
         .unwrap_or("Unknown");
 
-    let html_body = format!(
-        r#"<html>
-<body>
-<h2>Domain Registration Rejected</h2>
-<p>Your domain registration request has been rejected.</p>
-<table>
-<tr><td><strong>Domain Name</strong></td><td>{domain_name}</td></tr>
-<tr><td><strong>Owner Account</strong></td><td>{owner_account_id}</td></tr>
-<tr><td><strong>Rejected By</strong></td><td>{rejected_by}</td></tr>
-<tr><td><strong>Justification</strong></td><td>{justification}</td></tr>
-</table>
-</body>
-</html>"#
-    );
+    let html_body =
+        build_rejection_email_body(domain_name, owner_account_id, rejected_by, justification);
 
     ses.send_email()
         .from_email_address(&from_email)
@@ -91,6 +79,28 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
     Ok(())
 }
 
+fn build_rejection_email_body(
+    domain_name: &str,
+    owner_account_id: &str,
+    rejected_by: &str,
+    justification: &str,
+) -> String {
+    format!(
+        r#"<html>
+<body>
+<h2>Domain Registration Rejected</h2>
+<p>Your domain registration request has been rejected.</p>
+<table>
+<tr><td><strong>Domain Name</strong></td><td>{domain_name}</td></tr>
+<tr><td><strong>Owner Account</strong></td><td>{owner_account_id}</td></tr>
+<tr><td><strong>Rejected By</strong></td><td>{rejected_by}</td></tr>
+<tr><td><strong>Justification</strong></td><td>{justification}</td></tr>
+</table>
+</body>
+</html>"#
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
@@ -99,4 +109,64 @@ async fn main() -> Result<(), Error> {
         .init();
 
     lambda_runtime::run(service_fn(handler)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejection_email_body_contains_domain_name() {
+        let body = build_rejection_email_body(
+            "billing",
+            "111122223333",
+            "admin@example.com",
+            "Policy violation",
+        );
+        assert!(body.contains("billing"));
+    }
+
+    #[test]
+    fn rejection_email_body_contains_owner_account_id() {
+        let body = build_rejection_email_body(
+            "billing",
+            "111122223333",
+            "admin@example.com",
+            "Policy violation",
+        );
+        assert!(body.contains("111122223333"));
+    }
+
+    #[test]
+    fn rejection_email_body_contains_rejected_by() {
+        let body = build_rejection_email_body(
+            "billing",
+            "111122223333",
+            "admin@example.com",
+            "Policy violation",
+        );
+        assert!(body.contains("admin@example.com"));
+    }
+
+    #[test]
+    fn rejection_email_body_contains_justification() {
+        let body = build_rejection_email_body(
+            "billing",
+            "111122223333",
+            "admin@example.com",
+            "Policy violation",
+        );
+        assert!(body.contains("Policy violation"));
+    }
+
+    #[test]
+    fn rejection_email_body_contains_heading() {
+        let body = build_rejection_email_body(
+            "billing",
+            "111122223333",
+            "admin@example.com",
+            "Policy violation",
+        );
+        assert!(body.contains("Registration Rejected"));
+    }
 }

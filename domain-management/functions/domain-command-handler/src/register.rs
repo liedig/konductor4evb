@@ -159,7 +159,7 @@ async fn emit_failed(
     Ok(())
 }
 
-fn validate_domain_name(name: &str) -> Result<(), ControlPlaneError> {
+pub(crate) fn validate_domain_name(name: &str) -> Result<(), ControlPlaneError> {
     if name.len() < 2 || name.len() > 64 {
         return Err(control_plane_common::api::validation_error(
             "Domain name must be between 2 and 64 characters",
@@ -179,4 +179,57 @@ fn validate_domain_name(name: &str) -> Result<(), ControlPlaneError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_domain_names_pass() {
+        assert!(validate_domain_name("billing").is_ok());
+        assert!(validate_domain_name("my-domain").is_ok());
+        assert!(validate_domain_name("a1").is_ok());
+        assert!(validate_domain_name("domain-123-test").is_ok());
+    }
+
+    #[test]
+    fn rejects_name_too_short() {
+        assert!(validate_domain_name("a").is_err());
+    }
+
+    #[test]
+    fn rejects_name_too_long() {
+        let long_name = "a".repeat(65);
+        assert!(validate_domain_name(&long_name).is_err());
+    }
+
+    #[test]
+    fn accepts_name_at_boundary_lengths() {
+        assert!(validate_domain_name("ab").is_ok());
+        assert!(validate_domain_name(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn rejects_uppercase_characters() {
+        assert!(validate_domain_name("Billing").is_err());
+        assert!(validate_domain_name("MY-DOMAIN").is_err());
+    }
+
+    #[test]
+    fn rejects_special_characters() {
+        assert!(validate_domain_name("billing@v2").is_err());
+        assert!(validate_domain_name("my_domain").is_err());
+        assert!(validate_domain_name("domain.name").is_err());
+    }
+
+    #[test]
+    fn rejects_leading_hyphen() {
+        assert!(validate_domain_name("-billing").is_err());
+    }
+
+    #[test]
+    fn rejects_trailing_hyphen() {
+        assert!(validate_domain_name("billing-").is_err());
+    }
 }

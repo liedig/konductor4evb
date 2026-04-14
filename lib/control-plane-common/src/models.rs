@@ -117,3 +117,58 @@ pub struct PaginatedResponse<T: Serialize> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_token: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn domain_status_serializes_to_screaming_snake_case() {
+        let cases = vec![
+            (DomainStatus::PendingApproval, "\"PENDING_APPROVAL\""),
+            (DomainStatus::Approved, "\"APPROVED\""),
+            (DomainStatus::Rejected, "\"REJECTED\""),
+            (DomainStatus::Provisioning, "\"PROVISIONING\""),
+            (DomainStatus::Active, "\"ACTIVE\""),
+            (DomainStatus::ProvisioningFailed, "\"PROVISIONING_FAILED\""),
+            (DomainStatus::Inactive, "\"INACTIVE\""),
+        ];
+        for (status, expected) in cases {
+            assert_eq!(serde_json::to_string(&status).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn domain_status_deserializes_from_screaming_snake_case() {
+        let cases = vec![
+            ("\"PENDING_APPROVAL\"", DomainStatus::PendingApproval),
+            ("\"APPROVED\"", DomainStatus::Approved),
+            ("\"REJECTED\"", DomainStatus::Rejected),
+            ("\"PROVISIONING\"", DomainStatus::Provisioning),
+            ("\"ACTIVE\"", DomainStatus::Active),
+            ("\"PROVISIONING_FAILED\"", DomainStatus::ProvisioningFailed),
+            ("\"INACTIVE\"", DomainStatus::Inactive),
+        ];
+        for (input, expected) in cases {
+            let result: DomainStatus = serde_json::from_str(input).unwrap();
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn domain_status_display_matches_wire_format() {
+        assert_eq!(
+            DomainStatus::PendingApproval.to_string(),
+            "PENDING_APPROVAL"
+        );
+        assert_eq!(DomainStatus::Approved.to_string(), "APPROVED");
+        assert_eq!(DomainStatus::Rejected.to_string(), "REJECTED");
+        assert_eq!(DomainStatus::Provisioning.to_string(), "PROVISIONING");
+        assert_eq!(DomainStatus::Active.to_string(), "ACTIVE");
+        assert_eq!(
+            DomainStatus::ProvisioningFailed.to_string(),
+            "PROVISIONING_FAILED"
+        );
+        assert_eq!(DomainStatus::Inactive.to_string(), "INACTIVE");
+    }
+}

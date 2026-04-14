@@ -51,20 +51,8 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .await
         .context("failed to persist taskToken to domain record")?;
 
-    let html_body = format!(
-        r#"<html>
-<body>
-<h2>Domain Registration Approval Required</h2>
-<p>A new domain registration request requires your approval.</p>
-<table>
-<tr><td><strong>Domain Name</strong></td><td>{domain_name}</td></tr>
-<tr><td><strong>Owner Account</strong></td><td>{owner_account_id}</td></tr>
-<tr><td><strong>Owner Email</strong></td><td>{owner_email}</td></tr>
-<tr><td><strong>Task Token</strong></td><td>{task_token}</td></tr>
-</table>
-</body>
-</html>"#
-    );
+    let html_body =
+        build_approval_email_body(domain_name, owner_account_id, owner_email, task_token);
 
     ses.send_email()
         .from_email_address(&from_email)
@@ -102,6 +90,28 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
     Ok(())
 }
 
+fn build_approval_email_body(
+    domain_name: &str,
+    owner_account_id: &str,
+    owner_email: &str,
+    task_token: &str,
+) -> String {
+    format!(
+        r#"<html>
+<body>
+<h2>Domain Registration Approval Required</h2>
+<p>A new domain registration request requires your approval.</p>
+<table>
+<tr><td><strong>Domain Name</strong></td><td>{domain_name}</td></tr>
+<tr><td><strong>Owner Account</strong></td><td>{owner_account_id}</td></tr>
+<tr><td><strong>Owner Email</strong></td><td>{owner_email}</td></tr>
+<tr><td><strong>Task Token</strong></td><td>{task_token}</td></tr>
+</table>
+</body>
+</html>"#
+    )
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
@@ -110,4 +120,44 @@ async fn main() -> Result<(), Error> {
         .init();
 
     lambda_runtime::run(service_fn(handler)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn approval_email_body_contains_domain_name() {
+        let body =
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+        assert!(body.contains("billing"));
+    }
+
+    #[test]
+    fn approval_email_body_contains_owner_account_id() {
+        let body =
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+        assert!(body.contains("111122223333"));
+    }
+
+    #[test]
+    fn approval_email_body_contains_owner_email() {
+        let body =
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+        assert!(body.contains("owner@example.com"));
+    }
+
+    #[test]
+    fn approval_email_body_contains_task_token() {
+        let body =
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+        assert!(body.contains("tok-1"));
+    }
+
+    #[test]
+    fn approval_email_body_contains_heading() {
+        let body =
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+        assert!(body.contains("Approval Required"));
+    }
 }
