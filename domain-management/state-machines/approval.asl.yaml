@@ -1,0 +1,120 @@
+Comment: Domain registration approval workflow with human-in-the-loop
+QueryLanguage: JSONata
+StartAt: NotifyAndWait
+States:
+
+  NotifyAndWait:
+    Type: Task
+    Resource: "arn:aws:states:::lambda:invoke.waitForTaskToken"
+    Arguments:
+      FunctionName: "${SendApprovalNotificationFunction}"
+      Payload:
+        taskToken: "{% $states.context.Task.Token %}"
+        domainId: "{% $states.input.domainId %}"
+        domainName: "{% $states.input.domainName %}"
+        ownerAccountId: "{% $states.input.ownerAccountId %}"
+        ownerEmail: "{% $states.input.ownerEmail %}"
+    TimeoutSeconds: 604800
+    Catch:
+      - ErrorEquals:
+          - States.TaskFailed
+        Next: UpdateStatusRejected
+        Output: "{% $states.input %}"
+    Next: CheckDecision
+
+  CheckDecision:
+    Type: Choice
+    Choices:
+      - Condition: "{% $states.input.approved = true %}"
+        Next: UpdateStatusApproved
+    Default: UpdateStatusRejected
+
+  UpdateStatusApproved:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainId:
+          S: "{% $states.input.domainId %}"
+      UpdateExpression: "SET #s = :status, decidedBy = :decidedBy, justification = :justification, approvedAt = :approvedAt, updatedAt = :updatedAt"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: APPROVED
+        ":decidedBy":
+          S: "{% $states.input.decidedBy %}"
+        ":justification":
+          S: "{% $states.input.justification %}"
+        ":approvedAt":
+          S: "{% $states.context.State.EnteredTime %}"
+        ":updatedAt":
+          S: "{% $states.context.State.EnteredTime %}"
+    Output: "{% $states.input %}"
+    Next: EmitApprovedEvent
+
+  UpdateStatusRejected:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainId:
+          S: "{% $states.input.domainId %}"
+      UpdateExpression: "SET #s = :status, decidedBy = :decidedBy, justification = :justification, rejectedAt = :rejectedAt, updatedAt = :updatedAt"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: REJECTED
+        ":decidedBy":
+          S: "{% $states.input.decidedBy %}"
+        ":justification":
+          S: "{% $states.input.justification %}"
+        ":rejectedAt":
+          S: "{% $states.context.State.EnteredTime %}"
+        ":updatedAt":
+          S: "{% $states.context.State.EnteredTime %}"
+    Output: "{% $states.input %}"
+    Next: EmitRejectedEvent
+
+  EmitApprovedEvent:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${ControlPlaneEventBus}"
+          Source: controlplane.domain-management
+          DetailType: DomainRegistrationApproved
+          Detail: >-
+            {% $string({
+              "domainId": $states.input.domainId,
+              "domainName": $states.input.domainName,
+              "ownerAccountId": $states.input.ownerAccountId,
+              "ownerEmail": $states.input.ownerEmail,
+              "approvedBy": $states.input.decidedBy,
+              "justification": $states.input.justification,
+              "approvedAt": $states.context.State.EnteredTime
+            }) %}
+    End: true
+
+  EmitRejectedEvent:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${ControlPlaneEventBus}"
+          Source: controlplane.domain-management
+          DetailType: DomainRegistrationRejected
+          Detail: >-
+            {% $string({
+              "domainId": $states.input.domainId,
+              "domainName": $states.input.domainName,
+              "ownerAccountId": $states.input.ownerAccountId,
+              "ownerEmail": $states.input.ownerEmail,
+              "rejectedBy": $states.input.decidedBy,
+              "justification": $states.input.justification,
+              "rejectedAt": $states.context.State.EnteredTime
+            }) %}
+    End: true

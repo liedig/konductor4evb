@@ -1,0 +1,348 @@
+Comment: Domain resource provisioning workflow
+QueryLanguage: JSONata
+StartAt: SetProvisioningStatus
+States:
+
+  SetProvisioningStatus:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainId:
+          S: "{% $states.input.detail.domainId %}"
+      UpdateExpression: "SET #s = :status, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: PROVISIONING
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+    Output: "{% $states.input %}"
+    Next: EmitCreationStarted
+
+  EmitCreationStarted:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${ControlPlaneEventBus}"
+          Source: controlplane.domain-management
+          DetailType: DomainCreationStarted
+          Detail:
+            domainId: "{% $states.input.detail.domainId %}"
+            workflowExecutionId: "{% $states.context.Execution.Id %}"
+            startedAt: "{% $states.context.Execution.StartTime %}"
+    Output: "{% $states.input %}"
+    Next: CreatePlatformEventBus
+
+  CreatePlatformEventBus:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:eventbridge:createEventBus"
+    Arguments:
+      Name: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
+    Assign:
+      platformBus: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: SetPutEventPolicy
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  SetPutEventPolicy:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:eventbridge:putPermission"
+    Arguments:
+      EventBusName: "{% $platformBus.EventBusArn %}"
+      Action: "events:PutEvents"
+      Principal: "{% $states.input.detail.ownerAccountId %}"
+      StatementId: "{% 'allow-' & $states.input.detail.ownerAccountId & '-put-events' %}"
+    Output: "{% $states.input %}"
+    Next: CreateSchemaRegistry
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  CreateSchemaRegistry:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:schemas:createRegistry"
+    Arguments:
+      RegistryName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-schema-registry' %}"
+      Description: "{% 'Schema registry for domain ' & $states.input.detail.domainName %}"
+    Assign:
+      schemaRegistry: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: CreateSubscriptionDlq
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  CreateSubscriptionDlq:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:sqs:createQueue"
+    Arguments:
+      QueueName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-subscription-dlq' %}"
+    Assign:
+      subscriptionDlq: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: AssumeAppAccountRole
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  AssumeAppAccountRole:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:sts:assumeRole"
+    Arguments:
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Environment}-${Organization}-cp-trust-role' %}"
+      RoleSessionName: control-plane-provisioning
+    Assign:
+      appCredentials: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: CreateAppEventBus
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  CreateAppEventBus:
+    Type: Task
+    Comment: Creates domain event bus in the application account using assumed role credentials
+    Resource: "arn:aws:states:::aws-sdk:eventbridge:createEventBus"
+    Arguments:
+      Name: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
+    Credentials:
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Environment}-${Organization}-cp-trust-role' %}"
+    Assign:
+      appBus: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: CreateIntegrationDlq
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  CreateIntegrationDlq:
+    Type: Task
+    Comment: Creates integration rule DLQ in the application account using assumed role credentials
+    Resource: "arn:aws:states:::aws-sdk:sqs:createQueue"
+    Arguments:
+      QueueName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-integration-dlq' %}"
+    Credentials:
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Environment}-${Organization}-cp-trust-role' %}"
+    Assign:
+      integrationDlq: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: CreateDashboard
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  CreateDashboard:
+    Type: Task
+    Comment: Creates a CloudWatch dashboard for the domain event bus metrics
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:putDashboard"
+    Arguments:
+      DashboardName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-dashboard' %}"
+      DashboardBody: |-
+        {% (
+          $busName := '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-bus';
+          $dlqName := '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-subscription-dlq';
+          $string({
+            "widgets": [
+              {
+                "type": "metric",
+                "properties": {
+                  "metrics": [
+                    ["AWS/Events", "Invocations", "EventBusName", $busName],
+                    ["AWS/Events", "FailedInvocations", "EventBusName", $busName],
+                    ["AWS/Events", "MatchedEvents", "EventBusName", $busName],
+                    ["AWS/Events", "ThrottledRules", "EventBusName", $busName],
+                    ["AWS/Events", "DeadLetterInvocations", "EventBusName", $busName]
+                  ],
+                  "period": 300,
+                  "stat": "Sum",
+                  "title": "Event Bus Metrics",
+                  "region": "${AWS::Region}"
+                }
+              },
+              {
+                "type": "metric",
+                "properties": {
+                  "metrics": [
+                    ["AWS/SQS", "NumberOfMessagesReceived", "QueueName", $dlqName],
+                    ["AWS/SQS", "ApproximateNumberOfMessagesVisible", "QueueName", $dlqName]
+                  ],
+                  "period": 300,
+                  "stat": "Sum",
+                  "title": "Subscription DLQ",
+                  "region": "${AWS::Region}"
+                }
+              }
+            ]
+          })
+        ) %}
+    Assign:
+      dashboard: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: CreateFailedInvocationsAlarm
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  CreateFailedInvocationsAlarm:
+    Type: Task
+    Comment: Creates a CloudWatch alarm for high failure rate on the domain event bus
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
+    Arguments:
+      AlarmName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-failed-invocations' %}"
+      AlarmDescription: "{% 'High failed invocations rate on domain bus ' & $states.input.detail.domainName %}"
+      Namespace: AWS/Events
+      MetricName: FailedInvocations
+      Dimensions:
+        - Name: EventBusName
+          Value: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+    Output: "{% $states.input %}"
+    Next: CreateDlqDepthAlarm
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  CreateDlqDepthAlarm:
+    Type: Task
+    Comment: Creates a CloudWatch alarm for DLQ message accumulation
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
+    Arguments:
+      AlarmName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-dlq-depth' %}"
+      AlarmDescription: "{% 'Messages accumulating in subscription DLQ for domain ' & $states.input.detail.domainName %}"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-subscription-dlq' %}"
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+    Output: "{% $states.input %}"
+    Next: UpdateDomainRecord
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+
+  UpdateDomainRecord:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainId:
+          S: "{% $states.input.detail.domainId %}"
+      UpdateExpression: "SET #s = :status, resourceArns = :arns, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: ACTIVE
+        ":arns":
+          M:
+            platformEventBusArn:
+              S: "{% $platformBus.EventBusArn %}"
+            appEventBusArn:
+              S: "{% $appBus.EventBusArn %}"
+            schemaRegistryArn:
+              S: "{% $schemaRegistry.RegistryArn %}"
+            subscriptionDlqArn:
+              S: "{% $subscriptionDlq.QueueUrl %}"
+            integrationDlqArn:
+              S: "{% $integrationDlq.QueueUrl %}"
+            dashboardName:
+              S: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-dashboard' %}"
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+    Output: "{% $states.input %}"
+    Next: EmitCreationSucceeded
+
+  EmitCreationSucceeded:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${ControlPlaneEventBus}"
+          Source: controlplane.domain-management
+          DetailType: DomainCreationSucceeded
+          Detail:
+            domainId: "{% $states.input.detail.domainId %}"
+            workflowExecutionId: "{% $states.context.Execution.Id %}"
+            completedAt: "{% $states.context.State.EnteredTime %}"
+            resourceArns:
+              platformEventBusArn: "{% $platformBus.EventBusArn %}"
+              appEventBusArn: "{% $appBus.EventBusArn %}"
+              schemaRegistryArn: "{% $schemaRegistry.RegistryArn %}"
+              subscriptionDlqArn: "{% $subscriptionDlq.QueueUrl %}"
+              integrationDlqArn: "{% $integrationDlq.QueueUrl %}"
+    End: true
+
+  EmitCreationFailed:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${ControlPlaneEventBus}"
+          Source: controlplane.domain-management
+          DetailType: DomainCreationFailed
+          Detail:
+            domainId: "{% $states.input.detail.domainId %}"
+            workflowExecutionId: "{% $states.context.Execution.Id %}"
+            failedAt: "{% $states.context.State.EnteredTime %}"
+            errorCode: "{% $states.input.error.Error %}"
+            errorMessage: "{% $states.input.error.Cause %}"
+    Output: "{% $states.input %}"
+    Next: UpdateDomainFailed
+
+  UpdateDomainFailed:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainId:
+          S: "{% $states.input.detail.domainId %}"
+      UpdateExpression: "SET #s = :status, errorDetail = :err, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: PROVISIONING_FAILED
+        ":err":
+          S: "{% $states.input.error.Cause %}"
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+    End: true

@@ -14,6 +14,12 @@ Parameters:
     Type: String
     Default: "{env}-{org}-{domain}"
     Description: Configurable namespace convention for resource naming
+  ApprovalFromEmail:
+    Type: String
+    Description: Verified SES sender for approval notifications
+  ApprovalToEmail:
+    Type: String
+    Description: Verified SES recipient for approval notifications
 
 Globals:
   Function:
@@ -28,11 +34,9 @@ Globals:
         ORGANIZATION: !Ref Organization
         NAMESPACE_PATTERN: !Ref NamespacePattern
         DOMAINS_TABLE: !Ref DomainsTable
-        REGISTRATION_REQUESTS_TABLE: !Ref RegistrationRequestsTable
         CONTROL_PLANE_EVENT_BUS: !Ref ControlPlaneEventBus
         APPROVAL_STATE_MACHINE_ARN: !Ref ApprovalWorkflow
         DOMAINS_COMMAND_QUEUE_URL: !Ref DomainsCommandQueue
-        REGISTRATIONS_COMMAND_QUEUE_URL: !Ref RegistrationsCommandQueue
 
 Resources:
   # ---- EventBridge ----
@@ -85,39 +89,6 @@ Resources:
             ProjectionType: ALL
 
 
-  RegistrationRequestsTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      TableName: !Sub "${Environment}-${Organization}-registration-requests"
-      BillingMode: PAY_PER_REQUEST
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
-      AttributeDefinitions:
-        - AttributeName: requestId
-          AttributeType: S
-        - AttributeName: domainId
-          AttributeType: S
-        - AttributeName: status
-          AttributeType: S
-      KeySchema:
-        - AttributeName: requestId
-          KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: by-domain
-          KeySchema:
-            - AttributeName: domainId
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-        - IndexName: by-status
-          KeySchema:
-            - AttributeName: status
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-
   # ---- Dead Letter Queue (read Lambda functions) ----
   LambdaDlq:
     Type: AWS::SQS::Queue
@@ -141,21 +112,6 @@ Resources:
         deadLetterTargetArn: !GetAtt DomainsCommandDlq.Arn
         maxReceiveCount: 3
 
-  RegistrationsCommandDlq:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub "${Environment}-${Organization}-registrations-command-dlq"
-      MessageRetentionPeriod: 1209600
-
-  RegistrationsCommandQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub "${Environment}-${Organization}-registrations-command-queue"
-      VisibilityTimeout: 30
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt RegistrationsCommandDlq.Arn
-        maxReceiveCount: 3
-
   # ---- CloudWatch Log Groups ----
   ApiAccessLogGroup:
     Type: AWS::Logs::LogGroup
@@ -173,12 +129,6 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-describe-domain"
-      RetentionInDays: 30
-
-  ListPendingActivationsLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-list-pending-activations"
       RetentionInDays: 30
 
   # ---- IAM ----
@@ -228,7 +178,6 @@ Resources:
                   - sqs:GetQueueAttributes
                 Resource:
                   - !GetAtt DomainsCommandQueue.Arn
-                  - !GetAtt RegistrationsCommandQueue.Arn
 
   # ---- API Gateway ----
   ControlPlaneApi:
@@ -310,34 +259,6 @@ Resources:
             Path: /domains/{domainId}
             Method: GET
 
-  ListPendingActivationsFunction:
-    Type: AWS::Serverless::Function
-    DependsOn: ListPendingActivationsLogGroup
-    Metadata:
-      BuildMethod: rust-cargolambda
-    Properties:
-      FunctionName: !Sub "${Environment}-${Organization}-list-pending-activations"
-      CodeUri: ./domain-management/functions/list-pending-activations
-      Handler: bootstrap
-      DeadLetterQueue:
-        Type: SQS
-        TargetArn: !GetAtt LambdaDlq.Arn
-      Policies:
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action: [dynamodb:Query]
-              Resource:
-                - !GetAtt RegistrationRequestsTable.Arn
-                - !Sub "${RegistrationRequestsTable.Arn}/index/*"
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref ControlPlaneApi
-            Path: /domains/registrations
-            Method: GET
-
   # ---- Command Handler Functions ----
   DomainCommandHandlerLogGroup:
     Type: AWS::Logs::LogGroup
@@ -362,7 +283,6 @@ Resources:
               Resource:
                 - !GetAtt DomainsTable.Arn
                 - !Sub "${DomainsTable.Arn}/index/*"
-                - !GetAtt RegistrationRequestsTable.Arn
             - Effect: Allow
               Action: [events:PutEvents]
               Resource: !GetAtt ControlPlaneEventBus.Arn
@@ -382,42 +302,127 @@ Resources:
             Queue: !GetAtt DomainsCommandQueue.Arn
             BatchSize: 1
 
-  RegistrationCommandHandlerLogGroup:
+  # ---- Decide Registration Function ----
+  DecideFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-registration-command-handler"
+      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-decide-registration"
       RetentionInDays: 30
 
-  RegistrationCommandHandlerFunction:
+  DecideFunction:
     Type: AWS::Serverless::Function
-    DependsOn: RegistrationCommandHandlerLogGroup
+    DependsOn: DecideFunctionLogGroup
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Environment}-${Organization}-registration-command-handler"
-      CodeUri: ./domain-management/functions/registration-command-handler
+      FunctionName: !Sub "${Environment}-${Organization}-decide-registration"
+      CodeUri: ./domain-management/functions/decide-registration
       Handler: bootstrap
+      Environment:
+        Variables:
+          DOMAINS_TABLE: !Ref DomainsTable
+          CONTROL_PLANE_EVENT_BUS: !Ref ControlPlaneEventBus
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDlq.Arn
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
-              Action: [dynamodb:GetItem, dynamodb:UpdateItem]
-              Resource: !GetAtt RegistrationRequestsTable.Arn
-            - Effect: Allow
               Action: [states:SendTaskSuccess, states:SendTaskFailure]
               Resource: !Ref ApprovalWorkflow
-            - Effect: Allow
-              Action: [events:PutEvents]
-              Resource: !GetAtt ControlPlaneEventBus.Arn
-            - Effect: Allow
-              Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
-              Resource: !GetAtt RegistrationsCommandQueue.Arn
       Events:
-        SqsTrigger:
-          Type: SQS
+        Api:
+          Type: Api
           Properties:
-            Queue: !GetAtt RegistrationsCommandQueue.Arn
-            BatchSize: 1
+            RestApiId: !Ref ControlPlaneApi
+            Path: /domains/registrations/decide
+            Method: POST
+
+  # ---- Approval Notification Functions ----
+  SendApprovalNotificationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-send-approval-notification"
+      RetentionInDays: 30
+
+  SendApprovalNotificationFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SendApprovalNotificationFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "${Environment}-${Organization}-send-approval-notification"
+      CodeUri: ./domain-management/functions/send-approval-notification
+      Handler: bootstrap
+      Environment:
+        Variables:
+          DOMAINS_TABLE: !Ref DomainsTable
+          APPROVAL_FROM_EMAIL: !Ref ApprovalFromEmail
+          APPROVAL_TO_EMAIL: !Ref ApprovalToEmail
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:UpdateItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: "*"
+
+  SendRejectionNotificationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-send-rejection-notification"
+      RetentionInDays: 30
+
+  SendRejectionNotificationFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SendRejectionNotificationFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "${Environment}-${Organization}-send-rejection-notification"
+      CodeUri: ./domain-management/functions/send-rejection-notification
+      Handler: bootstrap
+      Environment:
+        Variables:
+          APPROVAL_FROM_EMAIL: !Ref ApprovalFromEmail
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: "*"
+
+  # ---- EventBridge Rules ----
+  DomainRegistrationRejectedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${Environment}-${Organization}-domain-registration-rejected"
+      EventBusName: !Ref ControlPlaneEventBus
+      EventPattern:
+        detail-type:
+          - DomainRegistrationRejected
+        source:
+          - controlplane.domain-management
+      Targets:
+        - Id: SendRejectionNotificationTarget
+          Arn: !GetAtt SendRejectionNotificationFunction.Arn
+
+  DomainRegistrationRejectedRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SendRejectionNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DomainRegistrationRejectedRule.Arn
 
   # ---- Step Functions ----
   ApprovalWorkflowRole:
@@ -440,12 +445,17 @@ Resources:
                 Action:
                   - dynamodb:UpdateItem
                 Resource:
-                  - !GetAtt RegistrationRequestsTable.Arn
+                  - !GetAtt DomainsTable.Arn
               - Effect: Allow
                 Action:
                   - events:PutEvents
                 Resource:
                   - !GetAtt ControlPlaneEventBus.Arn
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt SendApprovalNotificationFunction.Arn
 
   ApprovalWorkflow:
     Type: AWS::Serverless::StateMachine
@@ -453,10 +463,11 @@ Resources:
       Type: STANDARD
       Name: !Sub "${Environment}-${Organization}-domain-approval"
       Role: !GetAtt ApprovalWorkflowRole.Arn
-      DefinitionUri: ./domain-management/state-machines/approval.asl.json
+      DefinitionUri: ./domain-management/state-machines/approval.asl.yaml
       DefinitionSubstitutions:
-        RegistrationRequestsTable: !Ref RegistrationRequestsTable
+        DomainsTable: !Ref DomainsTable
         ControlPlaneEventBus: !GetAtt ControlPlaneEventBus.Arn
+        SendApprovalNotificationFunctionArn: !GetAtt SendApprovalNotificationFunction.Arn
 
   ProvisioningWorkflowRole:
     Type: AWS::IAM::Role
@@ -524,7 +535,7 @@ Resources:
       Type: STANDARD
       Name: !Sub "${Environment}-${Organization}-domain-provisioning"
       Role: !GetAtt ProvisioningWorkflowRole.Arn
-      DefinitionUri: ./domain-management/state-machines/provisioning.asl.json
+      DefinitionUri: ./domain-management/state-machines/provisioning.asl.yaml
       DefinitionSubstitutions:
         DomainsTable: !Ref DomainsTable
         ControlPlaneEventBus: !GetAtt ControlPlaneEventBus.Arn
@@ -539,6 +550,8 @@ Resources:
             Pattern:
               detail-type:
                 - DomainRegistrationApproved
+              source:
+                - controlplane.domain-management
 
 Outputs:
   ApiEndpoint:
@@ -550,9 +563,6 @@ Outputs:
   DomainsTableName:
     Description: Domains DynamoDB table name
     Value: !Ref DomainsTable
-  RegistrationRequestsTableName:
-    Description: Registration Requests DynamoDB table name
-    Value: !Ref RegistrationRequestsTable
   ControlPlaneFunctionRoleArn:
     Description: Trust-anchor role ARN (pass as ControlPlaneRoleArn to trust-stack.yaml)
     Value: !GetAtt ControlPlaneTrustAnchorRole.Arn

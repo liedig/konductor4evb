@@ -55,7 +55,10 @@ paths:
           default:
             statusCode: "202"
             responseTemplates:
-              application/json: '{"message":"OK"}'
+              application/json: |
+                #set($body = $input.path('$'))
+                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
+                {"requestId":"$messageId","message":"Request accepted"}
         passthroughBehavior: never
     get:
       operationId: ListDomains
@@ -194,36 +197,30 @@ paths:
           default:
             statusCode: "202"
             responseTemplates:
-              application/json: '{"message":"OK"}'
+              application/json: |
+                #set($body = $input.path('$'))
+                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
+                {"requestId":"$messageId","message":"Request accepted"}
         passthroughBehavior: never
 
-  /domains/registrations:
-    get:
-      operationId: ListRegistrationRequests
-      summary: List domain registration requests
-      parameters:
-        - name: status
-          in: query
-          schema:
-            type: string
-            enum: [PENDING_APPROVAL, APPROVED, CREATING, FAILED, REJECTED]
-        - name: nextToken
-          in: query
-          schema:
-            type: string
-        - name: maxResults
-          in: query
-          schema:
-            type: integer
-            default: 100
-            maximum: 100
+  /domains/registrations/decide:
+    post:
+      operationId: DecideRegistration
+      summary: Submit approval or rejection decision for a domain registration
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideRequest"
       responses:
         "200":
-          description: List of registration requests
+          description: Decision recorded
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ListRegistrationRequestsResponse"
+                $ref: "#/components/schemas/DecisionRecorded"
         "400":
           description: Validation error
           content:
@@ -240,74 +237,22 @@ paths:
         type: aws_proxy
         httpMethod: POST
         uri:
-          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListPendingActivationsFunction.Arn}/invocations"
-
-  /domains/registrations/{requestId}/decision:
-    post:
-      operationId: DecideRegistrationRequest
-      summary: Accept or reject a domain registration request
-      x-amazon-apigateway-request-validator: validate-body
-      parameters:
-        - name: requestId
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/DecisionRequest"
-      responses:
-        "202":
-          description: Command accepted
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CommandAccepted"
-        "400":
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "403":
-          description: Access denied
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-      x-amazon-apigateway-integration:
-        type: aws
-        httpMethod: POST
-        credentials:
-          Fn::GetAtt: [ControlPlaneApiSqsRole, Arn]
-        uri:
-          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${RegistrationsCommandQueue.QueueName}"
-        requestParameters:
-          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
-        requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"requestId\":\"$input.params('requestId')\",\"body\":$input.json('$')}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
-        responses:
-          default:
-            statusCode: "202"
-            responseTemplates:
-              application/json: '{"message":"OK"}'
-        passthroughBehavior: never
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DecideFunction.Arn}/invocations"
 
 components:
   schemas:
     CommandAccepted:
       type: object
       properties:
+        requestId:
+          type: string
         message:
           type: string
-          example: "OK"
+          example: "Domain registration request accepted"
 
     RegisterDomainRequest:
       type: object
-      required: [domainName, ownerAccountId]
+      required: [domainName, ownerAccountId, ownerEmail]
       properties:
         domainName:
           type: string
@@ -319,25 +264,13 @@ components:
         ownerAccountId:
           type: string
           pattern: "^[0-9]{12}$"
+        ownerEmail:
+          type: string
+          format: email
         tags:
           type: object
           additionalProperties:
             type: string
-
-    RegistrationRequestResponse:
-      type: object
-      properties:
-        requestId:
-          type: string
-        domainId:
-          type: string
-        domainName:
-          type: string
-        status:
-          type: string
-        createdAt:
-          type: string
-          format: date-time
 
     DomainSummary:
       type: object
@@ -408,9 +341,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        desiredStatus:
-          type: string
-          enum: [ACTIVE, SUSPENDED, DEACTIVATED]
 
     ListDomainsResponse:
       type: object
@@ -422,26 +352,27 @@ components:
         nextToken:
           type: string
 
-    ListRegistrationRequestsResponse:
+    DecideRequest:
       type: object
+      required: [taskToken, decision, decidedBy]
       properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/RegistrationRequestResponse"
-        nextToken:
+        taskToken:
           type: string
-
-    DecisionRequest:
-      type: object
-      required: [decision]
-      properties:
         decision:
           type: string
           enum: [ACCEPT, REJECT]
-        reason:
+        decidedBy:
+          type: string
+        justification:
           type: string
           maxLength: 512
+
+    DecisionRecorded:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Decision recorded"
 
     ErrorResponse:
       type: object

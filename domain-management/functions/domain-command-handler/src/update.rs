@@ -4,7 +4,6 @@ use std::env;
 
 use control_plane_common::dynamodb::{get_s, s, string_map_to_attr};
 use control_plane_common::error::ControlPlaneError;
-use control_plane_common::models::DomainStatus;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -62,35 +61,7 @@ pub async fn handle(
         expr_values.push((":tags".to_string(), string_map_to_attr(&tag_map)));
     }
 
-    let mut is_deactivation = false;
-
-    if let Some(desired) = body.get("desiredStatus").and_then(|v| v.as_str()) {
-        match desired {
-            "SUSPENDED" if current_status == "ACTIVE" => {
-                update_expr_parts.push("#s = :status".to_string());
-                expr_values.push((":status".to_string(), s(&DomainStatus::Suspended.to_string())));
-            }
-            "ACTIVE" if current_status == "SUSPENDED" => {
-                update_expr_parts.push("#s = :status".to_string());
-                expr_values.push((":status".to_string(), s(&DomainStatus::Active.to_string())));
-            }
-            "DEACTIVATED" if current_status == "ACTIVE" || current_status == "SUSPENDED" => {
-                update_expr_parts.push("#s = :status".to_string());
-                expr_values.push((":status".to_string(), s(&DomainStatus::Deactivated.to_string())));
-                is_deactivation = true;
-            }
-            "ACTIVE" | "SUSPENDED" | "DEACTIVATED" => {
-                let reason = format!("invalid state transition from {current_status} to {desired}");
-                return emit_failed(eb, &cp_bus, &domain_id, &reason).await;
-            }
-            _ => {
-                return emit_failed(eb, &cp_bus, &domain_id, "desiredStatus must be ACTIVE, SUSPENDED, or DEACTIVATED").await;
-            }
-        }
-    }
-
     let update_expression = format!("SET {}", update_expr_parts.join(", "));
-    let has_status_update = update_expr_parts.iter().any(|p| p.contains("#s"));
 
     let mut update = ddb
         .update_item()
@@ -99,9 +70,6 @@ pub async fn handle(
         .update_expression(&update_expression)
         .return_values(aws_sdk_dynamodb::types::ReturnValue::AllNew);
 
-    if has_status_update {
-        update = update.expression_attribute_names("#s", "status");
-    }
     for (k, v) in expr_values {
         update = update.expression_attribute_values(k, v);
     }
@@ -110,43 +78,6 @@ pub async fn handle(
         Some(a) => a,
         None => return emit_failed(eb, &cp_bus, &domain_id, "domain not found after update").await,
     };
-
-    if is_deactivation {
-        let domain_name = get_s(&attrs, "domainName").unwrap_or_default();
-        let owner_account_id = get_s(&attrs, "ownerAccountId").unwrap_or_default();
-        let environment = env::var("ENVIRONMENT").unwrap_or_default();
-        let organization = env::var("ORGANIZATION").unwrap_or_default();
-        let platform_bus_name = format!("{environment}-{organization}-{domain_name}-platform");
-
-        if let Err(e) = eb
-            .remove_permission()
-            .event_bus_name(&platform_bus_name)
-            .statement_id(format!("{domain_name}-publisher-access"))
-            .send()
-            .await
-        {
-            tracing::warn!("Failed to remove permission from bus {platform_bus_name}: {e}");
-        }
-
-        eb.put_events()
-            .entries(
-                aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
-                    .event_bus_name(&cp_bus)
-                    .source("controlplane.domain-management")
-                    .detail_type("DomainDeactivated")
-                    .detail(json!({
-                        "domainId": domain_id,
-                        "domainName": domain_name,
-                        "ownerAccountId": owner_account_id,
-                        "deactivatedAt": now,
-                        "previousStatus": current_status,
-                    }).to_string())
-                    .build(),
-            )
-            .send()
-            .await
-            .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
-    }
 
     eb.put_events()
         .entries(

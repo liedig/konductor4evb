@@ -43,20 +43,36 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
                     })
                 });
 
-                Ok(api::success_response(
-                    200,
-                    &json!({
-                        "domainId": get_s(&item, "domainId"),
-                        "domainName": get_s(&item, "domainName"),
-                        "description": get_s(&item, "description"),
-                        "ownerAccountId": get_s(&item, "ownerAccountId"),
-                        "status": get_s(&item, "status"),
-                        "tags": attr_to_string_map(&item, "tags"),
-                        "resourceArns": resource_arns,
-                        "createdAt": get_s(&item, "createdAt"),
-                        "updatedAt": get_s(&item, "updatedAt"),
-                    }),
-                ))
+                let mut body = json!({
+                    "domainId": get_s(&item, "domainId"),
+                    "domainName": get_s(&item, "domainName"),
+                    "description": get_s(&item, "description"),
+                    "ownerAccountId": get_s(&item, "ownerAccountId"),
+                    "ownerEmail": get_s(&item, "ownerEmail"),
+                    "status": get_s(&item, "status"),
+                    "tags": attr_to_string_map(&item, "tags"),
+                    "resourceArns": resource_arns,
+                    "createdAt": get_s(&item, "createdAt"),
+                    "updatedAt": get_s(&item, "updatedAt"),
+                });
+
+                if let Some(v) = get_s(&item, "decidedBy") {
+                    body["decidedBy"] = json!(v);
+                }
+                if let Some(v) = get_s(&item, "justification") {
+                    body["justification"] = json!(v);
+                }
+                if let Some(v) = get_s(&item, "approvedAt") {
+                    body["approvedAt"] = json!(v);
+                }
+                if let Some(v) = get_s(&item, "rejectedAt") {
+                    body["rejectedAt"] = json!(v);
+                }
+                if let Some(v) = get_s(&item, "errorDetail") {
+                    body["errorDetail"] = json!(v);
+                }
+
+                Ok(api::success_response(200, &body))
             }
             None => Ok(api::from_control_plane_error(
                 &ControlPlaneError::DomainNotFound { domain_id },

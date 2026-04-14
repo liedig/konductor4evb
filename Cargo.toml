@@ -2,11 +2,12 @@
 resolver = "2"
 members = [
     "lib/control-plane-common",
-    "domain-management/functions/domain-command-handler",
-    "domain-management/functions/registration-command-handler",
-    "domain-management/functions/list-domains",
+    "domain-management/functions/decide-registration",
     "domain-management/functions/describe-domain",
-    "domain-management/functions/list-pending-activations",
+    "domain-management/functions/domain-command-handler",
+    "domain-management/functions/list-domains",
+    "domain-management/functions/send-approval-notification",
+    "domain-management/functions/send-rejection-notification",
 ]
 
 [workspace.dependencies]
@@ -14,6 +15,7 @@ anyhow = "1"
 aws-config = "1"
 aws-sdk-dynamodb = "1"
 aws-sdk-eventbridge = "1"
+aws-sdk-sesv2 = "1"
 aws-sdk-sfn = "1"
 aws-sdk-sqs = "1"
 aws-sdk-sts = "1"

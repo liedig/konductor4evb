@@ -13,8 +13,6 @@ pub async fn handle(
     body: &Value,
 ) -> Result<()> {
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
-    let requests_table =
-        env::var("REGISTRATION_REQUESTS_TABLE").context("REGISTRATION_REQUESTS_TABLE not set")?;
     let state_machine_arn =
         env::var("APPROVAL_STATE_MACHINE_ARN").context("APPROVAL_STATE_MACHINE_ARN not set")?;
     let cp_bus = env::var("CONTROL_PLANE_EVENT_BUS").context("CONTROL_PLANE_EVENT_BUS not set")?;
@@ -23,7 +21,7 @@ pub async fn handle(
         .context("failed to deserialise RegisterDomainRequest")?;
 
     if let Err(e) = validate_domain_name(&request.domain_name) {
-        emit_failed(eb, &cp_bus, &request.domain_name, &request.owner_account_id, &e.to_string()).await?;
+        emit_failed(eb, &cp_bus, &request.domain_name, &request.owner_account_id, &request.owner_email, &e.to_string()).await?;
         return Ok(());
     }
 
@@ -39,7 +37,7 @@ pub async fn handle(
 
     if existing.count() > 0 {
         let reason = format!("domain '{}' already exists", request.domain_name);
-        emit_failed(eb, &cp_bus, &request.domain_name, &request.owner_account_id, &reason).await?;
+        emit_failed(eb, &cp_bus, &request.domain_name, &request.owner_account_id, &request.owner_email, &reason).await?;
         return Ok(());
     }
 
@@ -55,6 +53,7 @@ pub async fn handle(
         .item("domainName", s(&request.domain_name))
         .item("ownerAccountId", s(&request.owner_account_id))
         .item("status", s(&status))
+        .item("ownerEmail", s(&request.owner_email))
         .item("createdAt", s(&now))
         .item("updatedAt", s(&now))
         .item("createdBy", s(&request.owner_account_id));
@@ -68,24 +67,12 @@ pub async fn handle(
         .await
         .map_err(|e| ControlPlaneError::DynamoDb(e.to_string()))?;
 
-    ddb.put_item()
-        .table_name(&requests_table)
-        .item("requestId", s(&request_id))
-        .item("domainId", s(&domain_id))
-        .item("domainName", s(&request.domain_name))
-        .item("ownerAccountId", s(&request.owner_account_id))
-        .item("status", s(&status))
-        .item("createdAt", s(&now))
-        .item("createdBy", s(&request.owner_account_id))
-        .send()
-        .await
-        .map_err(|e| ControlPlaneError::DynamoDb(e.to_string()))?;
-
     let sfn_input = json!({
         "requestId": request_id,
         "domainId": domain_id,
         "domainName": request.domain_name,
         "ownerAccountId": request.owner_account_id,
+        "ownerEmail": request.owner_email,
         "description": request.description,
     });
 
@@ -108,6 +95,7 @@ pub async fn handle(
                     "domainId": domain_id,
                     "domainName": request.domain_name,
                     "ownerAccountId": request.owner_account_id,
+                    "ownerEmail": request.owner_email,
                     "status": status,
                     "createdAt": now,
                 }).to_string())
@@ -125,6 +113,7 @@ async fn emit_failed(
     cp_bus: &str,
     domain_name: &str,
     owner_account_id: &str,
+    owner_email: &str,
     reason: &str,
 ) -> Result<()> {
     eb.put_events()
@@ -136,6 +125,7 @@ async fn emit_failed(
                 .detail(json!({
                     "domainName": domain_name,
                     "ownerAccountId": owner_account_id,
+                    "ownerEmail": owner_email,
                     "reason": reason,
                     "failedAt": chrono::Utc::now().to_rfc3339(),
                 }).to_string())
