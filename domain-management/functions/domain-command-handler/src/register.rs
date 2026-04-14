@@ -21,7 +21,15 @@ pub async fn handle(
         .context("failed to deserialise RegisterDomainRequest")?;
 
     if let Err(e) = validate_domain_name(&request.domain_name) {
-        emit_failed(eb, &cp_bus, &request.domain_name, &request.owner_account_id, &request.owner_email, &e.to_string()).await?;
+        emit_failed(
+            eb,
+            &cp_bus,
+            &request.domain_name,
+            &request.owner_account_id,
+            &request.owner_email,
+            &e.to_string(),
+        )
+        .await?;
         return Ok(());
     }
 
@@ -37,7 +45,15 @@ pub async fn handle(
 
     if existing.count() > 0 {
         let reason = format!("domain '{}' already exists", request.domain_name);
-        emit_failed(eb, &cp_bus, &request.domain_name, &request.owner_account_id, &request.owner_email, &reason).await?;
+        emit_failed(
+            eb,
+            &cp_bus,
+            &request.domain_name,
+            &request.owner_account_id,
+            &request.owner_email,
+            &reason,
+        )
+        .await?;
         return Ok(());
     }
 
@@ -90,15 +106,18 @@ pub async fn handle(
                 .event_bus_name(&cp_bus)
                 .source("controlplane.domain-management")
                 .detail_type("RegisterDomainSucceeded")
-                .detail(json!({
-                    "requestId": request_id,
-                    "domainId": domain_id,
-                    "domainName": request.domain_name,
-                    "ownerAccountId": request.owner_account_id,
-                    "ownerEmail": request.owner_email,
-                    "status": status,
-                    "createdAt": now,
-                }).to_string())
+                .detail(
+                    json!({
+                        "requestId": request_id,
+                        "domainId": domain_id,
+                        "domainName": request.domain_name,
+                        "ownerAccountId": request.owner_account_id,
+                        "ownerEmail": request.owner_email,
+                        "status": status,
+                        "createdAt": now,
+                    })
+                    .to_string(),
+                )
                 .build(),
         )
         .send()
@@ -122,13 +141,16 @@ async fn emit_failed(
                 .event_bus_name(cp_bus)
                 .source("controlplane.domain-management")
                 .detail_type("RegisterDomainFailed")
-                .detail(json!({
-                    "domainName": domain_name,
-                    "ownerAccountId": owner_account_id,
-                    "ownerEmail": owner_email,
-                    "reason": reason,
-                    "failedAt": chrono::Utc::now().to_rfc3339(),
-                }).to_string())
+                .detail(
+                    json!({
+                        "domainName": domain_name,
+                        "ownerAccountId": owner_account_id,
+                        "ownerEmail": owner_email,
+                        "reason": reason,
+                        "failedAt": chrono::Utc::now().to_rfc3339(),
+                    })
+                    .to_string(),
+                )
                 .build(),
         )
         .send()

@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use std::env;
 
 use control_plane_common::api;
-use control_plane_common::dynamodb::{deserialize_pagination_token, get_s, s, serialize_pagination_token};
+use control_plane_common::dynamodb::{
+    deserialize_pagination_token, get_s, s, serialize_pagination_token,
+};
 
 struct QueryResult {
     items: Vec<HashMap<String, AttributeValue>>,
@@ -29,42 +31,70 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
     let start_key = next_token.as_deref().and_then(deserialize_pagination_token);
 
     let result = if let Some(owner) = &owner_filter {
-        query_by_index(&ddb, &table, "by-owner", "ownerAccountId", owner, max_results, start_key).await
+        query_by_index(
+            &ddb,
+            &table,
+            "by-owner",
+            "ownerAccountId",
+            owner,
+            max_results,
+            start_key,
+        )
+        .await
     } else if let Some(status) = &status_filter {
-        query_by_index(&ddb, &table, "by-status", "status", status, max_results, start_key).await
+        query_by_index(
+            &ddb,
+            &table,
+            "by-status",
+            "status",
+            status,
+            max_results,
+            start_key,
+        )
+        .await
     } else {
         scan_all(&ddb, &table, max_results, start_key).await
     };
 
     match result {
         Ok(qr) => {
-            let items: Vec<Value> = qr.items.iter().map(|item| {
-                json!({
-                    "domainId": get_s(item, "domainId"),
-                    "domainName": get_s(item, "domainName"),
-                    "description": get_s(item, "description"),
-                    "ownerAccountId": get_s(item, "ownerAccountId"),
-                    "status": get_s(item, "status"),
-                    "createdAt": get_s(item, "createdAt"),
+            let items: Vec<Value> = qr
+                .items
+                .iter()
+                .map(|item| {
+                    json!({
+                        "domainId": get_s(item, "domainId"),
+                        "domainName": get_s(item, "domainName"),
+                        "description": get_s(item, "description"),
+                        "ownerAccountId": get_s(item, "ownerAccountId"),
+                        "status": get_s(item, "status"),
+                        "createdAt": get_s(item, "createdAt"),
+                    })
                 })
-            }).collect();
+                .collect();
 
             let pagination_token = qr.last_key.as_ref().map(serialize_pagination_token);
 
-            Ok(api::success_response(200, &json!({
-                "items": items,
-                "nextToken": pagination_token,
-            })))
+            Ok(api::success_response(
+                200,
+                &json!({
+                    "items": items,
+                    "nextToken": pagination_token,
+                }),
+            ))
         }
         Err(e) => {
             tracing::error!("DynamoDB error: {e:?}");
-            Ok(api::error_response(500, control_plane_common::models::ApiError {
-                code: "InternalServerException".to_string(),
-                message: "Failed to list domains".to_string(),
-                request_id: None,
-                reason: None,
-                field_list: None,
-            }))
+            Ok(api::error_response(
+                500,
+                control_plane_common::models::ApiError {
+                    code: "InternalServerException".to_string(),
+                    message: "Failed to list domains".to_string(),
+                    request_id: None,
+                    reason: None,
+                    field_list: None,
+                },
+            ))
         }
     }
 }

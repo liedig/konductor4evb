@@ -26,7 +26,9 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
         )));
     }
 
-    if request.decision == Decision::Reject && request.justification.as_deref().unwrap_or("").is_empty() {
+    if request.decision == Decision::Reject
+        && request.justification.as_deref().unwrap_or("").is_empty()
+    {
         return Ok(api::from_control_plane_error(&api::validation_error(
             "justification is required when decision is REJECT",
         )));
@@ -92,7 +94,10 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
         }
     }
 
-    Ok(api::success_response(200, &json!({"message": "Decision recorded"})))
+    Ok(api::success_response(
+        200,
+        &json!({"message": "Decision recorded"}),
+    ))
 }
 
 #[tokio::main]

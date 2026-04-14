@@ -36,9 +36,7 @@ pub fn attr_to_string_map(
     })
 }
 
-pub fn serialize_pagination_token(
-    key: &HashMap<String, AttributeValue>,
-) -> String {
+pub fn serialize_pagination_token(key: &HashMap<String, AttributeValue>) -> String {
     let token_map: HashMap<String, String> = key
         .iter()
         .filter_map(|(k, v)| {
@@ -49,9 +47,7 @@ pub fn serialize_pagination_token(
     serde_json::to_string(&token_map).unwrap_or_default()
 }
 
-pub fn deserialize_pagination_token(
-    token: &str,
-) -> Option<HashMap<String, AttributeValue>> {
+pub fn deserialize_pagination_token(token: &str) -> Option<HashMap<String, AttributeValue>> {
     let map: HashMap<String, String> = serde_json::from_str(token).ok()?;
     Some(map.into_iter().map(|(k, v)| (k, s(&v))).collect())
 }

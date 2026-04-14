@@ -40,7 +40,13 @@ pub async fn handle(
     let current_status = get_s(&item, "status").unwrap_or_default();
 
     if current_status == "DEACTIVATED" {
-        return emit_failed(eb, &cp_bus, &domain_id, "domain is DEACTIVATED and cannot be modified").await;
+        return emit_failed(
+            eb,
+            &cp_bus,
+            &domain_id,
+            "domain is DEACTIVATED and cannot be modified",
+        )
+        .await;
     }
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -74,7 +80,12 @@ pub async fn handle(
         update = update.expression_attribute_values(k, v);
     }
 
-    let attrs = match update.send().await.map_err(|e| ControlPlaneError::DynamoDb(e.to_string()))?.attributes {
+    let attrs = match update
+        .send()
+        .await
+        .map_err(|e| ControlPlaneError::DynamoDb(e.to_string()))?
+        .attributes
+    {
         Some(a) => a,
         None => return emit_failed(eb, &cp_bus, &domain_id, "domain not found after update").await,
     };
@@ -85,11 +96,14 @@ pub async fn handle(
                 .event_bus_name(&cp_bus)
                 .source("controlplane.domain-management")
                 .detail_type("UpdateDomainSucceeded")
-                .detail(json!({
-                    "domainId": domain_id,
-                    "updatedAt": now,
-                    "status": get_s(&attrs, "status"),
-                }).to_string())
+                .detail(
+                    json!({
+                        "domainId": domain_id,
+                        "updatedAt": now,
+                        "status": get_s(&attrs, "status"),
+                    })
+                    .to_string(),
+                )
                 .build(),
         )
         .send()
@@ -99,18 +113,26 @@ pub async fn handle(
     Ok(())
 }
 
-async fn emit_failed(eb: &aws_sdk_eventbridge::Client, cp_bus: &str, domain_id: &str, reason: &str) -> Result<()> {
+async fn emit_failed(
+    eb: &aws_sdk_eventbridge::Client,
+    cp_bus: &str,
+    domain_id: &str,
+    reason: &str,
+) -> Result<()> {
     eb.put_events()
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .event_bus_name(cp_bus)
                 .source("controlplane.domain-management")
                 .detail_type("UpdateDomainFailed")
-                .detail(json!({
-                    "domainId": domain_id,
-                    "reason": reason,
-                    "failedAt": chrono::Utc::now().to_rfc3339(),
-                }).to_string())
+                .detail(
+                    json!({
+                        "domainId": domain_id,
+                        "reason": reason,
+                        "failedAt": chrono::Utc::now().to_rfc3339(),
+                    })
+                    .to_string(),
+                )
                 .build(),
         )
         .send()

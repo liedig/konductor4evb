@@ -35,16 +35,16 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        let body_str = record
-            .get("body")
-            .and_then(|b| b.as_str())
-            .unwrap_or("{}");
+        let body_str = record.get("body").and_then(|b| b.as_str()).unwrap_or("{}");
 
-        let body: Value = serde_json::from_str(body_str).unwrap_or(Value::Object(Default::default()));
+        let body: Value =
+            serde_json::from_str(body_str).unwrap_or(Value::Object(Default::default()));
 
         match http_method {
             "POST" => {
-                if let Err(e) = register::handle(&clients.ddb, &clients.eb, &clients.sfn, &body).await {
+                if let Err(e) =
+                    register::handle(&clients.ddb, &clients.eb, &clients.sfn, &body).await
+                {
                     tracing::error!("register failed: {e:?}");
                     return Err(e.into());
                 }

@@ -57,11 +57,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
 
     ses.send_email()
         .from_email_address(&from_email)
-        .destination(
-            Destination::builder()
-                .to_addresses(owner_email)
-                .build(),
-        )
+        .destination(Destination::builder().to_addresses(owner_email).build())
         .content(
             EmailContent::builder()
                 .simple(

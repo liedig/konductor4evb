@@ -28,59 +28,71 @@ pub fn error_response(status_code: u16, mut error: ApiError) -> Value {
 pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
     match err {
         ControlPlaneError::DomainNotFound { .. } | ControlPlaneError::RequestNotFound { .. } => {
-            error_response(404, ApiError {
-                code: "ResourceNotFoundException".to_string(),
-                message: err.to_string(),
-                request_id: None,
-                reason: None,
-                field_list: None,
-            })
+            error_response(
+                404,
+                ApiError {
+                    code: "ResourceNotFoundException".to_string(),
+                    message: err.to_string(),
+                    request_id: None,
+                    reason: None,
+                    field_list: None,
+                },
+            )
         }
-        ControlPlaneError::DomainAlreadyExists { .. } => {
-            error_response(409, ApiError {
+        ControlPlaneError::DomainAlreadyExists { .. } => error_response(
+            409,
+            ApiError {
                 code: "ConflictException".to_string(),
                 message: err.to_string(),
                 request_id: None,
                 reason: None,
                 field_list: None,
-            })
-        }
-        ControlPlaneError::ValidationException { message, reason, field_list } => {
-            error_response(400, ApiError {
+            },
+        ),
+        ControlPlaneError::ValidationException {
+            message,
+            reason,
+            field_list,
+        } => error_response(
+            400,
+            ApiError {
                 code: "ValidationException".to_string(),
                 message: message.clone(),
                 request_id: None,
                 reason: Some(reason.clone()),
                 field_list: field_list.clone(),
-            })
-        }
-        ControlPlaneError::AccessDenied => {
-            error_response(403, ApiError {
+            },
+        ),
+        ControlPlaneError::AccessDenied => error_response(
+            403,
+            ApiError {
                 code: "AccessDeniedException".to_string(),
                 message: "Access denied".to_string(),
                 request_id: None,
                 reason: None,
                 field_list: None,
-            })
-        }
-        ControlPlaneError::InvalidStateTransition { .. } => {
-            error_response(409, ApiError {
+            },
+        ),
+        ControlPlaneError::InvalidStateTransition { .. } => error_response(
+            409,
+            ApiError {
                 code: "ConflictException".to_string(),
                 message: err.to_string(),
                 request_id: None,
                 reason: None,
                 field_list: None,
-            })
-        }
-        _ => {
-            error_response(500, ApiError {
+            },
+        ),
+        _ => error_response(
+            500,
+            ApiError {
                 code: "InternalServerException".to_string(),
                 message: "An internal error occurred".to_string(),
                 request_id: None,
                 reason: None,
                 field_list: None,
-            })
-        }
+            },
+        ),
     }
 }
 
@@ -101,10 +113,7 @@ pub fn parse_error(message: impl Into<String>) -> ControlPlaneError {
 }
 
 pub fn parse_body<T: serde::de::DeserializeOwned>(event: &Value) -> Result<T, ControlPlaneError> {
-    let body_str = event
-        .get("body")
-        .and_then(|b| b.as_str())
-        .unwrap_or("{}");
+    let body_str = event.get("body").and_then(|b| b.as_str()).unwrap_or("{}");
 
     serde_json::from_str(body_str).map_err(|e| parse_error(format!("Invalid request body: {e}")))
 }

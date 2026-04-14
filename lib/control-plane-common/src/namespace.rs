@@ -42,7 +42,10 @@ mod tests {
     #[test]
     fn default_pattern_resolves_correctly() {
         let resolver = NamespaceResolver::default_pattern();
-        assert_eq!(resolver.resolve("prod", "acme", "billing"), "prod-acme-billing");
+        assert_eq!(
+            resolver.resolve("prod", "acme", "billing"),
+            "prod-acme-billing"
+        );
     }
 
     #[test]
@@ -57,6 +60,9 @@ mod tests {
     #[test]
     fn custom_pattern_resolves_correctly() {
         let resolver = NamespaceResolver::new("{org}/{env}/{domain}".to_string());
-        assert_eq!(resolver.resolve("prod", "acme", "billing"), "acme/prod/billing");
+        assert_eq!(
+            resolver.resolve("prod", "acme", "billing"),
+            "acme/prod/billing"
+        );
     }
 }
