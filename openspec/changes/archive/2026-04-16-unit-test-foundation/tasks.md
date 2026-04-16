@@ -20,8 +20,8 @@
 
 ## 4. Domain name validation (register.rs)
 
-- [ ] 4.1 Make `validate_domain_name` a `pub(crate)` function (currently private) so it can be tested from an inline test module
-- [ ] 4.2 Add `#[cfg(test)]` module to `register.rs` with tests: valid names pass (e.g., `"billing"`, `"my-domain"`, `"a1"`), too short fails (1 char), too long fails (65 chars), invalid characters fail (uppercase, special chars), leading/trailing hyphen fails
+- [x] 4.1 Make `validate_domain_name` a `pub(crate)` function (currently private) so it can be tested from an inline test module
+- [x] 4.2 Add `#[cfg(test)]` module to `register.rs` with tests: valid names pass (e.g., `"billing"`, `"my-domain"`, `"a1"`), too short fails (1 char), too long fails (65 chars), invalid characters fail (uppercase, special chars), leading/trailing hyphen fails
 
 ## 5. Notification email body extraction and tests
 
