@@ -4,7 +4,7 @@ use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde_json::Value;
 use std::env;
 
-use control_plane_common::dynamodb::s;
+use nexus_common::dynamodb::s;
 
 async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
     let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
@@ -42,6 +42,21 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .and_then(|v| v.as_str())
         .context("missing ownerEmail")?;
 
+    let active_domains = ddb
+        .query()
+        .table_name(&table)
+        .index_name("by-owner")
+        .key_condition_expression("ownerAccountId = :acct")
+        .filter_expression("#s = :active")
+        .expression_attribute_names("#s", "status")
+        .expression_attribute_values(":acct", s(owner_account_id))
+        .expression_attribute_values(":active", s("ACTIVE"))
+        .send()
+        .await
+        .context("failed to query by-owner GSI")?;
+
+    let is_new_account = active_domains.count() == 0;
+
     ddb.update_item()
         .table_name(&table)
         .key("domainId", s(domain_id))
@@ -51,8 +66,13 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .await
         .context("failed to persist taskToken to domain record")?;
 
-    let html_body =
-        build_approval_email_body(domain_name, owner_account_id, owner_email, task_token);
+    let html_body = build_approval_email_body(
+        domain_name,
+        owner_account_id,
+        owner_email,
+        task_token,
+        is_new_account,
+    );
 
     ses.send_email()
         .from_email_address(&from_email)
@@ -95,12 +115,24 @@ fn build_approval_email_body(
     owner_account_id: &str,
     owner_email: &str,
     task_token: &str,
+    is_new_account: bool,
 ) -> String {
+    let new_account_notice = if is_new_account {
+        r#"<div style="background-color:#fff3cd;border:1px solid #ffc107;padding:12px;margin:12px 0;border-radius:4px">
+<strong>New Account Detected:</strong> This is the first domain registration from account {owner_account_id}.
+Ensure the trust-stack has been deployed to this account before approving.
+</div>"#
+            .replace("{owner_account_id}", owner_account_id)
+    } else {
+        String::new()
+    };
+
     format!(
         r#"<html>
 <body>
 <h2>Domain Registration Approval Required</h2>
 <p>A new domain registration request requires your approval.</p>
+{new_account_notice}
 <table>
 <tr><td><strong>Domain Name</strong></td><td>{domain_name}</td></tr>
 <tr><td><strong>Owner Account</strong></td><td>{owner_account_id}</td></tr>
@@ -129,35 +161,50 @@ mod tests {
     #[test]
     fn approval_email_body_contains_domain_name() {
         let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
         assert!(body.contains("billing"));
     }
 
     #[test]
     fn approval_email_body_contains_owner_account_id() {
         let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
         assert!(body.contains("111122223333"));
     }
 
     #[test]
     fn approval_email_body_contains_owner_email() {
         let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
         assert!(body.contains("owner@example.com"));
     }
 
     #[test]
     fn approval_email_body_contains_task_token() {
         let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
         assert!(body.contains("tok-1"));
     }
 
     #[test]
     fn approval_email_body_contains_heading() {
         let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1");
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
         assert!(body.contains("Approval Required"));
+    }
+
+    #[test]
+    fn new_account_shows_trust_stack_notice() {
+        let body =
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", true);
+        assert!(body.contains("New Account Detected"));
+        assert!(body.contains("trust-stack"));
+    }
+
+    #[test]
+    fn known_account_omits_trust_stack_notice() {
+        let body =
+            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
+        assert!(!body.contains("New Account Detected"));
     }
 }

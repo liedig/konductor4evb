@@ -2,8 +2,8 @@ use anyhow::Result;
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde_json::{json, Value};
 
-use control_plane_common::api;
-use control_plane_common::models::{ApiError, DecideRequest, Decision};
+use nexus_common::api;
+use nexus_common::models::{ApiError, DecideRequest, Decision};
 
 async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
     let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;

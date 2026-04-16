@@ -1,8 +1,8 @@
 openapi: "3.0.1"
 info:
-  title: EventBridge Control Plane API
+  title: EventBridge Nexus API
   version: "1.0.0"
-  description: Control plane for managing AWS EventBridge domains, subscriptions, and cross-account event routing.
+  description: EventBridge Nexus — central integration platform for managing AWS EventBridge domains, subscriptions, and cross-account event routing.
 
 x-amazon-apigateway-request-validators:
   validate-body:
@@ -44,7 +44,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [ControlPlaneApiSqsRole, Arn]
+          Fn::GetAtt: [NexusApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainsCommandQueue.QueueName}"
         requestParameters:
@@ -186,7 +186,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [ControlPlaneApiSqsRole, Arn]
+          Fn::GetAtt: [NexusApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainsCommandQueue.QueueName}"
         requestParameters:

@@ -84,8 +84,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${ControlPlaneEventBus}"
-          Source: controlplane.domain-management
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.domain-management
           DetailType: DomainRegistrationApproved
           Detail: >-
             {% $string({
@@ -104,8 +104,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${ControlPlaneEventBus}"
-          Source: controlplane.domain-management
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.domain-management
           DetailType: DomainRegistrationRejected
           Detail: >-
             {% $string({

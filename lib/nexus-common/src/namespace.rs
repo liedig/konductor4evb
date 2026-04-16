@@ -8,7 +8,7 @@ impl NamespaceResolver {
     }
 
     pub fn default_pattern() -> Self {
-        Self::new("{env}-{org}-{domain}".to_string())
+        Self::new("{org}-{env}-{domain}".to_string())
     }
 
     pub fn resolve(&self, env: &str, org: &str, domain: &str) -> String {
@@ -33,6 +33,14 @@ impl NamespaceResolver {
     pub fn integration_dlq_name(&self, env: &str, org: &str, domain: &str) -> String {
         format!("{}-integration-dlq", self.resolve(env, org, domain))
     }
+
+    pub fn namespace(&self, org: &str, domain: &str) -> String {
+        format!("{org}-{domain}")
+    }
+
+    pub fn namespace_parameter_path(&self, domain: &str) -> String {
+        format!("/namespace/{domain}")
+    }
 }
 
 #[cfg(test)]
@@ -44,7 +52,7 @@ mod tests {
         let resolver = NamespaceResolver::default_pattern();
         assert_eq!(
             resolver.resolve("prod", "acme", "billing"),
-            "prod-acme-billing"
+            "acme-prod-billing"
         );
     }
 
@@ -53,7 +61,7 @@ mod tests {
         let resolver = NamespaceResolver::default_pattern();
         assert_eq!(
             resolver.event_bus_name("prod", "acme", "billing"),
-            "prod-acme-billing-domain-bus"
+            "acme-prod-billing-domain-bus"
         );
     }
 
@@ -63,6 +71,21 @@ mod tests {
         assert_eq!(
             resolver.resolve("prod", "acme", "billing"),
             "acme/prod/billing"
+        );
+    }
+
+    #[test]
+    fn namespace_is_environment_independent() {
+        let resolver = NamespaceResolver::default_pattern();
+        assert_eq!(resolver.namespace("acme", "billing"), "acme-billing");
+    }
+
+    #[test]
+    fn namespace_parameter_path_format() {
+        let resolver = NamespaceResolver::default_pattern();
+        assert_eq!(
+            resolver.namespace_parameter_path("billing"),
+            "/namespace/billing"
         );
     }
 }

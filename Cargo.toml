@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "lib/control-plane-common",
+    "lib/nexus-common",
     "domain-management/functions/decide-registration",
     "domain-management/functions/describe-domain",
     "domain-management/functions/domain-command-handler",
@@ -13,10 +13,10 @@ members = [
 [workspace.dependencies]
 anyhow = "1"
 aws-config = "1"
-aws-sdk-dynamodb = "1"
-aws-sdk-eventbridge = "1"
-aws-sdk-sesv2 = "1"
-aws-sdk-sfn = "1"
+aws-sdk-dynamodb = { version = "1", features = ["test-util"] }
+aws-sdk-eventbridge = { version = "1", features = ["test-util"] }
+aws-sdk-sesv2 = { version = "1", features = ["test-util"] }
+aws-sdk-sfn = { version = "1", features = ["test-util"] }
 aws-sdk-sqs = "1"
 aws-sdk-sts = "1"
 aws-sdk-schemas = "1"
@@ -29,4 +29,5 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+aws-smithy-mocks = "0.2"
 uuid = { version = "1", features = ["v4"] }

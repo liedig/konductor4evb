@@ -1,17 +1,17 @@
-# EventBridge Control Plane
+# EventBridge Nexus
 
-A serverless control plane for managing AWS EventBridge infrastructure across accounts. It provides domain-level APIs that let teams publish and subscribe to events without manually creating EventBridge rules, IAM policies, or cross-account delivery infrastructure.
+A serverless integration platform for managing AWS EventBridge infrastructure across accounts. It provides domain-level APIs that let teams publish and subscribe to events without manually creating EventBridge rules, IAM policies, or cross-account delivery infrastructure.
 
 ## Why
 
-Cross-account EventBridge setups are complex. Each subscription typically requires coordinating event buses, rules, resource policies, IAM roles, and DLQs across multiple AWS accounts. This control plane abstracts that away behind a REST API, reducing time-to-first-event from days to minutes and cutting the number of resources teams need to manage per subscription by roughly 60%.
+Cross-account EventBridge setups are complex. Each subscription typically requires coordinating event buses, rules, resource policies, IAM roles, and DLQs across multiple AWS accounts. EventBridge Nexus abstracts that away behind a REST API, reducing time-to-first-event from days to minutes and cutting the number of resources teams need to manage per subscription by roughly 60%.
 
 ## Key Concepts
 
 - **Domain** -- A logical grouping of related events owned by a team. Each domain gets its own event buses, schema registry, DLQs, and CloudWatch monitoring, all provisioned automatically.
-- **Platform account** -- The central account where the control plane runs. Domain event buses live here with policies restricting who can publish.
-- **Application account** -- A team's AWS account. Each gets a trust stack that grants the control plane cross-account access to create domain resources.
-- **Namespace convention** -- All resources follow a configurable `{env}-{org}-{domain}` naming pattern (e.g., `prod-acme-payments-domain-bus`).
+- **Platform account** -- The central account where the Nexus runs. Domain event buses live here with policies restricting who can publish.
+- **Application account** -- A team's AWS account. Each gets a trust stack that grants the Nexus cross-account access to create domain resources.
+- **Namespace convention** -- All resources follow a configurable `{org}-{env}-{domain}` naming pattern (e.g., `acme-prod-payments-domain-bus`).
 
 ## Architecture
 
@@ -23,7 +23,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
                     │  Lambda Functions (Rust)       │
                     │       │                       │
                     │  DynamoDB    EventBridge       │
-                    │  (domains,   (control plane    │
+                    │  (domains,   (Nexus            │
                     │   requests)   lifecycle bus)   │
                     │       │                       │
                     │  Step Functions                │
@@ -39,7 +39,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
                                │ STS AssumeRole
                     ┌──────────▼───────────────────┐
                     │      Application Account      │
-                    │  Trust Role (cp-trust-role)    │
+                    │  Trust Role (nexus-trust-role)  │
                     │  Domain Event Bus (app-side)   │
                     │  Integration DLQ               │
                     └──────────────────────────────┘
@@ -79,7 +79,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 ├── event-routing/                    # Event routing (planned)
 │   └── functions/
 ├── lib/
-│   └── control-plane-common/         # Shared library
+│   └── nexus-common/                 # Shared library
 │       └── src/
 │           ├── api.rs                # API Gateway helpers
 │           ├── dynamodb.rs           # DynamoDB helpers
@@ -154,7 +154,7 @@ make build    # sam build
 
 ### Deploy
 
-1. Deploy the control plane to the platform account:
+1. Deploy the Nexus to the platform account:
 
 ```bash
 sam deploy --guided
@@ -165,9 +165,9 @@ sam deploy --guided
 ```bash
 aws cloudformation deploy \
   --template-file trust-stack.yaml \
-  --stack-name <env>-<org>-cp-trust-stack \
+  --stack-name <org>-<env>-nexus-trust-stack \
   --parameter-overrides \
-    ControlPlaneRoleArn=<function-role-arn> \
+    NexusRoleArn=<function-role-arn> \
     ProvisioningWorkflowRoleArn=<provisioning-role-arn> \
     Environment=<env> \
     Organization=<org> \
@@ -203,9 +203,9 @@ Triggered by DomainDeletionRequested event. Tears down all provisioned resources
 
 | Resource | Account | Name Pattern |
 |---|---|---|
-| Domain event bus | Platform | `{env}-{org}-{domain}-domain-bus` |
-| Schema registry | Platform | `{env}-{org}-{domain}-schema-registry` |
-| Subscription DLQ | Platform | `{env}-{org}-{domain}-subscription-dlq` |
-| CloudWatch dashboard | Platform | `{env}-{org}-{domain}-domain-dashboard` |
-| Domain event bus | Application | `{env}-{org}-{domain}-domain-bus` |
-| Integration DLQ | Application | `{env}-{org}-{domain}-integration-dlq` |
+| Domain event bus | Platform | `{org}-{env}-{domain}-domain-bus` |
+| Schema registry | Platform | `{org}-{env}-{domain}-schema-registry` |
+| Subscription DLQ | Platform | `{org}-{env}-{domain}-subscription-dlq` |
+| CloudWatch dashboard | Platform | `{org}-{env}-{domain}-domain-dashboard` |
+| Domain event bus | Application | `{org}-{env}-{domain}-domain-bus` |
+| Integration DLQ | Application | `{org}-{env}-{domain}-integration-dlq` |

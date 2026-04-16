@@ -18,6 +18,13 @@
   - Cross-account automation (IAM/resource policies, rule creation)
 - Use lightweight unit tests only where they materially reduce risk on complex logic or edge cases
 
+## Product Naming
+- The product is called **EventBridge Nexus** (short form: **Nexus**)
+- Resource namespace convention: `{org}-{env}-{domain}` (e.g., `acme-prod-payments`)
+- Trust role: `nexus-trust-role`
+- Event source: `nexus.domain-management`
+- Lifecycle event bus: `nexus-bus`
+
 ## Git Workflow
 - Conventional Commits: `<type>[optional scope]: <description>`
 - Types: `feat`, `fix`, `refactor`, `chore`, `test`, `docs`

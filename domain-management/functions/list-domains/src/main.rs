@@ -5,8 +5,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
 
-use control_plane_common::api;
-use control_plane_common::dynamodb::{
+use nexus_common::api;
+use nexus_common::dynamodb::{
     deserialize_pagination_token, get_s, s, serialize_pagination_token,
 };
 
@@ -87,7 +87,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
             tracing::error!("DynamoDB error: {e:?}");
             Ok(api::error_response(
                 500,
-                control_plane_common::models::ApiError {
+                nexus_common::models::ApiError {
                     code: "InternalServerException".to_string(),
                     message: "Failed to list domains".to_string(),
                     request_id: None,

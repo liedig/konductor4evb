@@ -3,10 +3,10 @@ use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde_json::{json, Value};
 use std::env;
 
-use control_plane_common::api;
-use control_plane_common::dynamodb::{attr_to_string_map, get_m, get_s, s};
-use control_plane_common::error::ControlPlaneError;
-use control_plane_common::models::ApiError;
+use nexus_common::api;
+use nexus_common::dynamodb::{attr_to_string_map, get_m, get_s, s};
+use nexus_common::error::ControlPlaneError;
+use nexus_common::models::ApiError;
 
 async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
     let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;

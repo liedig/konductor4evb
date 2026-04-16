@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: EventBridge Control Plane
+Description: EventBridge Nexus
 
 Parameters:
   Environment:
@@ -12,8 +12,11 @@ Parameters:
     Description: Organization identifier used in resource naming
   NamespacePattern:
     Type: String
-    Default: "{env}-{org}-{domain}"
+    Default: "{org}-{env}-{domain}"
     Description: Configurable namespace convention for resource naming
+  OrganizationArn:
+    Type: String
+    Description: ARN of the AWS Organization for RAM sharing (e.g., arn:aws:organizations::123456789012:organization/o-abc123)
   ApprovalFromEmail:
     Type: String
     Description: Verified SES sender for approval notifications
@@ -34,16 +37,16 @@ Globals:
         ORGANIZATION: !Ref Organization
         NAMESPACE_PATTERN: !Ref NamespacePattern
         DOMAINS_TABLE: !Ref DomainsTable
-        CONTROL_PLANE_EVENT_BUS: !Ref ControlPlaneEventBus
+        NEXUS_EVENT_BUS: !Ref NexusEventBus
         APPROVAL_STATE_MACHINE_ARN: !Ref ApprovalWorkflow
         DOMAINS_COMMAND_QUEUE_URL: !Ref DomainsCommandQueue
 
 Resources:
   # ---- EventBridge ----
-  ControlPlaneEventBus:
+  NexusEventBus:
     Type: AWS::Events::EventBus
     Properties:
-      Name: !Sub "${Environment}-${Organization}-control-plane-bus"
+      Name: !Sub "${Organization}-${Environment}-nexus-bus"
 
   # ---- DynamoDB ----
   DomainsTable:
@@ -51,7 +54,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: !Sub "${Environment}-${Organization}-domains"
+      TableName: !Sub "${Organization}-${Environment}-domains"
       BillingMode: PAY_PER_REQUEST
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
@@ -93,20 +96,20 @@ Resources:
   LambdaDlq:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub "${Environment}-${Organization}-lambda-dlq"
+      QueueName: !Sub "${Organization}-${Environment}-lambda-dlq"
       MessageRetentionPeriod: 1209600
 
   # ---- Command Queues ----
   DomainsCommandDlq:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub "${Environment}-${Organization}-domains-command-dlq"
+      QueueName: !Sub "${Organization}-${Environment}-domains-command-dlq"
       MessageRetentionPeriod: 1209600
 
   DomainsCommandQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub "${Environment}-${Organization}-domains-command-queue"
+      QueueName: !Sub "${Organization}-${Environment}-domains-command-queue"
       VisibilityTimeout: 30
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt DomainsCommandDlq.Arn
@@ -116,28 +119,28 @@ Resources:
   ApiAccessLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/apigateway/${Environment}-${Organization}-control-plane-api"
+      LogGroupName: !Sub "/aws/apigateway/${Organization}-${Environment}-nexus-api"
       RetentionInDays: 30
 
   ListDomainsLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-list-domains"
+      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-list-domains"
       RetentionInDays: 30
 
   DescribeDomainLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-describe-domain"
+      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-describe-domain"
       RetentionInDays: 30
 
   # ---- IAM ----
-  # Dedicated trust-anchor role referenced by trust-stack.yaml ControlPlaneRoleArn parameter.
+  # Dedicated trust-anchor role referenced by trust-stack.yaml NexusRoleArn parameter.
   # Not used as a Lambda execution role; cross-account provisioning is handled by Step Functions.
-  ControlPlaneTrustAnchorRole:
+  NexusTrustAnchorRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Environment}-${Organization}-cp-function-role"
+      RoleName: !Sub "${Organization}-${Environment}-nexus-function-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -154,12 +157,12 @@ Resources:
                 Action:
                   - sts:AssumeRole
                 Resource:
-                  - !Sub "arn:aws:iam::*:role/${Environment}-${Organization}-cp-trust-role"
+                  - !Sub "arn:aws:iam::*:role/${Organization}-${Environment}-nexus-trust-role"
 
-  ControlPlaneApiSqsRole:
+  NexusApiSqsRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Environment}-${Organization}-apigw-sqs-role"
+      RoleName: !Sub "${Organization}-${Environment}-apigw-sqs-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -180,10 +183,10 @@ Resources:
                   - !GetAtt DomainsCommandQueue.Arn
 
   # ---- API Gateway ----
-  ControlPlaneApi:
+  NexusApi:
     Type: AWS::Serverless::Api
     Properties:
-      Name: !Sub "${Environment}-${Organization}-control-plane-api"
+      Name: !Sub "${Organization}-${Environment}-nexus-api"
       StageName: !Ref Environment
       TracingEnabled: true
       EndpointConfiguration:
@@ -211,7 +214,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Environment}-${Organization}-list-domains"
+      FunctionName: !Sub "${Organization}-${Environment}-list-domains"
       CodeUri: ./domain-management/functions/list-domains
       Handler: bootstrap
       DeadLetterQueue:
@@ -229,7 +232,7 @@ Resources:
         Api:
           Type: Api
           Properties:
-            RestApiId: !Ref ControlPlaneApi
+            RestApiId: !Ref NexusApi
             Path: /domains
             Method: GET
 
@@ -239,7 +242,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Environment}-${Organization}-describe-domain"
+      FunctionName: !Sub "${Organization}-${Environment}-describe-domain"
       CodeUri: ./domain-management/functions/describe-domain
       Handler: bootstrap
       DeadLetterQueue:
@@ -255,7 +258,7 @@ Resources:
         Api:
           Type: Api
           Properties:
-            RestApiId: !Ref ControlPlaneApi
+            RestApiId: !Ref NexusApi
             Path: /domains/{domainId}
             Method: GET
 
@@ -263,7 +266,7 @@ Resources:
   DomainCommandHandlerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-domain-command-handler"
+      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-domain-command-handler"
       RetentionInDays: 30
 
   DomainCommandHandlerFunction:
@@ -272,7 +275,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Environment}-${Organization}-domain-command-handler"
+      FunctionName: !Sub "${Organization}-${Environment}-domain-command-handler"
       CodeUri: ./domain-management/functions/domain-command-handler
       Handler: bootstrap
       Policies:
@@ -285,10 +288,10 @@ Resources:
                 - !Sub "${DomainsTable.Arn}/index/*"
             - Effect: Allow
               Action: [events:PutEvents]
-              Resource: !GetAtt ControlPlaneEventBus.Arn
+              Resource: !GetAtt NexusEventBus.Arn
             - Effect: Allow
               Action: [events:RemovePermission]
-              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Environment}-${Organization}-*"
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-${Environment}-*"
             - Effect: Allow
               Action: [states:StartExecution]
               Resource: !Ref ApprovalWorkflow
@@ -306,7 +309,7 @@ Resources:
   DecideFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-decide-registration"
+      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-decide-registration"
       RetentionInDays: 30
 
   DecideFunction:
@@ -315,13 +318,13 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Environment}-${Organization}-decide-registration"
+      FunctionName: !Sub "${Organization}-${Environment}-decide-registration"
       CodeUri: ./domain-management/functions/decide-registration
       Handler: bootstrap
       Environment:
         Variables:
           DOMAINS_TABLE: !Ref DomainsTable
-          CONTROL_PLANE_EVENT_BUS: !Ref ControlPlaneEventBus
+          NEXUS_EVENT_BUS: !Ref NexusEventBus
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaDlq.Arn
@@ -335,7 +338,7 @@ Resources:
         Api:
           Type: Api
           Properties:
-            RestApiId: !Ref ControlPlaneApi
+            RestApiId: !Ref NexusApi
             Path: /domains/registrations/decide
             Method: POST
 
@@ -343,7 +346,7 @@ Resources:
   SendApprovalNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-send-approval-notification"
+      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-send-approval-notification"
       RetentionInDays: 30
 
   SendApprovalNotificationFunction:
@@ -352,7 +355,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Environment}-${Organization}-send-approval-notification"
+      FunctionName: !Sub "${Organization}-${Environment}-send-approval-notification"
       CodeUri: ./domain-management/functions/send-approval-notification
       Handler: bootstrap
       Environment:
@@ -367,8 +370,10 @@ Resources:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
-              Action: [dynamodb:UpdateItem]
-              Resource: !GetAtt DomainsTable.Arn
+              Action: [dynamodb:UpdateItem, dynamodb:Query]
+              Resource:
+                - !GetAtt DomainsTable.Arn
+                - !Sub "${DomainsTable.Arn}/index/by-owner"
             - Effect: Allow
               Action: [ses:SendEmail]
               Resource: "*"
@@ -376,7 +381,7 @@ Resources:
   SendRejectionNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Environment}-${Organization}-send-rejection-notification"
+      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-send-rejection-notification"
       RetentionInDays: 30
 
   SendRejectionNotificationFunction:
@@ -385,7 +390,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Environment}-${Organization}-send-rejection-notification"
+      FunctionName: !Sub "${Organization}-${Environment}-send-rejection-notification"
       CodeUri: ./domain-management/functions/send-rejection-notification
       Handler: bootstrap
       Environment:
@@ -405,13 +410,13 @@ Resources:
   DomainRegistrationRejectedRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub "${Environment}-${Organization}-domain-registration-rejected"
-      EventBusName: !Ref ControlPlaneEventBus
+      Name: !Sub "${Organization}-${Environment}-domain-registration-rejected"
+      EventBusName: !Ref NexusEventBus
       EventPattern:
         detail-type:
           - DomainRegistrationRejected
         source:
-          - controlplane.domain-management
+          - nexus.domain-management
       Targets:
         - Id: SendRejectionNotificationTarget
           Arn: !GetAtt SendRejectionNotificationFunction.Arn
@@ -428,7 +433,7 @@ Resources:
   ApprovalWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Environment}-${Organization}-approval-wf-role"
+      RoleName: !Sub "${Organization}-${Environment}-approval-wf-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -450,7 +455,7 @@ Resources:
                 Action:
                   - events:PutEvents
                 Resource:
-                  - !GetAtt ControlPlaneEventBus.Arn
+                  - !GetAtt NexusEventBus.Arn
               - Effect: Allow
                 Action:
                   - lambda:InvokeFunction
@@ -461,18 +466,18 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "${Environment}-${Organization}-domain-approval"
+      Name: !Sub "${Organization}-${Environment}-domain-approval"
       Role: !GetAtt ApprovalWorkflowRole.Arn
       DefinitionUri: ./domain-management/state-machines/approval.asl.yaml
       DefinitionSubstitutions:
         DomainsTable: !Ref DomainsTable
-        ControlPlaneEventBus: !GetAtt ControlPlaneEventBus.Arn
-        SendApprovalNotificationFunctionArn: !GetAtt SendApprovalNotificationFunction.Arn
+        NexusEventBus: !GetAtt NexusEventBus.Arn
+        SendApprovalNotificationFunction: !GetAtt SendApprovalNotificationFunction.Arn
 
   ProvisioningWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Environment}-${Organization}-provisioning-wf-role"
+      RoleName: !Sub "${Organization}-${Environment}-provisioning-wf-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -493,13 +498,13 @@ Resources:
                   - events:PutPermission
                   - events:RemovePermission
                   - events:PutEvents
-                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Environment}-${Organization}-*"
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-${Environment}-*"
               - Effect: Allow
                 Action:
                   - schemas:CreateRegistry
                   - schemas:DeleteRegistry
                   - schemas:PutResourcePolicy
-                Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Environment}-${Organization}-*"
+                Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-${Environment}-*"
               - Effect: Allow
                 Action:
                   - sqs:CreateQueue
@@ -507,65 +512,84 @@ Resources:
                   - sqs:SetQueueAttributes
                   - sqs:GetQueueAttributes
                   - sqs:GetQueueUrl
-                Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Environment}-${Organization}-*"
+                Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Organization}-${Environment}-*"
               - Effect: Allow
                 Action:
                   - cloudwatch:PutDashboard
                   - cloudwatch:DeleteDashboards
-                Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Environment}-${Organization}-*"
+                Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Organization}-${Environment}-*"
               - Effect: Allow
                 Action:
                   - cloudwatch:PutMetricAlarm
                   - cloudwatch:DeleteAlarms
-                Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Environment}-${Organization}-*"
+                Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Organization}-${Environment}-*"
               - Effect: Allow
                 Action:
                   - dynamodb:UpdateItem
+                  - dynamodb:Query
                 Resource:
                   - !GetAtt DomainsTable.Arn
+                  - !Sub "${DomainsTable.Arn}/index/by-owner"
               - Effect: Allow
                 Action:
                   - sts:AssumeRole
                 Resource:
-                  - !Sub "arn:aws:iam::*:role/${Environment}-${Organization}-cp-trust-role"
+                  - !Sub "arn:aws:iam::*:role/${Organization}-${Environment}-nexus-trust-role"
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                  - ssm:AddTagsToResource
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/namespace/*"
+              - Effect: Allow
+                Action:
+                  - ram:CreateResourceShare
+                  - ram:GetResourceShares
+                  - ram:AssociateResourceShare
+                  - ram:ListResources
+                Resource: "*"
 
   ProvisioningWorkflow:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "${Environment}-${Organization}-domain-provisioning"
+      Name: !Sub "${Organization}-${Environment}-domain-provisioning"
       Role: !GetAtt ProvisioningWorkflowRole.Arn
       DefinitionUri: ./domain-management/state-machines/provisioning.asl.yaml
       DefinitionSubstitutions:
         DomainsTable: !Ref DomainsTable
-        ControlPlaneEventBus: !GetAtt ControlPlaneEventBus.Arn
+        NexusEventBus: !GetAtt NexusEventBus.Arn
         Environment: !Ref Environment
         Organization: !Ref Organization
         NamespacePattern: !Ref NamespacePattern
+        "AWS::Region": !Ref "AWS::Region"
+        "AWS::AccountId": !Ref "AWS::AccountId"
+        OrganizationArn: !Ref OrganizationArn
       Events:
         DomainApproved:
           Type: EventBridgeRule
           Properties:
-            EventBusName: !Ref ControlPlaneEventBus
+            EventBusName: !Ref NexusEventBus
             Pattern:
               detail-type:
                 - DomainRegistrationApproved
               source:
-                - controlplane.domain-management
+                - nexus.domain-management
 
 Outputs:
   ApiEndpoint:
-    Description: Control Plane API endpoint
-    Value: !Sub "https://${ControlPlaneApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
-  ControlPlaneEventBusArn:
-    Description: Control Plane EventBridge bus ARN
-    Value: !GetAtt ControlPlaneEventBus.Arn
+    Description: EventBridge Nexus API endpoint
+    Value: !Sub "https://${NexusApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+  NexusEventBusArn:
+    Description: EventBridge Nexus event bus ARN
+    Value: !GetAtt NexusEventBus.Arn
   DomainsTableName:
     Description: Domains DynamoDB table name
     Value: !Ref DomainsTable
-  ControlPlaneFunctionRoleArn:
-    Description: Trust-anchor role ARN (pass as ControlPlaneRoleArn to trust-stack.yaml)
-    Value: !GetAtt ControlPlaneTrustAnchorRole.Arn
+  NexusFunctionRoleArn:
+    Description: Trust-anchor role ARN (pass as NexusRoleArn to trust-stack.yaml)
+    Value: !GetAtt NexusTrustAnchorRole.Arn
   ProvisioningWorkflowRoleArn:
     Description: Provisioning workflow role ARN (pass as ProvisioningWorkflowRoleArn to trust-stack.yaml)
     Value: !GetAtt ProvisioningWorkflowRole.Arn

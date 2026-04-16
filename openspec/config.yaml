@@ -5,7 +5,7 @@ context: |
   For past decisions: read docs/development/decisions.md
 
   ## Purpose
-  Control plane for managing AWS EventBridge infrastructure, routing, and configuration across accounts.
+  EventBridge Nexus — central integration platform for managing AWS EventBridge infrastructure, routing, and configuration across accounts.
   Primary goals:
   - Eliminate cross-account EventBridge complexity for developers and architects
   - Reduce time-to-first-event from 1–2 days to under 10 minutes for most use cases
@@ -24,9 +24,9 @@ context: |
   - **Domain**: A logical grouping of related events owned by a team; each domain has its own event buses, schema registry, DLQ, and monitoring
   - **Domain event buses**: EventBridge buses provisioned per domain in producer and platform accounts; consumers interact with domains, not individual buses
   - **Publish API**: Lets producers send events to a domain without knowing bus topology or cross-account routing
-  - **Subscribe/Unsubscribe APIs**: Let consumers connect to or disconnect from domain events; the control plane creates/updates/deletes rules, IAM, and resource policies behind the scenes
+  - **Subscribe/Unsubscribe APIs**: Let consumers connect to or disconnect from domain events; the Nexus creates/updates/deletes rules, IAM, and resource policies behind the scenes
   - **Schema registry**: Per-domain registries storing event schemas, tracking versions, analyzing compatibility, and supporting consumer migration
-  - **Platform teams**: Manage domains, control plane policies, and governance
+  - **Platform teams**: Manage domains, Nexus policies, and governance
   - **Application teams**: Use simple publish/subscribe APIs; do not manage EventBridge resources directly
 
   ## Tech Stack
@@ -38,8 +38,8 @@ context: |
   - Observability: CloudWatch dashboards and alarms provisioned per domain
 
   ## Project Structure
-  - Cargo workspace with shared lib at lib/control-plane-common
-  - Lambda functions grouped by control plane function: domain-management/functions/<name>, event-routing/functions/<name>
+  - Cargo workspace with shared lib at lib/nexus-common (crate: nexus-common)
+  - Lambda functions grouped by Nexus function: domain-management/functions/<name>, event-routing/functions/<name>
   - Step Functions ASL definitions: domain-management/state-machines/*.asl.json
   - API contract: api/openapi.yaml
   - Trust stack for app account onboarding: trust-stack.yaml
@@ -56,15 +56,15 @@ context: |
   - One Lambda per API operation (register, list, describe, update, delete, approve, list-activations)
   - Table-per-entity DynamoDB design (domains table, registration-requests table)
   - Human-in-the-loop approval via Step Functions Task Token pattern
-  - Control plane event bus for internal lifecycle events (DomainRegistrationApproved, DomainCreationStarted, etc.)
+  - Nexus event bus for internal lifecycle events (DomainRegistrationApproved, DomainCreationStarted, etc.)
   - Cross-account provisioning via STS AssumeRole into trust role in app accounts
-  - Resource namespace: configurable {env}-{org}-{domain} convention
+  - Resource namespace: configurable {org}-{env}-{domain} convention
   - Domain buses live in the platform account with PutEvent policies restricting to owner account
   - Two DLQs per domain: subscription DLQ (platform account) and integration DLQ (app account)
   - 1:1 bus mapping per subscribing app account for event delivery
 
   ## Domain Context
-  AWS EventBridge Control Plane managing domain registration, event routing, and cross-account infrastructure.
+  AWS EventBridge Nexus managing domain registration, event routing, and cross-account infrastructure.
   Key concepts: domains, domain event buses, schema registries, subscriptions, publish/subscribe APIs, platform vs. application accounts.
 
 rules:

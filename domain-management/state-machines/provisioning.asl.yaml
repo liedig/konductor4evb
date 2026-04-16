@@ -1,4 +1,4 @@
-Comment: Domain resource provisioning workflow
+Comment: Domain resource provisioning workflow with saga rollback
 QueryLanguage: JSONata
 StartAt: SetProvisioningStatus
 States:
@@ -20,6 +20,26 @@ States:
         ":now":
           S: "{% $states.context.State.EnteredTime %}"
     Output: "{% $states.input %}"
+    Next: CheckNewAccount
+
+  CheckNewAccount:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:dynamodb:query"
+    Arguments:
+      TableName: "${DomainsTable}"
+      IndexName: by-owner
+      KeyConditionExpression: "ownerAccountId = :acct"
+      FilterExpression: "#s = :active"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":acct":
+          S: "{% $states.input.detail.ownerAccountId %}"
+        ":active":
+          S: ACTIVE
+    Assign:
+      isNewAccount: "{% $states.result.Count = 0 %}"
+    Output: "{% $states.input %}"
     Next: EmitCreationStarted
 
   EmitCreationStarted:
@@ -27,13 +47,14 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${ControlPlaneEventBus}"
-          Source: controlplane.domain-management
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.domain-management
           DetailType: DomainCreationStarted
           Detail:
             domainId: "{% $states.input.detail.domainId %}"
             workflowExecutionId: "{% $states.context.Execution.Id %}"
             startedAt: "{% $states.context.Execution.StartTime %}"
+            isNewAccount: "{% $isNewAccount %}"
     Output: "{% $states.input %}"
     Next: CreatePlatformEventBus
 
@@ -41,7 +62,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:createEventBus"
     Arguments:
-      Name: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
+      Name: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
     Assign:
       platformBus: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -49,8 +70,8 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreatePlatformEventBus' } } %}"
 
   SetPutEventPolicy:
     Type: Task
@@ -65,14 +86,14 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'SetPutEventPolicy' } } %}"
 
   CreateSchemaRegistry:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:schemas:createRegistry"
     Arguments:
-      RegistryName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-schema-registry' %}"
+      RegistryName: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-schema-registry' %}"
       Description: "{% 'Schema registry for domain ' & $states.input.detail.domainName %}"
     Assign:
       schemaRegistry: "{% $states.result %}"
@@ -81,14 +102,14 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateSchemaRegistry' } } %}"
 
   CreateSubscriptionDlq:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:sqs:createQueue"
     Arguments:
-      QueueName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-subscription-dlq' %}"
+      QueueName: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-subscription-dlq' %}"
     Assign:
       subscriptionDlq: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -96,15 +117,15 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateSubscriptionDlq' } } %}"
 
   AssumeAppAccountRole:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:sts:assumeRole"
     Arguments:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Environment}-${Organization}-cp-trust-role' %}"
-      RoleSessionName: control-plane-provisioning
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Organization}-${Environment}-nexus-trust-role' %}"
+      RoleSessionName: nexus-provisioning
     Assign:
       appCredentials: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -112,17 +133,16 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'AssumeAppAccountRole' } } %}"
 
   CreateAppEventBus:
     Type: Task
-    Comment: Creates domain event bus in the application account using assumed role credentials
     Resource: "arn:aws:states:::aws-sdk:eventbridge:createEventBus"
     Arguments:
-      Name: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
+      Name: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Environment}-${Organization}-cp-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Organization}-${Environment}-nexus-trust-role' %}"
     Assign:
       appBus: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -130,17 +150,16 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateAppEventBus' } } %}"
 
   CreateIntegrationDlq:
     Type: Task
-    Comment: Creates integration rule DLQ in the application account using assumed role credentials
     Resource: "arn:aws:states:::aws-sdk:sqs:createQueue"
     Arguments:
-      QueueName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-integration-dlq' %}"
+      QueueName: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-integration-dlq' %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Environment}-${Organization}-cp-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Organization}-${Environment}-nexus-trust-role' %}"
     Assign:
       integrationDlq: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -148,19 +167,18 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateIntegrationDlq' } } %}"
 
   CreateDashboard:
     Type: Task
-    Comment: Creates a CloudWatch dashboard for the domain event bus metrics
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putDashboard"
     Arguments:
-      DashboardName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-dashboard' %}"
+      DashboardName: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-dashboard' %}"
       DashboardBody: |-
         {% (
-          $busName := '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-bus';
-          $dlqName := '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-subscription-dlq';
+          $busName := '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-bus';
+          $dlqName := '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-subscription-dlq';
           $string({
             "widgets": [
               {
@@ -202,60 +220,141 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateDashboard' } } %}"
 
   CreateFailedInvocationsAlarm:
     Type: Task
-    Comment: Creates a CloudWatch alarm for high failure rate on the domain event bus
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
     Arguments:
-      AlarmName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-failed-invocations' %}"
+      AlarmName: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-failed-invocations' %}"
       AlarmDescription: "{% 'High failed invocations rate on domain bus ' & $states.input.detail.domainName %}"
       Namespace: AWS/Events
       MetricName: FailedInvocations
       Dimensions:
         - Name: EventBusName
-          Value: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
+          Value: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 3
       Threshold: 5
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+    Assign:
+      failedInvocAlarm: true
     Output: "{% $states.input %}"
     Next: CreateDlqDepthAlarm
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateFailedInvocationsAlarm' } } %}"
 
   CreateDlqDepthAlarm:
     Type: Task
-    Comment: Creates a CloudWatch alarm for DLQ message accumulation
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
     Arguments:
-      AlarmName: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-dlq-depth' %}"
+      AlarmName: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-dlq-depth' %}"
       AlarmDescription: "{% 'Messages accumulating in subscription DLQ for domain ' & $states.input.detail.domainName %}"
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
       Dimensions:
         - Name: QueueName
-          Value: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-subscription-dlq' %}"
+          Value: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-subscription-dlq' %}"
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 2
       Threshold: 10
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+    Assign:
+      dlqDepthAlarm: true
+    Output: "{% $states.input %}"
+    Next: CreateNamespaceParameter
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateDlqDepthAlarm' } } %}"
+
+  CreateNamespaceParameter:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ssm:putParameter"
+    Arguments:
+      Name: "{% '/namespace/' & $states.input.detail.domainName %}"
+      Value: "{% '${Organization}' & '-' & $states.input.detail.domainName %}"
+      Type: String
+      Tier: Advanced
+      Overwrite: true
+    Assign:
+      namespaceParameter: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: EnsureRAMResourceShare
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateNamespaceParameter' } } %}"
+
+  EnsureRAMResourceShare:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ram:getResourceShares"
+    Arguments:
+      ResourceOwner: SELF
+      Name: "{% '${Organization}' & '-domain-namespaces' %}"
+    Assign:
+      existingShares: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: CheckRAMShareExists
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'EnsureRAMResourceShare' } } %}"
+
+  CheckRAMShareExists:
+    Type: Choice
+    Choices:
+      - Condition: "{% $count($existingShares.ResourceShares) > 0 %}"
+        Next: AssociateParameterToExistingShare
+    Default: CreateRAMResourceShare
+
+  CreateRAMResourceShare:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ram:createResourceShare"
+    Arguments:
+      Name: "{% '${Organization}' & '-domain-namespaces' %}"
+      ResourceArns:
+        - "{% 'arn:aws:ssm:' & '${AWS::Region}' & ':' & '${AWS::AccountId}' & ':parameter/namespace/' & $states.input.detail.domainName %}"
+      Principals:
+        - "{% '${OrganizationArn}' %}"
+      AllowExternalPrincipals: false
+    Assign:
+      ramShare: "{% $states.result %}"
     Output: "{% $states.input %}"
     Next: UpdateDomainRecord
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
-        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause } } %}"
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateRAMResourceShare' } } %}"
+
+  AssociateParameterToExistingShare:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ram:associateResourceShare"
+    Arguments:
+      ResourceShareArn: "{% $existingShares.ResourceShares[0].ResourceShareArn %}"
+      ResourceArns:
+        - "{% 'arn:aws:ssm:' & '${AWS::Region}' & ':' & '${AWS::AccountId}' & ':parameter/namespace/' & $states.input.detail.domainName %}"
+    Assign:
+      ramShare: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: UpdateDomainRecord
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: StartCompensation
+        Output: "{% { 'detail': $states.input.detail, 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'AssociateParameterToExistingShare' } } %}"
 
   UpdateDomainRecord:
     Type: Task
@@ -284,7 +383,9 @@ States:
             integrationDlqArn:
               S: "{% $integrationDlq.QueueUrl %}"
             dashboardName:
-              S: "{% '${Environment}' & '-' & '${Organization}' & '-' & $states.input.detail.domainName & '-domain-dashboard' %}"
+              S: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-dashboard' %}"
+            namespaceParameterPath:
+              S: "{% '/namespace/' & $states.input.detail.domainName %}"
         ":now":
           S: "{% $states.context.State.EnteredTime %}"
     Output: "{% $states.input %}"
@@ -295,8 +396,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${ControlPlaneEventBus}"
-          Source: controlplane.domain-management
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.domain-management
           DetailType: DomainCreationSucceeded
           Detail:
             domainId: "{% $states.input.detail.domainId %}"
@@ -308,15 +409,207 @@ States:
               schemaRegistryArn: "{% $schemaRegistry.RegistryArn %}"
               subscriptionDlqArn: "{% $subscriptionDlq.QueueUrl %}"
               integrationDlqArn: "{% $integrationDlq.QueueUrl %}"
+            namespaceParameter: "{% '/namespace/' & $states.input.detail.domainName %}"
     End: true
+
+  # ---- Saga Compensation Chain ----
+
+  StartCompensation:
+    Type: Pass
+    Assign:
+      compensationErrors: "{% [] %}"
+    Next: CompensateIntegrationDlq
+
+  CompensateIntegrationDlq:
+    Type: Choice
+    Choices:
+      - Condition: "{% $exists($integrationDlq) %}"
+        Next: DeleteIntegrationDlq
+    Default: CompensateAppEventBus
+
+  DeleteIntegrationDlq:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:sqs:deleteQueue"
+    Arguments:
+      QueueUrl: "{% $integrationDlq.QueueUrl %}"
+    Credentials:
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Organization}-${Environment}-nexus-trust-role' %}"
+    Output: "{% $states.input %}"
+    Next: CompensateAppEventBus
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: CompensateAppEventBus
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete integration DLQ: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  CompensateAppEventBus:
+    Type: Choice
+    Choices:
+      - Condition: "{% $exists($appBus) %}"
+        Next: DeleteAppEventBus
+    Default: CompensateDlqDepthAlarm
+
+  DeleteAppEventBus:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
+    Arguments:
+      Name: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
+    Credentials:
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.detail.ownerAccountId & ':role/${Organization}-${Environment}-nexus-trust-role' %}"
+    Output: "{% $states.input %}"
+    Next: CompensateDlqDepthAlarm
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: CompensateDlqDepthAlarm
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete app event bus: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  CompensateDlqDepthAlarm:
+    Type: Choice
+    Choices:
+      - Condition: "{% $exists($dlqDepthAlarm) %}"
+        Next: DeleteDlqDepthAlarm
+    Default: CompensateFailedInvocAlarm
+
+  DeleteDlqDepthAlarm:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+    Arguments:
+      AlarmNames:
+        - "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-dlq-depth' %}"
+    Output: "{% $states.input %}"
+    Next: CompensateFailedInvocAlarm
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: CompensateFailedInvocAlarm
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete DLQ depth alarm: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  CompensateFailedInvocAlarm:
+    Type: Choice
+    Choices:
+      - Condition: "{% $exists($failedInvocAlarm) %}"
+        Next: DeleteFailedInvocAlarm
+    Default: CompensateDashboard
+
+  DeleteFailedInvocAlarm:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+    Arguments:
+      AlarmNames:
+        - "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-failed-invocations' %}"
+    Output: "{% $states.input %}"
+    Next: CompensateDashboard
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: CompensateDashboard
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete failed invocations alarm: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  CompensateDashboard:
+    Type: Choice
+    Choices:
+      - Condition: "{% $exists($dashboard) %}"
+        Next: DeleteDashboard
+    Default: CompensateSubscriptionDlq
+
+  DeleteDashboard:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteDashboards"
+    Arguments:
+      DashboardNames:
+        - "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-dashboard' %}"
+    Output: "{% $states.input %}"
+    Next: CompensateSubscriptionDlq
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: CompensateSubscriptionDlq
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete dashboard: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  CompensateSubscriptionDlq:
+    Type: Choice
+    Choices:
+      - Condition: "{% $exists($subscriptionDlq) %}"
+        Next: DeleteSubscriptionDlq
+    Default: CompensateSchemaRegistry
+
+  DeleteSubscriptionDlq:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:sqs:deleteQueue"
+    Arguments:
+      QueueUrl: "{% $subscriptionDlq.QueueUrl %}"
+    Output: "{% $states.input %}"
+    Next: CompensateSchemaRegistry
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: CompensateSchemaRegistry
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete subscription DLQ: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  CompensateSchemaRegistry:
+    Type: Choice
+    Choices:
+      - Condition: "{% $exists($schemaRegistry) %}"
+        Next: DeleteSchemaRegistry
+    Default: CompensatePlatformEventBus
+
+  DeleteSchemaRegistry:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:schemas:deleteRegistry"
+    Arguments:
+      RegistryName: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-schema-registry' %}"
+    Output: "{% $states.input %}"
+    Next: CompensatePlatformEventBus
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: CompensatePlatformEventBus
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete schema registry: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  CompensatePlatformEventBus:
+    Type: Choice
+    Choices:
+      - Condition: "{% $exists($platformBus) %}"
+        Next: DeletePlatformEventBus
+    Default: EmitCreationFailed
+
+  DeletePlatformEventBus:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
+    Arguments:
+      Name: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
+    Output: "{% $states.input %}"
+    Next: EmitCreationFailed
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitCreationFailed
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete platform event bus: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
 
   EmitCreationFailed:
     Type: Task
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${ControlPlaneEventBus}"
-          Source: controlplane.domain-management
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.domain-management
           DetailType: DomainCreationFailed
           Detail:
             domainId: "{% $states.input.detail.domainId %}"
@@ -324,6 +617,8 @@ States:
             failedAt: "{% $states.context.State.EnteredTime %}"
             errorCode: "{% $states.input.error.Error %}"
             errorMessage: "{% $states.input.error.Cause %}"
+            failedStep: "{% $states.input.error.FailedStep %}"
+            compensationErrors: "{% $compensationErrors %}"
     Output: "{% $states.input %}"
     Next: UpdateDomainFailed
 
@@ -342,7 +637,7 @@ States:
         ":status":
           S: PROVISIONING_FAILED
         ":err":
-          S: "{% $states.input.error.Cause %}"
+          S: "{% $states.input.error.FailedStep & ': ' & $states.input.error.Cause %}"
         ":now":
           S: "{% $states.context.State.EnteredTime %}"
     End: true
