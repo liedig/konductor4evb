@@ -63,10 +63,10 @@ flowchart LR
 make test
 
 # Run tests for a specific crate
-cargo test -p control-plane-common
+cargo test -p nexus-common
 
 # Run a single test by name
-cargo test -p control-plane-common default_pattern_resolves_correctly
+cargo test -p nexus-common default_pattern_resolves_correctly
 
 # Run tests with output visible (nocapture)
 cargo test --workspace -- --nocapture
@@ -107,7 +107,7 @@ mod tests {
 For cross-module or AWS SDK behavior, place tests in a `tests/` directory at the crate root. Each `.rs` file in `tests/` compiles as a separate crate with access to the library's public API.
 
 ```
-lib/control-plane-common/
+lib/nexus-common/
 ├── src/
 │   └── lib.rs
 └── tests/
@@ -115,7 +115,7 @@ lib/control-plane-common/
 ```
 
 ```rust
-use control_plane_common::NamespaceResolver;
+use nexus_common::NamespaceResolver;
 
 #[test]
 fn resolver_produces_consistent_naming() {
@@ -150,44 +150,98 @@ mod tests {
 }
 ```
 
-## Testing with AWS SDK Clients
+## Mocking AWS SDK Clients with Smithy-Mocks
 
-Isolate AWS interactions behind traits so tests can substitute fake implementations:
+Use [`aws-smithy-mocks`](https://docs.aws.amazon.com/sdk-for-rust/latest/dg/testing-smithy-mocks.html) to test Lambda handlers that call AWS services. This requires zero changes to production code — mock clients are real SDK client types with canned responses.
+
+### Setup
+
+SDK crates need the `test-util` feature enabled in the workspace `Cargo.toml`:
+
+```toml
+[workspace.dependencies]
+aws-sdk-dynamodb = { version = "1", features = ["test-util"] }
+aws-smithy-mocks = "0.2"
+```
+
+Each crate that needs mock tests adds a dev-dependency:
+
+```toml
+[dev-dependencies]
+aws-smithy-mocks = { workspace = true }
+```
+
+### Writing mock tests
+
+Create mock rules for each SDK operation, build a mock client, and pass it to the function under test:
 
 ```rust
-#[async_trait::async_trait]
-pub trait DomainStore {
-    async fn put(&self, domain: &Domain) -> anyhow::Result<()>;
-    async fn get(&self, id: &str) -> anyhow::Result<Option<Domain>>;
-}
-
-struct FakeDomainStore {
-    domains: std::sync::Mutex<Vec<Domain>>,
-}
-
-#[async_trait::async_trait]
-impl DomainStore for FakeDomainStore {
-    async fn put(&self, domain: &Domain) -> anyhow::Result<()> {
-        self.domains.lock().unwrap().push(domain.clone());
-        Ok(())
-    }
-
-    async fn get(&self, id: &str) -> anyhow::Result<Option<Domain>> {
-        let domains = self.domains.lock().unwrap();
-        Ok(domains.iter().find(|d| d.id == id).cloned())
-    }
-}
+use aws_sdk_dynamodb::operation::query::QueryOutput;
+use aws_smithy_mocks::{mock, mock_client, RuleMode};
 
 #[tokio::test]
-async fn register_domain_persists_to_store() {
-    let store = FakeDomainStore { domains: std::sync::Mutex::new(vec![]) };
+async fn rejects_duplicate_domain() {
+    let query_rule = mock!(aws_sdk_dynamodb::Client::query)
+        .match_requests(|req| req.index_name() == Some("by-name"))
+        .then_output(|| QueryOutput::builder().count(1).build());
 
-    let result = register_domain(&store, "billing", "123456789012").await;
+    let ddb = mock_client!(aws_sdk_dynamodb, [&query_rule]);
+
+    let result = handle(&ddb, &eb, &sfn, &request).await;
 
     assert!(result.is_ok());
-    assert_eq!(store.domains.lock().unwrap().len(), 1);
+    assert_eq!(query_rule.num_calls(), 1);
 }
 ```
+
+### Key patterns
+
+**Sequential rules** — when a function makes multiple calls to the same service, use `RuleMode::Sequential`:
+
+```rust
+let ddb = mock_client!(
+    aws_sdk_dynamodb,
+    RuleMode::Sequential,
+    [&query_rule, &put_rule]
+);
+```
+
+**Request matching** — verify the mock received expected inputs:
+
+```rust
+let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
+    .match_requests(|req| {
+        req.item()
+            .map(|items| items.contains_key("description"))
+            .unwrap_or(false)
+    })
+    .then_output(|| PutItemOutput::builder().build());
+```
+
+**Error simulation** — test failure paths:
+
+```rust
+let error_rule = mock!(aws_sdk_dynamodb::Client::query)
+    .then_error(|| QueryError::InternalServerError(
+        InternalServerError::builder().build()
+    ));
+```
+
+**Call verification** — confirm the mock was (or was not) invoked:
+
+```rust
+assert_eq!(rule.num_calls(), 1);
+```
+
+### When to use smithy-mocks vs trait abstractions
+
+| Interaction pattern | Approach |
+|---|---|
+| SDK call appears in one function | Smithy-mocks directly |
+| Same query/mutation pattern across 3+ functions | Extract a domain trait (e.g., `DomainRepository`) |
+| Fire-and-forget (EventBridge, SES) | Smithy-mocks directly |
+
+Prefer smithy-mocks by default. Only introduce trait abstractions when the same AWS interaction pattern is genuinely duplicated across multiple functions — driven by DRY, not by the need to mock.
 
 ## Error Case Testing
 

@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::env;
 
-use control_plane_common::dynamodb::{get_s, s, string_map_to_attr};
-use control_plane_common::error::ControlPlaneError;
+use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
+use nexus_common::error::ControlPlaneError;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -11,7 +11,7 @@ pub async fn handle(
     message: &Value,
 ) -> Result<()> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
-    let cp_bus = env::var("CONTROL_PLANE_EVENT_BUS").context("CONTROL_PLANE_EVENT_BUS not set")?;
+    let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
 
     let domain_id = message
         .get("domainId")
@@ -94,7 +94,7 @@ pub async fn handle(
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .event_bus_name(&cp_bus)
-                .source("controlplane.domain-management")
+                .source("nexus.domain-management")
                 .detail_type("UpdateDomainSucceeded")
                 .detail(
                     json!({
@@ -123,7 +123,7 @@ async fn emit_failed(
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .event_bus_name(cp_bus)
-                .source("controlplane.domain-management")
+                .source("nexus.domain-management")
                 .detail_type("UpdateDomainFailed")
                 .detail(
                     json!({
@@ -139,4 +139,146 @@ async fn emit_failed(
         .await
         .map_err(|e| anyhow::anyhow!("EventBridge error: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
+    use aws_sdk_dynamodb::operation::update_item::UpdateItemOutput;
+    use aws_sdk_eventbridge::operation::put_events::PutEventsOutput;
+    use aws_smithy_mocks::{mock, mock_client, RuleMode};
+    use std::collections::HashMap;
+
+    fn active_domain_item() -> HashMap<String, aws_sdk_dynamodb::types::AttributeValue> {
+        HashMap::from([
+            ("domainId".into(), s("d-123")),
+            ("domainName".into(), s("billing")),
+            ("ownerAccountId".into(), s("111122223333")),
+            ("status".into(), s("ACTIVE")),
+        ])
+    }
+
+    fn set_env() {
+        env::set_var("DOMAINS_TABLE", "domains");
+        env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+    }
+
+    #[tokio::test]
+    async fn updates_domain_and_emits_success_event() {
+        set_env();
+
+        let item = active_domain_item();
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item)
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .set_item(Some(item.clone()))
+                    .build()
+            });
+
+        let updated_attrs = HashMap::from([
+            ("domainId".into(), s("d-123")),
+            ("status".into(), s("ACTIVE")),
+            ("description".into(), s("Updated billing domain")),
+        ]);
+        let update_rule = mock!(aws_sdk_dynamodb::Client::update_item)
+            .then_output(move || {
+                UpdateItemOutput::builder()
+                    .set_attributes(Some(updated_attrs.clone()))
+                    .build()
+            });
+
+        let ddb = mock_client!(
+            aws_sdk_dynamodb,
+            RuleMode::Sequential,
+            [&get_rule, &update_rule]
+        );
+
+        let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| PutEventsOutput::builder().build());
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = json!({
+            "domainId": "d-123",
+            "body": {
+                "description": "Updated billing domain"
+            }
+        });
+
+        let result = handle(&ddb, &eb, &message).await;
+
+        assert!(result.is_ok());
+        assert_eq!(get_rule.num_calls(), 1);
+        assert_eq!(update_rule.num_calls(), 1);
+        assert_eq!(eb_rule.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn emits_failed_event_when_domain_not_found() {
+        set_env();
+
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item)
+            .then_output(|| GetItemOutput::builder().build());
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| PutEventsOutput::builder().build());
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = json!({
+            "domainId": "d-nonexistent",
+            "body": {}
+        });
+
+        let result = handle(&ddb, &eb, &message).await;
+
+        assert!(result.is_ok());
+        assert_eq!(eb_rule.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_update_on_deactivated_domain() {
+        set_env();
+
+        let mut item = active_domain_item();
+        item.insert("status".into(), s("DEACTIVATED"));
+
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item)
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .set_item(Some(item.clone()))
+                    .build()
+            });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| PutEventsOutput::builder().build());
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = json!({
+            "domainId": "d-123",
+            "body": {
+                "description": "Should not work"
+            }
+        });
+
+        let result = handle(&ddb, &eb, &message).await;
+
+        assert!(result.is_ok());
+        assert_eq!(eb_rule.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn returns_error_when_domain_id_missing() {
+        set_env();
+
+        let ddb = mock_client!(aws_sdk_dynamodb, &[]);
+        let eb = mock_client!(aws_sdk_eventbridge, &[]);
+
+        let message = json!({"body": {}});
+
+        let result = handle(&ddb, &eb, &message).await;
+
+        assert!(result.is_err());
+    }
 }
