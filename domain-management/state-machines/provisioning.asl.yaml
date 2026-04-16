@@ -40,22 +40,6 @@ States:
     Assign:
       isNewAccount: "{% $states.result.Count = 0 %}"
     Output: "{% $states.input %}"
-    Next: EmitCreationStarted
-
-  EmitCreationStarted:
-    Type: Task
-    Resource: "arn:aws:states:::events:putEvents"
-    Arguments:
-      Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
-          DetailType: DomainCreationStarted
-          Detail:
-            domainId: "{% $states.input.detail.domainId %}"
-            workflowExecutionId: "{% $states.context.Execution.Id %}"
-            startedAt: "{% $states.context.Execution.StartTime %}"
-            isNewAccount: "{% $isNewAccount %}"
-    Output: "{% $states.input %}"
     Next: CreatePlatformEventBus
 
   CreatePlatformEventBus:
@@ -389,20 +373,21 @@ States:
         ":now":
           S: "{% $states.context.State.EnteredTime %}"
     Output: "{% $states.input %}"
-    Next: EmitCreationSucceeded
+    Next: EmitProvisioningSucceeded
 
-  EmitCreationSucceeded:
+  EmitProvisioningSucceeded:
     Type: Task
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
         - EventBusName: "${NexusEventBus}"
           Source: nexus.domain-management
-          DetailType: DomainCreationSucceeded
+          DetailType: DomainProvisioningSucceeded
           Detail:
             domainId: "{% $states.input.detail.domainId %}"
             workflowExecutionId: "{% $states.context.Execution.Id %}"
             completedAt: "{% $states.context.State.EnteredTime %}"
+            isNewAccount: "{% $isNewAccount %}"
             resourceArns:
               platformEventBusArn: "{% $platformBus.EventBusArn %}"
               appEventBusArn: "{% $appBus.EventBusArn %}"
@@ -586,7 +571,7 @@ States:
     Choices:
       - Condition: "{% $exists($platformBus) %}"
         Next: DeletePlatformEventBus
-    Default: EmitCreationFailed
+    Default: EmitProvisioningFailed
 
   DeletePlatformEventBus:
     Type: Task
@@ -594,23 +579,23 @@ States:
     Arguments:
       Name: "{% '${Organization}' & '-' & '${Environment}' & '-' & $states.input.detail.domainName & '-domain-bus' %}"
     Output: "{% $states.input %}"
-    Next: EmitCreationFailed
+    Next: EmitProvisioningFailed
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitCreationFailed
+        Next: EmitProvisioningFailed
         Assign:
           compensationErrors: "{% $append($compensationErrors, 'Failed to delete platform event bus: ' & $states.errorOutput.Cause) %}"
         Output: "{% $states.input %}"
 
-  EmitCreationFailed:
+  EmitProvisioningFailed:
     Type: Task
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
         - EventBusName: "${NexusEventBus}"
           Source: nexus.domain-management
-          DetailType: DomainCreationFailed
+          DetailType: DomainProvisioningFailed
           Detail:
             domainId: "{% $states.input.detail.domainId %}"
             workflowExecutionId: "{% $states.context.Execution.Id %}"
@@ -620,9 +605,9 @@ States:
             failedStep: "{% $states.input.error.FailedStep %}"
             compensationErrors: "{% $compensationErrors %}"
     Output: "{% $states.input %}"
-    Next: UpdateDomainFailed
+    Next: UpdateDomainProvisioningFailed
 
-  UpdateDomainFailed:
+  UpdateDomainProvisioningFailed:
     Type: Task
     Resource: "arn:aws:states:::dynamodb:updateItem"
     Arguments:

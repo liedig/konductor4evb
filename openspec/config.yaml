@@ -56,7 +56,7 @@ context: |
   - One Lambda per API operation (register, list, describe, update, delete, approve, list-activations)
   - Table-per-entity DynamoDB design (domains table, registration-requests table)
   - Human-in-the-loop approval via Step Functions Task Token pattern
-  - Nexus event bus for internal lifecycle events (DomainRegistrationApproved, DomainCreationStarted, etc.)
+  - Nexus event bus for internal lifecycle events (DomainRegistrationApproved, DomainProvisioningSucceeded, DomainProvisioningFailed, etc.)
   - Cross-account provisioning via STS AssumeRole into trust role in app accounts
   - Resource namespace: configurable {org}-{env}-{domain} convention
   - Domain buses live in the platform account with PutEvent policies restricting to owner account
