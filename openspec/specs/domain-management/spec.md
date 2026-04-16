@@ -42,9 +42,8 @@ The domain management capability SHALL emit the following events. Each event SHA
 
 | Event type | When emitted | Purpose | Minimum payload |
 |------------|--------------|---------|-----------------|
-| `DomainCreationStarted` | When the provisioning workflow begins execution | Visibility and metrics | `domainId`, `workflowExecutionId`, `startedAt` |
-| `DomainCreationSucceeded` | When the provisioning workflow completes successfully | Control plane updates domain to ACTIVE with resource ARNs | `domainId`, `workflowExecutionId`, `completedAt`, `resourceArns` |
-| `DomainCreationFailed` | When the provisioning workflow fails | Control plane updates domain to PROVISIONING_FAILED | `domainId`, `workflowExecutionId`, `failedAt`, `errorCode`, `errorMessage` |
+| `DomainProvisioningSucceeded` | When the provisioning workflow completes successfully | Control plane updates domain to ACTIVE with resource ARNs | `domainId`, `workflowExecutionId`, `completedAt`, `resourceArns`, `namespaceParameter`, `isNewAccount` |
+| `DomainProvisioningFailed` | When the provisioning workflow fails | Control plane updates domain to PROVISIONING_FAILED | `domainId`, `workflowExecutionId`, `failedAt`, `errorCode`, `errorMessage`, `compensationResults` |
 
 #### Scenario: Approval workflow is sole emitter of approval/rejection events
 

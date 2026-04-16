@@ -79,14 +79,14 @@ The provisioning workflow SHALL create all domain resources in the correct order
   7. SSM Advanced parameter at `/namespace/{domainName}` with value `{org}-{domainName}`
   8. RAM resource share association for the namespace parameter
 - **AND THEN** upon successful completion, the workflow SHALL update the domain record to `ACTIVE` with all resource ARNs
-- **AND THEN** the workflow SHALL emit a `DomainCreationSucceeded` event
+- **AND THEN** the workflow SHALL emit a `DomainProvisioningSucceeded` event
 
 #### Scenario: Provisioning workflow step failure triggers saga rollback
 
 - **WHEN** any step in the provisioning workflow fails
 - **THEN** the workflow SHALL execute the saga compensation chain to delete all successfully created resources in reverse order
 - **AND THEN** the workflow SHALL update the domain record to `PROVISIONING_FAILED` with the error detail (including any compensation failures)
-- **AND THEN** the workflow SHALL emit a `DomainCreationFailed` event with the error code, error message, and the name of the failed step
+- **AND THEN** the workflow SHALL emit a `DomainProvisioningFailed` event with the error code, error message, and the name of the failed step
 
 #### Scenario: Provisioning uses updated namespace convention for resource names
 
@@ -96,22 +96,17 @@ The provisioning workflow SHALL create all domain resources in the correct order
 
 ### Requirement: Provisioning workflow lifecycle events
 
-The provisioning workflow SHALL emit lifecycle events to the Nexus event bus at key points: when provisioning starts, when it succeeds, and when it fails. These events SHALL conform to the event types and minimum payloads defined in the domain-management spec. The event source SHALL be `nexus.domain-management`.
-
-#### Scenario: Provisioning started event
-
-- **WHEN** the provisioning workflow begins execution
-- **THEN** it SHALL emit a `DomainCreationStarted` event to the Nexus event bus with source `nexus.domain-management`, domainId, workflowExecutionId, startedAt, and isNewAccount flag
+The provisioning workflow SHALL emit lifecycle events to the Nexus event bus for provisioning outcomes only. No intermediate events SHALL be emitted. The event source SHALL be `nexus.domain-management`.
 
 #### Scenario: Provisioning succeeded event
 
 - **WHEN** the provisioning workflow completes all steps successfully
-- **THEN** it SHALL emit a `DomainCreationSucceeded` event with source `nexus.domain-management`, domainId, workflowExecutionId, completedAt, resourceArns (map of all created resource ARNs), and namespaceParameter (SSM parameter path)
+- **THEN** it SHALL emit a `DomainProvisioningSucceeded` event with source `nexus.domain-management`, domainId, workflowExecutionId, completedAt, resourceArns (map of all created resource ARNs), namespaceParameter (SSM parameter path), and isNewAccount flag
 
 #### Scenario: Provisioning failed event
 
 - **WHEN** the provisioning workflow fails at any step
-- **THEN** it SHALL emit a `DomainCreationFailed` event with source `nexus.domain-management`, domainId, workflowExecutionId, failedAt, errorCode, errorMessage, and compensationResults (list of cleanup outcomes)
+- **THEN** it SHALL emit a `DomainProvisioningFailed` event with source `nexus.domain-management`, domainId, workflowExecutionId, failedAt, errorCode, errorMessage, and compensationResults (list of cleanup outcomes)
 
 ### Requirement: New account detection
 
