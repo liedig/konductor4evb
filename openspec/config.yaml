@@ -1,22 +1,13 @@
 schema: spec-driven
 
 context: |
+  For architecture overview: read docs/development/architecture.md
   For testing patterns: read docs/development/testing.md
   For past decisions: read docs/development/decisions.md
 
-  ## Purpose
-  EventBridge Nexus — central integration platform for managing AWS EventBridge infrastructure, routing, and configuration across accounts.
-  Primary goals:
-  - Eliminate cross-account EventBridge complexity for developers and architects
-  - Reduce time-to-first-event from 1–2 days to under 10 minutes for most use cases
-  - Cut the number of AWS resources developers must manage per subscription by ~60%
-  - Give platform teams governance over domains and routing while keeping application teams autonomous
-
-  Scale targets:
+  ## Scale Targets
   - Tens of thousands of domains and billions of events per month across cross-account scenarios
   - Automatically handle EventBridge rule limits per bus by distributing events across domain-specific buses
-
-  Security and reliability:
   - All cross-account operations backed by IAM, resource policies, AWS Organizations
   - Domain-level DLQs with at least 30 days of message retention
 
@@ -29,43 +20,12 @@ context: |
   - **Platform teams**: Manage domains, Nexus policies, and governance
   - **Application teams**: Use simple publish/subscribe APIs; do not manage EventBridge resources directly
 
-  ## Tech Stack
-  - Backend: Rust (cargo-lambda, aws-sdk-rust, serde, thiserror, anyhow, lambda_runtime)
-  - API: REST via API Gateway with IAM authorization, OpenAPI 3.0 contract
-  - Database: Amazon DynamoDB (table-per-entity, PAY_PER_REQUEST)
-  - Infrastructure: AWS SAM (template.yaml), Step Functions (ASL JSON), CloudFormation
-  - Workflows: Step Functions with SDK integrations (no intermediate Lambdas for AWS API calls). Use Jsonata
-  - Observability: CloudWatch dashboards and alarms provisioned per domain
-
-  ## Project Structure
-  - Cargo workspace with shared lib at lib/nexus-common (crate: nexus-common)
-  - Lambda functions grouped by Nexus function: domain-management/functions/<name>, event-routing/functions/<name>
-  - Step Functions ASL definitions: domain-management/state-machines/*.asl.json
-  - API contract: api/openapi.yaml
-  - Trust stack for app account onboarding: trust-stack.yaml
-
   ## Conventions
   - No code comments; write self-explanatory code with clear naming
   - Alphabetically sorted imports; files under 300 lines
   - Conventional Commits (feat, fix, refactor, chore, test, docs)
   - Trunk-based workflow with short-lived feature branches
   - Spec-driven development via OpenSpec for all feature planning
-
-  ## Architecture Decisions
-  - Single SAM template with one REST API Gateway (IAM auth)
-  - One Lambda per API operation (register, list, describe, update, delete, approve, list-activations)
-  - Table-per-entity DynamoDB design (domains table, registration-requests table)
-  - Human-in-the-loop approval via Step Functions Task Token pattern
-  - Nexus event bus for internal lifecycle events (DomainRegistrationApproved, DomainProvisioningSucceeded, DomainProvisioningFailed, etc.)
-  - Cross-account provisioning via STS AssumeRole into trust role in app accounts
-  - Resource namespace: configurable {org}-{env}-{domain} convention
-  - Domain buses live in the platform account with PutEvent policies restricting to owner account
-  - Two DLQs per domain: subscription DLQ (platform account) and integration DLQ (app account)
-  - 1:1 bus mapping per subscribing app account for event delivery
-
-  ## Domain Context
-  AWS EventBridge Nexus managing domain registration, event routing, and cross-account infrastructure.
-  Key concepts: domains, domain event buses, schema registries, subscriptions, publish/subscribe APIs, platform vs. application accounts.
 
 rules:
   proposal:
@@ -74,4 +34,5 @@ rules:
       This project follows DDD - prefer extending an existing spec over creating a new one.
       Only create a new spec if the change introduces a genuinely new bounded context.
   tasks:
-    - Always include a task to update decision log (site/docs/development/decisions.md)
+    - Always include a task to update decision log (docs/development/decisions.md)
+    - If the change affects architecture (workflows, APIs, resources, data model, events, cross-account trust), include a task to update docs/development/architecture.md
