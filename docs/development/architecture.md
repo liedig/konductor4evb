@@ -77,7 +77,7 @@ graph TB
 
 ### Key Design Decisions
 
-- **Single SAM template** (`template.yaml`) defines all platform-account resources
+- **Three-stack deployment model**: `notifications-stack.yaml` (optional, SES identities), `template.yaml` (core platform resources, with conditional notification resources), and `trust-stack.yaml` (per application account)
 - **One Lambda per API operation** — small, focused functions with least-privilege IAM
 - **Reads are synchronous** (API Gateway -> Lambda -> DynamoDB); writes are asynchronous (API Gateway -> SQS -> Lambda -> EventBridge)
 - **Step Functions for workflows** — no intermediate Lambdas for AWS API calls; uses SDK integrations with JSONata
@@ -453,7 +453,7 @@ The table uses `PAY_PER_REQUEST` billing with point-in-time recovery enabled and
 
 ## Infrastructure as Code
 
-All infrastructure is defined in a single AWS SAM template (`template.yaml`) with CloudFormation. Step Functions workflows are defined in YAML with JSONata query language.
+All infrastructure is defined across three CloudFormation templates. The core platform resources use AWS SAM (`template.yaml`); SES email identities are managed by an optional sibling stack (`notifications-stack.yaml`); and per-application-account trust roles use plain CloudFormation (`trust-stack.yaml`). Step Functions workflows are defined in YAML with JSONata query language.
 
 ### Project Structure
 
@@ -480,7 +480,8 @@ evb-nexus/
 │   │   ├── decisions.md                      # Decision log
 │   │   └── testing.md                        # Testing strategy
 │   └── trust-stack-deployment.md             # App account onboarding guide
-├── template.yaml                             # SAM template (all platform-account resources)
+├── template.yaml                             # SAM template (core platform resources)
+├── notifications-stack.yaml                  # Optional SES identity stack
 ├── trust-stack.yaml                          # CloudFormation for app account trust role
 └── Cargo.toml                                # Rust workspace root
 ```
@@ -493,7 +494,7 @@ evb-nexus/
 | API | REST via API Gateway with IAM authorization |
 | Database | DynamoDB (PAY_PER_REQUEST, single table) |
 | Workflows | Step Functions (YAML, JSONata, SDK integrations) |
-| Notifications | SES (approval and rejection emails) |
+| Notifications | SES (approval and rejection emails, optional via notifications-stack.yaml) |
 | Namespace sharing | SSM Advanced Parameters + RAM |
 | IaC | AWS SAM / CloudFormation |
 | Runtime | `provided.al2023` (ARM64, 256 MB) |
@@ -506,7 +507,9 @@ evb-nexus/
 |----------|---------|
 | [decisions.md](decisions.md) | Why things are built this way — architectural decision log |
 | [testing.md](testing.md) | Testing strategy, smithy-mocks patterns, TDD workflow |
+| [installation.md](../installation.md) | End-to-end installation guide (prerequisites, deploy, smoke test, uninstall) |
 | [trust-stack-deployment.md](../trust-stack-deployment.md) | Step-by-step guide for onboarding application accounts |
 | [api/openapi.yaml](../../api/openapi.yaml) | Full API contract with request/response schemas |
-| [template.yaml](../../template.yaml) | SAM template — source of truth for all platform resources |
+| [template.yaml](../../template.yaml) | SAM template — core platform resources (notification resources conditional) |
+| [notifications-stack.yaml](../../notifications-stack.yaml) | Optional SES identity stack |
 | [trust-stack.yaml](../../trust-stack.yaml) | Trust role CloudFormation template |

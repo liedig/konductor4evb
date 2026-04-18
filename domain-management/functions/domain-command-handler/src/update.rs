@@ -169,24 +169,22 @@ mod tests {
         set_env();
 
         let item = active_domain_item();
-        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item)
-            .then_output(move || {
-                GetItemOutput::builder()
-                    .set_item(Some(item.clone()))
-                    .build()
-            });
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
 
         let updated_attrs = HashMap::from([
             ("domainId".into(), s("d-123")),
             ("status".into(), s("ACTIVE")),
             ("description".into(), s("Updated billing domain")),
         ]);
-        let update_rule = mock!(aws_sdk_dynamodb::Client::update_item)
-            .then_output(move || {
-                UpdateItemOutput::builder()
-                    .set_attributes(Some(updated_attrs.clone()))
-                    .build()
-            });
+        let update_rule = mock!(aws_sdk_dynamodb::Client::update_item).then_output(move || {
+            UpdateItemOutput::builder()
+                .set_attributes(Some(updated_attrs.clone()))
+                .build()
+        });
 
         let ddb = mock_client!(
             aws_sdk_dynamodb,
@@ -243,12 +241,11 @@ mod tests {
         let mut item = active_domain_item();
         item.insert("status".into(), s("DEACTIVATED"));
 
-        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item)
-            .then_output(move || {
-                GetItemOutput::builder()
-                    .set_item(Some(item.clone()))
-                    .build()
-            });
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
         let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
 
         let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)

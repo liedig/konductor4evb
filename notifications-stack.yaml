@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  EventBridge Nexus Notifications Stack.
+  Manages SES email identities for approval and rejection notifications.
+  MUST be deployed in the same AWS region as the Nexus core stack
+  because SES identities are regional and the notification Lambda functions
+  in the core stack call SES via the local region endpoint.
+
+Parameters:
+  FromEmail:
+    Type: String
+    Description: >-
+      Verified SES sender email address for approval/rejection notifications.
+      Deploy this stack in the same region as the Nexus core stack (SES identities are regional).
+  ToEmail:
+    Type: String
+    Description: >-
+      Verified SES recipient email address (platform team inbox for approval notifications).
+      Deploy this stack in the same region as the Nexus core stack (SES identities are regional).
+
+Resources:
+  FromEmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref FromEmail
+
+  ToEmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref ToEmail
+
+Outputs:
+  FromEmail:
+    Description: Verified SES sender email address
+    Value: !Ref FromEmail
+  ToEmail:
+    Description: Verified SES recipient email address
+    Value: !Ref ToEmail

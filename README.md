@@ -138,43 +138,7 @@ RegisterDomain ──> PENDING_APPROVAL
 
 ## Getting Started
 
-### Prerequisites
-
-- Rust toolchain with [cargo-lambda](https://www.cargo-lambda.info/)
-- [AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html)
-- AWS credentials configured for the platform account
-
-### Build and Test
-
-```bash
-make check    # cargo check + clippy
-make test     # cargo test --workspace
-make build    # sam build
-```
-
-### Deploy
-
-1. Deploy the Nexus to the platform account:
-
-```bash
-sam deploy --guided
-```
-
-2. Deploy the trust stack in each application account:
-
-```bash
-aws cloudformation deploy \
-  --template-file trust-stack.yaml \
-  --stack-name <org>-<env>-nexus-trust-stack \
-  --parameter-overrides \
-    NexusRoleArn=<function-role-arn> \
-    ProvisioningWorkflowRoleArn=<provisioning-role-arn> \
-    Environment=<env> \
-    Organization=<org> \
-  --capabilities CAPABILITY_NAMED_IAM
-```
-
-See [`docs/trust-stack-deployment.md`](docs/trust-stack-deployment.md) for detailed instructions.
+See [docs/installation.md](docs/installation.md) for the complete installation guide covering prerequisites, three-stack deployment, smoke test, troubleshooting, and uninstall.
 
 ## Workflows
 

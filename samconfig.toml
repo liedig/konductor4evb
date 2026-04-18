@@ -9,5 +9,12 @@ capabilities = "CAPABILITY_NAMED_IAM"
 confirm_changeset = true
 
 [dev.deploy.parameters]
-stack_name = "dev-evb-control-plane"
+stack_name = "acme-nexus"
 parameter_overrides = "Environment=dev Organization=acme"
+
+[dev.notifications.parameters]
+template_file = "notifications-stack.yaml"
+stack_name = "acme-nexus-notifications"
+parameter_overrides = "FromEmail=<> ToEmail=<>"
+capabilities = "CAPABILITY_NAMED_IAM"
+confirm_changeset = true

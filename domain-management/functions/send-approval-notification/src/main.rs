@@ -160,51 +160,86 @@ mod tests {
 
     #[test]
     fn approval_email_body_contains_domain_name() {
-        let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            false,
+        );
         assert!(body.contains("billing"));
     }
 
     #[test]
     fn approval_email_body_contains_owner_account_id() {
-        let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            false,
+        );
         assert!(body.contains("111122223333"));
     }
 
     #[test]
     fn approval_email_body_contains_owner_email() {
-        let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            false,
+        );
         assert!(body.contains("owner@example.com"));
     }
 
     #[test]
     fn approval_email_body_contains_task_token() {
-        let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            false,
+        );
         assert!(body.contains("tok-1"));
     }
 
     #[test]
     fn approval_email_body_contains_heading() {
-        let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            false,
+        );
         assert!(body.contains("Approval Required"));
     }
 
     #[test]
     fn new_account_shows_trust_stack_notice() {
-        let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", true);
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            true,
+        );
         assert!(body.contains("New Account Detected"));
         assert!(body.contains("trust-stack"));
     }
 
     #[test]
     fn known_account_omits_trust_stack_notice() {
-        let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", "tok-1", false);
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            false,
+        );
         assert!(!body.contains("New Account Detected"));
     }
 }

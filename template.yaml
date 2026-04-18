@@ -19,10 +19,12 @@ Parameters:
     Description: ARN of the AWS Organization for RAM sharing (e.g., arn:aws:organizations::123456789012:organization/o-abc123)
   ApprovalFromEmail:
     Type: String
-    Description: Verified SES sender for approval notifications
+    Default: ""
+    Description: Verified SES sender for approval notifications. Leave empty to deploy without notification resources.
   ApprovalToEmail:
     Type: String
-    Description: Verified SES recipient for approval notifications
+    Default: ""
+    Description: Verified SES recipient for approval notifications. Leave empty to deploy without notification resources.
 
 Globals:
   Function:
@@ -40,6 +42,9 @@ Globals:
         NEXUS_EVENT_BUS: !Ref NexusEventBus
         APPROVAL_STATE_MACHINE_ARN: !Ref ApprovalWorkflow
         DOMAINS_COMMAND_QUEUE_URL: !Ref DomainsCommandQueue
+
+Conditions:
+  NotificationsEnabled: !Not [!Equals [!Ref ApprovalFromEmail, ""]]
 
 Resources:
   # ---- EventBridge ----
@@ -345,12 +350,14 @@ Resources:
   # ---- Approval Notification Functions ----
   SendApprovalNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup
+    Condition: NotificationsEnabled
     Properties:
       LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-send-approval-notification"
       RetentionInDays: 30
 
   SendApprovalNotificationFunction:
     Type: AWS::Serverless::Function
+    Condition: NotificationsEnabled
     DependsOn: SendApprovalNotificationFunctionLogGroup
     Metadata:
       BuildMethod: rust-cargolambda
@@ -380,12 +387,14 @@ Resources:
 
   SendRejectionNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup
+    Condition: NotificationsEnabled
     Properties:
       LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-send-rejection-notification"
       RetentionInDays: 30
 
   SendRejectionNotificationFunction:
     Type: AWS::Serverless::Function
+    Condition: NotificationsEnabled
     DependsOn: SendRejectionNotificationFunctionLogGroup
     Metadata:
       BuildMethod: rust-cargolambda
@@ -409,6 +418,7 @@ Resources:
   # ---- EventBridge Rules ----
   DomainRegistrationRejectedRule:
     Type: AWS::Events::Rule
+    Condition: NotificationsEnabled
     Properties:
       Name: !Sub "${Organization}-${Environment}-domain-registration-rejected"
       EventBusName: !Ref NexusEventBus
@@ -423,6 +433,7 @@ Resources:
 
   DomainRegistrationRejectedRulePermission:
     Type: AWS::Lambda::Permission
+    Condition: NotificationsEnabled
     Properties:
       FunctionName: !Ref SendRejectionNotificationFunction
       Action: lambda:InvokeFunction
@@ -456,11 +467,14 @@ Resources:
                   - events:PutEvents
                 Resource:
                   - !GetAtt NexusEventBus.Arn
-              - Effect: Allow
-                Action:
-                  - lambda:InvokeFunction
-                Resource:
-                  - !GetAtt SendApprovalNotificationFunction.Arn
+              - !If
+                - NotificationsEnabled
+                - Effect: Allow
+                  Action:
+                    - lambda:InvokeFunction
+                  Resource:
+                    - !GetAtt SendApprovalNotificationFunction.Arn
+                - !Ref AWS::NoValue
 
   ApprovalWorkflow:
     Type: AWS::Serverless::StateMachine

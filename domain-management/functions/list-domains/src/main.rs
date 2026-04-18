@@ -6,9 +6,7 @@ use std::collections::HashMap;
 use std::env;
 
 use nexus_common::api;
-use nexus_common::dynamodb::{
-    deserialize_pagination_token, get_s, s, serialize_pagination_token,
-};
+use nexus_common::dynamodb::{deserialize_pagination_token, get_s, s, serialize_pagination_token};
 
 struct QueryResult {
     items: Vec<HashMap<String, AttributeValue>>,
