@@ -50,6 +50,8 @@ Resources:
   # ---- EventBridge ----
   NexusEventBus:
     Type: AWS::Events::EventBus
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub "${Organization}-${Environment}-nexus-bus"
 
@@ -61,6 +63,9 @@ Resources:
     Properties:
       TableName: !Sub "${Organization}-${Environment}-domains"
       BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       AttributeDefinitions:
@@ -100,6 +105,8 @@ Resources:
   # ---- Dead Letter Queue (read Lambda functions) ----
   LambdaDlq:
     Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       QueueName: !Sub "${Organization}-${Environment}-lambda-dlq"
       MessageRetentionPeriod: 1209600
@@ -107,12 +114,16 @@ Resources:
   # ---- Command Queues ----
   DomainsCommandDlq:
     Type: AWS::SQS::Queue
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       QueueName: !Sub "${Organization}-${Environment}-domains-command-dlq"
       MessageRetentionPeriod: 1209600
 
   DomainsCommandQueue:
     Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       QueueName: !Sub "${Organization}-${Environment}-domains-command-queue"
       VisibilityTimeout: 30
@@ -123,18 +134,24 @@ Resources:
   # ---- CloudWatch Log Groups ----
   ApiAccessLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub "/aws/apigateway/${Organization}-${Environment}-nexus-api"
       RetentionInDays: 30
 
   ListDomainsLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-list-domains"
       RetentionInDays: 30
 
   DescribeDomainLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-describe-domain"
       RetentionInDays: 30
@@ -153,16 +170,21 @@ Resources:
             Principal:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
-      Policies:
-        - PolicyName: CrossAccountAssumeRole
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sts:AssumeRole
-                Resource:
-                  - !Sub "arn:aws:iam::*:role/${Organization}-${Environment}-nexus-trust-role"
+
+  NexusTrustAnchorPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: CrossAccountAssumeRole
+      Roles:
+        - !Ref NexusTrustAnchorRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - !Sub "arn:aws:iam::*:role/${Organization}-${Environment}-nexus-trust-role"
 
   NexusApiSqsRole:
     Type: AWS::IAM::Role
@@ -175,21 +197,28 @@ Resources:
             Principal:
               Service: apigateway.amazonaws.com
             Action: sts:AssumeRole
-      Policies:
-        - PolicyName: SendToCommandQueues
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                  - sqs:GetQueueAttributes
-                Resource:
-                  - !GetAtt DomainsCommandQueue.Arn
+
+  NexusApiSqsPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: SendToCommandQueues
+      Roles:
+        - !Ref NexusApiSqsRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sqs:SendMessage
+              - sqs:GetQueueAttributes
+            Resource:
+              - !GetAtt DomainsCommandQueue.Arn
 
   # ---- API Gateway ----
   NexusApi:
     Type: AWS::Serverless::Api
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       Name: !Sub "${Organization}-${Environment}-nexus-api"
       StageName: !Ref Environment
@@ -270,6 +299,8 @@ Resources:
   # ---- Command Handler Functions ----
   DomainCommandHandlerLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-domain-command-handler"
       RetentionInDays: 30
@@ -313,6 +344,8 @@ Resources:
   # ---- Decide Registration Function ----
   DecideFunctionLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-decide-registration"
       RetentionInDays: 30
@@ -350,6 +383,8 @@ Resources:
   # ---- Approval Notification Functions ----
   SendApprovalNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
       LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-send-approval-notification"
@@ -387,6 +422,8 @@ Resources:
 
   SendRejectionNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
       LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-send-rejection-notification"
@@ -452,29 +489,42 @@ Resources:
             Principal:
               Service: states.amazonaws.com
             Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ApprovalWorkflowPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - dynamodb:UpdateItem
-                Resource:
-                  - !GetAtt DomainsTable.Arn
-              - Effect: Allow
-                Action:
-                  - events:PutEvents
-                Resource:
-                  - !GetAtt NexusEventBus.Arn
-              - !If
-                - NotificationsEnabled
-                - Effect: Allow
-                  Action:
-                    - lambda:InvokeFunction
-                  Resource:
-                    - !GetAtt SendApprovalNotificationFunction.Arn
-                - !Ref AWS::NoValue
+
+  ApprovalWorkflowPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ApprovalWorkflowPolicy
+      Roles:
+        - !Ref ApprovalWorkflowRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:UpdateItem
+            Resource:
+              - !GetAtt DomainsTable.Arn
+          - Effect: Allow
+            Action:
+              - events:PutEvents
+            Resource:
+              - !GetAtt NexusEventBus.Arn
+
+  ApprovalWorkflowNotificationPolicy:
+    Type: AWS::IAM::Policy
+    Condition: NotificationsEnabled
+    Properties:
+      PolicyName: ApprovalWorkflowNotificationPolicy
+      Roles:
+        - !Ref ApprovalWorkflowRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${Organization}-${Environment}-send-approval-notification"
 
   ApprovalWorkflow:
     Type: AWS::Serverless::StateMachine
@@ -486,7 +536,7 @@ Resources:
       DefinitionSubstitutions:
         DomainsTable: !Ref DomainsTable
         NexusEventBus: !GetAtt NexusEventBus.Arn
-        SendApprovalNotificationFunction: !GetAtt SendApprovalNotificationFunction.Arn
+        SendApprovalNotificationFunction: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${Organization}-${Environment}-send-approval-notification"
 
   ProvisioningWorkflowRole:
     Type: AWS::IAM::Role
@@ -499,70 +549,75 @@ Resources:
             Principal:
               Service: states.amazonaws.com
             Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ProvisioningWorkflowPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - events:CreateEventBus
-                  - events:DeleteEventBus
-                  - events:DescribeEventBus
-                  - events:PutPermission
-                  - events:RemovePermission
-                  - events:PutEvents
-                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-${Environment}-*"
-              - Effect: Allow
-                Action:
-                  - schemas:CreateRegistry
-                  - schemas:DeleteRegistry
-                  - schemas:PutResourcePolicy
-                Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-${Environment}-*"
-              - Effect: Allow
-                Action:
-                  - sqs:CreateQueue
-                  - sqs:DeleteQueue
-                  - sqs:SetQueueAttributes
-                  - sqs:GetQueueAttributes
-                  - sqs:GetQueueUrl
-                Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Organization}-${Environment}-*"
-              - Effect: Allow
-                Action:
-                  - cloudwatch:PutDashboard
-                  - cloudwatch:DeleteDashboards
-                Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Organization}-${Environment}-*"
-              - Effect: Allow
-                Action:
-                  - cloudwatch:PutMetricAlarm
-                  - cloudwatch:DeleteAlarms
-                Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Organization}-${Environment}-*"
-              - Effect: Allow
-                Action:
-                  - dynamodb:UpdateItem
-                  - dynamodb:Query
-                Resource:
-                  - !GetAtt DomainsTable.Arn
-                  - !Sub "${DomainsTable.Arn}/index/by-owner"
-              - Effect: Allow
-                Action:
-                  - sts:AssumeRole
-                Resource:
-                  - !Sub "arn:aws:iam::*:role/${Organization}-${Environment}-nexus-trust-role"
-              - Effect: Allow
-                Action:
-                  - ssm:PutParameter
-                  - ssm:GetParameter
-                  - ssm:AddTagsToResource
-                Resource:
-                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/namespace/*"
-              - Effect: Allow
-                Action:
-                  - ram:CreateResourceShare
-                  - ram:GetResourceShares
-                  - ram:AssociateResourceShare
-                  - ram:ListResources
-                Resource: "*"
+
+  ProvisioningWorkflowPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ProvisioningWorkflowPolicy
+      Roles:
+        - !Ref ProvisioningWorkflowRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - events:CreateEventBus
+              - events:DeleteEventBus
+              - events:DescribeEventBus
+              - events:PutPermission
+              - events:RemovePermission
+              - events:PutEvents
+            Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-${Environment}-*"
+          - Effect: Allow
+            Action:
+              - schemas:CreateRegistry
+              - schemas:DeleteRegistry
+              - schemas:PutResourcePolicy
+            Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-${Environment}-*"
+          - Effect: Allow
+            Action:
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:SetQueueAttributes
+              - sqs:GetQueueAttributes
+              - sqs:GetQueueUrl
+            Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Organization}-${Environment}-*"
+          - Effect: Allow
+            Action:
+              - cloudwatch:PutDashboard
+              - cloudwatch:DeleteDashboards
+            Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Organization}-${Environment}-*"
+          - Effect: Allow
+            Action:
+              - cloudwatch:PutMetricAlarm
+              - cloudwatch:DeleteAlarms
+            Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Organization}-${Environment}-*"
+          - Effect: Allow
+            Action:
+              - dynamodb:UpdateItem
+              - dynamodb:Query
+            Resource:
+              - !GetAtt DomainsTable.Arn
+              - !Sub "${DomainsTable.Arn}/index/by-owner"
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - !Sub "arn:aws:iam::*:role/${Organization}-${Environment}-nexus-trust-role"
+          - Effect: Allow
+            Action:
+              - ssm:PutParameter
+              - ssm:GetParameter
+              - ssm:AddTagsToResource
+            Resource:
+              - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/namespace/*"
+          - Effect: Allow
+            Action:
+              - ram:CreateResourceShare
+              - ram:GetResourceShares
+              - ram:AssociateResourceShare
+              - ram:ListResources
+            Resource: "*"
 
   ProvisioningWorkflow:
     Type: AWS::Serverless::StateMachine

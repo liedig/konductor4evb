@@ -18,11 +18,6 @@ Parameters:
   Organization:
     Type: String
     Description: Organization identifier (must match Nexus configuration)
-  NamespacePrefix:
-    Type: String
-    Default: "*"
-    Description: Namespace prefix for resource scoping (e.g., "prod-acme-*")
-
 Resources:
   NexusTrustRole:
     Type: AWS::IAM::Role
@@ -50,7 +45,7 @@ Resources:
                   - events:PutPermission
                   - events:RemovePermission
                 Resource:
-                  - !Sub "arn:aws:events:*:${AWS::AccountId}:event-bus/${Organization}-${Environment}-*"
+                  - !Sub "arn:${AWS::Partition}:events:*:${AWS::AccountId}:event-bus/${Organization}-${Environment}-*"
         - PolicyName: DlqManagement
           PolicyDocument:
             Version: '2012-10-17'
@@ -63,7 +58,7 @@ Resources:
                   - sqs:GetQueueAttributes
                   - sqs:GetQueueUrl
                 Resource:
-                  - !Sub "arn:aws:sqs:*:${AWS::AccountId}:${Organization}-${Environment}-*"
+                  - !Sub "arn:${AWS::Partition}:sqs:*:${AWS::AccountId}:${Organization}-${Environment}-*"
         - PolicyName: BusToBusRoleManagement
           PolicyDocument:
             Version: '2012-10-17'
@@ -76,7 +71,7 @@ Resources:
                   - iam:DeleteRolePolicy
                   - iam:GetRole
                 Resource:
-                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${Organization}-${Environment}-b2b-*"
+                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Organization}-${Environment}-b2b-*"
 
 Outputs:
   TrustRoleArn:
