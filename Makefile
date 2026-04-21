@@ -1,5 +1,7 @@
 .PHONY: build test check smoke deploy deploy-core deploy-notifications teardown-core teardown-notifications clean
 
+export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
+
 build:
 	sam build --beta-features -c
 

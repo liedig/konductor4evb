@@ -37,7 +37,7 @@ Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
 |---|---|---|
 | Rust stable | [rustup.rs](https://rustup.rs/) — the project pins stable via `rust-toolchain.toml` | `rustc --version` |
 | cargo-lambda | [cargo-lambda.info](https://www.cargo-lambda.info/) | `cargo lambda --version` |
-| zig (for cross-compilation) | Comes with cargo-lambda or install via [ziglang.org](https://ziglang.org/) | `zig version` |
+| zig 0.14.x (for cross-compilation) | `brew install zig@0.14` or install via [ziglang.org](https://ziglang.org/). **zig 0.16+ has a broken `ar` command** — see [Troubleshooting](#zig-016-ar-regression-breaks-sam-build) | `zig version` |
 | AWS SAM CLI | [docs.aws.amazon.com](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) | `sam --version` |
 | AWS CLI | [docs.aws.amazon.com](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) | `aws --version` |
 | curl / jq | System package manager | `curl --version && jq --version` |
@@ -316,6 +316,44 @@ If domain provisioning fails with `AccessDenied` when assuming the trust role:
 aws iam get-role \
   --role-name <org>-<env>-nexus-trust-role \
   --region <region>
+```
+
+### zig 0.16+ `ar` regression breaks SAM build
+
+If `make build` fails with errors like:
+
+```
+ar: error: unable to open '...libring_core_0_17_14_.a': No such file or directory
+```
+
+or
+
+```
+ar: error: unable to open '...libaws_lc_0_39_1_crypto.a': No such file or directory
+```
+
+This is a regression in zig 0.16.0 where the `ar` subcommand (LLVM Archiver) cannot create new archive files. The `c` (create) modifier is broken — it always attempts to open an existing file first, failing when the output `.a` file does not yet exist. This affects any Rust crate using `cc-rs` for native compilation during cross-builds (including `ring` and `aws-lc-sys`, both used by the AWS SDK).
+
+**Fix:** Downgrade zig to 0.14.x:
+
+```bash
+brew unlink zig
+brew install zig@0.14
+brew link zig@0.14
+```
+
+Then clear caches and rebuild:
+
+```bash
+rm -rf ~/Library/Caches/cargo-zigbuild
+make clean
+make build
+```
+
+If builds also hang during the `aws-lc-sys` compilation step, set the following environment variable (already included in the Makefile):
+
+```bash
+export AWS_LC_SYS_NO_JITTER_ENTROPY=1
 ```
 
 ### SAM build cache is stale
