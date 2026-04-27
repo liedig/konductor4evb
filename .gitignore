@@ -131,3 +131,7 @@ Cargo.lock
 
 ### SAM ###
 **/.aws-sam
+
+### Claude Code / session transcripts ###
+# Local exports produced by `/export` or similar
+20[0-9][0-9]-[0-1][0-9]-[0-3][0-9]-*.txt
