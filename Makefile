@@ -1,86 +1,145 @@
-.PHONY: build test check smoke deploy deploy-core deploy-notifications teardown-core teardown-notifications clean
+.PHONY: help build test check smoke deploy deploy-core deploy-notifications teardown-core teardown-notifications clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
-build:
-	sam build --beta-features -c
+AWS_REGION ?= $(shell aws configure get region 2>/dev/null || echo us-east-1)
 
-test:
+# Colour codes for help output (tput falls back to empty strings on dumb terminals)
+BOLD := $(shell tput bold 2>/dev/null)
+DIM := $(shell tput dim 2>/dev/null)
+CYAN := $(shell tput setaf 6 2>/dev/null)
+GREEN := $(shell tput setaf 2 2>/dev/null)
+YELLOW := $(shell tput setaf 3 2>/dev/null)
+MAGENTA := $(shell tput setaf 5 2>/dev/null)
+RESET := $(shell tput sgr0 2>/dev/null)
+
+.DEFAULT_GOAL := help
+
+help: ## Show this help message
+	@printf "\n  $(BOLD)$(CYAN)EventBridge Nexus$(RESET) — Makefile targets\n\n"
+	@printf "  $(BOLD)Build & Test$(RESET)\n"
+	@awk 'BEGIN {FS = ":.*?## "} /^(build|test|check|clean):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\n  $(BOLD)Deploy$(RESET)\n"
+	@awk 'BEGIN {FS = ":.*?## "} /^(deploy|deploy-core|deploy-notifications):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\n  $(BOLD)Teardown$(RESET)\n"
+	@awk 'BEGIN {FS = ":.*?## "} /^(teardown-.+):.*## / {printf "    $(YELLOW)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\n  $(BOLD)Smoke Test$(RESET)\n"
+	@awk 'BEGIN {FS = ":.*?## "} /^smoke:.*## / {printf "    $(MAGENTA)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\n  $(BOLD)Environment variables$(RESET)\n"
+	@printf "    $(DIM)AWS_REGION$(RESET)                   current: $(CYAN)$(AWS_REGION)$(RESET)\n"
+	@printf "    $(DIM)APP_ACCOUNT_ID$(RESET)               required for: smoke\n"
+	@printf "    $(DIM)OWNER_EMAIL$(RESET)                  required for: smoke\n"
+	@printf "    $(DIM)NOTIFICATION_SENDER_EMAIL$(RESET)    required for: deploy-notifications\n"
+	@printf "    $(DIM)PLATFORM_OPERATOR_EMAIL$(RESET)      required for: deploy-notifications\n\n"
+
+build: ## sam build (Rust cross-compilation for arm64, cached)
+	sam build --config-file samconfig-core.toml --beta-features -c
+
+test: ## cargo test --workspace
 	cargo test --workspace
 
-check:
+check: ## cargo fmt, check, clippy (CI-equivalent local gate)
 	cargo fmt --check
 	cargo check --workspace
 	cargo clippy --workspace -- -D warnings
 
-smoke: ## Run end-to-end smoke test (register, approve, verify, cleanup)
-	@API_URL=$$(aws cloudformation describe-stacks \
-		--stack-name acme-nexus \
+smoke: ## End-to-end smoke test (register, approve, verify ACTIVE across envs)
+ifndef APP_ACCOUNT_ID
+	$(error APP_ACCOUNT_ID is required — the AWS account ID of the domain owner)
+endif
+ifndef OWNER_EMAIL
+	$(error OWNER_EMAIL is required — the verified SES recipient for the domain owner)
+endif
+	@set -euo pipefail; \
+	DOMAIN_NAME="smoke-test"; \
+	echo "$(BOLD)$(CYAN)=== Smoke test: $${DOMAIN_NAME} ===$(RESET)"; \
+	API_URL=$$(aws cloudformation describe-stacks \
+		--stack-name nexus-core \
 		--query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
 		--output text \
-		--region $(AWS_REGION)) && \
-	echo "=== Registering smoke-test domain ===" && \
+		--region $(AWS_REGION)); \
+	echo "  API endpoint: $${API_URL}"; \
+	echo ""; \
+	echo "$(BOLD)(1/4) Register domain$(RESET)"; \
 	RESPONSE=$$(awscurl -X POST "$${API_URL}/domains" \
 		--region $(AWS_REGION) \
 		-H "Content-Type: application/json" \
-		-d "{\"domainName\":\"smoke-test\",\"ownerAccountId\":\"$(APP_ACCOUNT_ID)\",\"ownerEmail\":\"$(OWNER_EMAIL)\",\"description\":\"Smoke test domain\"}") && \
-	echo "$$RESPONSE" && \
-	DOMAIN_ID=$$(echo "$$RESPONSE" | jq -r '.domainId') && \
-	echo "domainId=$${DOMAIN_ID}" && \
-	echo "=== Approving domain ===" && \
-	awscurl -X POST "$${API_URL}/domains/registrations/decide" \
+		-d "{\"domainName\":\"$${DOMAIN_NAME}\",\"ownerAccountId\":\"$(APP_ACCOUNT_ID)\",\"ownerEmail\":\"$(OWNER_EMAIL)\",\"description\":\"Smoke test domain\"}"); \
+	echo "  $${RESPONSE}"; \
+	REQUEST_ID=$$(echo "$${RESPONSE}" | jq -r '.requestId'); \
+	[ "$${REQUEST_ID}" = "null" ] && { echo "  $(BOLD)ERROR: no requestId in response$(RESET)"; exit 1; } || true; \
+	echo ""; \
+	echo "$(BOLD)(2/4) Wait for domain record with taskToken$(RESET)"; \
+	DOMAIN_ID=""; TASK_TOKEN=""; \
+	for i in $$(seq 1 20); do \
+		ITEM=$$(aws dynamodb query --table-name nexus-domains \
+			--index-name by-name \
+			--key-condition-expression "domainName = :n" \
+			--expression-attribute-values "{\":n\":{\"S\":\"$${DOMAIN_NAME}\"}}" \
+			--region $(AWS_REGION) \
+			--output json 2>/dev/null | jq -r '.Items[0] // empty'); \
+		if [ -n "$${ITEM}" ]; then \
+			DOMAIN_ID=$$(echo "$${ITEM}" | jq -r '.domainId.S // empty'); \
+			TASK_TOKEN=$$(echo "$${ITEM}" | jq -r '.taskToken.S // empty'); \
+			[ -n "$${DOMAIN_ID}" ] && [ -n "$${TASK_TOKEN}" ] && break; \
+		fi; \
+		printf "  waiting for approval workflow to publish taskToken (attempt %s/20)\r" "$$i"; \
+		sleep 3; \
+	done; \
+	echo ""; \
+	[ -z "$${DOMAIN_ID}" ] && { echo "  $(BOLD)ERROR: domain never appeared in table$(RESET)"; exit 1; } || true; \
+	[ -z "$${TASK_TOKEN}" ] && { echo "  $(BOLD)ERROR: taskToken never populated — check SendApprovalRequestNotificationFunction logs$(RESET)"; exit 1; } || true; \
+	echo "  domainId=$${DOMAIN_ID}"; \
+	echo "  taskToken=$${TASK_TOKEN:0:24}... (truncated)"; \
+	echo ""; \
+	echo "$(BOLD)(3/4) Approve$(RESET)"; \
+	DECIDE_RESPONSE=$$(awscurl -X POST "$${API_URL}/domains/registrations/decide" \
 		--region $(AWS_REGION) \
 		-H "Content-Type: application/json" \
-		-d "{\"domainName\":\"smoke-test\",\"decision\":\"ACCEPT\"}" && \
-	echo "=== Polling for ACTIVE status ===" && \
-	ATTEMPTS=0 && \
-	while [ $$ATTEMPTS -lt 30 ]; do \
+		-d "{\"taskToken\":\"$${TASK_TOKEN}\",\"decision\":\"ACCEPT\",\"decidedBy\":\"smoke-test\"}"); \
+	echo "  $${DECIDE_RESPONSE}"; \
+	echo ""; \
+	echo "$(BOLD)(4/4) Poll for ACTIVE status$(RESET)"; \
+	STATUS=""; \
+	for i in $$(seq 1 40); do \
 		STATUS=$$(awscurl -X GET "$${API_URL}/domains/$${DOMAIN_ID}" \
-			--region $(AWS_REGION) | jq -r '.status') && \
-		echo "  status=$$STATUS (attempt $$((ATTEMPTS+1))/30)" && \
-		if [ "$$STATUS" = "ACTIVE" ]; then break; fi && \
-		sleep 5 && \
-		ATTEMPTS=$$((ATTEMPTS+1)); \
-	done && \
-	if [ "$$STATUS" != "ACTIVE" ]; then echo "ERROR: domain did not reach ACTIVE" && exit 1; fi && \
-	echo "=== Verifying platform-account resources ===" && \
-	aws events describe-event-bus --name acme-dev-smoke-test-domain-bus --region $(AWS_REGION) > /dev/null && echo "  event-bus: OK" && \
-	aws schemas describe-registry --registry-name acme-dev-smoke-test-schema-registry --region $(AWS_REGION) > /dev/null && echo "  schema-registry: OK" && \
-	aws sqs get-queue-url --queue-name acme-dev-smoke-test-subscription-dlq --region $(AWS_REGION) > /dev/null && echo "  subscription-dlq: OK" && \
-	echo "=== Deleting smoke-test domain ===" && \
-	awscurl -X DELETE "$${API_URL}/domains/$${DOMAIN_ID}" --region $(AWS_REGION) && \
-	echo "=== Polling for DELETED status ===" && \
-	ATTEMPTS=0 && \
-	while [ $$ATTEMPTS -lt 30 ]; do \
-		STATUS=$$(awscurl -X GET "$${API_URL}/domains/$${DOMAIN_ID}" \
-			--region $(AWS_REGION) | jq -r '.status') && \
-		echo "  status=$$STATUS (attempt $$((ATTEMPTS+1))/30)" && \
-		if [ "$$STATUS" = "DELETED" ]; then break; fi && \
-		sleep 5 && \
-		ATTEMPTS=$$((ATTEMPTS+1)); \
-	done && \
-	if [ "$$STATUS" != "DELETED" ]; then echo "WARNING: domain did not reach DELETED within timeout"; fi && \
-	echo "=== Smoke test complete ==="
+			--region $(AWS_REGION) 2>/dev/null | jq -r '.status // "UNKNOWN"'); \
+		printf "  status=$(CYAN)%s$(RESET) (attempt %s/40)\r" "$${STATUS}" "$$i"; \
+		case "$${STATUS}" in \
+			ACTIVE) echo ""; break;; \
+			PROVISIONING_FAILED) echo ""; echo "  $(BOLD)ERROR: provisioning failed — check Step Functions executions$(RESET)"; exit 1;; \
+		esac; \
+		sleep 5; \
+	done; \
+	[ "$${STATUS}" != "ACTIVE" ] && { echo "  $(BOLD)ERROR: domain did not reach ACTIVE$(RESET)"; exit 1; } || true; \
+	echo ""; \
+	echo "$(BOLD)$(GREEN)✓ Smoke test complete — domain '$${DOMAIN_NAME}' is ACTIVE$(RESET)"; \
+	echo ""; \
+	echo "  To clean up, run:"; \
+	echo "    aws dynamodb delete-item --table-name nexus-domains --key '{\"domainId\":{\"S\":\"'$${DOMAIN_ID}'\"}}' --region $(AWS_REGION)"; \
+	echo "    (domain-level resources in your app account remain until a DELETE flow is built)"
 
-deploy: build deploy-core
+deploy: build deploy-core ## Build then deploy the core stack
 
-deploy-core: build
-	sam deploy --config-env dev
+deploy-core: build ## Deploy the Nexus core stack (builds first)
+	sam deploy --config-file samconfig-core.toml
 
-deploy-notifications:
-	aws cloudformation deploy \
-		--template-file notifications-stack.yaml \
-		--stack-name acme-nexus-notifications \
-		--parameter-overrides FromEmail=$(FROM_EMAIL) ToEmail=$(TO_EMAIL) \
-		--capabilities CAPABILITY_NAMED_IAM \
-		--region $(AWS_REGION)
+deploy-notifications: ## Deploy the notifications stack (SES identities)
+ifndef NOTIFICATION_SENDER_EMAIL
+	$(error NOTIFICATION_SENDER_EMAIL is required — verified SES sender)
+endif
+ifndef PLATFORM_OPERATOR_EMAIL
+	$(error PLATFORM_OPERATOR_EMAIL is required — verified SES recipient (platform team inbox))
+endif
+	sam deploy --config-file samconfig-notifications.toml \
+		--parameter-overrides NotificationSenderEmail=$(NOTIFICATION_SENDER_EMAIL) PlatformOperatorEmail=$(PLATFORM_OPERATOR_EMAIL)
 
-teardown-core:
-	aws cloudformation delete-stack --stack-name acme-nexus --region $(AWS_REGION)
+teardown-core: ## Delete the Nexus core stack
+	aws cloudformation delete-stack --stack-name nexus-core --region $(AWS_REGION)
 
-teardown-notifications:
-	aws cloudformation delete-stack --stack-name acme-nexus-notifications --region $(AWS_REGION)
+teardown-notifications: ## Delete the notifications stack
+	aws cloudformation delete-stack --stack-name nexus-notifications --region $(AWS_REGION)
 
-clean:
+clean: ## Remove cargo target/ and .aws-sam build artifacts
 	cargo clean
 	rm -rf .aws-sam
