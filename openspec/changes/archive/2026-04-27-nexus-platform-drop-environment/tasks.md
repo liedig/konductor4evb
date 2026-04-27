@@ -51,10 +51,10 @@ What's left is strictly the Nexus platform cleanup.
 - [x] 6.1 `cargo check --workspace && cargo clippy --workspace -- -D warnings`
 - [x] 6.2 `cargo test --workspace`
 - [x] 6.3 `sam build --beta-features -c` succeeds
-- [ ] 6.4 `sam deploy` (or `make deploy-core`) to a clean test account succeeds from an empty CloudFormation state
-- [ ] 6.5 Run `make smoke` to validate end-to-end
+- [x] 6.4 `sam deploy` (or `make deploy-core`) to a clean test account succeeds from an empty CloudFormation state
+- [x] 6.5 Run `make smoke` to validate end-to-end
 
 ## 7. OpenSpec
 
-- [ ] 7.1 Update delta specs in `openspec/changes/nexus-platform-drop-environment/specs/` as requirements shift during implementation
-- [ ] 7.2 Archive this change once verified (moves delta specs into main specs)
+- [x] 7.1 Update delta specs in `openspec/changes/nexus-platform-drop-environment/specs/` as requirements shift during implementation
+- [x] 7.2 Archive this change once verified (moves delta specs into main specs)

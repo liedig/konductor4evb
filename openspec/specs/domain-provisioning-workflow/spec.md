@@ -51,62 +51,89 @@ The approval workflow SHALL include a human approval step using the Step Functio
 - **AND THEN** the workflow SHALL update the domain record to `REJECTED` status with `decidedBy`, `justification`, and `rejectedAt`
 - **AND THEN** the workflow SHALL emit the `DomainRegistrationRejected` event
 
-### Requirement: Provisioning workflow resource creation
+### Requirement: Multi-environment provisioning coordinator
 
-The provisioning workflow SHALL create all domain resources in the correct order across both the platform account and the application (domain owner) account. The workflow SHALL set the domain status to `PROVISIONING` as its first step. The workflow SHALL detect whether the owner account is new. On success, the workflow SHALL create the namespace parameter, manage the RAM resource share, and set the domain status to `ACTIVE`. On failure, the workflow SHALL execute saga compensation to clean up created resources, then set the domain status to `PROVISIONING_FAILED`. The workflow SHALL be defined in YAML format and use JSONata as the query language.
+Domain provisioning SHALL be coordinated by an outer Step Functions workflow (`provision-domain`) that orchestrates per-environment provisioning via an embedded inner workflow (`provision-env`). The outer workflow SHALL run per-environment provisioning in parallel using a Map state. The outer workflow SHALL enforce an all-or-nothing contract across environments: if any environment fails to provision, the domain SHALL be marked `PROVISIONING_FAILED` and all environments that provisioned successfully SHALL be torn down via the `deprovision-env` workflow. The domain namespace SSM parameter and RAM resource share SHALL be managed by the outer workflow at the domain level, above the Map state, and SHALL NOT be rolled back on provisioning failure.
 
-#### Scenario: Provisioning workflow sets PROVISIONING status at start
+#### Scenario: Outer workflow orchestrates per-env provisioning
 
-- **WHEN** the provisioning workflow is triggered by a `DomainRegistrationApproved` event
-- **THEN** the workflow SHALL update the domain record to `PROVISIONING` status as its first step before creating any resources
+- **WHEN** the outer provisioning workflow is triggered by a `DomainRegistrationApproved` event
+- **THEN** it SHALL set the domain status to `PROVISIONING` as its first step
+- **AND THEN** it SHALL detect whether the `ownerAccountId` is a new account (as defined in the existing new-account-detection scenarios)
+- **AND THEN** it SHALL create the SSM namespace parameter and manage the RAM resource share at the domain level
+- **AND THEN** it SHALL start a Map state that, for each environment in the domain's `environments` list, starts a `provision-env` execution via `StartExecution.sync:2`
+- **AND THEN** the Map state SHALL run with unbounded concurrency (all environments in parallel)
 
-#### Scenario: Provisioning workflow detects new account
+#### Scenario: All environments succeed
 
-- **WHEN** the provisioning workflow sets `PROVISIONING` status
-- **THEN** the workflow SHALL query the `by-owner` GSI for the `ownerAccountId` filtering for `ACTIVE` status
-- **AND THEN** if no other `ACTIVE` domains exist for that account, the workflow SHALL flag the account as new in its execution context
+- **WHEN** every `provision-env` execution in the Map state completes successfully
+- **THEN** the outer workflow SHALL update the domain record to `ACTIVE` with a `resourceArns` map keyed by environment, each value containing the per-environment resource ARNs returned by the inner workflow
+- **AND THEN** the outer workflow SHALL emit a `DomainProvisioningSucceeded` event with the domain ID, workflow execution ID, completion timestamp, environments list, per-environment resource ARNs map, namespace parameter path, and `isNewAccount` flag
 
-#### Scenario: Provisioning workflow creates all resources
+#### Scenario: Any environment fails — succeeded siblings are torn down
 
-- **WHEN** the provisioning workflow proceeds after account detection
-- **THEN** the workflow SHALL create the following resources in order:
-  1. Domain event bus in the platform account with PutEvent policy restricting publishing to the domain owner account
-  2. Schema registry in the platform account with access policies
-  3. Subscription rule DLQ (SQS) in the platform account
-  4. Domain event bus in the application (owner) account via assumed role
-  5. Integration rule DLQ (SQS) in the application account via assumed role
-  6. CloudWatch dashboard, alarms, and metrics configuration in the platform account
-  7. SSM Advanced parameter at `/namespace/{domainName}` with value `{org}-{domainName}`
-  8. RAM resource share association for the namespace parameter
-- **AND THEN** upon successful completion, the workflow SHALL update the domain record to `ACTIVE` with all resource ARNs
-- **AND THEN** the workflow SHALL emit a `DomainProvisioningSucceeded` event
+- **WHEN** one or more `provision-env` executions fail
+- **THEN** the outer workflow SHALL run a second Map state in parallel over the environments that succeeded
+- **AND THEN** each iteration SHALL start a `deprovision-env` execution via `StartExecution.sync:2` to delete that environment's resources
+- **AND THEN** the outer workflow SHALL update the domain record to `PROVISIONING_FAILED`
+- **AND THEN** the outer workflow SHALL emit a `DomainProvisioningFailed` event populated with the first failed environment, the step within that environment that failed, the error code and message, and any compensation errors collected from both the inner saga and the outer sibling teardown
 
-#### Scenario: Provisioning workflow step failure triggers saga rollback
+#### Scenario: Namespace and RAM share persist across retries
 
-- **WHEN** any step in the provisioning workflow fails
-- **THEN** the workflow SHALL execute the saga compensation chain to delete all successfully created resources in reverse order
-- **AND THEN** the workflow SHALL update the domain record to `PROVISIONING_FAILED` with the error detail (including any compensation failures)
-- **AND THEN** the workflow SHALL emit a `DomainProvisioningFailed` event with the error code, error message, and the name of the failed step
+- **WHEN** the outer provisioning workflow fails after the SSM namespace parameter and RAM share have already been created
+- **THEN** the namespace parameter SHALL remain in place
+- **AND THEN** the RAM share association SHALL remain in place
+- **AND THEN** a subsequent retry of provisioning for the same domain SHALL reuse the existing namespace and RAM share as idempotent no-ops
 
-#### Scenario: Provisioning uses updated namespace convention for resource names
+### Requirement: Per-environment provisioning inner workflow
 
-- **WHEN** the provisioning workflow creates domain resources
-- **THEN** all resource names SHALL be derived from the `{org}-{env}-{domain}` namespace convention
-- **AND THEN** the organisation, environment, and domain name values SHALL be sourced from the event detail and Nexus configuration
+An inner Step Functions workflow (`provision-env`) SHALL encapsulate the creation of one environment's worth of domain resources. It SHALL accept `domainId`, `domainName`, `ownerAccountId`, and `environment` as inputs. On success it SHALL return the per-environment resource ARNs. On failure it SHALL run its own saga compensation to delete any resources it created before the failure, and then surface the failure to the outer workflow.
+
+The inner workflow's resource creation sequence SHALL match the existing per-env sequence: create platform event bus, set PutEvent policy, create schema registry, create subscription DLQ, assume the trust role in the owner account, create app event bus, create integration DLQ, create dashboard, create alarms. Resource names SHALL be env-scoped using the configurable namespace convention defaulting to `{org}-{env}-{domain}-<suffix>`.
+
+#### Scenario: Inner workflow creates one environment's resources
+
+- **WHEN** the inner workflow receives an input with `environment: "dev"` and the domain's metadata
+- **THEN** it SHALL create all per-env resources in the documented order, using `dev` as the env segment in every resource name
+- **AND THEN** it SHALL return the resource ARNs keyed by resource type
+
+#### Scenario: Inner workflow fails mid-sequence
+
+- **WHEN** any resource creation step in the inner workflow fails
+- **THEN** the inner workflow SHALL execute its saga compensation chain to delete all resources it successfully created in this environment, in reverse order
+- **AND THEN** the inner workflow SHALL exit with a failure state that carries the failed step, error code, error message, and any compensation errors
+- **AND THEN** the outer workflow SHALL observe this failure via the `.sync:2` integration and trigger the all-or-nothing rollback path
+
+### Requirement: Per-environment deprovisioning workflow
+
+A standalone Step Functions workflow (`deprovision-env`) SHALL idempotently delete one environment's worth of domain resources. It SHALL accept the per-env resource ARN set and the `ownerAccountId` as inputs. It SHALL be reused by (a) the outer provisioning workflow's all-or-nothing rollback path, and (b) future domain deletion flows. Each deletion step SHALL tolerate "resource already gone" responses as successful no-ops. Failures SHALL be collected into a `compensationErrors` output array; the workflow SHALL NOT halt on individual step failure.
+
+#### Scenario: Deprovisioning deletes all resources for one environment
+
+- **WHEN** the `deprovision-env` workflow is invoked with a complete per-env resource ARN set
+- **THEN** it SHALL delete integration DLQ, app event bus (in owner account via assumed role), subscription DLQ, schema registry, platform event bus, dashboard, and alarms for that environment
+- **AND THEN** each successful deletion SHALL advance to the next step
+- **AND THEN** each failed deletion SHALL be appended to `compensationErrors` with the resource identifier and error detail
+
+#### Scenario: Deprovisioning is idempotent
+
+- **WHEN** the `deprovision-env` workflow is invoked against resources that have already been partially or fully deleted
+- **THEN** "resource not found" errors from AWS APIs SHALL be treated as successful no-ops
+- **AND THEN** the workflow SHALL continue to the next step
 
 ### Requirement: Provisioning workflow lifecycle events
 
-The provisioning workflow SHALL emit lifecycle events to the Nexus event bus for provisioning outcomes only. No intermediate events SHALL be emitted. The event source SHALL be `nexus.domain-management`.
+The provisioning workflow SHALL emit lifecycle events to the Nexus event bus for provisioning outcomes only. No intermediate events SHALL be emitted (neither per-step within an env nor per-env completion). The outer workflow SHALL be the sole emitter of `DomainProvisioningSucceeded` and `DomainProvisioningFailed`. The event source SHALL be `nexus.domain-management`.
 
 #### Scenario: Provisioning succeeded event
 
-- **WHEN** the provisioning workflow completes all steps successfully
-- **THEN** it SHALL emit a `DomainProvisioningSucceeded` event with source `nexus.domain-management`, domainId, workflowExecutionId, completedAt, resourceArns (map of all created resource ARNs), namespaceParameter (SSM parameter path), and isNewAccount flag
+- **WHEN** the outer provisioning workflow completes all environments successfully
+- **THEN** it SHALL emit a `DomainProvisioningSucceeded` event with source `nexus.domain-management`, `domainId`, `workflowExecutionId`, `completedAt`, `environments`, `resourceArns` (map keyed by environment), `namespaceParameter` (SSM parameter path), and `isNewAccount` flag
 
 #### Scenario: Provisioning failed event
 
-- **WHEN** the provisioning workflow fails at any step
-- **THEN** it SHALL emit a `DomainProvisioningFailed` event with source `nexus.domain-management`, domainId, workflowExecutionId, failedAt, errorCode, errorMessage, and compensationResults (list of cleanup outcomes)
+- **WHEN** the outer provisioning workflow fails at any environment
+- **THEN** it SHALL emit a `DomainProvisioningFailed` event with source `nexus.domain-management`, `domainId`, `workflowExecutionId`, `failedAt`, `failedEnvironment` (the first environment observed to fail), `failedStep` (step within that environment), `errorCode`, `errorMessage`, and `compensationErrors` (aggregate across inner and outer compensation)
 
 ### Requirement: New account detection
 
@@ -131,35 +158,6 @@ The provisioning workflow SHALL detect whether the domain's `ownerAccountId` has
 - **AND THEN** the saga compensation chain SHALL clean up all platform-side resources created before the failure
 - **AND THEN** the domain SHALL be marked `PROVISIONING_FAILED` with an error detail indicating the trust role was not found and trust-stack deployment is required
 
-### Requirement: Saga rollback on provisioning failure
-
-The provisioning workflow SHALL implement compensating transactions using the saga pattern. When any resource creation step fails, the workflow SHALL delete all resources that were successfully created in reverse order before marking the domain as `PROVISIONING_FAILED`. Compensation SHALL be best-effort — individual compensation step failures SHALL be logged but SHALL NOT prevent subsequent compensation steps from executing.
-
-#### Scenario: Failure after platform resources created but before app resources
-
-- **WHEN** the provisioning workflow fails at `AssumeAppAccountRole` or `CreateAppEventBus`
-- **THEN** the workflow SHALL delete the following platform resources in reverse order: subscription DLQ, schema registry, platform event bus (and any alarms/dashboards if created)
-- **AND THEN** the domain SHALL be marked `PROVISIONING_FAILED` with the original error detail
-
-#### Scenario: Failure after app resources created
-
-- **WHEN** the provisioning workflow fails at `CreateDashboard` or any subsequent platform-side observability step
-- **THEN** the workflow SHALL delete app-account resources (integration DLQ, app event bus) using the assumed role, then delete platform resources in reverse order
-- **AND THEN** the domain SHALL be marked `PROVISIONING_FAILED` with the original error detail
-
-#### Scenario: Compensation step fails
-
-- **WHEN** a compensation step fails to delete a previously created resource
-- **THEN** the workflow SHALL log the compensation failure with the resource identifier and error
-- **AND THEN** the workflow SHALL continue to the next compensation step
-- **AND THEN** the `PROVISIONING_FAILED` error detail SHALL include a list of resources that could not be cleaned up
-
-#### Scenario: Full rollback on early failure
-
-- **WHEN** the provisioning workflow fails at `CreatePlatformEventBus` (the first resource creation step)
-- **THEN** no compensation SHALL be needed (no resources were created)
-- **AND THEN** the domain SHALL be marked `PROVISIONING_FAILED` with the error detail
-
 ### Requirement: Namespace parameter creation
 
 The provisioning workflow SHALL create an SSM Parameter Store Advanced parameter for the domain namespace during provisioning. The parameter SHALL be at path `/namespace/{domain}` with value `{org}-{domain}`. The parameter creation SHALL be idempotent — if the parameter already exists with the same value, no update SHALL occur.
@@ -175,6 +173,21 @@ The provisioning workflow SHALL create an SSM Parameter Store Advanced parameter
 - **WHEN** the provisioning workflow attempts to create a namespace parameter and a parameter at that path already exists with the same value
 - **THEN** the workflow SHALL treat this as a successful no-op
 - **AND THEN** provisioning SHALL continue to the next step
+
+### Requirement: Provisioning uses platform-layer names for Nexus-internal resources
+
+The provisioning workflow SHALL reference Nexus platform resources (the Nexus event bus, execution roles, log groups, DynamoDB tables) using the fixed `{org}-nexus-*` pattern with no environment segment. Domain-resource names (per-env buses, registries, DLQs, dashboards, alarms) are unaffected by this change — they continue to follow the `{org}-{env}-{domain}-*` pattern established by `multi-env-domain-provisioning`.
+
+#### Scenario: Provisioning emits events on the Nexus platform bus
+
+- **WHEN** the provisioning workflow emits `DomainProvisioningSucceeded` or `DomainProvisioningFailed` events
+- **THEN** the target event bus SHALL be `{org}-nexus-bus`
+
+#### Scenario: Provisioning workflow definition substitutions exclude `Environment`
+
+- **WHEN** the provisioning workflow is built from its ASL definition
+- **THEN** the `DefinitionSubstitutions` block SHALL NOT include an `Environment` key
+- **AND THEN** no substitution in the state machine SHALL reference `${Environment}` — env is sourced from the domain record per Map iteration, not from a deploy-time SAM substitution
 
 ### Requirement: RAM resource share management
 

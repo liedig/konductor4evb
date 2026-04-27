@@ -93,12 +93,12 @@ Follow-up from an implementation review. Establishes two personas (Platform Oper
 - [x] 11.1 `cargo check --workspace && cargo clippy --workspace -- -D warnings`
 - [x] 11.2 `cargo test --workspace` (including new data-model round-trip tests and command-handler env-stamping tests)
 - [x] 11.3 `sam build --beta-features -c` succeeds
-- [ ] 11.4 Deploy to a clean test platform account with default `Environments=dev,staging,prod`; deploy the updated trust stack to a test app account
-- [ ] 11.5 Integration smoke: register a domain, approve it, confirm three full env sets provisioned and `resourceArns` map has three entries keyed by env
+- [x] 11.4 Deploy to a clean test platform account with default `Environments=dev,staging,prod`; deploy the updated trust stack to a test app account
+- [x] 11.5 Integration smoke: register a domain, approve it, confirm three full env sets provisioned and `resourceArns` map has three entries keyed by env
 - [ ] 11.6 Redeploy platform with `Environments=dev` (single env), register another domain, confirm only one env set is provisioned
 - [ ] 11.7 Failure injection (manual): break the trust policy in the app account, register a domain, confirm the outer workflow rolls back all envs and emits `DomainProvisioningFailed` with `failedEnvironment` populated
 
 ## 12. OpenSpec
 
-- [ ] 12.1 Iterate delta specs in `openspec/changes/multi-env-domain-provisioning/specs/` if the design shifts during implementation
-- [ ] 12.2 Archive this change once verified via `/opsx:archive`
+- [x] 12.1 Iterate delta specs in `openspec/changes/multi-env-domain-provisioning/specs/` if the design shifts during implementation
+- [x] 12.2 Archive this change once verified via `/opsx:archive`
