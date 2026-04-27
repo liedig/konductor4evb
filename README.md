@@ -148,7 +148,7 @@ Human-in-the-loop registration approval using the Step Functions task-token patt
 Triggered automatically by `DomainRegistrationApproved`. All-or-nothing across the platform-configured `Environments` list.
 
 - **`provision-domain.asl.yaml`** (outer coordinator) — sets domain status to `PROVISIONING`, creates the env-independent namespace SSM parameter and RAM share, then fans out across the domain's environments using a Map state running `provision-env.sync:2` per entry. On all-success: updates status to `ACTIVE` with a per-env `resourceArns` map and emits `DomainProvisioningSucceeded`. On any-env-failure: fans out `deprovision-env.sync:2` over the envs that had succeeded, updates status to `PROVISIONING_FAILED`, and emits `DomainProvisioningFailed` with `failedEnvironment`, `failedStep`, `errorCode`, `errorMessage`, and aggregated `compensationErrors`.
-- **`provision-env.asl.yaml`** (inner, per-env) — creates the platform inbound bus, schema registry, subscription DLQ, dashboard, and alarms; assumes the trust role in the app account to create the app-side domain bus and integration DLQ. Inner saga rolls back any resources it created if a later step fails.
+- **`provision-env.asl.yaml`** (inner, per-env) — creates the platform-side domain bus, schema registry, subscription DLQ, dashboard, and alarms; assumes the trust role in the app account to create the matching app-side domain bus and integration DLQ. The platform and app buses share the same name — they live in different accounts, so there's no collision — which simplifies the mental model. Inner saga rolls back any resources it created if a later step fails.
 - **`deprovision-env.asl.yaml`** (reusable teardown) — idempotent delete-everything-in-this-env workflow. Used for rollback today; the primitive for a future `DELETE /domains` flow.
 
 ## Resource Topology Per Domain
@@ -157,7 +157,7 @@ Domain resources are provisioned **once per environment** in the `Environments` 
 
 | Resource | Account | Name Pattern |
 |---|---|---|
-| Inbound event bus | Platform | `{org}-{env}-{domain}-inbound-bus` |
+| Domain event bus | Platform | `{org}-{env}-{domain}-domain-bus` |
 | Schema registry | Platform | `{org}-{env}-{domain}-schema-registry` |
 | Subscription DLQ | Platform | `{org}-{env}-{domain}-subscription-dlq` |
 | CloudWatch dashboard | Platform | `{org}-{env}-{domain}-domain-dashboard` |
@@ -165,5 +165,7 @@ Domain resources are provisioned **once per environment** in the `Environments` 
 | DLQ-depth alarm | Platform | `{org}-{env}-{domain}-dlq-depth` |
 | Domain event bus | Application | `{org}-{env}-{domain}-domain-bus` |
 | Integration DLQ | Application | `{org}-{env}-{domain}-integration-dlq` |
+
+The platform-side and app-side domain buses intentionally share the same name — they're in different accounts, so there's no collision. Tip: to smoke-test end-to-end in a single AWS account (where platform = app), register each domain under a unique `domainName` per run so the test doesn't collide with its own previous attempt.
 
 A single trust role (`{org}-nexus-trust-role`) in each application account serves all environments.

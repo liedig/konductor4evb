@@ -7,7 +7,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:createEventBus"
     Arguments:
-      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-inbound-bus' %}"
+      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
     Assign:
       platformBus: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -22,7 +22,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:putPermission"
     Arguments:
-      EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-inbound-bus' %}"
+      EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
       Action: "events:PutEvents"
       Principal: "{% $states.input.ownerAccountId %}"
       StatementId: "{% 'allow-' & $states.input.ownerAccountId & '-put-events' %}"
@@ -106,7 +106,7 @@ States:
       DashboardName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-dashboard' %}"
       DashboardBody: |-
         {% (
-          $busName := '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-inbound-bus';
+          $busName := '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus';
           $dlqName := '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-subscription-dlq';
           $string({
             "widgets": [
@@ -157,12 +157,12 @@ States:
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
     Arguments:
       AlarmName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations' %}"
-      AlarmDescription: "{% 'High failed invocations rate on inbound bus ' & $states.input.domainName & ' (' & $states.input.environment & ')' %}"
+      AlarmDescription: "{% 'High failed invocations rate on domain bus ' & $states.input.domainName & ' (' & $states.input.environment & ')' %}"
       Namespace: AWS/Events
       MetricName: FailedInvocations
       Dimensions:
         - Name: EventBusName
-          Value: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-inbound-bus' %}"
+          Value: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 3
@@ -403,7 +403,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
     Arguments:
-      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-inbound-bus' %}"
+      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
     Output: "{% $states.input %}"
     Next: FailEnv
     Catch:

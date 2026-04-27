@@ -126,7 +126,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
     Arguments:
-      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-inbound-bus' %}"
+      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
     Output: "{% $states.input %}"
     Next: Done
     Catch:
