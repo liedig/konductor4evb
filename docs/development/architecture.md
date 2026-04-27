@@ -77,7 +77,8 @@ graph TB
 
 ### Key Design Decisions
 
-- **Three-stack deployment model**: `notifications-stack.yaml` (optional, SES identities), `template.yaml` (core platform resources, with conditional notification resources), and `trust-stack.yaml` (per application account)
+- **Three-stack deployment model**: `notifications-stack.yaml` (optional, SES identities), `nexus-core-stack.yaml` (core platform resources, with conditional notification resources), and `trust-stack.yaml` (per application account)
+- **Nexus is a singleton per org** — one deployment of `nexus-core-stack.yaml` per AWS Organization. Platform resources use the fixed `nexus-*` naming (no org or env segment). The app-account trust role is the one exception (`{org}-nexus-trust-role`, org-scoped for cross-org uniqueness). Domain resources use `{org}-{env}-{domain}-*` and are provisioned per environment from the platform-configured `Environments` list.
 - **One Lambda per API operation** — small, focused functions with least-privilege IAM
 - **Reads are synchronous** (API Gateway -> Lambda -> DynamoDB); writes are asynchronous (API Gateway -> SQS -> Lambda -> EventBridge)
 - **Step Functions for workflows** — no intermediate Lambdas for AWS API calls; uses SDK integrations with JSONata
@@ -149,10 +150,10 @@ sequenceDiagram
 
 | Method | Path | Type | Handler |
 |--------|------|------|---------|
-| `POST` | `/domains` | Async (SQS) | `domain-command-handler` (register) |
+| `POST` | `/domains` | Async (SQS) | `domain-registrations` (register) |
 | `GET` | `/domains` | Sync (Lambda proxy) | `list-domains` |
 | `GET` | `/domains/{domainId}` | Sync (Lambda proxy) | `describe-domain` |
-| `PUT` | `/domains/{domainId}` | Async (SQS) | `domain-command-handler` (update) |
+| `PUT` | `/domains/{domainId}` | Async (SQS) | `domain-registrations` (update) |
 | `POST` | `/domains/registrations/decide` | Sync (Lambda proxy) | `decide-registration` |
 
 The command handler Lambda receives SQS messages with a `HttpMethod` message attribute and dispatches to the appropriate handler (`register` for POST, `update` for PUT).
@@ -199,13 +200,55 @@ sequenceDiagram
 
 The provisioning workflow is triggered by the `DomainRegistrationApproved` event on the nexus bus. It creates all domain infrastructure across both the platform and application accounts using Step Functions SDK integrations (no intermediate Lambdas).
 
-### Resource Creation Sequence
+Since approved domains are provisioned into every environment configured on the platform (e.g., `dev,staging,prod`), provisioning is split across **three state machines**:
+
+| State machine | Role |
+|---------------|------|
+| `provision-domain.asl.yaml` (outer) | Coordinator. Sets status, creates the domain-level namespace + RAM share, then fans out one inner execution per environment via a `Map` state with unbounded concurrency (`MaxConcurrency: 0`). Runs rollback if any env fails. |
+| `provision-env.asl.yaml` (inner) | Creates all per-env resources across platform + app accounts, with an inner saga for rollback of partial state inside a single env. |
+| `deprovision-env.asl.yaml` | Idempotent teardown of a single env's resource set. Used by the outer workflow's rollback path, and reusable by a future `DELETE /domains` flow. |
+
+**Platform-configured environments.** The list of environments to provision is set once at platform deploy time via the `Environments` SAM parameter (`CommaDelimitedList`, default `dev,staging,prod`). It is NOT supplied per registration request — registration requests only carry `domainName`, `ownerAccountId`, and `ownerEmail`. The command handler stamps the current platform env list onto the domain record at registration time so approvals and provisioning work from a stable snapshot.
+
+**All-or-nothing contract.** The outer workflow produces one of two outcomes:
+- **All envs succeed** → domain moves to `ACTIVE`, `DomainProvisioningSucceeded` event emitted with a `resourceArns` map keyed by environment.
+- **Any env fails** → deprovision-env runs over every env that *did* succeed, domain moves to `PROVISIONING_FAILED`, and `DomainProvisioningFailed` is emitted with `failedEnvironment` plus any `compensationErrors` aggregated across rollback runs.
+
+Failures in the domain-level steps (namespace parameter, RAM share) that happen **before** the Map never leave per-env artefacts behind, so their failure path updates status and emits `DomainProvisioningFailed` with `failedEnvironment: null`.
+
+**Namespace + RAM persistence.** The SSM parameter (`/namespace/{domain}`) and the RAM resource share are created at the domain level, above the Map — they are environment-independent and are **never** rolled back. This makes the outer workflow safe to re-run on the same domain after a partial failure: the idempotent upserts avoid duplicates, and the existing shared namespace continues to be reused.
+
+### Outer Workflow (provision-domain)
 
 ```mermaid
 graph TD
     start["SetProvisioningStatus<br/>(DDB: PROVISIONING)"] --> check["CheckNewAccount<br/>(Query by-owner GSI)"]
-    check --> bus["CreatePlatformEventBus"]
-    bus --> policy["SetPutEventPolicy<br/>(Allow owner account)"]
+    check --> param["CreateNamespaceParameter<br/>(SSM Advanced)"]
+    param --> ramcheck["EnsureRAMResourceShare"]
+    ramcheck --> mapenvs{{"Map over environments<br/>(unbounded concurrency)"}}
+    mapenvs -->|invokes provision-env.sync:2| inner["ProvisionEnvWorkflow<br/>(one per env)"]
+    inner --> envresult{"All envs succeeded?"}
+    envresult -->|yes| update["UpdateDomainActive<br/>(resourceArns: per-env map)"]
+    update --> emit["EmitDomainProvisioningSucceeded"]
+    envresult -->|no| rollback{{"Map over succeeded envs<br/>(deprovision-env.sync:2)"}}
+    rollback --> failemit["EmitDomainProvisioningFailed<br/>(failedEnvironment, compensationErrors)"]
+    failemit --> failupdate["UpdateDomainProvisioningFailed"]
+
+    param -->|"error"| domainfail["EmitDomainProvisioningFailed<br/>(failedEnvironment: null)"]
+    ramcheck -->|"error"| domainfail
+
+    style emit fill:#6b6,color:#fff
+    style failemit fill:#f66,color:#fff
+    style domainfail fill:#f66,color:#fff
+```
+
+### Inner Workflow (provision-env)
+
+Per-env resource creation runs in this order, with an inner saga that rolls back anything created so far if any step fails:
+
+```mermaid
+graph TD
+    bus["CreatePlatformEventBus"] --> policy["SetPutEventPolicy<br/>(Allow owner account)"]
     policy --> schema["CreateSchemaRegistry"]
     schema --> dlq["CreateSubscriptionDLQ"]
     dlq --> assume["AssumeAppAccountRole<br/>(STS AssumeRole)"]
@@ -214,86 +257,55 @@ graph TD
     appdlq --> dash["CreateDashboard"]
     dash --> alarm1["CreateFailedInvocationsAlarm"]
     alarm1 --> alarm2["CreateDlqDepthAlarm"]
-    alarm2 --> param["CreateNamespaceParameter<br/>(SSM Advanced)"]
-    param --> ramcheck["EnsureRAMResourceShare"]
-    ramcheck --> update["UpdateDomainRecord<br/>(DDB: ACTIVE)"]
-    update --> emit["EmitProvisioningSucceeded"]
+    alarm2 --> ok["EmitEnvSucceeded<br/>(returns per-env resourceArns)"]
 
-    bus -->|"error"| comp["Saga Compensation"]
-    policy -->|"error"| comp
-    schema -->|"error"| comp
-    dlq -->|"error"| comp
-    assume -->|"error"| comp
-    appbus -->|"error"| comp
-    appdlq -->|"error"| comp
-    dash -->|"error"| comp
-    alarm1 -->|"error"| comp
-    alarm2 -->|"error"| comp
-    param -->|"error"| comp
-    ramcheck -->|"error"| comp
+    bus -->|error| comp["Inner Saga Compensation"]
+    policy -->|error| comp
+    schema -->|error| comp
+    dlq -->|error| comp
+    assume -->|error| comp
+    appbus -->|error| comp
+    appdlq -->|error| comp
+    dash -->|error| comp
+    alarm1 -->|error| comp
+    alarm2 -->|error| comp
 
-    comp --> fail["EmitProvisioningFailed<br/>+ UpdateDomainProvisioningFailed"]
+    comp --> failenv["FailEnv<br/>(propagates failedStep + compensationErrors)"]
 
     style comp fill:#f66,color:#fff
-    style emit fill:#6b6,color:#fff
-    style fail fill:#f66,color:#fff
+    style ok fill:#6b6,color:#fff
+    style failenv fill:#f66,color:#fff
 ```
 
 ### Resources Created Per Domain
 
-| Resource | Account | Naming Convention |
-|----------|---------|-------------------|
-| Event bus | Platform | `{org}-{env}-{domain}-domain-bus` |
-| PutEvents policy | Platform | Allows owner account to publish |
-| Schema registry | Platform | `{org}-{env}-{domain}-schema-registry` |
-| Subscription DLQ | Platform | `{org}-{env}-{domain}-subscription-dlq` |
-| Event bus | App | `{org}-{env}-{domain}-domain-bus` |
-| Integration DLQ | App | `{org}-{env}-{domain}-integration-dlq` |
-| CloudWatch dashboard | Platform | `{org}-{env}-{domain}-domain-dashboard` |
-| Failed invocations alarm | Platform | `{org}-{env}-{domain}-failed-invocations` |
-| DLQ depth alarm | Platform | `{org}-{env}-{domain}-dlq-depth` |
-| SSM parameter | Platform | `/namespace/{domain}` |
-| RAM resource share | Platform | `{org}-domain-namespaces` (shared) |
+| Resource | Scope | Account | Naming Convention |
+|----------|-------|---------|-------------------|
+| SSM parameter | Domain (shared across envs) | Platform | `/namespace/{domain}` |
+| RAM resource share | Domain (shared across envs) | Platform | `{org}-domain-namespaces` (shared) |
+| Event bus | Per-env | Platform | `{org}-{env}-{domain}-domain-bus` |
+| PutEvents policy | Per-env | Platform | Allows owner account to publish |
+| Schema registry | Per-env | Platform | `{org}-{env}-{domain}-schema-registry` |
+| Subscription DLQ | Per-env | Platform | `{org}-{env}-{domain}-subscription-dlq` |
+| Event bus | Per-env | App | `{org}-{env}-{domain}-domain-bus` |
+| Integration DLQ | Per-env | App | `{org}-{env}-{domain}-integration-dlq` |
+| CloudWatch dashboard | Per-env | Platform | `{org}-{env}-{domain}-domain-dashboard` |
+| Failed invocations alarm | Per-env | Platform | `{org}-{env}-{domain}-failed-invocations` |
+| DLQ depth alarm | Per-env | Platform | `{org}-{env}-{domain}-dlq-depth` |
 
 ### Saga Compensation (Rollback)
 
-If any provisioning step fails, the workflow walks backwards through all previously created resources and deletes them before marking the domain as `PROVISIONING_FAILED`. This is a **compensating transaction** pattern (saga):
+There are **two layers** of compensation:
 
-```mermaid
-graph RL
-    start["StartCompensation"] --> intdlq{"IntegrationDLQ<br/>exists?"}
-    intdlq -->|yes| delintdlq["Delete Integration DLQ"]
-    intdlq -->|no| appbus{"AppEventBus<br/>exists?"}
-    delintdlq --> appbus
-    appbus -->|yes| delappbus["Delete App Event Bus"]
-    appbus -->|no| dlqalarm{"DlqDepthAlarm<br/>exists?"}
-    delappbus --> dlqalarm
-    dlqalarm -->|yes| deldlqalarm["Delete DLQ Depth Alarm"]
-    dlqalarm -->|no| failedalarm{"FailedInvocAlarm<br/>exists?"}
-    deldlqalarm --> failedalarm
-    failedalarm -->|yes| delfailedalarm["Delete Failed Invoc Alarm"]
-    failedalarm -->|no| dashboard{"Dashboard<br/>exists?"}
-    delfailedalarm --> dashboard
-    dashboard -->|yes| deldash["Delete Dashboard"]
-    dashboard -->|no| subdlq{"SubscriptionDLQ<br/>exists?"}
-    deldash --> subdlq
-    subdlq -->|yes| delsubdlq["Delete Subscription DLQ"]
-    subdlq -->|no| registry{"SchemaRegistry<br/>exists?"}
-    delsubdlq --> registry
-    registry -->|yes| delreg["Delete Schema Registry"]
-    registry -->|no| platbus{"PlatformBus<br/>exists?"}
-    delreg --> platbus
-    platbus -->|yes| delplatbus["Delete Platform Event Bus"]
-    platbus -->|no| fail["EmitProvisioningFailed"]
-    delplatbus --> fail
+1. **Inner saga** (`provision-env`): if a per-env step fails, the inner workflow walks backwards through the resources already created **in that env** and deletes them. Best-effort — delete failures are captured in `compensationErrors` so the env fails deterministically instead of hanging.
+2. **Outer rollback** (`provision-domain`): if any env's inner execution fails, the outer workflow starts `deprovision-env` for every env that had already reported success. Each deprovision is idempotent (treats "already gone" as a no-op) and collects its own per-step `compensationErrors`, which the outer workflow aggregates into the `DomainProvisioningFailed` event payload.
 
-    style start fill:#f66,color:#fff
-    style fail fill:#f66,color:#fff
-```
+> Workflow definitions:
+> - Outer: `domain-management/state-machines/provision-domain.asl.yaml`
+> - Per-env provision: `domain-management/state-machines/provision-env.asl.yaml`
+> - Per-env deprovision: `domain-management/state-machines/deprovision-env.asl.yaml`
 
-Compensation is **best-effort** — if a delete fails, the error is captured in a `compensationErrors` array and included in the `DomainProvisioningFailed` event payload. This ensures the workflow always completes, even if cleanup is partial.
-
-> Workflow definition: `domain-management/state-machines/provisioning.asl.yaml`
+`deprovision-env` is intentionally standalone — it is the right primitive for a future `DELETE /domains` flow, which would iterate over the domain record's `environments` and tear down each env before removing the domain-level namespace + RAM association (scope: not included in this change).
 
 ---
 
@@ -322,13 +334,13 @@ graph LR
 
 ### Trust Role Permissions
 
-The trust role (`{org}-{env}-nexus-trust-role`) grants three scoped policies:
+The trust role (`{org}-nexus-trust-role`) is environment-independent — a single role in each app account covers every env the platform provisions into. It grants three scoped policies:
 
 | Policy | Actions | Resource Scope |
 |--------|---------|---------------|
-| EventBusManagement | `events:Create/Delete/Describe/PutPermission/RemovePermission` | `{org}-{env}-*` event buses |
-| DlqManagement | `sqs:Create/Delete/Set/GetQueueAttributes` | `{org}-{env}-*` queues |
-| BusToBusRoleManagement | `iam:Create/Delete/Put/DeleteRolePolicy/GetRole` | `{org}-{env}-b2b-*` roles |
+| EventBusManagement | `events:Create/Delete/Describe/PutPermission/RemovePermission` | `{org}-*` event buses |
+| DlqManagement | `sqs:Create/Delete/Set/GetQueueAttributes` | `{org}-*` queues |
+| BusToBusRoleManagement | `iam:Create/Delete/Put/DeleteRolePolicy/GetRole` | `{org}-b2b-*` roles |
 
 The trust role's `AssumeRolePolicyDocument` allows two principals from the platform account:
 1. The **Nexus function role** (trust anchor for Lambda-based operations)
@@ -346,13 +358,21 @@ The trust role's `AssumeRolePolicyDocument` allows two principals from the platf
 
 ## Resource Namespace Convention
 
-All Nexus-managed resources follow a consistent naming pattern:
+Nexus distinguishes **platform resources** (the singleton control plane) from **domain resources** (one set per environment per domain).
+
+**Platform resources** — fixed `nexus-*` pattern, no org or environment segment (Nexus is a singleton per AWS account):
 
 ```
-{org}-{env}-{domain}-{resource-suffix}
+nexus-bus                             (nexus event bus)
+nexus-domains                         (domains table)
+nexus-api                             (API Gateway)
+nexus-function-role                   (Lambda trust-anchor role)
+nexus-provisioning-wf-role            (Step Functions execution role)
 ```
 
-For example, for organization `acme`, environment `prod`, domain `billing`:
+The app-account **trust role** is the one exception: it carries the org prefix as `{org}-nexus-trust-role` (e.g., `acme-nexus-trust-role`) so multiple organizations sharing an app account don't collide.
+
+**Domain resources** — `{org}-{env}-{domain}-*`, one set per environment in the `Environments` platform parameter:
 
 ```
 acme-prod-billing-domain-bus          (EventBridge bus)
@@ -362,7 +382,9 @@ acme-prod-billing-integration-dlq     (App account DLQ)
 acme-prod-billing-domain-dashboard    (CloudWatch dashboard)
 ```
 
-The pattern is configurable via the `NamespacePattern` SAM parameter (default: `{org}-{env}-{domain}`). The `NamespaceResolver` in `lib/nexus-common/src/namespace.rs` handles all resource name generation.
+The domain pattern is configurable via the `NamespacePattern` SAM parameter (default: `{org}-{env}-{domain}`). The `NamespaceResolver` in `lib/nexus-common/src/namespace.rs` handles domain-resource name generation. The platform pattern (`nexus-*`) is fixed.
+
+The `nexus` name is reserved — the register-domain handler rejects it so no domain can collide with the platform namespace.
 
 ### Domain Namespace (Environment-Independent)
 
@@ -393,7 +415,7 @@ Application accounts can discover domains by reading SSM parameters locally, wit
 
 ## Event Bus and Lifecycle Events
 
-The **nexus bus** (`{org}-{env}-nexus-bus`) carries all internal lifecycle events. It is the backbone for workflow orchestration — events trigger Step Functions executions and EventBridge rules invoke notification Lambdas.
+The **nexus bus** (`nexus-bus`) carries all internal lifecycle events. It is a platform resource — a single bus per Nexus deployment, not per env. It is the backbone for workflow orchestration — events trigger Step Functions executions and EventBridge rules invoke notification Lambdas.
 
 ### Event Catalog
 
@@ -403,10 +425,12 @@ The **nexus bus** (`{org}-{env}-nexus-bus`) carries all internal lifecycle event
 | `RegisterDomainFailed` | `nexus.domain-management` | Command handler (register) | — |
 | `UpdateDomainSucceeded` | `nexus.domain-management` | Command handler (update) | — |
 | `UpdateDomainFailed` | `nexus.domain-management` | Command handler (update) | — |
-| `DomainRegistrationApproved` | `nexus.domain-management` | Approval workflow | Provisioning workflow |
+| `DomainRegistrationApproved` | `nexus.domain-management` | Approval workflow | Provision-domain workflow (outer) |
 | `DomainRegistrationRejected` | `nexus.domain-management` | Approval workflow | Rejection notification Lambda |
-| `DomainProvisioningSucceeded` | `nexus.domain-management` | Provisioning workflow | — |
-| `DomainProvisioningFailed` | `nexus.domain-management` | Provisioning workflow | — |
+| `DomainProvisioningSucceeded` | `nexus.domain-management` | Provision-domain workflow | — |
+| `DomainProvisioningFailed` | `nexus.domain-management` | Provision-domain workflow | Provisioning-failed notification Lambda |
+
+The `DomainProvisioningFailed` payload carries `failedEnvironment` (or `null` for domain-level failures), `failedStep`, `errorCode`, `errorMessage`, and an aggregated `compensationErrors` array from any rollback runs.
 
 All events use the source prefix `nexus.domain-management`. The `DomainRegistrationApproved` event is the key orchestration trigger — it initiates the provisioning workflow via an EventBridge rule on the nexus bus.
 
@@ -427,7 +451,9 @@ A single `domains` DynamoDB table stores both domain metadata and registration s
 | `description` | String | — |
 | `ownerEmail` | String | — |
 | `tags` | Map | — |
-| `resourceArns` | Map | — (populated after provisioning) |
+| `environments` | List<String> | — (stamped at registration time from the platform `Environments` parameter) |
+| `resourceArns` | Map<env, PerEnvResourceArns> | — (populated after provisioning; keyed by environment) |
+| `namespaceParameter` | String | — (e.g. `/namespace/billing`) |
 | `taskToken` | String | — (Step Functions task token) |
 | `decidedBy` | String | — |
 | `justification` | String | — |
@@ -453,7 +479,7 @@ The table uses `PAY_PER_REQUEST` billing with point-in-time recovery enabled and
 
 ## Infrastructure as Code
 
-All infrastructure is defined across three CloudFormation templates. The core platform resources use AWS SAM (`template.yaml`); SES email identities are managed by an optional sibling stack (`notifications-stack.yaml`); and per-application-account trust roles use plain CloudFormation (`trust-stack.yaml`). Step Functions workflows are defined in YAML with JSONata query language.
+All infrastructure is defined across three CloudFormation templates. The core platform resources use AWS SAM (`nexus-core-stack.yaml`); SES email identities are managed by an optional sibling stack (`notifications-stack.yaml`); and per-application-account trust roles use plain CloudFormation (`trust-stack.yaml`). Step Functions workflows are defined in YAML with JSONata query language.
 
 ### Project Structure
 
@@ -465,13 +491,16 @@ evb-nexus/
 │   ├── functions/
 │   │   ├── decide-registration/              # Sync: approve/reject decisions
 │   │   ├── describe-domain/                  # Sync: get domain by ID
-│   │   ├── domain-command-handler/           # Async: register + update commands
+│   │   ├── domain-registrations/           # Async: register + update commands
 │   │   ├── list-domains/                     # Sync: list/filter domains
-│   │   ├── send-approval-notification/       # Approval email (invoked by workflow)
-│   │   └── send-rejection-notification/      # Rejection email (EventBridge rule)
+│   │   ├── send-approval-request-notification/  # Approval request email (invoked by workflow)
+│   │   ├── send-rejection-outcome-notification/ # Rejection outcome email (EventBridge rule)
+│   │   └── send-provisioning-failed-notification/ # Provisioning failure email (EventBridge rule)
 │   └── state-machines/
 │       ├── approval.asl.yaml                 # Human-in-the-loop approval
-│       └── provisioning.asl.yaml             # Resource provisioning + saga rollback
+│       ├── provision-domain.asl.yaml         # Outer coordinator (fan-out over environments)
+│       ├── provision-env.asl.yaml            # Per-env resource creation + inner saga
+│       └── deprovision-env.asl.yaml          # Idempotent per-env teardown
 ├── lib/
 │   └── nexus-common/                         # Shared library (models, DDB helpers, API, validation, namespace)
 ├── docs/
@@ -480,9 +509,11 @@ evb-nexus/
 │   │   ├── decisions.md                      # Decision log
 │   │   └── testing.md                        # Testing strategy
 │   └── trust-stack-deployment.md             # App account onboarding guide
-├── template.yaml                             # SAM template (core platform resources)
+├── nexus-core-stack.yaml                     # SAM template (core platform resources)
 ├── notifications-stack.yaml                  # Optional SES identity stack
 ├── trust-stack.yaml                          # CloudFormation for app account trust role
+├── samconfig-core.toml                       # SAM config for core stack
+├── samconfig-notifications.toml              # SAM config for notifications stack
 └── Cargo.toml                                # Rust workspace root
 ```
 
@@ -510,6 +541,6 @@ evb-nexus/
 | [installation.md](../installation.md) | End-to-end installation guide (prerequisites, deploy, smoke test, uninstall) |
 | [trust-stack-deployment.md](../trust-stack-deployment.md) | Step-by-step guide for onboarding application accounts |
 | [api/openapi.yaml](../../api/openapi.yaml) | Full API contract with request/response schemas |
-| [template.yaml](../../template.yaml) | SAM template — core platform resources (notification resources conditional) |
+| [nexus-core-stack.yaml](../../nexus-core-stack.yaml) | SAM template — core platform resources (notification resources conditional) |
 | [notifications-stack.yaml](../../notifications-stack.yaml) | Optional SES identity stack |
 | [trust-stack.yaml](../../trust-stack.yaml) | Trust role CloudFormation template |

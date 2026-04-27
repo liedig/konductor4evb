@@ -1,6 +1,8 @@
 use aws_sdk_dynamodb::types::AttributeValue;
 use std::collections::HashMap;
 
+use crate::models::PerEnvResourceArns;
+
 pub fn s(val: &str) -> AttributeValue {
     AttributeValue::S(val.to_string())
 }
@@ -31,6 +33,75 @@ pub fn attr_to_string_map(
             .filter_map(|(k, v)| {
                 let val: &String = v.as_s().ok()?;
                 Some((k.clone(), val.clone()))
+            })
+            .collect()
+    })
+}
+
+pub fn get_string_list(item: &HashMap<String, AttributeValue>, key: &str) -> Option<Vec<String>> {
+    item.get(key).and_then(|v| v.as_l().ok()).map(|items| {
+        items
+            .iter()
+            .filter_map(|av| av.as_s().ok().cloned())
+            .collect()
+    })
+}
+
+pub fn string_list_to_attr(list: &[String]) -> AttributeValue {
+    AttributeValue::L(list.iter().map(|v| s(v)).collect())
+}
+
+fn per_env_arns_to_attr(arns: &PerEnvResourceArns) -> AttributeValue {
+    let mut map: HashMap<String, AttributeValue> = HashMap::new();
+    if let Some(v) = &arns.platform_event_bus_arn {
+        map.insert("platformEventBusArn".to_string(), s(v));
+    }
+    if let Some(v) = &arns.app_event_bus_arn {
+        map.insert("appEventBusArn".to_string(), s(v));
+    }
+    if let Some(v) = &arns.schema_registry_arn {
+        map.insert("schemaRegistryArn".to_string(), s(v));
+    }
+    if let Some(v) = &arns.subscription_dlq_arn {
+        map.insert("subscriptionDlqArn".to_string(), s(v));
+    }
+    if let Some(v) = &arns.integration_dlq_arn {
+        map.insert("integrationDlqArn".to_string(), s(v));
+    }
+    if let Some(v) = &arns.dashboard_arn {
+        map.insert("dashboardArn".to_string(), s(v));
+    }
+    AttributeValue::M(map)
+}
+
+fn attr_to_per_env_arns(inner: &HashMap<String, AttributeValue>) -> PerEnvResourceArns {
+    PerEnvResourceArns {
+        platform_event_bus_arn: get_s(inner, "platformEventBusArn"),
+        app_event_bus_arn: get_s(inner, "appEventBusArn"),
+        schema_registry_arn: get_s(inner, "schemaRegistryArn"),
+        subscription_dlq_arn: get_s(inner, "subscriptionDlqArn"),
+        integration_dlq_arn: get_s(inner, "integrationDlqArn"),
+        dashboard_arn: get_s(inner, "dashboardArn"),
+    }
+}
+
+pub fn resource_arns_map_to_attr(map: &HashMap<String, PerEnvResourceArns>) -> AttributeValue {
+    let outer: HashMap<String, AttributeValue> = map
+        .iter()
+        .map(|(env, arns)| (env.clone(), per_env_arns_to_attr(arns)))
+        .collect();
+    AttributeValue::M(outer)
+}
+
+pub fn attr_to_resource_arns_map(
+    item: &HashMap<String, AttributeValue>,
+    key: &str,
+) -> Option<HashMap<String, PerEnvResourceArns>> {
+    get_m(item, key).map(|m| {
+        m.iter()
+            .filter_map(|(env, av)| {
+                let inner = av.as_m().ok()?;
+                Some((env.clone(), attr_to_per_env_arns(inner)))
             })
             .collect()
     })
@@ -134,5 +205,64 @@ mod tests {
     #[test]
     fn deserialize_pagination_token_returns_none_for_malformed_json() {
         assert!(deserialize_pagination_token("not json {").is_none());
+    }
+
+    #[test]
+    fn string_list_round_trips_through_attribute_value() {
+        let list = vec!["dev".to_string(), "staging".to_string(), "prod".to_string()];
+        let attr = string_list_to_attr(&list);
+        let mut item = HashMap::new();
+        item.insert("environments".to_string(), attr);
+
+        let restored = get_string_list(&item, "environments").unwrap();
+        assert_eq!(restored, list);
+    }
+
+    #[test]
+    fn get_string_list_returns_none_for_missing_key() {
+        let item = HashMap::new();
+        assert!(get_string_list(&item, "environments").is_none());
+    }
+
+    #[test]
+    fn resource_arns_map_round_trips_through_attribute_value() {
+        let mut input: HashMap<String, PerEnvResourceArns> = HashMap::new();
+        input.insert(
+            "dev".to_string(),
+            PerEnvResourceArns {
+                platform_event_bus_arn: Some("arn:dev:platform".to_string()),
+                app_event_bus_arn: Some("arn:dev:app".to_string()),
+                schema_registry_arn: Some("arn:dev:schema".to_string()),
+                subscription_dlq_arn: Some("arn:dev:subdlq".to_string()),
+                integration_dlq_arn: Some("arn:dev:intdlq".to_string()),
+                dashboard_arn: Some("arn:dev:dash".to_string()),
+            },
+        );
+        input.insert(
+            "prod".to_string(),
+            PerEnvResourceArns {
+                platform_event_bus_arn: Some("arn:prod:platform".to_string()),
+                app_event_bus_arn: None,
+                schema_registry_arn: None,
+                subscription_dlq_arn: None,
+                integration_dlq_arn: None,
+                dashboard_arn: None,
+            },
+        );
+
+        let attr = resource_arns_map_to_attr(&input);
+        let mut item = HashMap::new();
+        item.insert("resourceArns".to_string(), attr);
+
+        let restored = attr_to_resource_arns_map(&item, "resourceArns").unwrap();
+        assert_eq!(restored.get("dev"), input.get("dev"));
+        assert_eq!(restored.get("prod"), input.get("prod"));
+        assert_eq!(restored.len(), 2);
+    }
+
+    #[test]
+    fn attr_to_resource_arns_map_returns_none_for_missing_key() {
+        let item = HashMap::new();
+        assert!(attr_to_resource_arns_map(&item, "resourceArns").is_none());
     }
 }

@@ -52,14 +52,13 @@ Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
 
 ### Decide on your namespace
 
-Nexus resources follow the `{org}-{env}-{domain}` naming convention. Choose values for:
+Nexus is a singleton per organization. Platform resources follow the fixed `nexus-*` pattern (e.g., `nexus-bus`); the app-account trust role follows `{org}-nexus-trust-role` (org-scoped so it's unique across organizations sharing an app account); domain resources follow `{org}-{env}-{domain}-*` (the env comes from the `Environments` parameter, applied per-domain at provisioning time). Choose a value for:
 
 | Parameter | Example | Notes |
 |---|---|---|
 | `Organization` | `acme` | Short identifier for your organization |
-| `Environment` | `dev` | One of `dev`, `staging`, `prod` |
 
-These values are immutable once deployed. AWS resources within the stack will include them (e.g., `acme-dev-nexus-bus`). Stack names use the organization only (e.g., `acme-nexus`).
+This value is immutable once deployed. Stack names are fixed (`nexus-core`, `nexus-notifications`, `nexus-trust`) — one deployment per AWS Organization.
 
 ---
 
@@ -70,26 +69,24 @@ This stack creates SES email identities for approval and rejection notifications
 **Important:** Deploy this stack in the same AWS region as the Nexus core stack. SES identities are regional.
 
 ```bash
-aws cloudformation deploy \
-  --template-file notifications-stack.yaml \
+sam deploy \
+  --config-file samconfig-notifications.toml \
   --stack-name <org>-nexus-notifications \
   --parameter-overrides \
-    FromEmail=<sender@example.com> \
-    ToEmail=<recipient@example.com> \
-  --capabilities CAPABILITY_NAMED_IAM \
+    NotificationSenderEmail=<sender@example.com> \
+    PlatformOperatorEmail=<platform-team@example.com> \
   --region <region>
 ```
 
 Example:
 
 ```bash
-aws cloudformation deploy \
-  --template-file notifications-stack.yaml \
-  --stack-name acme-nexus-notifications \
+sam deploy \
+  --config-file samconfig-notifications.toml \
+  --stack-name nexus-notifications \
   --parameter-overrides \
-    FromEmail=nexus-sender@example.com \
-    ToEmail=platform-team@example.com \
-  --capabilities CAPABILITY_NAMED_IAM \
+    NotificationSenderEmail=nexus-sender@example.com \
+    PlatformOperatorEmail=platform-team@example.com \
   --region us-east-1
 ```
 
@@ -137,41 +134,42 @@ make build    # sam build (Rust cross-compilation for arm64)
 For a first-time deployment with guided prompts:
 
 ```bash
-sam deploy --guided
+sam deploy --config-file samconfig-core.toml --guided
 ```
 
-For repeatable deployments using a configured profile (e.g., `dev`):
+For repeatable deployments using the defaults in `samconfig-core.toml`:
 
 ```bash
-sam deploy --config-env dev
+sam deploy --config-file samconfig-core.toml
 ```
 
 **Required parameters:**
 
 | Parameter | Description | Example |
 |---|---|---|
-| `Organization` | Organization identifier | `acme` |
-| `Environment` | Deployment environment | `dev` |
-| `OrganizationArn` | AWS Organization ARN (for RAM sharing) | `arn:aws:organizations::123456789012:organization/o-abc123` |
+| `Organization` | Organization identifier used in Nexus resource naming | `acme` |
+| `AwsOrganizationArn` | AWS Organization ARN (for RAM sharing of domain namespaces). Distinct from `Organization`. | `arn:aws:organizations::123456789012:organization/o-abc123` |
 
 **Optional parameters:**
 
 | Parameter | Description | Default |
 |---|---|---|
-| `ApprovalFromEmail` | SES sender for approval notifications (from Phase 1) | `""` (disabled) |
-| `ApprovalToEmail` | SES recipient for approval notifications (from Phase 1) | `""` (disabled) |
+| `NotificationSenderEmail` | SES sender address used as the From on all Nexus notification emails (from Phase 1) | `""` (disabled) |
+| `PlatformOperatorEmail` | SES recipient that receives domain approval requests — the platform team inbox (from Phase 1) | `""` (disabled) |
 | `NamespacePattern` | Resource naming convention | `{org}-{env}-{domain}` |
+| `Environments` | Comma-delimited list of environments every approved domain is provisioned into. Platform-team controlled; domain requesters cannot override. Each entry must match `^[a-z0-9][a-z0-9-]{0,31}$`. | `dev,staging,prod` |
+
+> **On `Environments`**: this is an org-wide governance setting. Every domain registered and approved on this Nexus deployment is provisioned across the full list. To add or remove an environment, update the parameter and redeploy — the change applies to *future* registrations only; existing domains keep the environment list they were registered with.
 
 If you completed Phase 1, pass the email addresses:
 
 ```bash
-sam deploy --config-env dev \
+sam deploy --config-file samconfig-core.toml \
   --parameter-overrides \
-    Environment=dev \
     Organization=acme \
-    OrganizationArn=arn:aws:organizations::123456789012:organization/o-abc123 \
-    ApprovalFromEmail=nexus-sender@example.com \
-    ApprovalToEmail=platform-team@example.com
+    AwsOrganizationArn=arn:aws:organizations::123456789012:organization/o-abc123 \
+    NotificationSenderEmail=nexus-sender@example.com \
+    PlatformOperatorEmail=platform-team@example.com
 ```
 
 ### Capture stack outputs
@@ -205,11 +203,10 @@ Switch your AWS CLI credentials to the application account, then:
 ```bash
 aws cloudformation deploy \
   --template-file trust-stack.yaml \
-  --stack-name <org>-<env>-nexus-trust \
+  --stack-name nexus-trust \
   --parameter-overrides \
     NexusRoleArn=<NexusFunctionRoleArn from Phase 2> \
     ProvisioningWorkflowRoleArn=<ProvisioningWorkflowRoleArn from Phase 2> \
-    Environment=<env> \
     Organization=<org> \
   --capabilities CAPABILITY_NAMED_IAM \
   --region <region>
@@ -220,15 +217,16 @@ Example:
 ```bash
 aws cloudformation deploy \
   --template-file trust-stack.yaml \
-  --stack-name acme-dev-nexus-trust \
+  --stack-name nexus-trust \
   --parameter-overrides \
-    NexusRoleArn=arn:aws:iam::111111111111:role/acme-dev-nexus-function-role \
-    ProvisioningWorkflowRoleArn=arn:aws:iam::111111111111:role/acme-dev-provisioning-wf-role \
-    Environment=dev \
+    NexusRoleArn=arn:aws:iam::111111111111:role/nexus-function-role \
+    ProvisioningWorkflowRoleArn=arn:aws:iam::111111111111:role/nexus-provisioning-wf-role \
     Organization=acme \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
+
+A single trust role (`<org>-nexus-trust-role`) serves all environments of all domains in the account.
 
 For detailed instructions including verification and troubleshooting, see [trust-stack-deployment.md](trust-stack-deployment.md).
 
@@ -253,8 +251,11 @@ The smoke test:
 2. Registers a domain named `smoke-test` via `awscurl` (IAM-signed request)
 3. Approves the domain via the API
 4. Polls until the domain reaches `ACTIVE` status (up to ~2.5 minutes)
-5. Verifies platform-account resources (event bus, schema registry, DLQ)
-6. Deletes the test domain and waits for `DELETED` status
+5. Verifies the describe-domain response:
+   - Shows the configured `environments` list on the domain record (e.g., `["dev","staging","prod"]`)
+   - `resourceArns` is a map keyed by environment, with one entry per configured env
+6. Verifies per-env platform-account resources (event bus, schema registry, DLQ) for each configured env
+7. Deletes the test domain and waits for `DELETED` status
 
 If all steps pass, your Nexus installation is working.
 
@@ -298,7 +299,7 @@ In SES sandbox mode, both the sender and recipient email addresses must be verif
 
 ### RAM share failed: not in an AWS Organization
 
-The `OrganizationArn` parameter is required. Nexus uses AWS RAM to share domain namespace information across accounts. If you see errors during provisioning related to RAM:
+The `AwsOrganizationArn` parameter is required. Nexus uses AWS RAM to share domain namespace information across accounts. If you see errors during provisioning related to RAM:
 
 - Confirm the platform account belongs to an AWS Organization.
 - Verify the Organization ARN is correct (`arn:aws:organizations::...`).
@@ -314,7 +315,7 @@ If domain provisioning fails with `AccessDenied` when assuming the trust role:
 
 ```bash
 aws iam get-role \
-  --role-name <org>-<env>-nexus-trust-role \
+  --role-name <org>-nexus-trust-role \
   --region <region>
 ```
 

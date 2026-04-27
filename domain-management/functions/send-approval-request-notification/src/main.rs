@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::env;
 
 use nexus_common::dynamodb::s;
+use nexus_common::html::escape;
 
 async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
     let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
@@ -12,8 +13,12 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
     let ses = aws_sdk_sesv2::Client::new(&config);
 
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
-    let to_email = env::var("APPROVAL_TO_EMAIL").context("APPROVAL_TO_EMAIL not set")?;
-    let from_email = env::var("APPROVAL_FROM_EMAIL").context("APPROVAL_FROM_EMAIL not set")?;
+    let to_email =
+        env::var("PLATFORM_OPERATOR_EMAIL").context("PLATFORM_OPERATOR_EMAIL not set")?;
+    let from_email =
+        env::var("NOTIFICATION_SENDER_EMAIL").context("NOTIFICATION_SENDER_EMAIL not set")?;
+    let decide_endpoint_url =
+        env::var("DECIDE_ENDPOINT_URL").context("DECIDE_ENDPOINT_URL not set")?;
 
     let payload = &event.payload;
 
@@ -41,6 +46,16 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .get("ownerEmail")
         .and_then(|v| v.as_str())
         .context("missing ownerEmail")?;
+
+    let environments: Vec<String> = payload
+        .get("environments")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let active_domains = ddb
         .query()
@@ -72,6 +87,8 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         owner_email,
         task_token,
         is_new_account,
+        &environments,
+        &decide_endpoint_url,
     );
 
     ses.send_email()
@@ -116,32 +133,74 @@ fn build_approval_email_body(
     owner_email: &str,
     task_token: &str,
     is_new_account: bool,
+    environments: &[String],
+    decide_endpoint_url: &str,
 ) -> String {
+    let domain_name = escape(domain_name);
+    let owner_account_id = escape(owner_account_id);
+    let owner_email = escape(owner_email);
     let new_account_notice = if is_new_account {
         r#"<div style="background-color:#fff3cd;border:1px solid #ffc107;padding:12px;margin:12px 0;border-radius:4px">
 <strong>New Account Detected:</strong> This is the first domain registration from account {owner_account_id}.
 Ensure the trust-stack has been deployed to this account before approving.
 </div>"#
-            .replace("{owner_account_id}", owner_account_id)
+            .replace("{owner_account_id}", &owner_account_id)
     } else {
         String::new()
     };
+
+    let environments_display = if environments.is_empty() {
+        "(none configured)".to_string()
+    } else {
+        environments.join(", ")
+    };
+    let environments_display = escape(&environments_display);
+
+    let encoded_token = url_encode(task_token);
+    let approve_url = escape(&format!(
+        "{decide_endpoint_url}?decision=approve&token={encoded_token}"
+    ));
+    let reject_url = escape(&format!(
+        "{decide_endpoint_url}?decision=reject&token={encoded_token}"
+    ));
 
     format!(
         r#"<html>
 <body>
 <h2>Domain Registration Approval Required</h2>
 <p>A new domain registration request requires your approval.</p>
+<p>On approval, provisioning will cover the following environments: <strong>{environments_display}</strong>.</p>
 {new_account_notice}
 <table>
 <tr><td><strong>Domain Name</strong></td><td>{domain_name}</td></tr>
 <tr><td><strong>Owner Account</strong></td><td>{owner_account_id}</td></tr>
 <tr><td><strong>Owner Email</strong></td><td>{owner_email}</td></tr>
-<tr><td><strong>Task Token</strong></td><td>{task_token}</td></tr>
+<tr><td><strong>Environments</strong></td><td>{environments_display}</td></tr>
 </table>
+<p style="margin-top:24px">
+  <a href="{approve_url}" style="display:inline-block;background-color:#1d8102;color:#ffffff;padding:10px 20px;margin-right:8px;text-decoration:none;border-radius:4px">Approve</a>
+  <a href="{reject_url}" style="display:inline-block;background-color:#b31b1b;color:#ffffff;padding:10px 20px;text-decoration:none;border-radius:4px">Reject</a>
+</p>
 </body>
 </html>"#
     )
+}
+fn url_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 3);
+    for byte in input.bytes() {
+        let is_unreserved = byte.is_ascii_alphanumeric()
+            || byte == b'-'
+            || byte == b'_'
+            || byte == b'.'
+            || byte == b'~';
+        if is_unreserved {
+            out.push(byte as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{byte:02X}"));
+        }
+    }
+    out
 }
 
 #[tokio::main]
@@ -158,6 +217,12 @@ async fn main() -> Result<(), Error> {
 mod tests {
     use super::*;
 
+    fn envs() -> Vec<String> {
+        vec!["dev".into(), "staging".into(), "prod".into()]
+    }
+
+    const DECIDE_URL: &str = "https://api.example.com/dev/domains/registrations/decide";
+
     #[test]
     fn approval_email_body_contains_domain_name() {
         let body = build_approval_email_body(
@@ -166,6 +231,8 @@ mod tests {
             "owner@example.com",
             "tok-1",
             false,
+            &envs(),
+            DECIDE_URL,
         );
         assert!(body.contains("billing"));
     }
@@ -178,6 +245,8 @@ mod tests {
             "owner@example.com",
             "tok-1",
             false,
+            &envs(),
+            DECIDE_URL,
         );
         assert!(body.contains("111122223333"));
     }
@@ -190,20 +259,56 @@ mod tests {
             "owner@example.com",
             "tok-1",
             false,
+            &envs(),
+            DECIDE_URL,
         );
         assert!(body.contains("owner@example.com"));
     }
 
     #[test]
-    fn approval_email_body_contains_task_token() {
+    fn approval_email_body_contains_approve_and_reject_links() {
         let body = build_approval_email_body(
             "billing",
             "111122223333",
             "owner@example.com",
             "tok-1",
             false,
+            &envs(),
+            DECIDE_URL,
         );
-        assert!(body.contains("tok-1"));
+        assert!(body.contains(&format!("{DECIDE_URL}?decision=approve&amp;token=tok-1")));
+        assert!(body.contains(&format!("{DECIDE_URL}?decision=reject&amp;token=tok-1")));
+    }
+
+    #[test]
+    fn approval_email_body_url_encodes_task_token_special_chars() {
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "AQC+abc/def=",
+            false,
+            &envs(),
+            DECIDE_URL,
+        );
+        assert!(body.contains("token=AQC%2Babc%2Fdef%3D"));
+        assert!(!body.contains("token=AQC+abc/def="));
+    }
+
+    #[test]
+    fn approval_email_body_escapes_html_input() {
+        let body = build_approval_email_body(
+            "<billing>",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            false,
+            &["dev<script>".to_string()],
+            DECIDE_URL,
+        );
+        assert!(body.contains("&lt;billing&gt;"));
+        assert!(!body.contains("<billing>"));
+        assert!(body.contains("dev&lt;script&gt;"));
     }
 
     #[test]
@@ -214,6 +319,8 @@ mod tests {
             "owner@example.com",
             "tok-1",
             false,
+            &envs(),
+            DECIDE_URL,
         );
         assert!(body.contains("Approval Required"));
     }
@@ -226,6 +333,8 @@ mod tests {
             "owner@example.com",
             "tok-1",
             true,
+            &envs(),
+            DECIDE_URL,
         );
         assert!(body.contains("New Account Detected"));
         assert!(body.contains("trust-stack"));
@@ -239,7 +348,47 @@ mod tests {
             "owner@example.com",
             "tok-1",
             false,
+            &envs(),
+            DECIDE_URL,
         );
         assert!(!body.contains("New Account Detected"));
+    }
+
+    #[test]
+    fn approval_email_body_lists_environments() {
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            false,
+            &envs(),
+            DECIDE_URL,
+        );
+        assert!(body.contains("dev, staging, prod"));
+    }
+
+    #[test]
+    fn approval_email_body_handles_empty_environments() {
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            "tok-1",
+            false,
+            &[],
+            DECIDE_URL,
+        );
+        assert!(body.contains("(none configured)"));
+    }
+
+    #[test]
+    fn url_encode_preserves_unreserved_chars() {
+        assert_eq!(url_encode("abcXYZ123-_.~"), "abcXYZ123-_.~");
+    }
+
+    #[test]
+    fn url_encode_encodes_reserved_chars() {
+        assert_eq!(url_encode("+/=&? "), "%2B%2F%3D%26%3F%20");
     }
 }

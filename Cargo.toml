@@ -4,10 +4,12 @@ members = [
     "lib/nexus-common",
     "domain-management/functions/decide-registration",
     "domain-management/functions/describe-domain",
-    "domain-management/functions/domain-command-handler",
+    "domain-management/functions/domain-registrations",
     "domain-management/functions/list-domains",
-    "domain-management/functions/send-approval-notification",
-    "domain-management/functions/send-rejection-notification",
+    "domain-management/functions/send-approval-outcome-notification",
+    "domain-management/functions/send-approval-request-notification",
+    "domain-management/functions/send-provisioning-failed-notification",
+    "domain-management/functions/send-rejection-outcome-notification",
 ]
 
 [workspace.dependencies]

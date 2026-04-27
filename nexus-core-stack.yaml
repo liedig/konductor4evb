@@ -3,28 +3,38 @@ Transform: AWS::Serverless-2016-10-31
 Description: EventBridge Nexus
 
 Parameters:
-  Environment:
-    Type: String
-    Default: dev
-    AllowedValues: [dev, staging, prod]
+  Environments:
+    Type: CommaDelimitedList
+    Default: "dev,staging,prod"
+    Description: >
+      Comma-delimited list of environments every approved domain will be
+      provisioned into. Platform-team configured; domain requesters have no
+      say. Each entry must match ^[a-z0-9][a-z0-9-]{0,31}$.
   Organization:
     Type: String
     Description: Organization identifier used in resource naming
   NamespacePattern:
     Type: String
     Default: "{org}-{env}-{domain}"
-    Description: Configurable namespace convention for resource naming
-  OrganizationArn:
+    Description: >
+      Naming convention for domain resources (per-env buses, schema registries,
+      DLQs, dashboards, alarms). Does not apply to Nexus platform resources,
+      which use the fixed {org}-nexus-* pattern.
+  AwsOrganizationArn:
     Type: String
-    Description: ARN of the AWS Organization for RAM sharing (e.g., arn:aws:organizations::123456789012:organization/o-abc123)
-  ApprovalFromEmail:
+    Description: >-
+      ARN of the AWS Organization used for RAM sharing of domain namespaces
+      (e.g., arn:aws:organizations::123456789012:organization/o-abc123).
+      Distinct from the Organization parameter, which is the short org
+      identifier used in Nexus resource naming.
+  NotificationSenderEmail:
     Type: String
     Default: ""
-    Description: Verified SES sender for approval notifications. Leave empty to deploy without notification resources.
-  ApprovalToEmail:
+    Description: Verified SES sender address used as the From on all Nexus notification emails. Leave empty to deploy without notification resources.
+  PlatformOperatorEmail:
     Type: String
     Default: ""
-    Description: Verified SES recipient for approval notifications. Leave empty to deploy without notification resources.
+    Description: Verified SES recipient that receives domain approval requests (the platform team inbox). Leave empty to deploy without notification resources.
 
 Globals:
   Function:
@@ -35,33 +45,32 @@ Globals:
     Tracing: Active
     Environment:
       Variables:
-        ENVIRONMENT: !Ref Environment
+        ENVIRONMENTS: !Join [",", !Ref Environments]
         ORGANIZATION: !Ref Organization
         NAMESPACE_PATTERN: !Ref NamespacePattern
         DOMAINS_TABLE: !Ref DomainsTable
         NEXUS_EVENT_BUS: !Ref NexusEventBus
-        APPROVAL_STATE_MACHINE_ARN: !Ref ApprovalWorkflow
         DOMAINS_COMMAND_QUEUE_URL: !Ref DomainsCommandQueue
 
 Conditions:
-  NotificationsEnabled: !Not [!Equals [!Ref ApprovalFromEmail, ""]]
+  NotificationsEnabled: !Not [!Equals [!Ref NotificationSenderEmail, ""]]
 
 Resources:
   # ---- EventBridge ----
   NexusEventBus:
     Type: AWS::Events::EventBus
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
-      Name: !Sub "${Organization}-${Environment}-nexus-bus"
+      Name: !Sub "nexus-bus"
 
   # ---- DynamoDB ----
   DomainsTable:
     Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
-      TableName: !Sub "${Organization}-${Environment}-domains"
+      TableName: !Sub "nexus-domains"
       BillingMode: PAY_PER_REQUEST
       SSESpecification:
         SSEEnabled: true
@@ -105,19 +114,45 @@ Resources:
   # ---- Dead Letter Queue (read Lambda functions) ----
   LambdaDlq:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "${Organization}-${Environment}-lambda-dlq"
+      QueueName: !Sub "nexus-lambda-dlq"
       MessageRetentionPeriod: 1209600
+
+  # ---- Shared DLQ for EventBridge rule delivery failures ----
+  EventBridgeRuleDlq:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub "nexus-eventbridge-rule-dlq"
+      MessageRetentionPeriod: 1209600
+
+  EventBridgeRuleDlqPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref EventBridgeRuleDlq
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt EventBridgeRuleDlq.Arn
+            Condition:
+              ArnLike:
+                "aws:SourceArn": !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${NexusEventBus}/*"
 
   # ---- Command Queues ----
   DomainsCommandDlq:
     Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "${Organization}-${Environment}-domains-command-dlq"
+      QueueName: !Sub "nexus-domains-command-dlq"
       MessageRetentionPeriod: 1209600
 
   DomainsCommandQueue:
@@ -125,7 +160,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "${Organization}-${Environment}-domains-command-queue"
+      QueueName: !Sub "nexus-domains-command-queue"
       VisibilityTimeout: 30
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt DomainsCommandDlq.Arn
@@ -137,7 +172,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/apigateway/${Organization}-${Environment}-nexus-api"
+      LogGroupName: !Sub "/aws/apigateway/nexus-api"
       RetentionInDays: 30
 
   ListDomainsLogGroup:
@@ -145,7 +180,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-list-domains"
+      LogGroupName: !Sub "/aws/lambda/nexus-list-domains"
       RetentionInDays: 30
 
   DescribeDomainLogGroup:
@@ -153,7 +188,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-describe-domain"
+      LogGroupName: !Sub "/aws/lambda/nexus-describe-domain"
       RetentionInDays: 30
 
   # ---- IAM ----
@@ -162,7 +197,7 @@ Resources:
   NexusTrustAnchorRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Organization}-${Environment}-nexus-function-role"
+      RoleName: !Sub "nexus-function-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -184,12 +219,12 @@ Resources:
             Action:
               - sts:AssumeRole
             Resource:
-              - !Sub "arn:aws:iam::*:role/${Organization}-${Environment}-nexus-trust-role"
+              - !Sub "arn:aws:iam::*:role/${Organization}-nexus-trust-role"
 
   NexusApiSqsRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Organization}-${Environment}-apigw-sqs-role"
+      RoleName: !Sub "nexus-apigw-sqs-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -220,8 +255,8 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      Name: !Sub "${Organization}-${Environment}-nexus-api"
-      StageName: !Ref Environment
+      Name: !Sub "nexus-api"
+      StageName: v1
       TracingEnabled: true
       EndpointConfiguration:
         Type: REGIONAL
@@ -248,7 +283,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Organization}-${Environment}-list-domains"
+      FunctionName: !Sub "nexus-list-domains"
       CodeUri: ./domain-management/functions/list-domains
       Handler: bootstrap
       DeadLetterQueue:
@@ -276,7 +311,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Organization}-${Environment}-describe-domain"
+      FunctionName: !Sub "nexus-describe-domain"
       CodeUri: ./domain-management/functions/describe-domain
       Handler: bootstrap
       DeadLetterQueue:
@@ -297,23 +332,26 @@ Resources:
             Method: GET
 
   # ---- Command Handler Functions ----
-  DomainCommandHandlerLogGroup:
+  DomainRegistrationsLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-domain-command-handler"
+      LogGroupName: !Sub "/aws/lambda/nexus-domain-registrations"
       RetentionInDays: 30
 
-  DomainCommandHandlerFunction:
+  DomainRegistrationsFunction:
     Type: AWS::Serverless::Function
-    DependsOn: DomainCommandHandlerLogGroup
+    DependsOn: DomainRegistrationsLogGroup
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Organization}-${Environment}-domain-command-handler"
-      CodeUri: ./domain-management/functions/domain-command-handler
+      FunctionName: !Sub "nexus-domain-registrations"
+      CodeUri: ./domain-management/functions/domain-registrations
       Handler: bootstrap
+      Environment:
+        Variables:
+          APPROVAL_STATE_MACHINE_ARN: !Ref ApprovalWorkflow
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -327,7 +365,7 @@ Resources:
               Resource: !GetAtt NexusEventBus.Arn
             - Effect: Allow
               Action: [events:RemovePermission]
-              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-${Environment}-*"
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
             - Effect: Allow
               Action: [states:StartExecution]
               Resource: !Ref ApprovalWorkflow
@@ -347,7 +385,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-decide-registration"
+      LogGroupName: !Sub "/aws/lambda/nexus-decide-registration"
       RetentionInDays: 30
 
   DecideFunction:
@@ -356,7 +394,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Organization}-${Environment}-decide-registration"
+      FunctionName: !Sub "nexus-decide-registration"
       CodeUri: ./domain-management/functions/decide-registration
       Handler: bootstrap
       Environment:
@@ -371,40 +409,47 @@ Resources:
           Statement:
             - Effect: Allow
               Action: [states:SendTaskSuccess, states:SendTaskFailure]
-              Resource: !Ref ApprovalWorkflow
+              Resource: "*"
       Events:
-        Api:
+        ApiPost:
           Type: Api
           Properties:
             RestApiId: !Ref NexusApi
             Path: /domains/registrations/decide
             Method: POST
+        ApiGet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /domains/registrations/decide
+            Method: GET
 
   # ---- Approval Notification Functions ----
-  SendApprovalNotificationFunctionLogGroup:
+  SendApprovalRequestNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-send-approval-notification"
+      LogGroupName: !Sub "/aws/lambda/nexus-send-approval-request-notification"
       RetentionInDays: 30
 
-  SendApprovalNotificationFunction:
+  SendApprovalRequestNotificationFunction:
     Type: AWS::Serverless::Function
     Condition: NotificationsEnabled
-    DependsOn: SendApprovalNotificationFunctionLogGroup
+    DependsOn: SendApprovalRequestNotificationFunctionLogGroup
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Organization}-${Environment}-send-approval-notification"
-      CodeUri: ./domain-management/functions/send-approval-notification
+      FunctionName: !Sub "nexus-send-approval-request-notification"
+      CodeUri: ./domain-management/functions/send-approval-request-notification
       Handler: bootstrap
       Environment:
         Variables:
           DOMAINS_TABLE: !Ref DomainsTable
-          APPROVAL_FROM_EMAIL: !Ref ApprovalFromEmail
-          APPROVAL_TO_EMAIL: !Ref ApprovalToEmail
+          NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
+          PLATFORM_OPERATOR_EMAIL: !Ref PlatformOperatorEmail
+          DECIDE_ENDPOINT_URL: !Sub "https://${NexusApi}.execute-api.${AWS::Region}.amazonaws.com/v1/domains/registrations/decide"
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaDlq.Arn
@@ -420,28 +465,28 @@ Resources:
               Action: [ses:SendEmail]
               Resource: "*"
 
-  SendRejectionNotificationFunctionLogGroup:
+  SendApprovalOutcomeNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${Organization}-${Environment}-send-rejection-notification"
+      LogGroupName: !Sub "/aws/lambda/nexus-send-approval-outcome-notification"
       RetentionInDays: 30
 
-  SendRejectionNotificationFunction:
+  SendApprovalOutcomeNotificationFunction:
     Type: AWS::Serverless::Function
     Condition: NotificationsEnabled
-    DependsOn: SendRejectionNotificationFunctionLogGroup
+    DependsOn: SendApprovalOutcomeNotificationFunctionLogGroup
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "${Organization}-${Environment}-send-rejection-notification"
-      CodeUri: ./domain-management/functions/send-rejection-notification
+      FunctionName: !Sub "nexus-send-approval-outcome-notification"
+      CodeUri: ./domain-management/functions/send-approval-outcome-notification
       Handler: bootstrap
       Environment:
         Variables:
-          APPROVAL_FROM_EMAIL: !Ref ApprovalFromEmail
+          NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaDlq.Arn
@@ -452,12 +497,106 @@ Resources:
               Action: [ses:SendEmail]
               Resource: "*"
 
+  SendRejectionOutcomeNotificationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Condition: NotificationsEnabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-send-rejection-outcome-notification"
+      RetentionInDays: 30
+
+  SendRejectionOutcomeNotificationFunction:
+    Type: AWS::Serverless::Function
+    Condition: NotificationsEnabled
+    DependsOn: SendRejectionOutcomeNotificationFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-send-rejection-outcome-notification"
+      CodeUri: ./domain-management/functions/send-rejection-outcome-notification
+      Handler: bootstrap
+      Environment:
+        Variables:
+          NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: "*"
+
+  SendProvisioningFailedNotificationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Condition: NotificationsEnabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-send-provisioning-failed-notification"
+      RetentionInDays: 30
+
+  SendProvisioningFailedNotificationFunction:
+    Type: AWS::Serverless::Function
+    Condition: NotificationsEnabled
+    DependsOn: SendProvisioningFailedNotificationFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-send-provisioning-failed-notification"
+      CodeUri: ./domain-management/functions/send-provisioning-failed-notification
+      Handler: bootstrap
+      Environment:
+        Variables:
+          NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
+          DOMAINS_TABLE: !Ref DomainsTable
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: "*"
+
   # ---- EventBridge Rules ----
+  DomainRegistrationApprovedNotificationRule:
+    Type: AWS::Events::Rule
+    Condition: NotificationsEnabled
+    Properties:
+      Name: !Sub "nexus-domain-registration-approved-notification"
+      EventBusName: !Ref NexusEventBus
+      EventPattern:
+        detail-type:
+          - DomainRegistrationApproved
+        source:
+          - nexus.domain-management
+      Targets:
+        - Id: SendApprovalOutcomeNotificationTarget
+          Arn: !GetAtt SendApprovalOutcomeNotificationFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt EventBridgeRuleDlq.Arn
+
+  DomainRegistrationApprovedNotificationRulePermission:
+    Type: AWS::Lambda::Permission
+    Condition: NotificationsEnabled
+    Properties:
+      FunctionName: !Ref SendApprovalOutcomeNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DomainRegistrationApprovedNotificationRule.Arn
+
   DomainRegistrationRejectedRule:
     Type: AWS::Events::Rule
     Condition: NotificationsEnabled
     Properties:
-      Name: !Sub "${Organization}-${Environment}-domain-registration-rejected"
+      Name: !Sub "nexus-domain-registration-rejected"
       EventBusName: !Ref NexusEventBus
       EventPattern:
         detail-type:
@@ -466,22 +605,50 @@ Resources:
           - nexus.domain-management
       Targets:
         - Id: SendRejectionNotificationTarget
-          Arn: !GetAtt SendRejectionNotificationFunction.Arn
+          Arn: !GetAtt SendRejectionOutcomeNotificationFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt EventBridgeRuleDlq.Arn
 
   DomainRegistrationRejectedRulePermission:
     Type: AWS::Lambda::Permission
     Condition: NotificationsEnabled
     Properties:
-      FunctionName: !Ref SendRejectionNotificationFunction
+      FunctionName: !Ref SendRejectionOutcomeNotificationFunction
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt DomainRegistrationRejectedRule.Arn
+
+  DomainProvisioningFailedRule:
+    Type: AWS::Events::Rule
+    Condition: NotificationsEnabled
+    Properties:
+      Name: !Sub "nexus-domain-provisioning-failed"
+      EventBusName: !Ref NexusEventBus
+      EventPattern:
+        detail-type:
+          - DomainProvisioningFailed
+        source:
+          - nexus.domain-management
+      Targets:
+        - Id: SendProvisioningFailedNotificationTarget
+          Arn: !GetAtt SendProvisioningFailedNotificationFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt EventBridgeRuleDlq.Arn
+
+  DomainProvisioningFailedRulePermission:
+    Type: AWS::Lambda::Permission
+    Condition: NotificationsEnabled
+    Properties:
+      FunctionName: !Ref SendProvisioningFailedNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DomainProvisioningFailedRule.Arn
 
   # ---- Step Functions ----
   ApprovalWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Organization}-${Environment}-approval-wf-role"
+      RoleName: !Sub "nexus-approval-wf-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -509,6 +676,13 @@ Resources:
               - events:PutEvents
             Resource:
               - !GetAtt NexusEventBus.Arn
+          - Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+            Resource: "*"
 
   ApprovalWorkflowNotificationPolicy:
     Type: AWS::IAM::Policy
@@ -524,24 +698,29 @@ Resources:
             Action:
               - lambda:InvokeFunction
             Resource:
-              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${Organization}-${Environment}-send-approval-notification"
+              - !GetAtt SendApprovalRequestNotificationFunction.Arn
 
   ApprovalWorkflow:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "${Organization}-${Environment}-domain-approval"
+      Name: !Sub "nexus-domain-approval"
       Role: !GetAtt ApprovalWorkflowRole.Arn
+      Tracing:
+        Enabled: true
       DefinitionUri: ./domain-management/state-machines/approval.asl.yaml
       DefinitionSubstitutions:
         DomainsTable: !Ref DomainsTable
         NexusEventBus: !GetAtt NexusEventBus.Arn
-        SendApprovalNotificationFunction: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${Organization}-${Environment}-send-approval-notification"
+        SendApprovalRequestNotificationFunction: !If
+          - NotificationsEnabled
+          - !GetAtt SendApprovalRequestNotificationFunction.Arn
+          - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:notifications-disabled"
 
   ProvisioningWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Organization}-${Environment}-provisioning-wf-role"
+      RoleName: !Sub "nexus-provisioning-wf-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -567,13 +746,17 @@ Resources:
               - events:PutPermission
               - events:RemovePermission
               - events:PutEvents
-            Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-${Environment}-*"
+            Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
+          - Effect: Allow
+            Action:
+              - events:PutEvents
+            Resource: !GetAtt NexusEventBus.Arn
           - Effect: Allow
             Action:
               - schemas:CreateRegistry
               - schemas:DeleteRegistry
               - schemas:PutResourcePolicy
-            Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-${Environment}-*"
+            Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
           - Effect: Allow
             Action:
               - sqs:CreateQueue
@@ -581,17 +764,17 @@ Resources:
               - sqs:SetQueueAttributes
               - sqs:GetQueueAttributes
               - sqs:GetQueueUrl
-            Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Organization}-${Environment}-*"
+            Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Organization}-*"
           - Effect: Allow
             Action:
               - cloudwatch:PutDashboard
               - cloudwatch:DeleteDashboards
-            Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Organization}-${Environment}-*"
+            Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Organization}-*"
           - Effect: Allow
             Action:
               - cloudwatch:PutMetricAlarm
               - cloudwatch:DeleteAlarms
-            Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Organization}-${Environment}-*"
+            Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Organization}-*"
           - Effect: Allow
             Action:
               - dynamodb:UpdateItem
@@ -603,7 +786,7 @@ Resources:
             Action:
               - sts:AssumeRole
             Resource:
-              - !Sub "arn:aws:iam::*:role/${Organization}-${Environment}-nexus-trust-role"
+              - !Sub "arn:aws:iam::*:role/${Organization}-nexus-trust-role"
           - Effect: Allow
             Action:
               - ssm:PutParameter
@@ -618,23 +801,70 @@ Resources:
               - ram:AssociateResourceShare
               - ram:ListResources
             Resource: "*"
+          - Effect: Allow
+            Action:
+              - states:StartExecution
+              - states:DescribeExecution
+              - states:StopExecution
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - events:PutTargets
+              - events:PutRule
+              - events:DescribeRule
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+            Resource: "*"
 
-  ProvisioningWorkflow:
+  ProvisionEnvWorkflow:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "${Organization}-${Environment}-domain-provisioning"
+      Name: !Sub "nexus-provision-env"
       Role: !GetAtt ProvisioningWorkflowRole.Arn
-      DefinitionUri: ./domain-management/state-machines/provisioning.asl.yaml
+      Tracing:
+        Enabled: true
+      DefinitionUri: ./domain-management/state-machines/provision-env.asl.yaml
+      DefinitionSubstitutions:
+        Organization: !Ref Organization
+        "AWS::Region": !Ref "AWS::Region"
+        "AWS::AccountId": !Ref "AWS::AccountId"
+
+  DeprovisionEnvWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub "nexus-deprovision-env"
+      Role: !GetAtt ProvisioningWorkflowRole.Arn
+      Tracing:
+        Enabled: true
+      DefinitionUri: ./domain-management/state-machines/deprovision-env.asl.yaml
+      DefinitionSubstitutions:
+        Organization: !Ref Organization
+
+  ProvisionDomainWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub "nexus-provision-domain"
+      Role: !GetAtt ProvisioningWorkflowRole.Arn
+      Tracing:
+        Enabled: true
+      DefinitionUri: ./domain-management/state-machines/provision-domain.asl.yaml
       DefinitionSubstitutions:
         DomainsTable: !Ref DomainsTable
         NexusEventBus: !GetAtt NexusEventBus.Arn
-        Environment: !Ref Environment
         Organization: !Ref Organization
-        NamespacePattern: !Ref NamespacePattern
         "AWS::Region": !Ref "AWS::Region"
         "AWS::AccountId": !Ref "AWS::AccountId"
-        OrganizationArn: !Ref OrganizationArn
+        AwsOrganizationArn: !Ref AwsOrganizationArn
+        ProvisionEnvStateMachineArn: !Ref ProvisionEnvWorkflow
+        DeprovisionEnvStateMachineArn: !Ref DeprovisionEnvWorkflow
       Events:
         DomainApproved:
           Type: EventBridgeRule
@@ -645,11 +875,13 @@ Resources:
                 - DomainRegistrationApproved
               source:
                 - nexus.domain-management
+            DeadLetterConfig:
+              Arn: !GetAtt EventBridgeRuleDlq.Arn
 
 Outputs:
   ApiEndpoint:
     Description: EventBridge Nexus API endpoint
-    Value: !Sub "https://${NexusApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+    Value: !Sub "https://${NexusApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
   NexusEventBusArn:
     Description: EventBridge Nexus event bus ARN
     Value: !GetAtt NexusEventBus.Arn

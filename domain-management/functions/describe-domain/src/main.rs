@@ -4,7 +4,9 @@ use serde_json::{json, Value};
 use std::env;
 
 use nexus_common::api;
-use nexus_common::dynamodb::{attr_to_string_map, get_m, get_s, s};
+use nexus_common::dynamodb::{
+    attr_to_resource_arns_map, attr_to_string_map, get_s, get_string_list, s,
+};
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::ApiError;
 
@@ -32,16 +34,9 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
     match result {
         Ok(output) => match output.item {
             Some(item) => {
-                let resource_arns = get_m(&item, "resourceArns").map(|arns| {
-                    json!({
-                        "platformEventBusArn": get_s(arns, "platformEventBusArn"),
-                        "appEventBusArn": get_s(arns, "appEventBusArn"),
-                        "schemaRegistryArn": get_s(arns, "schemaRegistryArn"),
-                        "subscriptionDlqArn": get_s(arns, "subscriptionDlqArn"),
-                        "integrationDlqArn": get_s(arns, "integrationDlqArn"),
-                        "dashboardArn": get_s(arns, "dashboardArn"),
-                    })
-                });
+                let resource_arns =
+                    attr_to_resource_arns_map(&item, "resourceArns").map(|map| json!(map));
+                let environments = get_string_list(&item, "environments").unwrap_or_default();
 
                 let mut body = json!({
                     "domainId": get_s(&item, "domainId"),
@@ -50,8 +45,10 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
                     "ownerAccountId": get_s(&item, "ownerAccountId"),
                     "ownerEmail": get_s(&item, "ownerEmail"),
                     "status": get_s(&item, "status"),
+                    "environments": environments,
                     "tags": attr_to_string_map(&item, "tags"),
                     "resourceArns": resource_arns,
+                    "namespaceParameter": get_s(&item, "namespaceParameter"),
                     "createdAt": get_s(&item, "createdAt"),
                     "updatedAt": get_s(&item, "updatedAt"),
                 });

@@ -1,31 +1,41 @@
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::json;
+use std::collections::HashMap;
 use std::env;
 
 use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
 use nexus_common::error::ControlPlaneError;
+use nexus_common::models::DomainStatus;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateDomainMessage {
+    pub domain_id: String,
+    #[serde(default)]
+    pub body: UpdateDomainBody,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateDomainBody {
+    pub description: Option<String>,
+    pub tags: Option<HashMap<String, String>>,
+}
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
     eb: &aws_sdk_eventbridge::Client,
-    message: &Value,
+    message: &UpdateDomainMessage,
 ) -> Result<()> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
-
-    let domain_id = message
-        .get("domainId")
-        .and_then(|v| v.as_str())
-        .context("missing domainId in message")?
-        .to_string();
-
-    let empty = Value::Object(Default::default());
-    let body = message.get("body").unwrap_or(&empty);
+    let domain_id = &message.domain_id;
 
     let existing = ddb
         .get_item()
         .table_name(&table)
-        .key("domainId", s(&domain_id))
+        .key("domainId", s(domain_id))
         .send()
         .await
         .map_err(|e| ControlPlaneError::DynamoDb(e.to_string()))?;
@@ -33,18 +43,20 @@ pub async fn handle(
     let item = match existing.item {
         Some(item) => item,
         None => {
-            return emit_failed(eb, &cp_bus, &domain_id, "domain not found").await;
+            return emit_failed(eb, &cp_bus, domain_id, "domain not found").await;
         }
     };
 
-    let current_status = get_s(&item, "status").unwrap_or_default();
+    let current_status = get_s(&item, "status")
+        .as_deref()
+        .and_then(|status| status.parse::<DomainStatus>().ok());
 
-    if current_status == "DEACTIVATED" {
+    if matches!(current_status, Some(DomainStatus::Inactive)) {
         return emit_failed(
             eb,
             &cp_bus,
-            &domain_id,
-            "domain is DEACTIVATED and cannot be modified",
+            domain_id,
+            "domain is INACTIVE and cannot be modified",
         )
         .await;
     }
@@ -53,18 +65,14 @@ pub async fn handle(
     let mut update_expr_parts = vec!["updatedAt = :now".to_string()];
     let mut expr_values = vec![(":now".to_string(), s(&now))];
 
-    if let Some(desc) = body.get("description").and_then(|v| v.as_str()) {
+    if let Some(desc) = message.body.description.as_deref() {
         update_expr_parts.push("description = :desc".to_string());
         expr_values.push((":desc".to_string(), s(desc)));
     }
 
-    if let Some(tags) = body.get("tags").and_then(|v| v.as_object()) {
-        let tag_map: std::collections::HashMap<String, String> = tags
-            .iter()
-            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-            .collect();
+    if let Some(tags) = &message.body.tags {
         update_expr_parts.push("tags = :tags".to_string());
-        expr_values.push((":tags".to_string(), string_map_to_attr(&tag_map)));
+        expr_values.push((":tags".to_string(), string_map_to_attr(tags)));
     }
 
     let update_expression = format!("SET {}", update_expr_parts.join(", "));
@@ -72,7 +80,7 @@ pub async fn handle(
     let mut update = ddb
         .update_item()
         .table_name(&table)
-        .key("domainId", s(&domain_id))
+        .key("domainId", s(domain_id))
         .update_expression(&update_expression)
         .return_values(aws_sdk_dynamodb::types::ReturnValue::AllNew);
 
@@ -87,7 +95,7 @@ pub async fn handle(
         .attributes
     {
         Some(a) => a,
-        None => return emit_failed(eb, &cp_bus, &domain_id, "domain not found after update").await,
+        None => return emit_failed(eb, &cp_bus, domain_id, "domain not found after update").await,
     };
 
     eb.put_events()
@@ -150,6 +158,16 @@ mod tests {
     use aws_smithy_mocks::{mock, mock_client, RuleMode};
     use std::collections::HashMap;
 
+    fn update_message(domain_id: &str, description: Option<&str>) -> UpdateDomainMessage {
+        UpdateDomainMessage {
+            domain_id: domain_id.to_string(),
+            body: UpdateDomainBody {
+                description: description.map(std::string::ToString::to_string),
+                tags: None,
+            },
+        }
+    }
+
     fn active_domain_item() -> HashMap<String, aws_sdk_dynamodb::types::AttributeValue> {
         HashMap::from([
             ("domainId".into(), s("d-123")),
@@ -196,13 +214,7 @@ mod tests {
             .then_output(|| PutEventsOutput::builder().build());
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
-        let message = json!({
-            "domainId": "d-123",
-            "body": {
-                "description": "Updated billing domain"
-            }
-        });
-
+        let message = update_message("d-123", Some("Updated billing domain"));
         let result = handle(&ddb, &eb, &message).await;
 
         assert!(result.is_ok());
@@ -223,11 +235,7 @@ mod tests {
             .then_output(|| PutEventsOutput::builder().build());
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
-        let message = json!({
-            "domainId": "d-nonexistent",
-            "body": {}
-        });
-
+        let message = update_message("d-nonexistent", None);
         let result = handle(&ddb, &eb, &message).await;
 
         assert!(result.is_ok());
@@ -235,11 +243,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_update_on_deactivated_domain() {
+    async fn rejects_update_on_inactive_domain() {
         set_env();
 
         let mut item = active_domain_item();
-        item.insert("status".into(), s("DEACTIVATED"));
+        item.insert("status".into(), s("INACTIVE"));
 
         let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
             GetItemOutput::builder()
@@ -252,30 +260,24 @@ mod tests {
             .then_output(|| PutEventsOutput::builder().build());
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
-        let message = json!({
-            "domainId": "d-123",
-            "body": {
-                "description": "Should not work"
-            }
-        });
-
+        let message = update_message("d-123", Some("Should not work"));
         let result = handle(&ddb, &eb, &message).await;
 
         assert!(result.is_ok());
         assert_eq!(eb_rule.num_calls(), 1);
     }
 
-    #[tokio::test]
-    async fn returns_error_when_domain_id_missing() {
-        set_env();
+    #[test]
+    fn update_message_deserialization_rejects_unknown_fields() {
+        let message = serde_json::json!({
+            "domainId": "d-123",
+            "body": {
+                "description": "test",
+                "unknownField": "x"
+            }
+        });
 
-        let ddb = mock_client!(aws_sdk_dynamodb, &[]);
-        let eb = mock_client!(aws_sdk_eventbridge, &[]);
-
-        let message = json!({"body": {}});
-
-        let result = handle(&ddb, &eb, &message).await;
-
-        assert!(result.is_err());
+        let parsed = serde_json::from_value::<UpdateDomainMessage>(message);
+        assert!(parsed.is_err());
     }
 }

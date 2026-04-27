@@ -15,16 +15,39 @@ pub enum DomainStatus {
     Inactive,
 }
 
+impl DomainStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::PendingApproval => "PENDING_APPROVAL",
+            Self::Approved => "APPROVED",
+            Self::Rejected => "REJECTED",
+            Self::Provisioning => "PROVISIONING",
+            Self::Active => "ACTIVE",
+            Self::ProvisioningFailed => "PROVISIONING_FAILED",
+            Self::Inactive => "INACTIVE",
+        }
+    }
+}
+
 impl std::fmt::Display for DomainStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::PendingApproval => write!(f, "PENDING_APPROVAL"),
-            Self::Approved => write!(f, "APPROVED"),
-            Self::Rejected => write!(f, "REJECTED"),
-            Self::Provisioning => write!(f, "PROVISIONING"),
-            Self::Active => write!(f, "ACTIVE"),
-            Self::ProvisioningFailed => write!(f, "PROVISIONING_FAILED"),
-            Self::Inactive => write!(f, "INACTIVE"),
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for DomainStatus {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "PENDING_APPROVAL" => Ok(Self::PendingApproval),
+            "APPROVED" => Ok(Self::Approved),
+            "REJECTED" => Ok(Self::Rejected),
+            "PROVISIONING" => Ok(Self::Provisioning),
+            "ACTIVE" => Ok(Self::Active),
+            "PROVISIONING_FAILED" => Ok(Self::ProvisioningFailed),
+            "INACTIVE" => Ok(Self::Inactive),
+            _ => Err(()),
         }
     }
 }
@@ -45,8 +68,11 @@ pub struct Domain {
     pub owner_account_id: String,
     pub owner_email: String,
     pub status: DomainStatus,
+    pub environments: Vec<String>,
     pub tags: Option<std::collections::HashMap<String, String>>,
-    pub resource_arns: Option<DomainResourceArns>,
+    pub resource_arns: Option<std::collections::HashMap<String, PerEnvResourceArns>>,
+    pub namespace_parameter: Option<String>,
+    pub ram_share_arn: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub task_token: Option<String>,
@@ -57,9 +83,9 @@ pub struct Domain {
     pub error_detail: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct DomainResourceArns {
+pub struct PerEnvResourceArns {
     pub platform_event_bus_arn: Option<String>,
     pub app_event_bus_arn: Option<String>,
     pub schema_registry_arn: Option<String>,
@@ -70,6 +96,7 @@ pub struct DomainResourceArns {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct RegisterDomainRequest {
     pub domain_name: String,
     pub description: Option<String>,
@@ -80,6 +107,7 @@ pub struct RegisterDomainRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct DecideRequest {
     pub task_token: String,
     pub decision: Decision,
@@ -170,5 +198,64 @@ mod tests {
             "PROVISIONING_FAILED"
         );
         assert_eq!(DomainStatus::Inactive.to_string(), "INACTIVE");
+    }
+
+    #[test]
+    fn domain_status_from_str_matches_wire_format() {
+        assert_eq!(
+            "PENDING_APPROVAL".parse::<DomainStatus>(),
+            Ok(DomainStatus::PendingApproval)
+        );
+        assert_eq!(
+            "APPROVED".parse::<DomainStatus>(),
+            Ok(DomainStatus::Approved)
+        );
+        assert_eq!(
+            "REJECTED".parse::<DomainStatus>(),
+            Ok(DomainStatus::Rejected)
+        );
+        assert_eq!(
+            "PROVISIONING".parse::<DomainStatus>(),
+            Ok(DomainStatus::Provisioning)
+        );
+        assert_eq!("ACTIVE".parse::<DomainStatus>(), Ok(DomainStatus::Active));
+        assert_eq!(
+            "PROVISIONING_FAILED".parse::<DomainStatus>(),
+            Ok(DomainStatus::ProvisioningFailed)
+        );
+        assert_eq!(
+            "INACTIVE".parse::<DomainStatus>(),
+            Ok(DomainStatus::Inactive)
+        );
+    }
+
+    #[test]
+    fn domain_status_from_str_rejects_invalid_values() {
+        assert!("DEACTIVATED".parse::<DomainStatus>().is_err());
+        assert!("".parse::<DomainStatus>().is_err());
+    }
+
+    #[test]
+    fn register_domain_request_rejects_unknown_fields() {
+        let value = serde_json::json!({
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com",
+            "unexpected": "value"
+        });
+        let parsed: Result<RegisterDomainRequest, _> = serde_json::from_value(value);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn decide_request_rejects_unknown_fields() {
+        let value = serde_json::json!({
+            "taskToken": "token",
+            "decision": "ACCEPT",
+            "decidedBy": "admin@example.com",
+            "unexpected": "value"
+        });
+        let parsed: Result<DecideRequest, _> = serde_json::from_value(value);
+        assert!(parsed.is_err());
     }
 }

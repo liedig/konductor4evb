@@ -1,0 +1,336 @@
+Comment: Outer coordinator for multi-environment domain provisioning with all-or-nothing semantics
+QueryLanguage: JSONata
+StartAt: SetProvisioningStatus
+States:
+
+  SetProvisioningStatus:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainId:
+          S: "{% $states.input.detail.domainId %}"
+      UpdateExpression: "SET #s = :status, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: PROVISIONING
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+    Output: "{% $states.input %}"
+    Next: CheckNewAccount
+
+  CheckNewAccount:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:dynamodb:query"
+    Arguments:
+      TableName: "${DomainsTable}"
+      IndexName: by-owner
+      KeyConditionExpression: "ownerAccountId = :acct"
+      FilterExpression: "#s = :active"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":acct":
+          S: "{% $states.input.detail.ownerAccountId %}"
+        ":active":
+          S: ACTIVE
+    Assign:
+      isNewAccount: "{% $states.result.Count = 0 %}"
+    Output: "{% $states.input %}"
+    Next: CreateNamespaceParameter
+
+  CreateNamespaceParameter:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ssm:putParameter"
+    Arguments:
+      Name: "{% '/namespace/' & $states.input.detail.domainName %}"
+      Value: "{% '${Organization}' & '-' & $states.input.detail.domainName %}"
+      Type: String
+      Tier: Advanced
+      Overwrite: true
+    Output: "{% $states.input %}"
+    Next: EnsureRAMResourceShare
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitProvisioningFailedDomainLevel
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'CreateNamespaceParameter', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
+
+  EnsureRAMResourceShare:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ram:getResourceShares"
+    Arguments:
+      ResourceOwner: SELF
+      Name: "{% '${Organization}' & '-domain-namespaces' %}"
+      ResourceShareStatus: ACTIVE
+    Assign:
+      existingShares: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: CheckRAMShareExists
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitProvisioningFailedDomainLevel
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'EnsureRAMResourceShare', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
+
+  CheckRAMShareExists:
+    Type: Choice
+    Choices:
+      - Condition: "{% $count($existingShares.ResourceShares) > 0 %}"
+        Next: AssociateParameterToExistingShare
+    Default: CreateRAMResourceShare
+
+  CreateRAMResourceShare:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ram:createResourceShare"
+    Arguments:
+      Name: "{% '${Organization}' & '-domain-namespaces' %}"
+      ResourceArns:
+        - "{% 'arn:aws:ssm:' & '${AWS::Region}' & ':' & '${AWS::AccountId}' & ':parameter/namespace/' & $states.input.detail.domainName %}"
+      Principals:
+        - "{% '${AwsOrganizationArn}' %}"
+      AllowExternalPrincipals: false
+    Assign:
+      ramShare: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: ProvisionEnvironments
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitProvisioningFailedDomainLevel
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'CreateRAMResourceShare', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
+
+  AssociateParameterToExistingShare:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ram:associateResourceShare"
+    Arguments:
+      ResourceShareArn: "{% $existingShares.ResourceShares[0].ResourceShareArn %}"
+      ResourceArns:
+        - "{% 'arn:aws:ssm:' & '${AWS::Region}' & ':' & '${AWS::AccountId}' & ':parameter/namespace/' & $states.input.detail.domainName %}"
+    Assign:
+      ramShare: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: ProvisionEnvironments
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitProvisioningFailedDomainLevel
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'AssociateParameterToExistingShare', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
+
+  ProvisionEnvironments:
+    Type: Map
+    MaxConcurrency: 0
+    Items: "{% $states.input.detail.environments %}"
+    ItemSelector:
+      environment: "{% $states.context.Map.Item.Value %}"
+      domainId: "{% $states.input.detail.domainId %}"
+      domainName: "{% $states.input.detail.domainName %}"
+      ownerAccountId: "{% $states.input.detail.ownerAccountId %}"
+    ItemProcessor:
+      ProcessorConfig:
+        Mode: INLINE
+      StartAt: StartProvisionEnv
+      States:
+        StartProvisionEnv:
+          Type: Task
+          Resource: "arn:aws:states:::states:startExecution.sync:2"
+          Arguments:
+            StateMachineArn: "${ProvisionEnvStateMachineArn}"
+            Input: "{% $states.input %}"
+          Output:
+            status: SUCCEEDED
+            environment: "{% $states.input.environment %}"
+            result: "{% $states.result.Output %}"
+          End: true
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: RecordEnvFailure
+              Output:
+                status: FAILED
+                environment: "{% $states.input.environment %}"
+                error:
+                  Error: "{% $states.errorOutput.Error %}"
+                  Cause: "{% $states.errorOutput.Cause %}"
+        RecordEnvFailure:
+          Type: Pass
+          End: true
+    Assign:
+      envResults: "{% $states.result %}"
+      succeededResults: "{% [$states.result[status='SUCCEEDED']] %}"
+      failedResults: "{% [$states.result[status='FAILED']] %}"
+    Output: "{% $states.input %}"
+    Next: CheckAnyEnvFailed
+
+  CheckAnyEnvFailed:
+    Type: Choice
+    Choices:
+      - Condition: "{% $count($failedResults) > 0 %}"
+        Next: RollbackSucceededEnvs
+    Default: UpdateDomainActive
+
+  UpdateDomainActive:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainId:
+          S: "{% $states.input.detail.domainId %}"
+      UpdateExpression: "SET #s = :status, resourceArns = :arns, namespaceParameter = :ns, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: ACTIVE
+        ":arns":
+          M: "{% $merge($succeededResults.{ $.environment: { 'M': { 'platformEventBusArn': { 'S': $.result.resourceArns.platformEventBusArn }, 'appEventBusArn': { 'S': $.result.resourceArns.appEventBusArn }, 'schemaRegistryArn': { 'S': $.result.resourceArns.schemaRegistryArn }, 'subscriptionDlqArn': { 'S': $.result.resourceArns.subscriptionDlqArn }, 'integrationDlqArn': { 'S': $.result.resourceArns.integrationDlqArn }, 'dashboardArn': { 'S': $.result.resourceArns.dashboardArn } } } }) %}"
+        ":ns":
+          S: "{% '/namespace/' & $states.input.detail.domainName %}"
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+    Output: "{% $states.input %}"
+    Next: EmitProvisioningSucceeded
+
+  EmitProvisioningSucceeded:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.domain-management
+          DetailType: DomainProvisioningSucceeded
+          Detail:
+            domainId: "{% $states.input.detail.domainId %}"
+            domainName: "{% $states.input.detail.domainName %}"
+            workflowExecutionId: "{% $states.context.Execution.Id %}"
+            completedAt: "{% $states.context.State.EnteredTime %}"
+            isNewAccount: "{% $isNewAccount %}"
+            environments: "{% $states.input.detail.environments %}"
+            resourceArns: "{% $merge($succeededResults.{ $.environment: $.result.resourceArns }) %}"
+            namespaceParameter: "{% '/namespace/' & $states.input.detail.domainName %}"
+    End: true
+
+  RollbackSucceededEnvs:
+    Type: Map
+    MaxConcurrency: 0
+    Items: "{% $succeededResults %}"
+    ItemSelector:
+      environment: "{% $states.context.Map.Item.Value.environment %}"
+      domainId: "{% $states.input.detail.domainId %}"
+      domainName: "{% $states.input.detail.domainName %}"
+      ownerAccountId: "{% $states.input.detail.ownerAccountId %}"
+      resourceArns: "{% $states.context.Map.Item.Value.result.resourceArns %}"
+    ItemProcessor:
+      ProcessorConfig:
+        Mode: INLINE
+      StartAt: StartDeprovisionEnv
+      States:
+        StartDeprovisionEnv:
+          Type: Task
+          Resource: "arn:aws:states:::states:startExecution.sync:2"
+          Arguments:
+            StateMachineArn: "${DeprovisionEnvStateMachineArn}"
+            Input: "{% $states.input %}"
+          Output: "{% $states.result.Output %}"
+          End: true
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: RecordDeprovisionFailure
+              Output:
+                environment: "{% $states.input.environment %}"
+                compensationErrors:
+                  - "{% 'Deprovision workflow failure: ' & $states.errorOutput.Cause %}"
+        RecordDeprovisionFailure:
+          Type: Pass
+          End: true
+    Assign:
+      rollbackResults: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: EmitProvisioningFailedAfterRollback
+
+  EmitProvisioningFailedAfterRollback:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.domain-management
+          DetailType: DomainProvisioningFailed
+          Detail:
+            domainId: "{% $states.input.detail.domainId %}"
+            domainName: "{% $states.input.detail.domainName %}"
+            workflowExecutionId: "{% $states.context.Execution.Id %}"
+            failedAt: "{% $states.context.State.EnteredTime %}"
+            failedEnvironment: "{% $failedResults[0].environment %}"
+            failedStep: "{% $failedResults[0].error.Error %}"
+            errorCode: "{% $failedResults[0].error.Error %}"
+            errorMessage: "{% $failedResults[0].error.Cause %}"
+            compensationErrors: "{% $exists($rollbackResults) ? $reduce($rollbackResults[$exists(compensationErrors)].compensationErrors, function($a, $b) { $append($a, $b) }, []) : [] %}"
+    Output: "{% $states.input %}"
+    Next: UpdateDomainProvisioningFailed
+
+  EmitProvisioningFailedDomainLevel:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.domain-management
+          DetailType: DomainProvisioningFailed
+          Detail:
+            domainId: "{% $states.input.detail.domainId %}"
+            domainName: "{% $states.input.detail.domainName %}"
+            workflowExecutionId: "{% $states.context.Execution.Id %}"
+            failedAt: "{% $states.context.State.EnteredTime %}"
+            failedEnvironment: null
+            failedStep: "{% $states.input.failure.failedStep %}"
+            errorCode: "{% $states.input.failure.errorCode %}"
+            errorMessage: "{% $states.input.failure.errorMessage %}"
+            compensationErrors: []
+    Output: "{% $states.input %}"
+    Next: UpdateDomainProvisioningFailedDomainLevel
+
+  UpdateDomainProvisioningFailed:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainId:
+          S: "{% $states.input.detail.domainId %}"
+      UpdateExpression: "SET #s = :status, errorDetail = :err, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: PROVISIONING_FAILED
+        ":err":
+          S: "{% $failedResults[0].environment & '/' & $failedResults[0].error.Error & ': ' & $failedResults[0].error.Cause %}"
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+    End: true
+
+  UpdateDomainProvisioningFailedDomainLevel:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainId:
+          S: "{% $states.input.detail.domainId %}"
+      UpdateExpression: "SET #s = :status, errorDetail = :err, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: PROVISIONING_FAILED
+        ":err":
+          S: "{% $states.input.failure.failedStep & ': ' & $states.input.failure.errorMessage %}"
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+    End: true

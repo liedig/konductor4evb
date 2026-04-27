@@ -1,0 +1,145 @@
+Comment: Idempotent per-environment teardown. Collects per-step errors; never hard-fails.
+QueryLanguage: JSONata
+StartAt: Start
+States:
+
+  Start:
+    Type: Pass
+    Assign:
+      compensationErrors: "{% [] %}"
+    Output: "{% $states.input %}"
+    Next: DeleteIntegrationDlq
+
+  DeleteIntegrationDlq:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:sqs:deleteQueue"
+    Arguments:
+      QueueUrl: "{% $states.input.resourceArns.integrationDlqArn %}"
+    Credentials:
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+    Output: "{% $states.input %}"
+    Next: DeleteAppEventBus
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: DeleteAppEventBus
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete integration DLQ: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  DeleteAppEventBus:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
+    Arguments:
+      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
+    Credentials:
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+    Output: "{% $states.input %}"
+    Next: DeleteDlqDepthAlarm
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: DeleteDlqDepthAlarm
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete app event bus: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  DeleteDlqDepthAlarm:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+    Arguments:
+      AlarmNames:
+        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth' %}"
+    Output: "{% $states.input %}"
+    Next: DeleteFailedInvocAlarm
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: DeleteFailedInvocAlarm
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete DLQ depth alarm: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  DeleteFailedInvocAlarm:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+    Arguments:
+      AlarmNames:
+        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations' %}"
+    Output: "{% $states.input %}"
+    Next: DeleteDashboard
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: DeleteDashboard
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete failed invocations alarm: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  DeleteDashboard:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteDashboards"
+    Arguments:
+      DashboardNames:
+        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-dashboard' %}"
+    Output: "{% $states.input %}"
+    Next: DeleteSubscriptionDlq
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: DeleteSubscriptionDlq
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete dashboard: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  DeleteSubscriptionDlq:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:sqs:deleteQueue"
+    Arguments:
+      QueueUrl: "{% $states.input.resourceArns.subscriptionDlqArn %}"
+    Output: "{% $states.input %}"
+    Next: DeleteSchemaRegistry
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: DeleteSchemaRegistry
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete subscription DLQ: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  DeleteSchemaRegistry:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:schemas:deleteRegistry"
+    Arguments:
+      RegistryName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-schema-registry' %}"
+    Output: "{% $states.input %}"
+    Next: DeletePlatformEventBus
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: DeletePlatformEventBus
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete schema registry: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  DeletePlatformEventBus:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
+    Arguments:
+      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-inbound-bus' %}"
+    Output: "{% $states.input %}"
+    Next: Done
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: Done
+        Assign:
+          compensationErrors: "{% $append($compensationErrors, 'Failed to delete platform event bus: ' & $states.errorOutput.Cause) %}"
+        Output: "{% $states.input %}"
+
+  Done:
+    Type: Pass
+    Output:
+      environment: "{% $states.input.environment %}"
+      compensationErrors: "{% $compensationErrors %}"
+    End: true

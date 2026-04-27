@@ -7,32 +7,36 @@ Description: >
   in the core stack call SES via the local region endpoint.
 
 Parameters:
-  FromEmail:
+  NotificationSenderEmail:
     Type: String
     Description: >-
-      Verified SES sender email address for approval/rejection notifications.
+      Verified SES sender address used as the From on all Nexus notification emails.
       Deploy this stack in the same region as the Nexus core stack (SES identities are regional).
-  ToEmail:
+  PlatformOperatorEmail:
     Type: String
     Description: >-
-      Verified SES recipient email address (platform team inbox for approval notifications).
+      Verified SES recipient (the platform team inbox) that receives domain approval requests.
       Deploy this stack in the same region as the Nexus core stack (SES identities are regional).
+
+Conditions:
+  SenderAndOperatorDiffer: !Not [!Equals [!Ref NotificationSenderEmail, !Ref PlatformOperatorEmail]]
 
 Resources:
-  FromEmailIdentity:
+  NotificationSenderIdentity:
     Type: AWS::SES::EmailIdentity
     Properties:
-      EmailIdentity: !Ref FromEmail
+      EmailIdentity: !Ref NotificationSenderEmail
 
-  ToEmailIdentity:
+  PlatformOperatorIdentity:
     Type: AWS::SES::EmailIdentity
+    Condition: SenderAndOperatorDiffer
     Properties:
-      EmailIdentity: !Ref ToEmail
+      EmailIdentity: !Ref PlatformOperatorEmail
 
 Outputs:
-  FromEmail:
-    Description: Verified SES sender email address
-    Value: !Ref FromEmail
-  ToEmail:
-    Description: Verified SES recipient email address
-    Value: !Ref ToEmail
+  NotificationSenderEmail:
+    Description: Verified SES sender address
+    Value: !Ref NotificationSenderEmail
+  PlatformOperatorEmail:
+    Description: Verified SES recipient (platform team inbox)
+    Value: !Ref PlatformOperatorEmail

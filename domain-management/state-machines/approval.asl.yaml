@@ -7,19 +7,23 @@ States:
     Type: Task
     Resource: "arn:aws:states:::lambda:invoke.waitForTaskToken"
     Arguments:
-      FunctionName: "${SendApprovalNotificationFunction}"
+      FunctionName: "${SendApprovalRequestNotificationFunction}"
       Payload:
         taskToken: "{% $states.context.Task.Token %}"
         domainId: "{% $states.input.domainId %}"
         domainName: "{% $states.input.domainName %}"
         ownerAccountId: "{% $states.input.ownerAccountId %}"
         ownerEmail: "{% $states.input.ownerEmail %}"
+        environments: "{% $states.input.environments %}"
+    # Capture the registration context before the task token replaces $states.input
+    # with the decide payload ({approved, decidedBy, justification}).
+    Assign:
+      registration: "{% $states.input %}"
     TimeoutSeconds: 604800
     Catch:
       - ErrorEquals:
           - States.TaskFailed
         Next: UpdateStatusRejected
-        Output: "{% $states.input %}"
     Next: CheckDecision
 
   CheckDecision:
@@ -36,7 +40,7 @@ States:
       TableName: "${DomainsTable}"
       Key:
         domainId:
-          S: "{% $states.input.domainId %}"
+          S: "{% $registration.domainId %}"
       UpdateExpression: "SET #s = :status, decidedBy = :decidedBy, justification = :justification, approvedAt = :approvedAt, updatedAt = :updatedAt"
       ExpressionAttributeNames:
         "#s": status
@@ -46,12 +50,11 @@ States:
         ":decidedBy":
           S: "{% $states.input.decidedBy %}"
         ":justification":
-          S: "{% $states.input.justification %}"
+          S: "{% $states.input.justification ? $states.input.justification : '' %}"
         ":approvedAt":
           S: "{% $states.context.State.EnteredTime %}"
         ":updatedAt":
           S: "{% $states.context.State.EnteredTime %}"
-    Output: "{% $states.input %}"
     Next: EmitApprovedEvent
 
   UpdateStatusRejected:
@@ -61,7 +64,7 @@ States:
       TableName: "${DomainsTable}"
       Key:
         domainId:
-          S: "{% $states.input.domainId %}"
+          S: "{% $registration.domainId %}"
       UpdateExpression: "SET #s = :status, decidedBy = :decidedBy, justification = :justification, rejectedAt = :rejectedAt, updatedAt = :updatedAt"
       ExpressionAttributeNames:
         "#s": status
@@ -71,12 +74,11 @@ States:
         ":decidedBy":
           S: "{% $states.input.decidedBy %}"
         ":justification":
-          S: "{% $states.input.justification %}"
+          S: "{% $states.input.justification ? $states.input.justification : '' %}"
         ":rejectedAt":
           S: "{% $states.context.State.EnteredTime %}"
         ":updatedAt":
           S: "{% $states.context.State.EnteredTime %}"
-    Output: "{% $states.input %}"
     Next: EmitRejectedEvent
 
   EmitApprovedEvent:
@@ -89,12 +91,13 @@ States:
           DetailType: DomainRegistrationApproved
           Detail: >-
             {% $string({
-              "domainId": $states.input.domainId,
-              "domainName": $states.input.domainName,
-              "ownerAccountId": $states.input.ownerAccountId,
-              "ownerEmail": $states.input.ownerEmail,
+              "domainId": $registration.domainId,
+              "domainName": $registration.domainName,
+              "ownerAccountId": $registration.ownerAccountId,
+              "ownerEmail": $registration.ownerEmail,
+              "environments": $registration.environments,
               "approvedBy": $states.input.decidedBy,
-              "justification": $states.input.justification,
+              "justification": $states.input.justification ? $states.input.justification : '',
               "approvedAt": $states.context.State.EnteredTime
             }) %}
     End: true
@@ -109,12 +112,12 @@ States:
           DetailType: DomainRegistrationRejected
           Detail: >-
             {% $string({
-              "domainId": $states.input.domainId,
-              "domainName": $states.input.domainName,
-              "ownerAccountId": $states.input.ownerAccountId,
-              "ownerEmail": $states.input.ownerEmail,
+              "domainId": $registration.domainId,
+              "domainName": $registration.domainName,
+              "ownerAccountId": $registration.ownerAccountId,
+              "ownerEmail": $registration.ownerEmail,
               "rejectedBy": $states.input.decidedBy,
-              "justification": $states.input.justification,
+              "justification": $states.input.justification ? $states.input.justification : '',
               "rejectedAt": $states.context.State.EnteredTime
             }) %}
     End: true

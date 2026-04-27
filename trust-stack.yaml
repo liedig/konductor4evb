@@ -3,6 +3,7 @@ Description: >
   EventBridge Nexus Trust Stack.
   Deploy this template in each application account to allow the Nexus
   to create and manage domain resources (event buses, DLQs) in this account.
+  One trust role serves all environments of all domains in the account.
 
 Parameters:
   NexusRoleArn:
@@ -11,18 +12,15 @@ Parameters:
   ProvisioningWorkflowRoleArn:
     Type: String
     Description: ARN of the provisioning workflow role in the platform account (from Nexus stack outputs)
-  Environment:
-    Type: String
-    Default: dev
-    AllowedValues: [dev, staging, prod]
   Organization:
     Type: String
     Description: Organization identifier (must match Nexus configuration)
+
 Resources:
   NexusTrustRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${Organization}-${Environment}-nexus-trust-role"
+      RoleName: !Sub "${Organization}-nexus-trust-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -32,46 +30,63 @@ Resources:
                 - !Ref NexusRoleArn
                 - !Ref ProvisioningWorkflowRoleArn
             Action: sts:AssumeRole
-      Policies:
-        - PolicyName: EventBusManagement
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - events:CreateEventBus
-                  - events:DeleteEventBus
-                  - events:DescribeEventBus
-                  - events:PutPermission
-                  - events:RemovePermission
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:events:*:${AWS::AccountId}:event-bus/${Organization}-${Environment}-*"
-        - PolicyName: DlqManagement
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:CreateQueue
-                  - sqs:DeleteQueue
-                  - sqs:SetQueueAttributes
-                  - sqs:GetQueueAttributes
-                  - sqs:GetQueueUrl
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:sqs:*:${AWS::AccountId}:${Organization}-${Environment}-*"
-        - PolicyName: BusToBusRoleManagement
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - iam:CreateRole
-                  - iam:DeleteRole
-                  - iam:PutRolePolicy
-                  - iam:DeleteRolePolicy
-                  - iam:GetRole
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Organization}-${Environment}-b2b-*"
+
+  NexusTrustEventBusPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: EventBusManagement
+      Roles:
+        - !Ref NexusTrustRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - events:CreateEventBus
+              - events:DeleteEventBus
+              - events:DescribeEventBus
+              - events:PutPermission
+              - events:RemovePermission
+            Resource:
+              - !Sub "arn:${AWS::Partition}:events:*:${AWS::AccountId}:event-bus/${Organization}-*"
+
+  NexusTrustDlqPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: DlqManagement
+      Roles:
+        - !Ref NexusTrustRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:SetQueueAttributes
+              - sqs:GetQueueAttributes
+              - sqs:GetQueueUrl
+            Resource:
+              - !Sub "arn:${AWS::Partition}:sqs:*:${AWS::AccountId}:${Organization}-*"
+
+  NexusTrustBusToBusRolePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: BusToBusRoleManagement
+      Roles:
+        - !Ref NexusTrustRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:DeleteRole
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:GetRole
+            Resource:
+              - !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${Organization}-*-b2b-*"
 
 Outputs:
   TrustRoleArn:

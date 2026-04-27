@@ -238,6 +238,52 @@ paths:
         httpMethod: POST
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DecideFunction.Arn}/invocations"
+    get:
+      operationId: DecideRegistrationViaLink
+      summary: One-click approve or reject a domain registration via email link
+      description: >
+        Unauthenticated endpoint used by the approval-request notification email.
+        The task token is a single-use bearer credential; possession of the token
+        is itself the authorization. Responds with an HTML confirmation page.
+      security: []
+      x-amazon-apigateway-auth:
+        type: NONE
+      parameters:
+        - name: decision
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [approve, reject]
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Decision recorded (HTML confirmation page)
+          content:
+            text/html:
+              schema:
+                type: string
+        "400":
+          description: Missing or invalid parameters (HTML page)
+          content:
+            text/html:
+              schema:
+                type: string
+        "500":
+          description: Internal server error (HTML page)
+          content:
+            text/html:
+              schema:
+                type: string
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DecideFunction.Arn}/invocations"
 
 components:
   schemas:
@@ -271,6 +317,11 @@ components:
           type: object
           additionalProperties:
             type: string
+      example:
+        domainName: sales
+        ownerAccountId: "111122223333"
+        ownerEmail: sales-team@example.com
+        description: Sales domain events
 
     DomainSummary:
       type: object
@@ -285,6 +336,11 @@ components:
           type: string
         status:
           type: string
+        environments:
+          type: array
+          items:
+            type: string
+          example: ["dev", "staging", "prod"]
         createdAt:
           type: string
           format: date-time
@@ -300,14 +356,41 @@ components:
           type: string
         ownerAccountId:
           type: string
+        ownerEmail:
+          type: string
+          format: email
         status:
           type: string
+        environments:
+          type: array
+          description: Environments this domain is provisioned into.
+          items:
+            type: string
+          example: ["dev", "staging", "prod"]
         tags:
           type: object
           additionalProperties:
             type: string
         resourceArns:
-          $ref: "#/components/schemas/DomainResourceArns"
+          type: object
+          description: >
+            Per-environment resource ARN sets. Populated when the domain status
+            is `ACTIVE`. Each key is an environment name from the domain's
+            `environments` list.
+          additionalProperties:
+            $ref: "#/components/schemas/PerEnvResourceArns"
+          example:
+            dev:
+              platformEventBusArn: "arn:aws:events:us-east-1:111122223333:event-bus/acme-dev-sales-domain-bus"
+              appEventBusArn: "arn:aws:events:us-east-1:444455556666:event-bus/acme-dev-sales-domain-bus"
+              schemaRegistryArn: "arn:aws:schemas:us-east-1:111122223333:registry/acme-dev-sales-schema-registry"
+              subscriptionDlqArn: "arn:aws:sqs:us-east-1:111122223333:acme-dev-sales-subscription-dlq"
+              integrationDlqArn: "arn:aws:sqs:us-east-1:444455556666:acme-dev-sales-integration-dlq"
+              dashboardArn: "arn:aws:cloudwatch::111122223333:dashboard/acme-dev-sales-domain-dashboard"
+        namespaceParameter:
+          type: string
+          description: SSM parameter path where the domain namespace is published (env-independent).
+          example: "/namespace/sales"
         createdAt:
           type: string
           format: date-time
@@ -315,8 +398,9 @@ components:
           type: string
           format: date-time
 
-    DomainResourceArns:
+    PerEnvResourceArns:
       type: object
+      description: Resource ARNs for a single environment of a domain.
       properties:
         platformEventBusArn:
           type: string

@@ -4,11 +4,14 @@ use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde_json::Value;
 use std::env;
 
+use nexus_common::html::escape;
+
 async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
     let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
     let ses = aws_sdk_sesv2::Client::new(&config);
 
-    let from_email = env::var("APPROVAL_FROM_EMAIL").context("APPROVAL_FROM_EMAIL not set")?;
+    let from_email =
+        env::var("NOTIFICATION_SENDER_EMAIL").context("NOTIFICATION_SENDER_EMAIL not set")?;
 
     let detail = event
         .payload
@@ -85,6 +88,10 @@ fn build_rejection_email_body(
     rejected_by: &str,
     justification: &str,
 ) -> String {
+    let domain_name = escape(domain_name);
+    let owner_account_id = escape(owner_account_id);
+    let rejected_by = escape(rejected_by);
+    let justification = escape(justification);
     format!(
         r#"<html>
 <body>
@@ -168,5 +175,18 @@ mod tests {
             "Policy violation",
         );
         assert!(body.contains("Registration Rejected"));
+    }
+
+    #[test]
+    fn rejection_email_body_escapes_html_input() {
+        let body = build_rejection_email_body(
+            "<billing>",
+            "111122223333",
+            "admin@example.com",
+            "<script>alert(1)</script>",
+        );
+        assert!(body.contains("&lt;billing&gt;"));
+        assert!(body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert!(!body.contains("<script>alert(1)</script>"));
     }
 }

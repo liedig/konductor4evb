@@ -64,7 +64,7 @@ jobs:
         run: pip install cargo-lambda aws-sam-cli
 
       - name: Validate SAM template
-        run: sam validate
+        run: sam validate --config-file samconfig-core.toml --lint
 
       - name: SAM build
-        run: sam build --beta-features -c
+        run: sam build --config-file samconfig-core.toml --beta-features -c
