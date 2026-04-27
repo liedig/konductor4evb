@@ -17,32 +17,36 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 
 ```
                            Platform Account
-                    ┌──────────────────────────────┐
-                    │  API Gateway (IAM auth)       │
-                    │       │                       │
-                    │  Lambda Functions (Rust)       │
-                    │       │                       │
-                    │  DynamoDB    EventBridge       │
-                    │  (domains,   (Nexus            │
-                    │   requests)   lifecycle bus)   │
-                    │       │                       │
-                    │  Step Functions                │
-                    │  ├─ Approval (Task Token)      │
-                    │  ├─ Provisioning (SDK integ.)  │
-                    │  └─ Cleanup                    │
-                    │       │                       │
-                    │  Domain Event Buses            │
-                    │  Schema Registries             │
-                    │  Subscription DLQs             │
-                    │  CloudWatch Dashboards/Alarms  │
-                    └──────────┬───────────────────┘
+                    ┌───────────────────────────────┐
+                    │  API Gateway (IAM + email-link) │
+                    │       │                         │
+                    │  Lambda Functions (Rust)        │
+                    │       │                         │
+                    │  DynamoDB     EventBridge       │
+                    │  (nexus-      (nexus-bus:       │
+                    │   domains)     lifecycle)       │
+                    │       │                         │
+                    │  Step Functions                 │
+                    │  ├─ approval (task token)       │
+                    │  ├─ provision-domain (outer)    │
+                    │  ├─ provision-env (per-env saga)│
+                    │  └─ deprovision-env (teardown)  │
+                    │       │                         │
+                    │  Per-env domain resources:      │
+                    │  ├─ Inbound event bus           │
+                    │  ├─ Schema registry             │
+                    │  ├─ Subscription DLQ            │
+                    │  └─ Dashboard + alarms          │
+                    └──────────┬──────────────────────┘
                                │ STS AssumeRole
-                    ┌──────────▼───────────────────┐
-                    │      Application Account      │
-                    │  Trust Role (nexus-trust-role)  │
-                    │  Domain Event Bus (app-side)   │
-                    │  Integration DLQ               │
-                    └──────────────────────────────┘
+                    ┌──────────▼──────────────────────┐
+                    │       Application Account        │
+                    │  Trust role ({org}-nexus-trust-  │
+                    │    role, serves all envs)        │
+                    │  Per-env domain resources:       │
+                    │  ├─ Domain event bus             │
+                    │  └─ Integration DLQ              │
+                    └──────────────────────────────────┘
 ```
 
 ## Tech Stack
@@ -65,25 +69,26 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 │   └── openapi.yaml                  # API contract
 ├── domain-management/
 │   ├── functions/                    # Lambda handlers
-│   │   ├── register-domain/
-│   │   ├── list-domains/
-│   │   ├── describe-domain/
-│   │   ├── update-domain/
-│   │   ├── delete-domain/
-│   │   ├── approve-registration/
-│   │   └── list-pending-activations/
-│   └── state-machines/               # Step Functions ASL
-│       ├── approval.asl.json
-│       ├── provisioning.asl.json
-│       └── cleanup.asl.json
-├── event-routing/                    # Event routing (planned)
-│   └── functions/
+│   │   ├── domain-registrations/     # Async writes: register + update (SQS-triggered)
+│   │   ├── list-domains/             # GET /domains
+│   │   ├── describe-domain/          # GET /domains/{domainId}
+│   │   ├── decide-registration/      # POST/GET /domains/registrations/decide
+│   │   ├── send-approval-request-notification/    # Invoked by workflow (platform operator email)
+│   │   ├── send-approval-outcome-notification/    # EventBridge-triggered (domain owner)
+│   │   ├── send-rejection-outcome-notification/   # EventBridge-triggered (domain owner)
+│   │   └── send-provisioning-failed-notification/ # EventBridge-triggered (domain owner)
+│   └── state-machines/               # Step Functions ASL (YAML + JSONata)
+│       ├── approval.asl.yaml         # Human-in-the-loop registration approval
+│       ├── provision-domain.asl.yaml # Outer coordinator (fans out over envs)
+│       ├── provision-env.asl.yaml    # Per-env resource creation + inner saga
+│       └── deprovision-env.asl.yaml  # Idempotent per-env teardown
 ├── lib/
 │   └── nexus-common/                 # Shared library
 │       └── src/
 │           ├── api.rs                # API Gateway helpers
 │           ├── dynamodb.rs           # DynamoDB helpers
 │           ├── error.rs              # Error types
+│           ├── html.rs               # HTML response helpers
 │           ├── models.rs             # Domain models
 │           └── namespace.rs          # Resource naming
 ├── docs/
@@ -99,17 +104,16 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 
 ## API
 
-All endpoints require IAM authentication.
+All endpoints require IAM authentication **except** the `GET` email-link decide endpoint, which is unauthenticated — the Step Functions task token in the query string is the bearer credential.
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/domains` | Register a new domain |
-| `GET` | `/domains` | List domains (filter by owner, status) |
-| `GET` | `/domains/{domainId}` | Describe a domain |
-| `PUT` | `/domains/{domainId}` | Update domain metadata |
-| `DELETE` | `/domains/{domainId}` | Delete a domain |
-| `GET` | `/domains/activations` | List pending registrations |
-| `POST` | `/domains/activations/{requestId}/decision` | Approve or reject a registration |
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/domains` | IAM | Register a new domain (async via SQS) |
+| `GET` | `/domains` | IAM | List domains (filter by owner, status) |
+| `GET` | `/domains/{domainId}` | IAM | Describe a domain (includes per-env `resourceArns` map) |
+| `PUT` | `/domains/{domainId}` | IAM | Update domain metadata (async via SQS) |
+| `POST` | `/domains/registrations/decide` | IAM | Approve or reject a registration (JSON body with task token) |
+| `GET` | `/domains/registrations/decide?decision={approve\|reject}&token={taskToken}` | none | One-click approve/reject via email link (HTML confirmation page) |
 
 Full API contract: [`api/openapi.yaml`](api/openapi.yaml)
 
@@ -120,22 +124,13 @@ RegisterDomain ──> PENDING_APPROVAL
                         │
         Approve ────────┼────── Reject
            │                      │
-      APPROVED                REJECTED
+      PROVISIONING              REJECTED
            │
-   Provisioning Workflow
-   (bus, schema registry,
-    DLQs, dashboard, alarms
-    across both accounts)
-           │
-        ACTIVE
-        │    │
-   Suspend  Delete
-      │       │
-  SUSPENDED  DELETING
-      │       │
-   Resume    Cleanup Workflow
-      │       │
-   ACTIVE   DELETED
+ provision-domain workflow
+ (fans out over environments,
+  saga rollback on any failure)
+        │        │
+     ACTIVE  PROVISIONING_FAILED
 ```
 
 ## Getting Started
@@ -144,34 +139,31 @@ See [docs/installation.md](docs/installation.md) for the complete installation g
 
 ## Workflows
 
-### Approval
+### Approval (`approval.asl.yaml`)
 
-Human-in-the-loop registration approval using the Step Functions Task Token pattern. The workflow waits indefinitely for a platform team member to approve or reject via the API.
+Human-in-the-loop registration approval using the Step Functions task-token pattern. The workflow waits up to 7 days for approval via the authenticated POST API or the one-click GET email link. On approve it emits `DomainRegistrationApproved` (which triggers provisioning). On reject (or timeout) it emits `DomainRegistrationRejected`.
 
-### Provisioning
+### Provisioning (three-workflow split)
 
-Triggered automatically when a domain is approved. Uses Step Functions SDK integrations (no intermediate Lambdas) to create resources across both accounts:
+Triggered automatically by `DomainRegistrationApproved`. All-or-nothing across the platform-configured `Environments` list.
 
-1. Create domain event bus in platform account with PutEvent policy
-2. Create schema registry
-3. Create subscription DLQ (platform account)
-4. Assume role in application account
-5. Create domain event bus (app account)
-6. Create integration DLQ (app account)
-7. Create CloudWatch dashboard and alarms
-8. Update domain record to ACTIVE
-
-### Cleanup
-
-Triggered by DomainDeletionRequested event. Tears down all provisioned resources in both accounts in parallel where possible, then marks the domain as DELETED.
+- **`provision-domain.asl.yaml`** (outer coordinator) — sets domain status to `PROVISIONING`, creates the env-independent namespace SSM parameter and RAM share, then fans out across the domain's environments using a Map state running `provision-env.sync:2` per entry. On all-success: updates status to `ACTIVE` with a per-env `resourceArns` map and emits `DomainProvisioningSucceeded`. On any-env-failure: fans out `deprovision-env.sync:2` over the envs that had succeeded, updates status to `PROVISIONING_FAILED`, and emits `DomainProvisioningFailed` with `failedEnvironment`, `failedStep`, `errorCode`, `errorMessage`, and aggregated `compensationErrors`.
+- **`provision-env.asl.yaml`** (inner, per-env) — creates the platform inbound bus, schema registry, subscription DLQ, dashboard, and alarms; assumes the trust role in the app account to create the app-side domain bus and integration DLQ. Inner saga rolls back any resources it created if a later step fails.
+- **`deprovision-env.asl.yaml`** (reusable teardown) — idempotent delete-everything-in-this-env workflow. Used for rollback today; the primitive for a future `DELETE /domains` flow.
 
 ## Resource Topology Per Domain
 
+Domain resources are provisioned **once per environment** in the `Environments` list (default `dev,staging,prod`). Platform resources (bus, table, API, etc.) are singletons with the fixed `nexus-*` pattern — not listed here.
+
 | Resource | Account | Name Pattern |
 |---|---|---|
-| Domain event bus | Platform | `{org}-{env}-{domain}-domain-bus` |
+| Inbound event bus | Platform | `{org}-{env}-{domain}-inbound-bus` |
 | Schema registry | Platform | `{org}-{env}-{domain}-schema-registry` |
 | Subscription DLQ | Platform | `{org}-{env}-{domain}-subscription-dlq` |
 | CloudWatch dashboard | Platform | `{org}-{env}-{domain}-domain-dashboard` |
+| Failed-invocations alarm | Platform | `{org}-{env}-{domain}-failed-invocations` |
+| DLQ-depth alarm | Platform | `{org}-{env}-{domain}-dlq-depth` |
 | Domain event bus | Application | `{org}-{env}-{domain}-domain-bus` |
 | Integration DLQ | Application | `{org}-{env}-{domain}-integration-dlq` |
+
+A single trust role (`{org}-nexus-trust-role`) in each application account serves all environments.
