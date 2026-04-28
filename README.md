@@ -11,7 +11,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 - **Domain** -- A logical grouping of related events owned by a team. Each domain gets its own event buses, schema registry, DLQs, and CloudWatch monitoring, all provisioned automatically.
 - **Platform account** -- The central account where the Nexus runs. Domain event buses live here with policies restricting who can publish.
 - **Application account** -- A team's AWS account. Each gets a trust stack that grants the Nexus cross-account access to create domain resources.
-- **Namespace convention** -- Platform resources follow the fixed `nexus-*` pattern (e.g., `nexus-bus`); the app-account trust role is `{org}-nexus-trust-role`; domain resources follow a configurable `{org}-{env}-{domain}-*` pattern (e.g., `acme-prod-payments-domain-bus`) and are provisioned per environment from the platform-configured `Environments` list.
+- **Namespace convention** -- Platform resources follow the fixed `nexus-*` pattern (e.g., `nexus-bus`); the app-account trust role is `{org}-nexus-trust-role`; domain resources follow a configurable `{org}-{env}-{domain}-*` pattern (e.g., `acme-prod-payments-event-bus`) and are provisioned per environment from the platform-configured `Environments` list.
 
 ## Architecture
 
@@ -157,13 +157,13 @@ Domain resources are provisioned **once per environment** in the `Environments` 
 
 | Resource | Account | Name Pattern |
 |---|---|---|
-| Domain event bus | Platform | `{org}-{env}-{domain}-domain-bus` |
+| Domain event bus | Platform | `{org}-{env}-{domain}-event-bus` |
 | Schema registry | Platform | `{org}-{env}-{domain}-schema-registry` |
 | Subscription DLQ | Platform | `{org}-{env}-{domain}-subscription-dlq` |
 | CloudWatch dashboard | Platform | `{org}-{env}-{domain}-domain-dashboard` |
 | Failed-invocations alarm | Platform | `{org}-{env}-{domain}-failed-invocations` |
 | DLQ-depth alarm | Platform | `{org}-{env}-{domain}-dlq-depth` |
-| Domain event bus | Application | `{org}-{env}-{domain}-domain-bus` |
+| Domain event bus | Application | `{org}-{env}-{domain}-event-bus` |
 | Integration DLQ | Application | `{org}-{env}-{domain}-integration-dlq` |
 
 The platform-side and app-side domain buses intentionally share the same name — they're in different accounts, so there's no collision. Tip: to smoke-test end-to-end in a single AWS account (where platform = app), register each domain under a unique `domainName` per run so the test doesn't collide with its own previous attempt.

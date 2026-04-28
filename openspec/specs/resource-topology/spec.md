@@ -14,12 +14,12 @@ The Nexus platform itself SHALL separately own control-plane resources that are 
 #### Scenario: Platform resources created per environment
 
 - **WHEN** the provisioning workflow runs for a domain with `environments: ["dev", "staging", "prod"]`
-- **THEN** the platform account SHALL contain three domain event buses (`{org}-dev-{domain}-domain-bus`, `{org}-staging-{domain}-domain-bus`, `{org}-prod-{domain}-domain-bus`), three schema registries, three subscription DLQs, and three dashboards/alarm sets, one per environment
+- **THEN** the platform account SHALL contain three domain event buses (`{org}-dev-{domain}-event-bus`, `{org}-staging-{domain}-event-bus`, `{org}-prod-{domain}-event-bus`), three schema registries, three subscription DLQs, and three dashboards/alarm sets, one per environment
 
 #### Scenario: Domain event bus created in platform account
 
 - **WHEN** the provisioning workflow creates the domain event bus in the platform account for a given environment
-- **THEN** the bus SHALL be named according to the `{org}-{env}-{domain}-domain-bus` convention using that environment's value
+- **THEN** the bus SHALL be named according to the `{org}-{env}-{domain}-event-bus` convention using that environment's value
 - **AND THEN** the bus SHALL exist in the platform account where EventBridge Nexus operates
 
 #### Scenario: PutEvent policy restricts publishing to domain owner
@@ -64,7 +64,7 @@ When a domain is provisioned, EventBridge Nexus SHALL create the following resou
 #### Scenario: Domain event bus created in application account
 
 - **WHEN** the provisioning workflow runs for a given environment
-- **THEN** Nexus SHALL create a domain event bus in the owning application account, named `{org}-{env}-{domain}-domain-bus`
+- **THEN** Nexus SHALL create a domain event bus in the owning application account, named `{org}-{env}-{domain}-event-bus`
 - **AND THEN** this bus SHALL be the target for subscription rules that route events from the platform domain bus to the application account
 
 #### Scenario: Integration rule DLQ created in application account
@@ -137,7 +137,7 @@ Nexus platform resources — the control plane itself — SHALL NOT use this con
 #### Scenario: Default namespace applied to domain resources
 
 - **WHEN** a domain is provisioned with org `acme`, domain name `billing`, and environment `dev`
-- **THEN** the domain event bus in the platform account SHALL be named `acme-dev-billing-domain-bus` (or according to the configured convention)
+- **THEN** the domain event bus in the platform account SHALL be named `acme-dev-billing-event-bus` (or according to the configured convention)
 - **AND THEN** the schema registry, DLQs, and other domain resources SHALL follow the same convention with appropriate suffixes
 
 #### Scenario: Platform team configures custom convention

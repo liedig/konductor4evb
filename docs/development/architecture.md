@@ -283,11 +283,11 @@ graph TD
 |----------|-------|---------|-------------------|
 | SSM parameter | Domain (shared across envs) | Platform | `/namespace/{domain}` |
 | RAM resource share | Domain (shared across envs) | Platform | `{org}-domain-namespaces` (shared) |
-| Event bus | Per-env | Platform | `{org}-{env}-{domain}-domain-bus` |
+| Event bus | Per-env | Platform | `{org}-{env}-{domain}-event-bus` |
 | PutEvents policy | Per-env | Platform | Allows owner account to publish |
 | Schema registry | Per-env | Platform | `{org}-{env}-{domain}-schema-registry` |
 | Subscription DLQ | Per-env | Platform | `{org}-{env}-{domain}-subscription-dlq` |
-| Event bus | Per-env | App | `{org}-{env}-{domain}-domain-bus` |
+| Event bus | Per-env | App | `{org}-{env}-{domain}-event-bus` |
 | Integration DLQ | Per-env | App | `{org}-{env}-{domain}-integration-dlq` |
 | CloudWatch dashboard | Per-env | Platform | `{org}-{env}-{domain}-domain-dashboard` |
 | Failed invocations alarm | Per-env | Platform | `{org}-{env}-{domain}-failed-invocations` |
@@ -375,7 +375,7 @@ The app-account **trust role** is the one exception: it carries the org prefix a
 **Domain resources** — `{org}-{env}-{domain}-*`, one set per environment in the `Environments` platform parameter:
 
 ```
-acme-prod-billing-domain-bus          (EventBridge bus)
+acme-prod-billing-event-bus           (EventBridge bus)
 acme-prod-billing-schema-registry     (Schema registry)
 acme-prod-billing-subscription-dlq    (Platform DLQ)
 acme-prod-billing-integration-dlq     (App account DLQ)

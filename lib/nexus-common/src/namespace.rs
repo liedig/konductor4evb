@@ -19,7 +19,7 @@ impl NamespaceResolver {
     }
 
     pub fn event_bus_name(&self, env: &str, org: &str, domain: &str) -> String {
-        format!("{}-domain-bus", self.resolve(env, org, domain))
+        format!("{}-event-bus", self.resolve(env, org, domain))
     }
 
     pub fn schema_registry_name(&self, env: &str, org: &str, domain: &str) -> String {
@@ -61,7 +61,7 @@ mod tests {
         let resolver = NamespaceResolver::default_pattern();
         assert_eq!(
             resolver.event_bus_name("prod", "acme", "billing"),
-            "acme-prod-billing-domain-bus"
+            "acme-prod-billing-event-bus"
         );
     }
 

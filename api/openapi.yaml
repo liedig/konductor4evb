@@ -381,8 +381,8 @@ components:
             $ref: "#/components/schemas/PerEnvResourceArns"
           example:
             dev:
-              platformEventBusArn: "arn:aws:events:us-east-1:111122223333:event-bus/acme-dev-sales-domain-bus"
-              appEventBusArn: "arn:aws:events:us-east-1:444455556666:event-bus/acme-dev-sales-domain-bus"
+              platformEventBusArn: "arn:aws:events:us-east-1:111122223333:event-bus/acme-dev-sales-event-bus"
+              appEventBusArn: "arn:aws:events:us-east-1:444455556666:event-bus/acme-dev-sales-event-bus"
               schemaRegistryArn: "arn:aws:schemas:us-east-1:111122223333:registry/acme-dev-sales-schema-registry"
               subscriptionDlqArn: "arn:aws:sqs:us-east-1:111122223333:acme-dev-sales-subscription-dlq"
               integrationDlqArn: "arn:aws:sqs:us-east-1:444455556666:acme-dev-sales-integration-dlq"

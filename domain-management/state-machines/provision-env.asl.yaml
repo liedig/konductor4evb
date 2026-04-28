@@ -7,7 +7,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:createEventBus"
     Arguments:
-      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
+      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Assign:
       platformBus: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -22,7 +22,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:putPermission"
     Arguments:
-      EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
+      EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
       Action: "events:PutEvents"
       Principal: "{% $states.input.ownerAccountId %}"
       StatementId: "{% 'allow-' & $states.input.ownerAccountId & '-put-events' %}"
@@ -69,7 +69,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:createEventBus"
     Arguments:
-      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
+      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
       RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
     Assign:
@@ -106,7 +106,7 @@ States:
       DashboardName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-dashboard' %}"
       DashboardBody: |-
         {% (
-          $busName := '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus';
+          $busName := '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus';
           $dlqName := '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-subscription-dlq';
           $string({
             "widgets": [
@@ -162,7 +162,7 @@ States:
       MetricName: FailedInvocations
       Dimensions:
         - Name: EventBusName
-          Value: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
+          Value: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 3
@@ -266,7 +266,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
     Arguments:
-      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
+      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
       RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
     Output: "{% $states.input %}"
@@ -403,7 +403,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
     Arguments:
-      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-bus' %}"
+      Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Output: "{% $states.input %}"
     Next: FailEnv
     Catch:

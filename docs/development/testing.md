@@ -81,7 +81,7 @@ Place unit tests in a `#[cfg(test)]` module at the bottom of the source file the
 
 ```rust
 pub fn event_bus_name(env: &str, org: &str, domain: &str) -> String {
-    format!("{env}-{org}-{domain}-domain-bus")
+    format!("{env}-{org}-{domain}-event-bus")
 }
 
 #[cfg(test)]
@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn event_bus_name_includes_suffix() {
         let result = event_bus_name("prod", "acme", "billing");
-        assert_eq!(result, "prod-acme-billing-domain-bus");
+        assert_eq!(result, "prod-acme-billing-event-bus");
     }
 }
 ```
