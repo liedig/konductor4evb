@@ -49,7 +49,7 @@ States:
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
     Arguments:
       AlarmNames:
-        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth' %}"
+        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth-alarm' %}"
     Output: "{% $states.input %}"
     Next: DeleteFailedInvocAlarm
     Catch:
@@ -65,7 +65,7 @@ States:
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
     Arguments:
       AlarmNames:
-        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations' %}"
+        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations-alarm' %}"
     Output: "{% $states.input %}"
     Next: DeleteDashboard
     Catch:
@@ -81,7 +81,7 @@ States:
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteDashboards"
     Arguments:
       DashboardNames:
-        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-dashboard' %}"
+        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dashboard' %}"
     Output: "{% $states.input %}"
     Next: DeleteSubscriptionDlq
     Catch:

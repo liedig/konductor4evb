@@ -160,9 +160,9 @@ Domain resources are provisioned **once per environment** in the `Environments` 
 | Domain event bus | Platform | `{org}-{env}-{domain}-event-bus` |
 | Schema registry | Platform | `{org}-{env}-{domain}-schema-registry` |
 | Subscription DLQ | Platform | `{org}-{env}-{domain}-subscription-dlq` |
-| CloudWatch dashboard | Platform | `{org}-{env}-{domain}-domain-dashboard` |
-| Failed-invocations alarm | Platform | `{org}-{env}-{domain}-failed-invocations` |
-| DLQ-depth alarm | Platform | `{org}-{env}-{domain}-dlq-depth` |
+| CloudWatch dashboard | Platform | `{org}-{env}-{domain}-dashboard` |
+| Failed-invocations alarm | Platform | `{org}-{env}-{domain}-failed-invocations-alarm` |
+| DLQ-depth alarm | Platform | `{org}-{env}-{domain}-dlq-depth-alarm` |
 | Domain event bus | Application | `{org}-{env}-{domain}-event-bus` |
 | Integration DLQ | Application | `{org}-{env}-{domain}-integration-dlq` |
 

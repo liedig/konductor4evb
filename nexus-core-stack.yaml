@@ -50,7 +50,7 @@ Globals:
         NAMESPACE_PATTERN: !Ref NamespacePattern
         DOMAINS_TABLE: !Ref DomainsTable
         NEXUS_EVENT_BUS: !Ref NexusEventBus
-        DOMAINS_COMMAND_QUEUE_URL: !Ref DomainsCommandQueue
+        DOMAIN_REGISTRATIONS_QUEUE_URL: !Ref DomainRegistrationsQueue
 
 Conditions:
   NotificationsEnabled: !Not [!Equals [!Ref NotificationSenderEmail, ""]]
@@ -112,28 +112,28 @@ Resources:
 
 
   # ---- Dead Letter Queue (read Lambda functions) ----
-  LambdaDlq:
+  LambdaFailureDlq:
     Type: AWS::SQS::Queue
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-lambda-dlq"
+      QueueName: !Sub "nexus-lambda-failure-dlq"
       MessageRetentionPeriod: 1209600
 
   # ---- Shared DLQ for EventBridge rule delivery failures ----
-  EventBridgeRuleDlq:
+  EventBridgeRuleFailureDlq:
     Type: AWS::SQS::Queue
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-eventbridge-rule-dlq"
+      QueueName: !Sub "nexus-eventbridge-rule-failure-dlq"
       MessageRetentionPeriod: 1209600
 
-  EventBridgeRuleDlqPolicy:
+  EventBridgeRuleFailureDlqPolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
       Queues:
-        - !Ref EventBridgeRuleDlq
+        - !Ref EventBridgeRuleFailureDlq
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -141,29 +141,29 @@ Resources:
             Principal:
               Service: events.amazonaws.com
             Action: sqs:SendMessage
-            Resource: !GetAtt EventBridgeRuleDlq.Arn
+            Resource: !GetAtt EventBridgeRuleFailureDlq.Arn
             Condition:
               ArnLike:
                 "aws:SourceArn": !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${NexusEventBus}/*"
 
   # ---- Command Queues ----
-  DomainsCommandDlq:
+  DomainRegistrationsDlq:
     Type: AWS::SQS::Queue
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-domains-command-dlq"
+      QueueName: !Sub "nexus-domain-registrations-dlq"
       MessageRetentionPeriod: 1209600
 
-  DomainsCommandQueue:
+  DomainRegistrationsQueue:
     Type: AWS::SQS::Queue
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-domains-command-queue"
+      QueueName: !Sub "nexus-domain-registrations-queue"
       VisibilityTimeout: 30
       RedrivePolicy:
-        deadLetterTargetArn: !GetAtt DomainsCommandDlq.Arn
+        deadLetterTargetArn: !GetAtt DomainRegistrationsDlq.Arn
         maxReceiveCount: 3
 
   # ---- CloudWatch Log Groups ----
@@ -236,7 +236,7 @@ Resources:
   NexusApiSqsPolicy:
     Type: AWS::IAM::Policy
     Properties:
-      PolicyName: SendToCommandQueues
+      PolicyName: SendToDomainRegistrations
       Roles:
         - !Ref NexusApiSqsRole
       PolicyDocument:
@@ -247,7 +247,7 @@ Resources:
               - sqs:SendMessage
               - sqs:GetQueueAttributes
             Resource:
-              - !GetAtt DomainsCommandQueue.Arn
+              - !GetAtt DomainRegistrationsQueue.Arn
 
   # ---- API Gateway ----
   NexusApi:
@@ -288,7 +288,7 @@ Resources:
       Handler: bootstrap
       DeadLetterQueue:
         Type: SQS
-        TargetArn: !GetAtt LambdaDlq.Arn
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -316,7 +316,7 @@ Resources:
       Handler: bootstrap
       DeadLetterQueue:
         Type: SQS
-        TargetArn: !GetAtt LambdaDlq.Arn
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -371,12 +371,12 @@ Resources:
               Resource: !Ref ApprovalWorkflow
             - Effect: Allow
               Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
-              Resource: !GetAtt DomainsCommandQueue.Arn
+              Resource: !GetAtt DomainRegistrationsQueue.Arn
       Events:
         SqsTrigger:
           Type: SQS
           Properties:
-            Queue: !GetAtt DomainsCommandQueue.Arn
+            Queue: !GetAtt DomainRegistrationsQueue.Arn
             BatchSize: 1
 
   # ---- Decide Registration Function ----
@@ -403,7 +403,7 @@ Resources:
           NEXUS_EVENT_BUS: !Ref NexusEventBus
       DeadLetterQueue:
         Type: SQS
-        TargetArn: !GetAtt LambdaDlq.Arn
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -452,7 +452,7 @@ Resources:
           DECIDE_ENDPOINT_URL: !Sub "https://${NexusApi}.execute-api.${AWS::Region}.amazonaws.com/v1/domains/registrations/decide"
       DeadLetterQueue:
         Type: SQS
-        TargetArn: !GetAtt LambdaDlq.Arn
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -489,7 +489,7 @@ Resources:
           NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
       DeadLetterQueue:
         Type: SQS
-        TargetArn: !GetAtt LambdaDlq.Arn
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -521,7 +521,7 @@ Resources:
           NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
       DeadLetterQueue:
         Type: SQS
-        TargetArn: !GetAtt LambdaDlq.Arn
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -554,7 +554,7 @@ Resources:
           DOMAINS_TABLE: !Ref DomainsTable
       DeadLetterQueue:
         Type: SQS
-        TargetArn: !GetAtt LambdaDlq.Arn
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -570,7 +570,7 @@ Resources:
     Type: AWS::Events::Rule
     Condition: NotificationsEnabled
     Properties:
-      Name: !Sub "nexus-domain-registration-approved-notification"
+      Name: !Sub "nexus-domain-registration-approved"
       EventBusName: !Ref NexusEventBus
       EventPattern:
         detail-type:
@@ -581,7 +581,7 @@ Resources:
         - Id: SendApprovalOutcomeNotificationTarget
           Arn: !GetAtt SendApprovalOutcomeNotificationFunction.Arn
           DeadLetterConfig:
-            Arn: !GetAtt EventBridgeRuleDlq.Arn
+            Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
 
   DomainRegistrationApprovedNotificationRulePermission:
     Type: AWS::Lambda::Permission
@@ -607,7 +607,7 @@ Resources:
         - Id: SendRejectionNotificationTarget
           Arn: !GetAtt SendRejectionOutcomeNotificationFunction.Arn
           DeadLetterConfig:
-            Arn: !GetAtt EventBridgeRuleDlq.Arn
+            Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
 
   DomainRegistrationRejectedRulePermission:
     Type: AWS::Lambda::Permission
@@ -633,7 +633,7 @@ Resources:
         - Id: SendProvisioningFailedNotificationTarget
           Arn: !GetAtt SendProvisioningFailedNotificationFunction.Arn
           DeadLetterConfig:
-            Arn: !GetAtt EventBridgeRuleDlq.Arn
+            Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
 
   DomainProvisioningFailedRulePermission:
     Type: AWS::Lambda::Permission
@@ -648,7 +648,7 @@ Resources:
   ApprovalWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "nexus-approval-wf-role"
+      RoleName: !Sub "nexus-approval-workflow-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -720,7 +720,7 @@ Resources:
   ProvisioningWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "nexus-provisioning-wf-role"
+      RoleName: !Sub "nexus-provisioning-workflow-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -876,7 +876,7 @@ Resources:
               source:
                 - nexus.domain-management
             DeadLetterConfig:
-              Arn: !GetAtt EventBridgeRuleDlq.Arn
+              Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
 
 Outputs:
   ApiEndpoint:
@@ -894,6 +894,6 @@ Outputs:
   ProvisioningWorkflowRoleArn:
     Description: Provisioning workflow role ARN (pass as ProvisioningWorkflowRoleArn to trust-stack.yaml)
     Value: !GetAtt ProvisioningWorkflowRole.Arn
-  LambdaDlqUrl:
+  LambdaFailureDlqUrl:
     Description: Lambda Dead Letter Queue URL for monitoring failed async invocations
-    Value: !Ref LambdaDlq
+    Value: !Ref LambdaFailureDlq

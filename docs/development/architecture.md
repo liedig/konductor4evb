@@ -289,9 +289,9 @@ graph TD
 | Subscription DLQ | Per-env | Platform | `{org}-{env}-{domain}-subscription-dlq` |
 | Event bus | Per-env | App | `{org}-{env}-{domain}-event-bus` |
 | Integration DLQ | Per-env | App | `{org}-{env}-{domain}-integration-dlq` |
-| CloudWatch dashboard | Per-env | Platform | `{org}-{env}-{domain}-domain-dashboard` |
-| Failed invocations alarm | Per-env | Platform | `{org}-{env}-{domain}-failed-invocations` |
-| DLQ depth alarm | Per-env | Platform | `{org}-{env}-{domain}-dlq-depth` |
+| CloudWatch dashboard | Per-env | Platform | `{org}-{env}-{domain}-dashboard` |
+| Failed invocations alarm | Per-env | Platform | `{org}-{env}-{domain}-failed-invocations-alarm` |
+| DLQ depth alarm | Per-env | Platform | `{org}-{env}-{domain}-dlq-depth-alarm` |
 
 ### Saga Compensation (Rollback)
 
@@ -367,7 +367,7 @@ nexus-bus                             (nexus event bus)
 nexus-domains                         (domains table)
 nexus-api                             (API Gateway)
 nexus-function-role                   (Lambda trust-anchor role)
-nexus-provisioning-wf-role            (Step Functions execution role)
+nexus-provisioning-workflow-role      (Step Functions execution role)
 ```
 
 The app-account **trust role** is the one exception: it carries the org prefix as `{org}-nexus-trust-role` (e.g., `acme-nexus-trust-role`) so multiple organizations sharing an app account don't collide.
@@ -379,7 +379,7 @@ acme-prod-billing-event-bus           (EventBridge bus)
 acme-prod-billing-schema-registry     (Schema registry)
 acme-prod-billing-subscription-dlq    (Platform DLQ)
 acme-prod-billing-integration-dlq     (App account DLQ)
-acme-prod-billing-domain-dashboard    (CloudWatch dashboard)
+acme-prod-billing-dashboard           (CloudWatch dashboard)
 ```
 
 The domain pattern is configurable via the `NamespacePattern` SAM parameter (default: `{org}-{env}-{domain}`). The `NamespaceResolver` in `lib/nexus-common/src/namespace.rs` handles domain-resource name generation. The platform pattern (`nexus-*`) is fixed.

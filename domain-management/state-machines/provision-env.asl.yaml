@@ -25,7 +25,7 @@ States:
       EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
       Action: "events:PutEvents"
       Principal: "{% $states.input.ownerAccountId %}"
-      StatementId: "{% 'allow-' & $states.input.ownerAccountId & '-put-events' %}"
+      StatementId: "{% 'allow-' & $states.input.ownerAccountId & '-put-events-' & $states.input.domainName %}"
     Output: "{% $states.input %}"
     Next: CreateSchemaRegistry
     Catch:
@@ -103,7 +103,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putDashboard"
     Arguments:
-      DashboardName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-dashboard' %}"
+      DashboardName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dashboard' %}"
       DashboardBody: |-
         {% (
           $busName := '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus';
@@ -156,7 +156,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
     Arguments:
-      AlarmName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations' %}"
+      AlarmName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations-alarm' %}"
       AlarmDescription: "{% 'High failed invocations rate on domain bus ' & $states.input.domainName & ' (' & $states.input.environment & ')' %}"
       Namespace: AWS/Events
       MetricName: FailedInvocations
@@ -183,7 +183,7 @@ States:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
     Arguments:
-      AlarmName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth' %}"
+      AlarmName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth-alarm' %}"
       AlarmDescription: "{% 'Messages accumulating in subscription DLQ for domain ' & $states.input.domainName & ' (' & $states.input.environment & ')' %}"
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
@@ -220,7 +220,7 @@ States:
         schemaRegistryArn: "{% $schemaRegistry.RegistryArn %}"
         subscriptionDlqArn: "{% $subscriptionDlq.QueueUrl %}"
         integrationDlqArn: "{% $integrationDlq.QueueUrl %}"
-        dashboardArn: "{% 'arn:aws:cloudwatch::' & '${AWS::AccountId}' & ':dashboard/' & '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-dashboard' %}"
+        dashboardArn: "{% 'arn:aws:cloudwatch::' & '${AWS::AccountId}' & ':dashboard/' & '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dashboard' %}"
     End: true
 
   # ---- Inner Saga Compensation Chain ----
@@ -291,7 +291,7 @@ States:
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
     Arguments:
       AlarmNames:
-        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth' %}"
+        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth-alarm' %}"
     Output: "{% $states.input %}"
     Next: CompensateFailedInvocAlarm
     Catch:
@@ -314,7 +314,7 @@ States:
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
     Arguments:
       AlarmNames:
-        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations' %}"
+        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations-alarm' %}"
     Output: "{% $states.input %}"
     Next: CompensateDashboard
     Catch:
@@ -337,7 +337,7 @@ States:
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteDashboards"
     Arguments:
       DashboardNames:
-        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-domain-dashboard' %}"
+        - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dashboard' %}"
     Output: "{% $states.input %}"
     Next: CompensateSubscriptionDlq
     Catch:

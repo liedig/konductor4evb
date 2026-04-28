@@ -220,7 +220,7 @@ aws cloudformation deploy \
   --stack-name nexus-trust \
   --parameter-overrides \
     NexusRoleArn=arn:aws:iam::111111111111:role/nexus-function-role \
-    ProvisioningWorkflowRoleArn=arn:aws:iam::111111111111:role/nexus-provisioning-wf-role \
+    ProvisioningWorkflowRoleArn=arn:aws:iam::111111111111:role/nexus-provisioning-workflow-role \
     Organization=acme \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
