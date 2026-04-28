@@ -21,6 +21,7 @@ aws cloudformation deploy \
     NexusRoleArn=arn:aws:iam::<platform-account-id>:role/<org>-nexus-function-role \
     ProvisioningWorkflowRoleArn=arn:aws:iam::<platform-account-id>:role/nexus-provisioning-workflow-role \
     Organization=<org> \
+  --tags Application=nexus Component=trust \
   --capabilities CAPABILITY_NAMED_IAM \
   --region <region>
 ```
@@ -35,6 +36,7 @@ aws cloudformation deploy \
     NexusRoleArn=arn:aws:iam::111111111111:role/nexus-function-role \
     ProvisioningWorkflowRoleArn=arn:aws:iam::111111111111:role/nexus-provisioning-workflow-role \
     Organization=acme \
+  --tags Application=nexus Component=trust \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
@@ -72,6 +74,7 @@ aws cloudformation deploy \
     NexusRoleArn=<new-role-arn> \
     ProvisioningWorkflowRoleArn=<new-workflow-role-arn> \
     Organization=<org> \
+  --tags Application=nexus Component=trust \
   --capabilities CAPABILITY_NAMED_IAM \
   --region <region>
 ```
