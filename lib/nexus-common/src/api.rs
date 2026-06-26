@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn error_mapping_domain_not_found_returns_404() {
         let err = ControlPlaneError::DomainNotFound {
-            domain_id: "abc".to_string(),
+            domain_name: "abc".to_string(),
         };
         let resp = from_control_plane_error(&err);
         assert_eq!(resp["statusCode"], 404);
@@ -272,20 +272,23 @@ mod tests {
 
     #[test]
     fn path_param_extracts_value() {
-        let event = json!({"pathParameters": {"domainId": "abc-123"}});
-        assert_eq!(path_param(&event, "domainId"), Some("abc-123".to_string()));
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        assert_eq!(
+            path_param(&event, "domainName"),
+            Some("billing".to_string())
+        );
     }
 
     #[test]
     fn path_param_returns_none_when_missing() {
         let event = json!({});
-        assert_eq!(path_param(&event, "domainId"), None);
+        assert_eq!(path_param(&event, "domainName"), None);
     }
 
     #[test]
     fn path_param_returns_none_for_unknown_param() {
         let event = json!({"pathParameters": {"other": "val"}});
-        assert_eq!(path_param(&event, "domainId"), None);
+        assert_eq!(path_param(&event, "domainName"), None);
     }
 
     #[test]

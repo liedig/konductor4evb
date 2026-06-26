@@ -15,7 +15,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 
 ## Architecture
 
-```
+```text
                            Platform Account
                     ┌───────────────────────────────┐
                     │  API Gateway (IAM + email-link) │
@@ -63,7 +63,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 
 ## Project Structure
 
-```
+```text
 .
 ├── api/
 │   └── openapi.yaml                  # API contract
@@ -71,7 +71,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 │   ├── functions/                    # Lambda handlers
 │   │   ├── domain-registrations/     # Async writes: register + update (SQS-triggered)
 │   │   ├── list-domains/             # GET /domains
-│   │   ├── describe-domain/          # GET /domains/{domainId}
+│   │   ├── describe-domain/          # GET /domains/{domainName}
 │   │   ├── decide-registration/      # POST/GET /domains/registrations/decide
 │   │   ├── send-approval-request-notification/    # Invoked by workflow (platform operator email)
 │   │   ├── send-approval-outcome-notification/    # EventBridge-triggered (domain owner)
@@ -110,8 +110,8 @@ All endpoints require IAM authentication **except** the `GET` email-link decide 
 |---|---|---|---|
 | `POST` | `/domains` | IAM | Register a new domain (async via SQS) |
 | `GET` | `/domains` | IAM | List domains (filter by owner, status) |
-| `GET` | `/domains/{domainId}` | IAM | Describe a domain (includes per-env `resourceArns` map) |
-| `PUT` | `/domains/{domainId}` | IAM | Update domain metadata (async via SQS) |
+| `GET` | `/domains/{domainName}` | IAM | Describe a domain (includes per-env `resourceArns` map) |
+| `PUT` | `/domains/{domainName}` | IAM | Update domain metadata (async via SQS) |
 | `POST` | `/domains/registrations/decide` | IAM | Approve or reject a registration (JSON body with task token) |
 | `GET` | `/domains/registrations/decide?decision={approve\|reject}&token={taskToken}` | none | One-click approve/reject via email link (HTML confirmation page) |
 
@@ -119,7 +119,7 @@ Full API contract: [`api/openapi.yaml`](api/openapi.yaml)
 
 ## Domain Lifecycle
 
-```
+```text
 RegisterDomain ──> PENDING_APPROVAL
                         │
         Approve ────────┼────── Reject

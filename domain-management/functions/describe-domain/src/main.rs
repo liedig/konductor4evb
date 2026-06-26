@@ -15,11 +15,11 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
     let ddb = aws_sdk_dynamodb::Client::new(&config);
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
 
-    let domain_id = match api::path_param(&event.payload, "domainId") {
-        Some(id) => id,
+    let domain_name = match api::path_param(&event.payload, "domainName") {
+        Some(name) => name,
         None => {
             return Ok(api::from_control_plane_error(&api::validation_error(
-                "Missing domainId path parameter",
+                "Missing domainName path parameter",
             )));
         }
     };
@@ -27,7 +27,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
     let result = ddb
         .get_item()
         .table_name(&table)
-        .key("domainId", s(&domain_id))
+        .key("domainName", s(&domain_name))
         .send()
         .await;
 
@@ -39,7 +39,6 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
                 let environments = get_string_list(&item, "environments").unwrap_or_default();
 
                 let mut body = json!({
-                    "domainId": get_s(&item, "domainId"),
                     "domainName": get_s(&item, "domainName"),
                     "description": get_s(&item, "description"),
                     "ownerAccountId": get_s(&item, "ownerAccountId"),
@@ -72,7 +71,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
                 Ok(api::success_response(200, &body))
             }
             None => Ok(api::from_control_plane_error(
-                &ControlPlaneError::DomainNotFound { domain_id },
+                &ControlPlaneError::DomainNotFound { domain_name },
             )),
         },
         Err(e) => {

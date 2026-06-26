@@ -21,11 +21,6 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .get("detail")
         .context("missing detail in EventBridge event")?;
 
-    let domain_id = detail
-        .get("domainId")
-        .and_then(|v| v.as_str())
-        .context("missing domainId in detail")?;
-
     let domain_name = detail
         .get("domainName")
         .and_then(|v| v.as_str())
@@ -34,7 +29,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
     let item = ddb
         .get_item()
         .table_name(&table)
-        .key("domainId", s(domain_id))
+        .key("domainName", s(domain_name))
         .send()
         .await
         .context("failed to load domain record")?
@@ -80,7 +75,6 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .context("failed to send provisioning-failed email")?;
 
     tracing::info!(
-        domain_id,
         domain_name,
         owner_email,
         "provisioning-failed notification sent"

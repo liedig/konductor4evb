@@ -7,6 +7,7 @@ The project is a Rust workspace (7 Lambda binary targets + 1 shared lib) built w
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Automated checks (fmt, clippy, test, SAM build) on every PR and push to `develop` and `main`
 - Fast feedback via caching and sequential job stages (fail early on cheap checks)
 - Bare-bones issue and PR templates that can be iterated on
@@ -14,6 +15,7 @@ The project is a Rust workspace (7 Lambda binary targets + 1 shared lib) built w
 - Makefile parity with CI so `make check` locally matches the CI check job
 
 **Non-Goals:**
+
 - Continuous deployment (CD) — no deploy step in this change
 - Branch protection rules — configured in GitHub UI, not in code
 - Code coverage reporting
@@ -45,6 +47,7 @@ on:
 ```
 
 This covers:
+
 - PR validation (before merge)
 - Post-merge validation (catches broken merges, direct pushes)
 
@@ -63,6 +66,7 @@ Both tools are available via pip and install in ~10 seconds:
 ### 4. Rust caching via `Swatinem/rust-cache`
 
 This is the de facto standard for Rust CI caching. It caches:
+
 - `~/.cargo/registry` (crate index + downloaded crates)
 - `~/.cargo/git` (git dependencies)
 - `target/` (compiled artifacts)

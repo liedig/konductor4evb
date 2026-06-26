@@ -32,6 +32,7 @@ Before writing any code, all foundational architecture decisions must be documen
 **Rationale**: Rust provides fast cold starts (~10-50ms), low memory footprint, and strong type safety. The `provided.al2023` runtime is the current Amazon Linux 2023 base. Raw handler avoids unnecessary abstraction for Lambda-to-Lambda communication. cargo-lambda is the standard Rust Lambda toolchain.
 
 **Alternatives considered**:
+
 - *TypeScript/Node.js*: Faster development velocity but weaker type safety and higher cold starts. Rejected because the BRD targets a production AWS service where performance and reliability are paramount.
 - *Go*: Similar performance to Rust but less expressive type system. Rejected in favor of Rust's ownership model and ecosystem.
 - *HTTP framework adapter (axum/actix)*: Would allow local development with a web server. Rejected to keep the Lambda handler minimal and avoid framework coupling, though this could be revisited if local dev experience becomes a bottleneck.
@@ -43,6 +44,7 @@ Before writing any code, all foundational architecture decisions must be documen
 **Rationale**: Clean separation of concerns, independent scaling, independent deployment, and minimal cold start per function (smaller binary). Rust cold starts are fast enough that the per-function overhead is negligible.
 
 **Alternatives considered**:
+
 - *Shared router function*: Single Lambda handling all routes. Simpler deployment but larger binary, longer cold starts, and blast radius of a bug affects all operations. Rejected for a service with 20+ operations.
 - *Module-per-route in shared function*: Compromise approach. Rejected because Rust binary sizes grow significantly with all dependencies bundled.
 
@@ -53,6 +55,7 @@ Before writing any code, all foundational architecture decisions must be documen
 **Rationale**: REST API type supports IAM auth natively (SigV4), request/response validation from OpenAPI, and usage plans. This aligns with AWS service conventions. OpenAPI provides a machine-readable contract for SDK generation.
 
 **Alternatives considered**:
+
 - *HTTP API*: Cheaper and faster but lacks native IAM policy-based authorization and built-in request validation. Rejected because IAM auth is a hard requirement for an AWS-style control plane.
 - *Lambda Function URLs*: No API management features. Rejected.
 
@@ -63,6 +66,7 @@ Before writing any code, all foundational architecture decisions must be documen
 **Rationale**: Simpler to reason about, easier to evolve independently, and avoids the complexity of single-table design upfront. The raw SDK avoids another abstraction layer and keeps the team close to the DynamoDB data model.
 
 **Alternatives considered**:
+
 - *Single-table design*: DynamoDB best practice for minimizing round trips. Rejected for now because the access patterns are not fully known yet. Can be consolidated later if query patterns demand it.
 - *DynamoDB mapper/ORM*: Additional abstraction. Rejected to maintain direct control over queries and avoid mapping overhead.
 
@@ -75,6 +79,7 @@ Before writing any code, all foundational architecture decisions must be documen
 **Rationale**: Separation keeps approval logic independent from provisioning logic. The approval workflow can evolve (e.g., automated policy checks, multi-level approval) without affecting provisioning. Communication via events on the control plane bus makes the handoff observable, auditable, and loosely coupled.
 
 **Alternatives considered**:
+
 - *Single workflow with Task Token wait then provisioning steps*: Simpler but tightly couples approval and provisioning. A change to either half requires redeploying the entire workflow. Rejected for modularity.
 - *API-driven approval (no workflow)*: Approval via a direct API call that then starts provisioning. Loses the audit trail and observability of a workflow. Rejected.
 
@@ -97,6 +102,7 @@ Before writing any code, all foundational architecture decisions must be documen
 **Rationale**: This is the standard AWS pattern for cross-account access. The trust stack is a one-time setup per account. Scoping permissions to the namespace prefix ensures least privilege.
 
 **Alternatives considered**:
+
 - *CloudFormation StackSets via AWS Organizations*: Would automate trust stack deployment across all accounts. Deferred for now because it requires Organizations integration and adds complexity. Can be added later as an enhancement.
 - *Resource-based policies only*: Insufficient for creating resources in other accounts (need IAM role for STS assumption).
 
@@ -113,6 +119,7 @@ Before writing any code, all foundational architecture decisions must be documen
 **Rationale**: SAM is a first-party AWS tool built on CloudFormation. It has native support for Lambda, API Gateway, and Step Functions. It supports `sam local` for testing and `sam deploy` for deployment. This aligns with the serverless-first approach.
 
 **Alternatives considered**:
+
 - *AWS CDK*: More expressive, programmatic infrastructure. Rejected because it adds a TypeScript/Python dependency to a Rust project and introduces another abstraction layer over CloudFormation.
 - *Terraform*: Cloud-agnostic. Rejected because this is an AWS-only project and SAM provides tighter integration with Lambda and API Gateway.
 

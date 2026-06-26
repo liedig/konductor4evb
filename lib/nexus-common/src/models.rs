@@ -62,7 +62,6 @@ pub enum Decision {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Domain {
-    pub domain_id: String,
     pub domain_name: String,
     pub description: Option<String>,
     pub owner_account_id: String,

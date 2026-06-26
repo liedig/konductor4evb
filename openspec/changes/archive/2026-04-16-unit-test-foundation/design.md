@@ -5,6 +5,7 @@ The codebase has 7 Lambda binary targets and 1 shared library with substantial p
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Make `cargo test --workspace` meaningful with 40+ tests covering core business logic
 - Cover all pure utility functions in `control-plane-common`
 - Cover validation logic in domain command handler and decide-registration
@@ -12,6 +13,7 @@ The codebase has 7 Lambda binary targets and 1 shared library with substantial p
 - Follow existing test conventions (inline modules, descriptive names, `assert_eq!` over `assert!`)
 
 **Non-Goals:**
+
 - Trait-based AWS SDK mocking (future change)
 - Integration tests
 - Testing Lambda handler orchestration (requires mocking)

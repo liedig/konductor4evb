@@ -1,6 +1,7 @@
 # Capability: Domain Owner Notifications
 
 ## Purpose
+
 TBD
 
 ## Requirements

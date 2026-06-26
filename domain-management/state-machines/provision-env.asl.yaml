@@ -211,7 +211,6 @@ States:
     Output:
       status: SUCCEEDED
       environment: "{% $states.input.environment %}"
-      domainId: "{% $states.input.domainId %}"
       domainName: "{% $states.input.domainName %}"
       ownerAccountId: "{% $states.input.ownerAccountId %}"
       resourceArns:

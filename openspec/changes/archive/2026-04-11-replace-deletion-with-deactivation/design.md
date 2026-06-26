@@ -9,6 +9,7 @@ The `UpdateDomain` operation (via `desiredStatus: DEACTIVATED`) already handles 
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Remove the `DELETE /domains/{domainId}` endpoint and all associated infrastructure
 - Add `DEACTIVATED` as a terminal domain status reachable from `ACTIVE` or `SUSPENDED`
 - Disable event routing on deactivated domains by removing PutEvent permissions from domain event buses
@@ -17,6 +18,7 @@ The `UpdateDomain` operation (via `desiredStatus: DEACTIVATED`) already handles 
 - Remove the `CleanupWorkflow` state machine and its IAM role
 
 **Non-Goals:**
+
 - Implementing a scheduled resource cleanup for long-deactivated domains (future consideration)
 - Providing a "reactivation" path from `DEACTIVATED` back to `ACTIVE` (terminal by design)
 - Changing how `SUSPENDED` domains work (suspend remains reversible)

@@ -1,6 +1,7 @@
 <coding_guidelines>
 
 ## Code Style
+
 - No code comments — write self-explanatory code with clear, intention-revealing names
 - Alphabetically sorted imports
 - Files under 300 lines; split when it improves clarity
@@ -8,6 +9,7 @@
 - Start simple; add complexity only when clearly required
 
 ## Testing Strategy
+
 - Write tests for critical paths only, not every function
 - AAA pattern (Arrange, Act, Assert)
 - Prefer integration and behavior tests over unit test coverage metrics
@@ -19,6 +21,7 @@
 - Use lightweight unit tests only where they materially reduce risk on complex logic or edge cases
 
 ## Product Naming
+
 - The product is called **EventBridge Nexus** (short form: **Nexus**)
 - Resource namespace convention: `{org}-{env}-{domain}` (e.g., `acme-prod-payments`)
 - Trust role: `nexus-trust-role`
@@ -26,19 +29,20 @@
 - Lifecycle event bus: `nexus-bus`
 
 ## Git Workflow
+
 - Conventional Commits: `<type>[optional scope]: <description>`
 - Types: `feat`, `fix`, `refactor`, `chore`, `test`, `docs`
 - Breaking changes: `!` after type/scope or `BREAKING CHANGE:` footer
 - Short-lived feature branches per change (e.g., `feat-domain-management`, `fix-subscription-metrics`)
 
 Examples:
-```
+
+```text
 feat(api): add event routing configuration endpoint
 fix(auth): resolve token expiration race condition
 refactor(storage): extract database connection logic
 BREAKING CHANGE(api): remove deprecated v1 endpoints
 ```
-
 
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands
@@ -48,6 +52,7 @@ BREAKING CHANGE(api): remove deprecated v1 endpoints
 **Always prefix commands with `rtk`**. If RTK has a dedicated filter, it uses it. If not, it passes through unchanged. This means RTK is always safe to use.
 
 **Important**: Even in command chains with `&&`, use `rtk`:
+
 ```bash
 # ❌ Wrong
 git add . && git commit -m "msg" && git push
@@ -59,6 +64,7 @@ rtk git add . && rtk git commit -m "msg" && rtk git push
 ## RTK Commands by Workflow
 
 ### Build & Compile (80-90% savings)
+
 ```bash
 rtk cargo build         # Cargo build output
 rtk cargo check         # Cargo check output
@@ -70,6 +76,7 @@ rtk next build          # Next.js build with route metrics (87%)
 ```
 
 ### Test (60-99% savings)
+
 ```bash
 rtk cargo test          # Cargo test failures only (90%)
 rtk go test             # Go test failures only (90%)
@@ -83,6 +90,7 @@ rtk test <cmd>          # Generic test wrapper - failures only
 ```
 
 ### Git (59-80% savings)
+
 ```bash
 rtk git status          # Compact status
 rtk git log             # Compact log (works with all git flags)
@@ -101,6 +109,7 @@ rtk git worktree        # Compact worktree
 Note: Git passthrough works for ALL subcommands, even those not explicitly listed.
 
 ### GitHub (26-87% savings)
+
 ```bash
 rtk gh pr view <num>    # Compact PR view (87%)
 rtk gh pr checks        # Compact PR checks (79%)
@@ -110,6 +119,7 @@ rtk gh api              # Compact API responses (26%)
 ```
 
 ### JavaScript/TypeScript Tooling (70-90% savings)
+
 ```bash
 rtk pnpm list           # Compact dependency tree (70%)
 rtk pnpm outdated       # Compact outdated packages (80%)
@@ -120,6 +130,7 @@ rtk prisma              # Prisma without ASCII art (88%)
 ```
 
 ### Files & Search (60-75% savings)
+
 ```bash
 rtk ls <path>           # Tree format, compact (65%)
 rtk read <file>         # Code reading with filtering (60%)
@@ -128,6 +139,7 @@ rtk find <pattern>      # Find grouped by directory (70%)
 ```
 
 ### Analysis & Debug (70-90% savings)
+
 ```bash
 rtk err <cmd>           # Filter errors only from any command
 rtk log <file>          # Deduplicated logs with counts
@@ -139,6 +151,7 @@ rtk diff                # Ultra-compact diffs
 ```
 
 ### Infrastructure (85% savings)
+
 ```bash
 rtk docker ps           # Compact container list
 rtk docker images       # Compact image list
@@ -148,12 +161,14 @@ rtk kubectl logs        # Deduplicated pod logs
 ```
 
 ### Network (65-70% savings)
+
 ```bash
 rtk curl <url>          # Compact HTTP responses (70%)
 rtk wget <url>          # Compact download output (65%)
 ```
 
 ### Meta Commands
+
 ```bash
 rtk gain                # View token savings statistics
 rtk gain --history      # View command history with savings

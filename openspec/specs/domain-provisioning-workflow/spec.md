@@ -1,8 +1,11 @@
 # domain-provisioning-workflow Specification
 
 ## Purpose
+
 TBD - created by archiving change architecture-decisions. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Two-phase workflow separation
 
 Domain registration SHALL be handled by two separate AWS Step Functions workflows: an approval workflow and a provisioning workflow. The approval workflow SHALL manage the human-in-the-loop approval process including notification, decision handling, and status updates. The provisioning workflow SHALL create all domain resources. The two workflows SHALL communicate via lifecycle events on the control plane event bus. Both workflows SHALL be defined in YAML format and use JSONata as the query language.
@@ -209,4 +212,3 @@ The provisioning workflow SHALL ensure that a RAM resource share exists for doma
 
 - **WHEN** the provisioning workflow attempts to associate a namespace parameter that is already in the RAM share
 - **THEN** the association SHALL be treated as a successful no-op
-

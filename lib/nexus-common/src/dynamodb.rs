@@ -187,13 +187,16 @@ mod tests {
     #[test]
     fn pagination_token_round_trips() {
         let mut key = HashMap::new();
-        key.insert("domainId".to_string(), s("abc-123"));
+        key.insert("domainName".to_string(), s("billing"));
         key.insert("status".to_string(), s("ACTIVE"));
 
         let token = serialize_pagination_token(&key);
         let restored = deserialize_pagination_token(&token).unwrap();
 
-        assert_eq!(restored.get("domainId").unwrap().as_s().unwrap(), "abc-123");
+        assert_eq!(
+            restored.get("domainName").unwrap().as_s().unwrap(),
+            "billing"
+        );
         assert_eq!(restored.get("status").unwrap().as_s().unwrap(), "ACTIVE");
     }
 

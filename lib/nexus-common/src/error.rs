@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Error)]
 pub enum ControlPlaneError {
-    #[error("domain not found: {domain_id}")]
-    DomainNotFound { domain_id: String },
+    #[error("domain not found: {domain_name}")]
+    DomainNotFound { domain_name: String },
 
     #[error("domain already exists: {domain_name}")]
     DomainAlreadyExists { domain_name: String },

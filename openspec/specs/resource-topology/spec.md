@@ -1,8 +1,11 @@
 # resource-topology Specification
 
 ## Purpose
+
 TBD - created by archiving change architecture-decisions. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Platform account domain resources
 
 When a domain is provisioned, EventBridge Nexus SHALL create the following resources in the platform account **for each environment** in the domain's `environments` list: a domain event bus, a PutEvent policy restricting publishing to the domain's owning application account, a schema registry with access policies, a subscription rule DLQ (SQS queue), and CloudWatch observability resources (dashboard, alarms, metrics configuration).
@@ -197,4 +200,3 @@ All domain namespace SSM parameters SHALL be shared with the AWS Organisation vi
 - **WHEN** an application account accesses a shared namespace parameter
 - **THEN** the account SHALL be able to read the parameter value
 - **AND THEN** the account SHALL NOT be able to modify or delete the parameter
-

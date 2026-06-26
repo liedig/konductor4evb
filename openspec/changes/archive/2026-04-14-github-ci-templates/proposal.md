@@ -17,6 +17,7 @@ There is no CI pipeline or GitHub contribution templates. Code changes merge wit
 ## Capabilities
 
 ### New Capabilities
+
 - `ci-pipeline`: GitHub Actions CI workflow definition, triggers, job structure, caching, and toolchain setup
 - `contribution-templates`: GitHub issue templates, PR template, and repository configuration for contributor workflow
 

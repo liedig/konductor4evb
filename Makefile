@@ -1,8 +1,9 @@
-.PHONY: help build test check smoke deploy deploy-core deploy-notifications teardown-core teardown-notifications clean
+.PHONY: help build test check smoke deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
 AWS_REGION ?= $(shell aws configure get region 2>/dev/null || echo us-east-1)
+ORGANIZATION ?= acme
 
 # Colour codes for help output (tput falls back to empty strings on dumb terminals)
 BOLD := $(shell tput bold 2>/dev/null)
@@ -20,7 +21,7 @@ help: ## Show this help message
 	@printf "  $(BOLD)Build & Test$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(build|test|check|clean):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Deploy$(RESET)\n"
-	@awk 'BEGIN {FS = ":.*?## "} /^(deploy|deploy-core|deploy-notifications):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^(deploy|deploy-core|deploy-notifications|deploy-trust):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Teardown$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(teardown-.+):.*## / {printf "    $(YELLOW)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Smoke Test$(RESET)\n"
@@ -30,7 +31,9 @@ help: ## Show this help message
 	@printf "    $(DIM)APP_ACCOUNT_ID$(RESET)               required for: smoke\n"
 	@printf "    $(DIM)OWNER_EMAIL$(RESET)                  required for: smoke\n"
 	@printf "    $(DIM)NOTIFICATION_SENDER_EMAIL$(RESET)    required for: deploy-notifications\n"
-	@printf "    $(DIM)PLATFORM_OPERATOR_EMAIL$(RESET)      required for: deploy-notifications\n\n"
+	@printf "    $(DIM)PLATFORM_OPERATOR_EMAIL$(RESET)      required for: deploy-notifications\n"
+	@printf "    $(DIM)APP_PROFILE$(RESET)                  required for: deploy-trust, teardown-trust\n"
+	@printf "    $(DIM)ORGANIZATION$(RESET)                 optional for: deploy-trust (default: $(CYAN)$(ORGANIZATION)$(RESET))\n\n"
 
 build: ## sam build (Rust cross-compilation for arm64, cached)
 	sam build --config-file samconfig-core.toml --beta-features -c
@@ -70,26 +73,22 @@ endif
 	[ "$${REQUEST_ID}" = "null" ] && { echo "  $(BOLD)ERROR: no requestId in response$(RESET)"; exit 1; } || true; \
 	echo ""; \
 	echo "$(BOLD)(2/4) Wait for domain record with taskToken$(RESET)"; \
-	DOMAIN_ID=""; TASK_TOKEN=""; \
+	TASK_TOKEN=""; \
 	for i in $$(seq 1 20); do \
-		ITEM=$$(aws dynamodb query --table-name nexus-domains \
-			--index-name by-name \
-			--key-condition-expression "domainName = :n" \
-			--expression-attribute-values "{\":n\":{\"S\":\"$${DOMAIN_NAME}\"}}" \
+		ITEM=$$(aws dynamodb get-item --table-name nexus-domains \
+			--key "{\"domainName\":{\"S\":\"$${DOMAIN_NAME}\"}}" \
 			--region $(AWS_REGION) \
-			--output json 2>/dev/null | jq -r '.Items[0] // empty'); \
+			--output json 2>/dev/null | jq -r '.Item // empty'); \
 		if [ -n "$${ITEM}" ]; then \
-			DOMAIN_ID=$$(echo "$${ITEM}" | jq -r '.domainId.S // empty'); \
 			TASK_TOKEN=$$(echo "$${ITEM}" | jq -r '.taskToken.S // empty'); \
-			[ -n "$${DOMAIN_ID}" ] && [ -n "$${TASK_TOKEN}" ] && break; \
+			[ -n "$${TASK_TOKEN}" ] && break; \
 		fi; \
 		printf "  waiting for approval workflow to publish taskToken (attempt %s/20)\r" "$$i"; \
 		sleep 3; \
 	done; \
 	echo ""; \
-	[ -z "$${DOMAIN_ID}" ] && { echo "  $(BOLD)ERROR: domain never appeared in table$(RESET)"; exit 1; } || true; \
 	[ -z "$${TASK_TOKEN}" ] && { echo "  $(BOLD)ERROR: taskToken never populated — check SendApprovalRequestNotificationFunction logs$(RESET)"; exit 1; } || true; \
-	echo "  domainId=$${DOMAIN_ID}"; \
+	echo "  domainName=$${DOMAIN_NAME}"; \
 	echo "  taskToken=$${TASK_TOKEN:0:24}... (truncated)"; \
 	echo ""; \
 	echo "$(BOLD)(3/4) Approve$(RESET)"; \
@@ -102,7 +101,7 @@ endif
 	echo "$(BOLD)(4/4) Poll for ACTIVE status$(RESET)"; \
 	STATUS=""; \
 	for i in $$(seq 1 40); do \
-		STATUS=$$(awscurl -X GET "$${API_URL}/domains/$${DOMAIN_ID}" \
+		STATUS=$$(awscurl -X GET "$${API_URL}/domains/$${DOMAIN_NAME}" \
 			--region $(AWS_REGION) 2>/dev/null | jq -r '.status // "UNKNOWN"'); \
 		printf "  status=$(CYAN)%s$(RESET) (attempt %s/40)\r" "$${STATUS}" "$$i"; \
 		case "$${STATUS}" in \
@@ -116,7 +115,7 @@ endif
 	echo "$(BOLD)$(GREEN)✓ Smoke test complete — domain '$${DOMAIN_NAME}' is ACTIVE$(RESET)"; \
 	echo ""; \
 	echo "  To clean up, run:"; \
-	echo "    aws dynamodb delete-item --table-name nexus-domains --key '{\"domainId\":{\"S\":\"'$${DOMAIN_ID}'\"}}' --region $(AWS_REGION)"; \
+	echo "    aws dynamodb delete-item --table-name nexus-domains --key '{\"domainName\":{\"S\":\"'$${DOMAIN_NAME}'\"}}' --region $(AWS_REGION)"; \
 	echo "    (domain-level resources in your app account remain until a DELETE flow is built)"
 
 deploy: build deploy-core ## Build then deploy the core stack
@@ -139,6 +138,43 @@ teardown-core: ## Delete the Nexus core stack
 
 teardown-notifications: ## Delete the notifications stack
 	aws cloudformation delete-stack --stack-name nexus-notifications --region $(AWS_REGION)
+
+deploy-trust: ## Deploy the trust stack to an application account (requires APP_PROFILE)
+ifndef APP_PROFILE
+	$(error APP_PROFILE is required — the AWS CLI profile for the target application account)
+endif
+	@set -euo pipefail; \
+	NEXUS_ROLE_ARN=$$(aws cloudformation describe-stacks \
+		--stack-name nexus-core \
+		--query "Stacks[0].Outputs[?OutputKey=='NexusFunctionRoleArn'].OutputValue" \
+		--output text \
+		--region $(AWS_REGION)); \
+	PROVISIONING_ROLE_ARN=$$(aws cloudformation describe-stacks \
+		--stack-name nexus-core \
+		--query "Stacks[0].Outputs[?OutputKey=='ProvisioningWorkflowRoleArn'].OutputValue" \
+		--output text \
+		--region $(AWS_REGION)); \
+	echo "$(BOLD)$(CYAN)Deploying trust stack to profile: $(APP_PROFILE)$(RESET)"; \
+	echo "  NexusRoleArn:           $${NEXUS_ROLE_ARN}"; \
+	echo "  ProvisioningRoleArn:    $${PROVISIONING_ROLE_ARN}"; \
+	echo "  Organization:           $(ORGANIZATION)"; \
+	aws cloudformation deploy \
+		--template-file trust-stack.yaml \
+		--stack-name nexus-trust \
+		--parameter-overrides \
+			NexusRoleArn=$${NEXUS_ROLE_ARN} \
+			ProvisioningWorkflowRoleArn=$${PROVISIONING_ROLE_ARN} \
+			Organization=$(ORGANIZATION) \
+		--tags Application=nexus Component=trust \
+		--capabilities CAPABILITY_NAMED_IAM \
+		--region $(AWS_REGION) \
+		--profile $(APP_PROFILE)
+
+teardown-trust: ## Delete the trust stack from an application account (requires APP_PROFILE)
+ifndef APP_PROFILE
+	$(error APP_PROFILE is required — the AWS CLI profile for the target application account)
+endif
+	aws cloudformation delete-stack --stack-name nexus-trust --region $(AWS_REGION) --profile $(APP_PROFILE)
 
 clean: ## Remove cargo target/ and .aws-sam build artifacts
 	cargo clean

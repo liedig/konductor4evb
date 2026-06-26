@@ -78,8 +78,6 @@ Resources:
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       AttributeDefinitions:
-        - AttributeName: domainId
-          AttributeType: S
         - AttributeName: domainName
           AttributeType: S
         - AttributeName: ownerAccountId
@@ -88,15 +86,9 @@ Resources:
           AttributeType: S
 
       KeySchema:
-        - AttributeName: domainId
+        - AttributeName: domainName
           KeyType: HASH
       GlobalSecondaryIndexes:
-        - IndexName: by-name
-          KeySchema:
-            - AttributeName: domainName
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
         - IndexName: by-owner
           KeySchema:
             - AttributeName: ownerAccountId
@@ -328,7 +320,7 @@ Resources:
           Type: Api
           Properties:
             RestApiId: !Ref NexusApi
-            Path: /domains/{domainId}
+            Path: /domains/{domainName}
             Method: GET
 
   # ---- Command Handler Functions ----

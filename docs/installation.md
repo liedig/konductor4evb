@@ -6,7 +6,7 @@ This guide walks you through deploying EventBridge Nexus into your own AWS envir
 
 Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │  Platform Account                                │
 │                                                  │
@@ -228,15 +228,19 @@ aws cloudformation deploy \
   --region us-east-1
 ```
 
-A single trust role (`<org>-nexus-trust-role`) serves all environments of all domains in the account.
+A single trust role (`<org>-nexus-trust-role`) serves all environments of all
+domains in the account.
 
-For detailed instructions including verification and troubleshooting, see [trust-stack-deployment.md](trust-stack-deployment.md).
+For detailed instructions including verification and troubleshooting, see
+[trust-stack-deployment.md](trust-stack-deployment.md).
 
 ---
 
 ## Phase 4 — Smoke test
 
-Verify your installation by running the automated smoke test, which registers a test domain, approves it, verifies ACTIVE status and provisioned resources, then deletes the domain:
+Verify your installation by running the automated smoke test, which registers a
+test domain, approves it, verifies ACTIVE status and provisioned resources, then
+deletes the domain:
 
 ```bash
 make smoke AWS_REGION=<region> APP_ACCOUNT_ID=<application-account-id> OWNER_EMAIL=<owner@example.com>
@@ -249,6 +253,7 @@ make smoke AWS_REGION=us-east-1 APP_ACCOUNT_ID=222233334444 OWNER_EMAIL=owner@ex
 ```
 
 The smoke test:
+
 1. Fetches the API endpoint from the core stack outputs
 2. Registers a domain named `smoke-test` via `awscurl` (IAM-signed request)
 3. Approves the domain via the API
@@ -277,13 +282,13 @@ awscurl -X POST "${API_URL}/domains" --region "${REGION}" \
 # Approve
 awscurl -X POST "${API_URL}/domains/registrations/decide" --region "${REGION}" \
   -H "Content-Type: application/json" \
-  -d '{"domainName":"billing","decision":"ACCEPT"}'
+  -d '{"taskToken":"<taskToken>","decision":"ACCEPT","decidedBy":"<email>"}'
 
 # Check status
-awscurl -X GET "${API_URL}/domains/<domainId>" --region "${REGION}"
+awscurl -X GET "${API_URL}/domains/<domainName>" --region "${REGION}"
 
 # Delete
-awscurl -X DELETE "${API_URL}/domains/<domainId>" --region "${REGION}"
+awscurl -X DELETE "${API_URL}/domains/<domainName>" --region "${REGION}"
 ```
 
 ---
@@ -325,13 +330,13 @@ aws iam get-role \
 
 If `make build` fails with errors like:
 
-```
+```text
 ar: error: unable to open '...libring_core_0_17_14_.a': No such file or directory
 ```
 
 or
 
-```
+```text
 ar: error: unable to open '...libaws_lc_0_39_1_crypto.a': No such file or directory
 ```
 
@@ -395,7 +400,7 @@ Before deleting the stacks, remove all domains to clean up provisioned resources
 awscurl -X GET "${API_URL}/domains" --region "${REGION}"
 
 # Delete each domain
-awscurl -X DELETE "${API_URL}/domains/<domainId>" --region "${REGION}"
+awscurl -X DELETE "${API_URL}/domains/<domainName>" --region "${REGION}"
 ```
 
 Wait for each domain to reach `DELETED` status. The cleanup workflow runs automatically.

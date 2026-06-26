@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use aws_sdk_dynamodb::operation::put_item::PutItemError;
 use aws_sdk_dynamodb::types::AttributeValue;
 use serde_json::json;
 use std::env;
@@ -34,31 +35,6 @@ pub async fn handle(
         return Ok(());
     }
 
-    let existing = ddb
-        .query()
-        .table_name(&domains_table)
-        .index_name("by-name")
-        .key_condition_expression("domainName = :name")
-        .expression_attribute_values(":name", s(&request.domain_name))
-        .send()
-        .await
-        .map_err(|e| ControlPlaneError::DynamoDb(e.to_string()))?;
-
-    if existing.count() > 0 {
-        let reason = format!("domain '{}' already exists", request.domain_name);
-        emit_failed(
-            eb,
-            &cp_bus,
-            &request.domain_name,
-            &request.owner_account_id,
-            &request.owner_email,
-            &reason,
-        )
-        .await?;
-        return Ok(());
-    }
-
-    let domain_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     let status = DomainStatus::PendingApproval.to_string();
@@ -66,14 +42,14 @@ pub async fn handle(
     let mut put_domain = ddb
         .put_item()
         .table_name(&domains_table)
-        .item("domainId", s(&domain_id))
         .item("domainName", s(&request.domain_name))
         .item("ownerAccountId", s(&request.owner_account_id))
         .item("status", s(&status))
         .item("ownerEmail", s(&request.owner_email))
         .item("createdAt", s(&now))
         .item("updatedAt", s(&now))
-        .item("createdBy", s(&request.owner_account_id));
+        .item("createdBy", s(&request.owner_account_id))
+        .condition_expression("attribute_not_exists(domainName)");
 
     if let Some(desc) = &request.description {
         put_domain = put_domain.item("description", s(desc));
@@ -82,14 +58,30 @@ pub async fn handle(
     let environments_attr = AttributeValue::L(environments.iter().map(|e| s(e)).collect());
     put_domain = put_domain.item("environments", environments_attr);
 
-    put_domain
-        .send()
-        .await
-        .map_err(|e| ControlPlaneError::DynamoDb(e.to_string()))?;
+    match put_domain.send().await {
+        Ok(_) => {}
+        Err(e) => {
+            let service_err = e.into_service_error();
+            if let PutItemError::ConditionalCheckFailedException(_) = service_err {
+                let reason = format!("domain '{}' already exists", request.domain_name);
+                emit_failed(
+                    eb,
+                    &cp_bus,
+                    &request.domain_name,
+                    &request.owner_account_id,
+                    &request.owner_email,
+                    &reason,
+                )
+                .await?;
+                return Ok(());
+            } else {
+                return Err(ControlPlaneError::DynamoDb(service_err.to_string()).into());
+            }
+        }
+    }
 
     let sfn_input = json!({
         "requestId": request_id,
-        "domainId": domain_id,
         "domainName": request.domain_name,
         "ownerAccountId": request.owner_account_id,
         "ownerEmail": request.owner_email,
@@ -114,7 +106,6 @@ pub async fn handle(
                 .detail(
                     json!({
                         "requestId": request_id,
-                        "domainId": domain_id,
                         "domainName": request.domain_name,
                         "ownerAccountId": request.owner_account_id,
                         "ownerEmail": request.owner_email,
@@ -346,10 +337,9 @@ mod tests {
     mod handle_tests {
         use super::*;
         use aws_sdk_dynamodb::operation::put_item::PutItemOutput;
-        use aws_sdk_dynamodb::operation::query::QueryOutput;
         use aws_sdk_eventbridge::operation::put_events::PutEventsOutput;
         use aws_sdk_sfn::operation::start_execution::StartExecutionOutput;
-        use aws_smithy_mocks::{mock, mock_client, RuleMode};
+        use aws_smithy_mocks::{mock, mock_client};
         use serde_json::Value;
 
         fn valid_request() -> RegisterDomainRequest {
@@ -376,18 +366,10 @@ mod tests {
         async fn creates_domain_and_starts_approval() {
             set_env();
 
-            let query_rule = mock!(aws_sdk_dynamodb::Client::query)
-                .match_requests(|req| req.index_name() == Some("by-name"))
-                .then_output(|| QueryOutput::builder().count(0).build());
-
             let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
                 .then_output(|| PutItemOutput::builder().build());
 
-            let ddb = mock_client!(
-                aws_sdk_dynamodb,
-                RuleMode::Sequential,
-                [&query_rule, &put_rule]
-            );
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
@@ -405,7 +387,6 @@ mod tests {
             let result = handle(&ddb, &eb, &sfn, &valid_request()).await;
 
             assert!(result.is_ok());
-            assert_eq!(query_rule.num_calls(), 1);
             assert_eq!(put_rule.num_calls(), 1);
             assert_eq!(sfn_rule.num_calls(), 1);
             assert_eq!(eb_rule.num_calls(), 1);
@@ -415,9 +396,13 @@ mod tests {
         async fn rejects_duplicate_domain_with_failed_event() {
             set_env();
 
-            let query_rule = mock!(aws_sdk_dynamodb::Client::query)
-                .then_output(|| QueryOutput::builder().count(1).build());
-            let ddb = mock_client!(aws_sdk_dynamodb, [&query_rule]);
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item).then_error(|| {
+                aws_sdk_dynamodb::operation::put_item::PutItemError::ConditionalCheckFailedException(
+                    aws_sdk_dynamodb::types::error::ConditionalCheckFailedException::builder()
+                        .build(),
+                )
+            });
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
@@ -428,7 +413,7 @@ mod tests {
             let result = handle(&ddb, &eb, &sfn, &valid_request()).await;
 
             assert!(result.is_ok());
-            assert_eq!(query_rule.num_calls(), 1);
+            assert_eq!(put_rule.num_calls(), 1);
             assert_eq!(eb_rule.num_calls(), 1);
         }
 
@@ -462,9 +447,6 @@ mod tests {
         async fn creates_domain_with_optional_description() {
             set_env();
 
-            let query_rule = mock!(aws_sdk_dynamodb::Client::query)
-                .then_output(|| QueryOutput::builder().count(0).build());
-
             let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
                 .match_requests(|req| {
                     req.item()
@@ -473,11 +455,7 @@ mod tests {
                 })
                 .then_output(|| PutItemOutput::builder().build());
 
-            let ddb = mock_client!(
-                aws_sdk_dynamodb,
-                RuleMode::Sequential,
-                [&query_rule, &put_rule]
-            );
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
@@ -510,9 +488,6 @@ mod tests {
         async fn stamps_environments_list_on_put_item() {
             set_env();
 
-            let query_rule = mock!(aws_sdk_dynamodb::Client::query)
-                .then_output(|| QueryOutput::builder().count(0).build());
-
             let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
                 .match_requests(|req| {
                     let Some(items) = req.item() else {
@@ -529,11 +504,7 @@ mod tests {
                 })
                 .then_output(|| PutItemOutput::builder().build());
 
-            let ddb = mock_client!(
-                aws_sdk_dynamodb,
-                RuleMode::Sequential,
-                [&query_rule, &put_rule]
-            );
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
@@ -558,15 +529,9 @@ mod tests {
         async fn includes_environments_in_succeeded_event() {
             set_env();
 
-            let query_rule = mock!(aws_sdk_dynamodb::Client::query)
-                .then_output(|| QueryOutput::builder().count(0).build());
             let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
                 .then_output(|| PutItemOutput::builder().build());
-            let ddb = mock_client!(
-                aws_sdk_dynamodb,
-                RuleMode::Sequential,
-                [&query_rule, &put_rule]
-            );
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .match_requests(|req| {

@@ -815,13 +815,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
   - Subject line templates
   - Raw message delivery option
   - Message filtering policies
-  
+
 - **SQS-specific configuration**:
   - Message group ID for FIFO queues
   - Message deduplication ID
   - Message delay settings
   - Visibility timeout recommendations
-  
+
 - **Kinesis-specific configuration**:
   - Partition key strategy (random, field-based, static)
   - Explicit hash key support
@@ -1340,19 +1340,19 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - **Amazon EventBridge**: Core event routing infrastructure
   - Risk: EventBridge service limits or outages
   - Mitigation: Design within limits, implement caching and graceful degradation
-  
+
 - **AWS IAM**: Authentication, authorization, and policy management
   - Risk: IAM eventual consistency causing permission delays
   - Mitigation: Implement retry logic and permission validation
-  
+
 - **AWS CloudFormation**: Resource provisioning and lifecycle management
   - Risk: CloudFormation stack failures during provisioning
   - Mitigation: Implement rollback and recovery mechanisms
-  
+
 - **Amazon CloudWatch**: Metrics, logs, dashboards, and alarms
   - Risk: CloudWatch API throttling at scale
   - Mitigation: Batch operations and implement local caching
-  
+
 - **AWS CloudTrail**: Audit logging and compliance
   - Risk: CloudTrail delivery delays
   - Mitigation: Accept eventual consistency for audit logs
@@ -1377,13 +1377,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 - **EventBridge rule limit**: 2000 rules per event bus
   - Addressed by domain-specific event buses
-  
+
 - **EventBridge event size**: 256 KB maximum
   - Document in limitations, guide customers to S3 for large payloads
-  
+
 - **IAM policy size limits**: 10,240 characters for resource policies
   - Implement policy splitting for large subscription lists
-  
+
 - **Cross-region latency**: Event delivery between regions has inherent latency
   - Document cross-region behavior, consider future multi-region support
 
@@ -1974,8 +1974,8 @@ To exit beta and proceed to General Availability, the following criteria must be
    - **Owner**: Business Development
 
 3. **Enterprise Support Package**: Should we offer a premium support tier for enterprise customers with dedicated architectural guidance?
-    - **Decision Needed By**: Phase 6
-    - **Owner**: Product Management
+   - **Decision Needed By**: Phase 6
+   - **Owner**: Product Management
 
 ---
 

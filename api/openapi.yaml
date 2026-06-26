@@ -107,12 +107,12 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListDomainsFunction.Arn}/invocations"
 
-  /domains/{domainId}:
+  /domains/{domainName}:
     get:
       operationId: GetDomain
       summary: Get domain details
       parameters:
-        - name: domainId
+        - name: domainName
           in: path
           required: true
           schema:
@@ -152,7 +152,7 @@ paths:
       summary: Update domain metadata or status
       x-amazon-apigateway-request-validator: validate-body
       parameters:
-        - name: domainId
+        - name: domainName
           in: path
           required: true
           schema:
@@ -192,7 +192,7 @@ paths:
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"domainId\":\"$input.params('domainId')\",\"body\":$input.json('$')}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody={\"domainName\":\"$input.params('domainName')\",\"body\":$input.json('$')}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
         responses:
           default:
             statusCode: "202"
@@ -326,8 +326,6 @@ components:
     DomainSummary:
       type: object
       properties:
-        domainId:
-          type: string
         domainName:
           type: string
         description:
@@ -348,8 +346,6 @@ components:
     DomainDetail:
       type: object
       properties:
-        domainId:
-          type: string
         domainName:
           type: string
         description:

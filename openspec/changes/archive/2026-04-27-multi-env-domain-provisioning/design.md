@@ -10,7 +10,7 @@ The feature: when a domain like `sales` is approved, Nexus provisions a complete
 
 ### D1: One domain = one owner account across all its environments
 
-```
+```text
   POST /domains { domainName: "sales", ownerAccountId: "111...", environments: [dev, staging, prod] }
                                                 │
                                                 ▼
@@ -32,6 +32,7 @@ The feature: when a domain like `sales` is approved, Nexus provisions a complete
 **Trust role implication**: a single application account must host resources for all envs of a domain. The trust role in that account cannot itself be env-scoped or there would be three roles per domain-owner account for one domain. The role is renamed from `${Organization}-${Environment}-nexus-trust-role` to `${Organization}-nexus-trust-role` as part of this change. Its inline IAM policies still scope resources by `{org}-{env}-*` so it can manage per-env domain resources — only the role name loses its env segment. (This rename was originally scoped into `nexus-platform-drop-environment`; pulled forward because multi-env provisioning hard-depends on it.)
 
 **Rejected alternatives**:
+
 - Per-env account IDs in the request. Fits a minority of teams (dev/prod account isolation) but complicates the common case, the API schema, and the trust-stack deployment story (one trust stack per account per domain).
 - Polymorphic `environments` field accepting either strings or objects. Extra schema complexity for a v1 that should stay focused.
 
@@ -39,7 +40,7 @@ The feature: when a domain like `sales` is approved, Nexus provisions a complete
 
 ### D2: Workflow split into three embedded state machines
 
-```
+```text
   Layer                  File                        Responsibility
   ──────                 ────                        ──────────────
   Outer coordinator      provision-domain.asl.yaml   Domain-level setup (namespace + RAM),
@@ -71,7 +72,7 @@ Outer workflow uses a `Map` state with `MaxConcurrency: 0` (unbounded). Resource
 
 If env[0,1] succeed and env[2] fails:
 
-```
+```text
   Map iteration 0 (dev):      SUCCEEDED
   Map iteration 1 (staging):  SUCCEEDED
   Map iteration 2 (prod):     FAILED (inner saga already cleaned up partial prod state)
@@ -106,6 +107,7 @@ This mirrors the current best-effort compensation philosophy. Going further (e.g
 The platform team — not the domain requester — decides which environments exist. A domain owner registering `sales` has no legitimate reason to pick a subset or invent new env names; the org has already decided (say) it runs `dev`, `staging`, and `prod`, and every domain lives in all three.
 
 **Mechanism**:
+
 - Nexus core SAM template declares an `Environments` parameter (type `CommaDelimitedList`, default `dev,staging,prod`). Each entry SHALL match `^[a-z0-9][a-z0-9-]{0,31}$`. Validation happens once at stack deploy via SAM's parameter constraints.
 - The domain command handler Lambda receives the list via an `ENVIRONMENTS` environment variable and parses it at cold start.
 - On registration, the handler snapshots the current list onto the domain record's `environments` field.
@@ -114,6 +116,7 @@ The platform team — not the domain requester — decides which environments ex
 **Why snapshot rather than re-read on every workflow step**: if the platform team later adds `qa`, existing domains stay at their original set unless a deliberate migration updates them. Prevents surprise re-provisioning of every old domain the next time someone touches it. The domain record is the source of truth for that domain's env set; the SAM parameter is the source of truth for *new* domains' env set.
 
 **Rejected alternatives**:
+
 - Per-request `environments` field. Gives the requester a lever they shouldn't have — env set is governance, not user preference.
 - Hard-coded enum `[dev, staging, prod]`. Too restrictive for orgs that legitimately want `qa`, `uat`, `sandbox`.
 - Reading the list live on every provisioning step. Introduces the drift problem above.
@@ -122,6 +125,7 @@ The platform team — not the domain requester — decides which environments ex
 ### D7: Data model — `resourceArns` becomes a map
 
 Today (flat):
+
 ```json
 {
   "domainId": "...",
@@ -137,6 +141,7 @@ Today (flat):
 ```
 
 After:
+
 ```json
 {
   "domainId": "...",

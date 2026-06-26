@@ -4,7 +4,7 @@
 
 Follow test-driven development when implementing features:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────┐
 │                    RED → GREEN → REFACTOR                   │
 ├─────────────────────────────────────────────────────────────┤
@@ -24,12 +24,14 @@ Follow test-driven development when implementing features:
 ```
 
 **Key principles:**
+
 - Tests guide implementation, not the other way around
 - Never change a test to make it pass - change the implementation
 - Each cycle should be small (minutes, not hours)
 - Commit after each green phase
 
 **Anti-patterns to avoid:**
+
 - Writing implementation first, then tests to match
 - Writing multiple tests before any implementation
 - Changing test assertions to match buggy behavior
@@ -97,6 +99,7 @@ mod tests {
 ```
 
 **Guidelines:**
+
 - One `mod tests` block per source file
 - Use `use super::*;` to import the parent module
 - Test function names should describe the behavior, not the function name
@@ -106,7 +109,7 @@ mod tests {
 
 For cross-module or AWS SDK behavior, place tests in a `tests/` directory at the crate root. Each `.rs` file in `tests/` compiles as a separate crate with access to the library's public API.
 
-```
+```text
 lib/nexus-common/
 ├── src/
 │   └── lib.rs
@@ -267,7 +270,7 @@ fn rejects_domain_name_with_special_chars() {
 
 ## Test Organization Conventions
 
-```
+```text
 crate-root/
 ├── src/
 │   ├── lib.rs

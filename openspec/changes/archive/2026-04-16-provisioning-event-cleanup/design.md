@@ -5,12 +5,14 @@ The provisioning workflow (`provisioning.asl.yaml`) emits three EventBridge even
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Remove the intermediate `EmitCreationStarted` state and `DomainCreationStarted` event
 - Rename outcome events to `DomainProvisioningSucceeded` / `DomainProvisioningFailed`
 - Preserve the `isNewAccount` signal by moving it to the succeeded event
 - Rename workflow states to match the new event naming
 
 **Non-Goals:**
+
 - Changing the provisioning workflow's resource creation logic
 - Adding new events or states
 - Modifying the saga compensation chain (it already references `EmitCreationFailed` which gets renamed)

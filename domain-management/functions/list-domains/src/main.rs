@@ -61,7 +61,6 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
                 .iter()
                 .map(|item| {
                     json!({
-                        "domainId": get_s(item, "domainId"),
                         "domainName": get_s(item, "domainName"),
                         "description": get_s(item, "description"),
                         "ownerAccountId": get_s(item, "ownerAccountId"),

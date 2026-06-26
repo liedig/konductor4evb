@@ -1,8 +1,11 @@
 # system-architecture Specification
 
 ## Purpose
+
 TBD - created by archiving change architecture-decisions. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: API layer
 
 The control plane SHALL expose a REST API through Amazon API Gateway (REST API type) with IAM authentication. The API contract SHALL be defined using OpenAPI specification. Read operations (GET) and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Write operations (POST on `/domains`, PUT on `/domains/{domainId}`) SHALL use `aws` service integrations to route commands through SQS queues for durable, asynchronous processing. The decide-registration endpoint (`POST /domains/registrations/decide`) SHALL use `aws_proxy` Lambda integration for synchronous processing. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI spec. The API SHALL be served from a static stage named `v1`.
@@ -167,4 +170,3 @@ EventBridge Nexus SHALL use AWS Resource Access Manager to share domain namespac
 - **WHEN** the Nexus provisioning workflow attempts to create a RAM resource share with the Organisation as principal
 - **THEN** the AWS account SHALL be a member of an AWS Organisation with RAM sharing enabled
 - **AND THEN** if RAM sharing is not enabled, the workflow SHALL fail with a clear error message
-

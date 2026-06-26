@@ -32,6 +32,7 @@ The provisioning workflow role already has scoped permissions for EventBridge, S
 **Rationale:** Resources should group by organisation and domain first, with environment as a secondary discriminator. When listing resources in the AWS console or CLI, `acme-dev-billing-*` and `acme-prod-billing-*` appear adjacent, making cross-environment comparison natural.
 
 **Alternatives considered:**
+
 - `{org}-{domain}-{env}` — Groups domain variants together but breaks the `{prefix}-*` IAM scoping pattern since the environment is a suffix. Would require more complex IAM resource patterns.
 - Keep `{env}-{org}-{domain}` — Current convention; groups by environment which scatters domain resources when you have many domains.
 
@@ -44,6 +45,7 @@ The provisioning workflow role already has scoped permissions for EventBridge, S
 **Rationale:** The namespace is the domain's logical identity within the organisation. Environment is a deployment concern, not an identity concern. Application teams reference the namespace to discover and construct resource names — they should not need to know which environment they are querying.
 
 **SSM parameter design:**
+
 - Path: `/namespace/{domain}` (e.g., `/namespace/billing`)
 - Value: `{org}-{domain}` (e.g., `acme-billing`)
 - Tier: Advanced (required for RAM sharing)
@@ -57,10 +59,12 @@ The provisioning workflow role already has scoped permissions for EventBridge, S
 **Rationale:** Full-mesh discoverability. Every account in the organisation can see every domain namespace. This enables teams to discover available domains without cross-account IAM or API calls. Since namespaces are just identifiers (not sensitive data), broad sharing is appropriate.
 
 **Alternatives considered:**
+
 - Per-account RAM shares — Fine-grained access control but adds complexity for managing share membership. Not justified since namespace values are non-sensitive.
 - No RAM, use Nexus API for discovery — Forces cross-account API calls and IAM setup for what should be simple parameter reads. Defeats the purpose of local references.
 
 **Provisioning workflow integration:**
+
 1. `CreateNamespaceParameter` — `ssm:PutParameter` (idempotent; no-op if parameter already exists with same value)
 2. `EnsureRAMResourceShare` — `ram:GetResourceShares` to check existence, `ram:CreateResourceShare` if needed
 3. `AssociateParameterToShare` — `ram:AssociateResourceShare` to add the SSM parameter ARN
@@ -72,11 +76,13 @@ The provisioning workflow role already has scoped permissions for EventBridge, S
 **Rationale:** The domains table already tracks `ownerAccountId` with a GSI. No new table or entity needed — the domain table implicitly serves as the account registry. The first domain registration from any account will be flagged.
 
 **Query design:**
+
 - Query `by-owner` GSI with `ownerAccountId = :id`
 - Filter for `status = ACTIVE` (exclude the current PROVISIONING domain and any previously failed attempts)
 - If count == 0, this is a new account
 
 **What happens for new accounts:**
+
 - The approval notification email includes a flag: "This is a new account — trust-stack deployment required"
 - The provisioning workflow proceeds normally to `AssumeRole`
 - If `AssumeRole` fails (trust role not deployed), the saga rollback cleans up platform-side resources and the domain enters `PROVISIONING_FAILED` with a clear error message indicating the trust-stack is missing
@@ -92,7 +98,7 @@ The provisioning workflow role already has scoped permissions for EventBridge, S
 
 The provisioning workflow already uses `Assign` to capture outputs from each resource creation step (`$platformBus`, `$schemaRegistry`, `$subscriptionDlq`, `$appBus`, `$integrationDlq`, `$dashboard`). The compensation chain uses Choice states to check which variables are set, then deletes in reverse order:
 
-```
+```text
 Compensation order (reverse of creation):
 1. DeleteIntegrationDlq      (app account, if $integrationDlq set)
 2. DeleteAppEventBus          (app account, if $appBus set)
@@ -109,6 +115,7 @@ Each compensation step catches its own errors (best-effort cleanup). After compe
 App-account resource deletion reuses the assumed role credentials from `AssumeAppAccountRole`. If the failure occurred before or during `AssumeRole`, only platform-side resources need cleanup.
 
 **Alternatives considered:**
+
 - Manual cleanup only — Current approach. Error-prone, invisible orphaned resources.
 - Parallel compensation — Delete all resources simultaneously. Risk of dependency issues (e.g., can't delete a bus with active rules). Sequential reverse-order is safer.
 
@@ -119,6 +126,7 @@ App-account resource deletion reuses the assumed role credentials from `AssumeAp
 **Rationale:** The system is an integration platform, not a control plane in the infrastructure control/data plane sense. "Nexus" communicates that it is the central connection point linking domains, accounts, and event flows.
 
 **Scope of rename:**
+
 - Event source prefix: `controlplane.domain-management` → `nexus.domain-management`
 - Control plane event bus: `{org}-{env}-control-plane-bus` → `{org}-{env}-nexus-bus`
 - Trust role: `{org}-{env}-cp-trust-role` → `{org}-{env}-nexus-trust-role`

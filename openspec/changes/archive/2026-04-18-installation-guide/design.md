@@ -7,6 +7,7 @@ The audience is a platform operator deploying Nexus for the first time into thei
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Write a runnable, end-to-end installation guide at `docs/installation.md`.
 - Replace the README "Getting Started" section with a pointer to the guide.
 - Cover all four deployment phases: prerequisites, notifications stack, core stack, trust stack.
@@ -15,6 +16,7 @@ The audience is a platform operator deploying Nexus for the first time into thei
 - Include uninstall instructions.
 
 **Non-Goals:**
+
 - Production hardening guidance (multi-account landing zone, SCPs, guardrails).
 - CI/CD pipeline setup for Nexus itself.
 - API authz setup (deferred to a future change).
@@ -30,6 +32,7 @@ One document covering the full install flow, rather than splitting across multip
 **Rationale:** An installer following a single doc from start to finish is less likely to miss a step. Cross-referencing between docs creates gaps.
 
 **Alternatives considered:**
+
 - *Multi-doc split:* Would allow per-phase docs but increases navigation burden and risk of divergence.
 - *README-only:* Would bloat the README beyond its purpose as a project overview.
 

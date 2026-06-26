@@ -87,6 +87,16 @@ graph TB
 
 ---
 
+## Account-Per-Domain Ownership Model
+
+Nexus follows an **account-per-domain** principle: one AWS account hosts one domain's application-side resources. The trust stack is deployed once per account, and the `{org}-{env}-{domain}-*` resource naming convention assumes no two domains share an account. This keeps blast radius bounded and trust-role IAM policies simple.
+
+Each domain has a **primary owner** (the account that hosts the resources) and optional **secondary owners** who act as co-managers and backup decision-makers. Secondary owners can approve changes and provide a fallback if the primary owner is unavailable.
+
+Domain names are **globally unique** and serve as the sole domain identifier throughout the system — there is no separate UUID. This follows DDD/EDA principles where the domain name IS the bounded context identifier. Uniqueness is enforced atomically by DynamoDB's partition key constraint.
+
+---
+
 ## Domain Lifecycle
 
 A domain moves through a well-defined status progression from registration to active use:
@@ -211,6 +221,7 @@ Since approved domains are provisioned into every environment configured on the 
 **Platform-configured environments.** The list of environments to provision is set once at platform deploy time via the `Environments` SAM parameter (`CommaDelimitedList`, default `dev,staging,prod`). It is NOT supplied per registration request — registration requests only carry `domainName`, `ownerAccountId`, and `ownerEmail`. The command handler stamps the current platform env list onto the domain record at registration time so approvals and provisioning work from a stable snapshot.
 
 **All-or-nothing contract.** The outer workflow produces one of two outcomes:
+
 - **All envs succeed** → domain moves to `ACTIVE`, `DomainProvisioningSucceeded` event emitted with a `resourceArns` map keyed by environment.
 - **Any env fails** → deprovision-env runs over every env that *did* succeed, domain moves to `PROVISIONING_FAILED`, and `DomainProvisioningFailed` is emitted with `failedEnvironment` plus any `compensationErrors` aggregated across rollback runs.
 
@@ -301,6 +312,7 @@ There are **two layers** of compensation:
 2. **Outer rollback** (`provision-domain`): if any env's inner execution fails, the outer workflow starts `deprovision-env` for every env that had already reported success. Each deprovision is idempotent (treats "already gone" as a no-op) and collects its own per-step `compensationErrors`, which the outer workflow aggregates into the `DomainProvisioningFailed` event payload.
 
 > Workflow definitions:
+>
 > - Outer: `domain-management/state-machines/provision-domain.asl.yaml`
 > - Per-env provision: `domain-management/state-machines/provision-env.asl.yaml`
 > - Per-env deprovision: `domain-management/state-machines/deprovision-env.asl.yaml`
@@ -343,6 +355,7 @@ The trust role (`{org}-nexus-trust-role`) is environment-independent — a singl
 | BusToBusRoleManagement | `iam:Create/Delete/Put/DeleteRolePolicy/GetRole` | `{org}-b2b-*` roles |
 
 The trust role's `AssumeRolePolicyDocument` allows two principals from the platform account:
+
 1. The **Nexus function role** (trust anchor for Lambda-based operations)
 2. The **Provisioning workflow role** (for Step Functions SDK integrations)
 
@@ -362,7 +375,7 @@ Nexus distinguishes **platform resources** (the singleton control plane) from **
 
 **Platform resources** — fixed `nexus-*` pattern, no org or environment segment (Nexus is a singleton per AWS account):
 
-```
+```text
 nexus-bus                             (nexus event bus)
 nexus-domains                         (domains table)
 nexus-api                             (API Gateway)
@@ -374,7 +387,7 @@ The app-account **trust role** is the one exception: it carries the org prefix a
 
 **Domain resources** — `{org}-{env}-{domain}-*`, one set per environment in the `Environments` platform parameter:
 
-```
+```text
 acme-prod-billing-event-bus           (EventBridge bus)
 acme-prod-billing-schema-registry     (Schema registry)
 acme-prod-billing-subscription-dlq    (Platform DLQ)
@@ -483,7 +496,7 @@ All infrastructure is defined across three CloudFormation templates. The core pl
 
 ### Project Structure
 
-```
+```text
 evb-nexus/
 ├── api/
 │   └── openapi.yaml                          # OpenAPI 3.0 contract (embedded in SAM)

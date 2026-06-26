@@ -1,6 +1,7 @@
 ## Preamble
 
 This change lands after `multi-env-domain-provisioning`. By the time this change starts:
+
 - The trust role in `trust-stack.yaml` is already renamed to `${Organization}-nexus-trust-role` and its `Environment` parameter already dropped.
 - The provisioning state machine no longer uses `${Environment}` — env is sourced from the domain record per Map iteration.
 - `docs/trust-stack-deployment.md` has already been updated.

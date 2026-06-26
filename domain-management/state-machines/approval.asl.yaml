@@ -10,7 +10,6 @@ States:
       FunctionName: "${SendApprovalRequestNotificationFunction}"
       Payload:
         taskToken: "{% $states.context.Task.Token %}"
-        domainId: "{% $states.input.domainId %}"
         domainName: "{% $states.input.domainName %}"
         ownerAccountId: "{% $states.input.ownerAccountId %}"
         ownerEmail: "{% $states.input.ownerEmail %}"
@@ -39,8 +38,8 @@ States:
     Arguments:
       TableName: "${DomainsTable}"
       Key:
-        domainId:
-          S: "{% $registration.domainId %}"
+        domainName:
+          S: "{% $registration.domainName %}"
       UpdateExpression: "SET #s = :status, decidedBy = :decidedBy, justification = :justification, approvedAt = :approvedAt, updatedAt = :updatedAt"
       ExpressionAttributeNames:
         "#s": status
@@ -63,8 +62,8 @@ States:
     Arguments:
       TableName: "${DomainsTable}"
       Key:
-        domainId:
-          S: "{% $registration.domainId %}"
+        domainName:
+          S: "{% $registration.domainName %}"
       UpdateExpression: "SET #s = :status, decidedBy = :decidedBy, justification = :justification, rejectedAt = :rejectedAt, updatedAt = :updatedAt"
       ExpressionAttributeNames:
         "#s": status
@@ -91,7 +90,6 @@ States:
           DetailType: DomainRegistrationApproved
           Detail: >-
             {% $string({
-              "domainId": $registration.domainId,
               "domainName": $registration.domainName,
               "ownerAccountId": $registration.ownerAccountId,
               "ownerEmail": $registration.ownerEmail,
@@ -112,7 +110,6 @@ States:
           DetailType: DomainRegistrationRejected
           Detail: >-
             {% $string({
-              "domainId": $registration.domainId,
               "domainName": $registration.domainName,
               "ownerAccountId": $registration.ownerAccountId,
               "ownerEmail": $registration.ownerEmail,

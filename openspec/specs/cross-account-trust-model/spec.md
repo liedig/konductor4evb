@@ -1,8 +1,11 @@
 # cross-account-trust-model Specification
 
 ## Purpose
+
 TBD - created by archiving change architecture-decisions. Update Purpose after archive.
+
 ## Requirements
+
 ### Requirement: Control plane assumed role in application accounts
 
 EventBridge Nexus SHALL use IAM assumed roles to create and manage resources in application accounts. Each application account that participates in Nexus SHALL have a single dedicated IAM role that Nexus can assume. The trust role SHALL be named `{org}-nexus-trust-role` (no environment segment) because one role serves all environments of all domains in that application account. This is required by the one-domain-one-account model: a domain provisioned into environments `[dev, staging, prod]` places all three envs' resources in the same application account, and Nexus uses one trust role to create them.
@@ -99,4 +102,3 @@ EventBridge Nexus Lambda functions and Step Functions workflows SHALL execute us
 - **WHEN** the provisioning workflow creates namespace parameters and manages RAM shares
 - **THEN** the execution role SHALL permit `ssm:PutParameter`, `ssm:GetParameter`, and `ssm:AddTagsToResource` scoped to `arn:aws:ssm:*:${AccountId}:parameter/namespace/*`
 - **AND THEN** the execution role SHALL permit `ram:CreateResourceShare`, `ram:GetResourceShares`, `ram:AssociateResourceShare`, and `ram:ListResources`
-

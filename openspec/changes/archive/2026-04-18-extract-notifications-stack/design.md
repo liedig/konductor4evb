@@ -9,12 +9,14 @@ The existing capability `domain-owner-notifications` describes the behavior of a
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Make SES identity management an independently deployable concern (separate CloudFormation stack).
 - Allow the Nexus core stack to deploy cleanly without SES configured, for testing and iteration.
 - Preserve existing approval/rejection notification behavior when SES is configured.
 - Align stack names and resource naming with the `{org}-{env}-{domain}` convention documented in `AGENTS.md`.
 
 **Non-Goals:**
+
 - Supporting multiple notification transports (Slack, SNS, webhooks). SES email remains the only transport.
 - SES configuration sets, bounce handling, or production SES access. The notifications stack targets testing against the SES sandbox.
 - Changing approval workflow semantics or task-token handling.
@@ -30,6 +32,7 @@ Introduce `notifications-stack.yaml` as a standalone CloudFormation template dep
 **Rationale:** Separation of lifecycle. Operators can redeploy the core stack without touching SES identities (which have verification side effects), and can tear down notifications without affecting core. Nested stacks would entangle parameters and force SES to be understood at core-stack deploy time.
 
 **Alternatives considered:**
+
 - *Nested stack:* Simpler single-command deploy, but reintroduces the coupling we are trying to remove.
 - *Conditional resources inside core:* Keeps one template but makes core harder to reason about and retains the verification side-effects in the core lifecycle.
 
@@ -42,6 +45,7 @@ Add `NotificationsEnabled: !Not [!Equals [!Ref ApprovalFromEmail, ""]]` to core.
 **Trade-off:** Approval workflow with notifications disabled will wait on a task token with no email dispatched. Operators must approve via direct API call. This is acceptable for the intended use (local/testing).
 
 **Alternatives considered:**
+
 - *Make the parameters required as today:* Blocks first-time installs without SES.
 - *Remove notifications entirely from core when disabled:* Rejected because it means swapping templates per environment.
 
@@ -52,6 +56,7 @@ Add `NotificationsEnabled: !Not [!Equals [!Ref ApprovalFromEmail, ""]]` to core.
 **Rationale:** Scope discipline. SES is used for test notifications in a sandbox account. Any additional SES features can be added later without changing the contract (the stack's outputs remain the raw email addresses).
 
 **Outputs:**
+
 - `FromEmail` (string, echo of the verified From address)
 - `ToEmail` (string, echo of the verified To address)
 
@@ -96,6 +101,7 @@ Rollback: revert the template and samconfig changes; the notifications stack can
 ## Open Questions
 
 None blocking. The following are deferred to later changes:
+
 - Alternate transports (Slack, SNS, webhooks) behind a transport abstraction.
 - Production SES concerns (configuration sets, bounce/complaint handling, DKIM).
 - API authz posture and its impact on the smoke-test path.

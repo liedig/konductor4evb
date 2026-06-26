@@ -27,11 +27,6 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .and_then(|v| v.as_str())
         .context("missing taskToken")?;
 
-    let domain_id = payload
-        .get("domainId")
-        .and_then(|v| v.as_str())
-        .context("missing domainId")?;
-
     let domain_name = payload
         .get("domainName")
         .and_then(|v| v.as_str())
@@ -74,7 +69,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
 
     ddb.update_item()
         .table_name(&table)
-        .key("domainId", s(domain_id))
+        .key("domainName", s(domain_name))
         .update_expression("SET taskToken = :token")
         .expression_attribute_values(":token", s(task_token))
         .send()
@@ -122,7 +117,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .await
         .context("failed to send approval email")?;
 
-    tracing::info!(domain_id, domain_name, "approval notification sent");
+    tracing::info!(domain_name, "approval notification sent");
 
     Ok(())
 }

@@ -11,7 +11,7 @@ use nexus_common::models::DomainStatus;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateDomainMessage {
-    pub domain_id: String,
+    pub domain_name: String,
     #[serde(default)]
     pub body: UpdateDomainBody,
 }
@@ -30,12 +30,12 @@ pub async fn handle(
 ) -> Result<()> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
-    let domain_id = &message.domain_id;
+    let domain_name = &message.domain_name;
 
     let existing = ddb
         .get_item()
         .table_name(&table)
-        .key("domainId", s(domain_id))
+        .key("domainName", s(domain_name))
         .send()
         .await
         .map_err(|e| ControlPlaneError::DynamoDb(e.to_string()))?;
@@ -43,7 +43,7 @@ pub async fn handle(
     let item = match existing.item {
         Some(item) => item,
         None => {
-            return emit_failed(eb, &cp_bus, domain_id, "domain not found").await;
+            return emit_failed(eb, &cp_bus, domain_name, "domain not found").await;
         }
     };
 
@@ -55,7 +55,7 @@ pub async fn handle(
         return emit_failed(
             eb,
             &cp_bus,
-            domain_id,
+            domain_name,
             "domain is INACTIVE and cannot be modified",
         )
         .await;
@@ -80,7 +80,7 @@ pub async fn handle(
     let mut update = ddb
         .update_item()
         .table_name(&table)
-        .key("domainId", s(domain_id))
+        .key("domainName", s(domain_name))
         .update_expression(&update_expression)
         .return_values(aws_sdk_dynamodb::types::ReturnValue::AllNew);
 
@@ -95,7 +95,9 @@ pub async fn handle(
         .attributes
     {
         Some(a) => a,
-        None => return emit_failed(eb, &cp_bus, domain_id, "domain not found after update").await,
+        None => {
+            return emit_failed(eb, &cp_bus, domain_name, "domain not found after update").await
+        }
     };
 
     eb.put_events()
@@ -106,7 +108,7 @@ pub async fn handle(
                 .detail_type("UpdateDomainSucceeded")
                 .detail(
                     json!({
-                        "domainId": domain_id,
+                        "domainName": domain_name,
                         "updatedAt": now,
                         "status": get_s(&attrs, "status"),
                     })
@@ -124,7 +126,7 @@ pub async fn handle(
 async fn emit_failed(
     eb: &aws_sdk_eventbridge::Client,
     cp_bus: &str,
-    domain_id: &str,
+    domain_name: &str,
     reason: &str,
 ) -> Result<()> {
     eb.put_events()
@@ -135,7 +137,7 @@ async fn emit_failed(
                 .detail_type("UpdateDomainFailed")
                 .detail(
                     json!({
-                        "domainId": domain_id,
+                        "domainName": domain_name,
                         "reason": reason,
                         "failedAt": chrono::Utc::now().to_rfc3339(),
                     })
@@ -158,9 +160,9 @@ mod tests {
     use aws_smithy_mocks::{mock, mock_client, RuleMode};
     use std::collections::HashMap;
 
-    fn update_message(domain_id: &str, description: Option<&str>) -> UpdateDomainMessage {
+    fn update_message(domain_name: &str, description: Option<&str>) -> UpdateDomainMessage {
         UpdateDomainMessage {
-            domain_id: domain_id.to_string(),
+            domain_name: domain_name.to_string(),
             body: UpdateDomainBody {
                 description: description.map(std::string::ToString::to_string),
                 tags: None,
@@ -170,7 +172,6 @@ mod tests {
 
     fn active_domain_item() -> HashMap<String, aws_sdk_dynamodb::types::AttributeValue> {
         HashMap::from([
-            ("domainId".into(), s("d-123")),
             ("domainName".into(), s("billing")),
             ("ownerAccountId".into(), s("111122223333")),
             ("status".into(), s("ACTIVE")),
@@ -194,7 +195,7 @@ mod tests {
         });
 
         let updated_attrs = HashMap::from([
-            ("domainId".into(), s("d-123")),
+            ("domainName".into(), s("billing")),
             ("status".into(), s("ACTIVE")),
             ("description".into(), s("Updated billing domain")),
         ]);
@@ -214,7 +215,7 @@ mod tests {
             .then_output(|| PutEventsOutput::builder().build());
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
-        let message = update_message("d-123", Some("Updated billing domain"));
+        let message = update_message("billing", Some("Updated billing domain"));
         let result = handle(&ddb, &eb, &message).await;
 
         assert!(result.is_ok());
@@ -235,7 +236,7 @@ mod tests {
             .then_output(|| PutEventsOutput::builder().build());
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
-        let message = update_message("d-nonexistent", None);
+        let message = update_message("nonexistent", None);
         let result = handle(&ddb, &eb, &message).await;
 
         assert!(result.is_ok());
@@ -260,7 +261,7 @@ mod tests {
             .then_output(|| PutEventsOutput::builder().build());
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
-        let message = update_message("d-123", Some("Should not work"));
+        let message = update_message("billing", Some("Should not work"));
         let result = handle(&ddb, &eb, &message).await;
 
         assert!(result.is_ok());
@@ -270,7 +271,7 @@ mod tests {
     #[test]
     fn update_message_deserialization_rejects_unknown_fields() {
         let message = serde_json::json!({
-            "domainId": "d-123",
+            "domainName": "billing",
             "body": {
                 "description": "test",
                 "unknownField": "x"

@@ -7,6 +7,7 @@ The design follows the pattern established by the [AWS Unicorn Contracts sample]
 ## Goals / Non-Goals
 
 **Goals:**
+
 - Route all write operations (POST/PUT on `/domains`, POST on `/domains/registrations/{requestId}/decision`) through SQS
 - API Gateway validates request body structure before enqueueing
 - All writes return `202 Accepted` with `{"message":"OK"}`
@@ -16,6 +17,7 @@ The design follows the pattern established by the [AWS Unicorn Contracts sample]
 - Read operations (GET) remain synchronous and unchanged
 
 **Non-Goals:**
+
 - Command status polling API (callers consume EventBridge events instead)
 - Per-caller event delivery (EventBridge subscriptions are the consumer's responsibility)
 - Changing the approval workflow or provisioning workflow internals
@@ -33,6 +35,7 @@ The domains queue handles both register and update because they share the same r
 ### HTTP method as the sole routing key
 
 Within each queue, dispatch uses only the `HttpMethod` message attribute (`POST` vs `PUT`). No separate `operation` attribute is needed because:
+
 - The domains queue: `POST` = register, `PUT` = update
 - The registrations queue: only `POST` is valid
 
@@ -53,6 +56,7 @@ API Gateway VTL templates wrap the original request body to include path paramet
 ```
 
 For the registrations queue:
+
 ```vtl
 {
   "requestId": "$input.params('requestId')",
@@ -67,6 +71,7 @@ For the `/domains` POST (no path params), the message body is `$input.body` dire
 ### Existing write Lambda functions replaced by two command handlers
 
 `register-domain`, `update-domain`, and `approve-registration` are removed. Two new Lambdas replace them:
+
 - `domain-command-handler` -- consumes `domains-command-queue`
 - `registration-command-handler` -- consumes `registrations-command-queue`
 

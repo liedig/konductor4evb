@@ -1,6 +1,7 @@
 # Capability: Contribution Templates
 
 ## Purpose
+
 TBD
 
 ## Requirements

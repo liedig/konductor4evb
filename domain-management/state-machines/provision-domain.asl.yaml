@@ -9,8 +9,8 @@ States:
     Arguments:
       TableName: "${DomainsTable}"
       Key:
-        domainId:
-          S: "{% $states.input.detail.domainId %}"
+        domainName:
+          S: "{% $states.input.detail.domainName %}"
       UpdateExpression: "SET #s = :status, updatedAt = :now"
       ExpressionAttributeNames:
         "#s": status
@@ -126,7 +126,6 @@ States:
     Items: "{% $states.input.detail.environments %}"
     ItemSelector:
       environment: "{% $states.context.Map.Item.Value %}"
-      domainId: "{% $states.input.detail.domainId %}"
       domainName: "{% $states.input.detail.domainName %}"
       ownerAccountId: "{% $states.input.detail.ownerAccountId %}"
     ItemProcessor:
@@ -178,8 +177,8 @@ States:
     Arguments:
       TableName: "${DomainsTable}"
       Key:
-        domainId:
-          S: "{% $states.input.detail.domainId %}"
+        domainName:
+          S: "{% $states.input.detail.domainName %}"
       UpdateExpression: "SET #s = :status, resourceArns = :arns, namespaceParameter = :ns, updatedAt = :now"
       ExpressionAttributeNames:
         "#s": status
@@ -204,7 +203,6 @@ States:
           Source: nexus.domain-management
           DetailType: DomainProvisioningSucceeded
           Detail:
-            domainId: "{% $states.input.detail.domainId %}"
             domainName: "{% $states.input.detail.domainName %}"
             workflowExecutionId: "{% $states.context.Execution.Id %}"
             completedAt: "{% $states.context.State.EnteredTime %}"
@@ -220,7 +218,6 @@ States:
     Items: "{% $succeededResults %}"
     ItemSelector:
       environment: "{% $states.context.Map.Item.Value.environment %}"
-      domainId: "{% $states.input.detail.domainId %}"
       domainName: "{% $states.input.detail.domainName %}"
       ownerAccountId: "{% $states.input.detail.ownerAccountId %}"
       resourceArns: "{% $states.context.Map.Item.Value.result.resourceArns %}"
@@ -262,7 +259,6 @@ States:
           Source: nexus.domain-management
           DetailType: DomainProvisioningFailed
           Detail:
-            domainId: "{% $states.input.detail.domainId %}"
             domainName: "{% $states.input.detail.domainName %}"
             workflowExecutionId: "{% $states.context.Execution.Id %}"
             failedAt: "{% $states.context.State.EnteredTime %}"
@@ -283,7 +279,6 @@ States:
           Source: nexus.domain-management
           DetailType: DomainProvisioningFailed
           Detail:
-            domainId: "{% $states.input.detail.domainId %}"
             domainName: "{% $states.input.detail.domainName %}"
             workflowExecutionId: "{% $states.context.Execution.Id %}"
             failedAt: "{% $states.context.State.EnteredTime %}"
@@ -301,8 +296,8 @@ States:
     Arguments:
       TableName: "${DomainsTable}"
       Key:
-        domainId:
-          S: "{% $states.input.detail.domainId %}"
+        domainName:
+          S: "{% $states.input.detail.domainName %}"
       UpdateExpression: "SET #s = :status, errorDetail = :err, updatedAt = :now"
       ExpressionAttributeNames:
         "#s": status
@@ -321,8 +316,8 @@ States:
     Arguments:
       TableName: "${DomainsTable}"
       Key:
-        domainId:
-          S: "{% $states.input.detail.domainId %}"
+        domainName:
+          S: "{% $states.input.detail.domainName %}"
       UpdateExpression: "SET #s = :status, errorDetail = :err, updatedAt = :now"
       ExpressionAttributeNames:
         "#s": status
