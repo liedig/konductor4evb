@@ -8,7 +8,7 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 ### Requirement: API layer
 
-The control plane SHALL expose a REST API through Amazon API Gateway (REST API type) with IAM authentication. The API contract SHALL be defined using OpenAPI specification. Read operations (GET) and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Write operations (POST on `/domains`, PUT on `/domains/{domainId}`) SHALL use `aws` service integrations to route commands through SQS queues for durable, asynchronous processing. The decide-registration endpoint (`POST /domains/registrations/decide`) SHALL use `aws_proxy` Lambda integration for synchronous processing. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI spec. The API SHALL be served from a static stage named `v1`.
+The control plane SHALL expose a REST API through Amazon API Gateway (REST API type) with IAM authentication. The API contract SHALL be defined using OpenAPI specification. Read operations (GET) and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Write operations (POST on `/domains`, PUT on `/domains/{domainName}`) SHALL use `aws` service integrations to route commands through SQS queues for durable, asynchronous processing. The decide-registration endpoint (`POST /domains/registrations/decide`) SHALL use `aws_proxy` Lambda integration for synchronous processing. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI spec. The API SHALL be served from a static stage named `v1`. Domain-specific endpoints (`GET /domains/{domainName}`, `PUT /domains/{domainName}`) SHALL use the domain name as the path parameter.
 
 #### Scenario: Read operations served synchronously via Lambda
 
@@ -60,20 +60,21 @@ All Lambda functions SHALL be compiled with cargo-lambda and deployed using the 
 
 ### Requirement: DynamoDB data model
 
-The control plane SHALL use Amazon DynamoDB as the system of record with a single domains table for domain lifecycle management. The domain record SHALL store all metadata, approval-phase fields, and provisioned resource references. The DynamoDB SDK SHALL be used directly without an ORM or mapper layer.
+The control plane SHALL use Amazon DynamoDB as the system of record with a single domains table for domain lifecycle management. The domain record SHALL store all metadata, approval-phase fields, and provisioned resource references. The DynamoDB SDK SHALL be used directly without an ORM or mapper layer. The partition key SHALL be the domain name (`domainName`). The table SHALL have `by-owner` and `by-status` Global Secondary Indexes. There SHALL NOT be a `by-name` GSI.
 
 #### Scenario: Single domains table design
 
 - **WHEN** a domain is created via the register command
-- **THEN** a single record SHALL be created in the domains table containing all domain metadata
+- **THEN** a single record SHALL be created in the domains table with `domainName` as the partition key, containing all domain metadata
 - **AND THEN** approval-phase fields (`taskToken`, `decidedBy`, `justification`, timestamps) SHALL be added to the same record as the workflow progresses
 - **AND THEN** provisioned resource ARNs SHALL be added to the same record when provisioning completes
 
 #### Scenario: GSI-based querying
 
-- **WHEN** an operation requires listing domains by name, owner, or status
-- **THEN** the control plane SHALL query the appropriate GSI (`by-name`, `by-owner`, `by-status`) on the domains table
+- **WHEN** an operation requires listing domains by owner or status
+- **THEN** the control plane SHALL query the appropriate GSI (`by-owner`, `by-status`) on the domains table
 - **AND THEN** compose the response in the Lambda function
+- **AND THEN** name-based lookups SHALL use a direct `GetItem` on the partition key, not a GSI query
 
 ### Requirement: Error handling strategy
 
@@ -170,3 +171,13 @@ EventBridge Nexus SHALL use AWS Resource Access Manager to share domain namespac
 - **WHEN** the Nexus provisioning workflow attempts to create a RAM resource share with the Organisation as principal
 - **THEN** the AWS account SHALL be a member of an AWS Organisation with RAM sharing enabled
 - **AND THEN** if RAM sharing is not enabled, the workflow SHALL fail with a clear error message
+
+### Requirement: Account-per-domain design principle
+
+The system SHALL assume one AWS account per domain for application-side resources. The trust stack is deployed per-account, and resource naming (`{org}-{env}-{domain}-*`) assumes no two domains share an account. This principle SHALL be documented in the system architecture specification so that future changes do not silently violate it.
+
+#### Scenario: Architecture documentation references account-per-domain
+
+- **WHEN** a reader views the system architecture documentation
+- **THEN** the account-per-domain principle SHALL be documented as an explicit design decision
+- **AND THEN** the documentation SHALL explain that each domain's application-side resources are provisioned in a single owner account
