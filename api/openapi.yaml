@@ -46,7 +46,7 @@ paths:
         credentials:
           Fn::GetAtt: [NexusApiSqsRole, Arn]
         uri:
-          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainsCommandQueue.QueueName}"
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainRegistrationsQueue.QueueName}"
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
@@ -188,7 +188,7 @@ paths:
         credentials:
           Fn::GetAtt: [NexusApiSqsRole, Arn]
         uri:
-          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainsCommandQueue.QueueName}"
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainRegistrationsQueue.QueueName}"
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
