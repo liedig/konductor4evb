@@ -26,13 +26,13 @@ All domain details, lifecycle state, and approval metadata SHALL be stored in a 
 
 ### Requirement: Domain management events
 
-The domain management capability SHALL emit the following events. Each event SHALL have a well-defined type, a consistent payload, and a defined emitter (control plane command handler or workflow). Events SHALL be emitted on the control plane event bus. Command outcome events (`*Succeeded` / `*Failed`) are the primary mechanism by which callers learn the result of write operations. The approval workflow SHALL be the sole emitter of approval and rejection events. All event payloads SHALL identify the domain by `domainName` and SHALL NOT include a `domainId` field.
+The domain management capability SHALL emit the following events. Each event SHALL have a well-defined type, a consistent payload, and a defined emitter (control plane command handler or workflow). Events SHALL be emitted on the control plane event bus. Command outcome events (`*Succeeded` / `*Failed`) are the primary mechanism by which callers learn the result of write operations. The approval workflow SHALL be the sole emitter of approval and rejection events. All event payloads SHALL identify the domain by `domainName` and SHALL NOT include a `domainId` field. Events that carry domain owner information SHALL include `secondaryOwnerEmails` when present on the domain record.
 
 #### Events emitted by the control plane command handler
 
 | Event type | When emitted | Purpose | Minimum payload |
 |------------|--------------|---------|-----------------|
-| `RegisterDomainSucceeded` | After the register-domain command is successfully processed | Confirms domain registration was accepted | `domainName`, `ownerAccountId`, `ownerEmail`, `environments`, `status`, `createdAt` |
+| `RegisterDomainSucceeded` | After the register-domain command is successfully processed | Confirms domain registration was accepted | `domainName`, `ownerAccountId`, `ownerEmail`, `secondaryOwnerEmails`, `environments`, `status`, `createdAt` |
 | `RegisterDomainFailed` | After the register-domain command fails (e.g., duplicate name, validation error) | Surfaces processing failure to callers and audit | `domainName`, `ownerAccountId`, `reason`, `failedAt` |
 | `UpdateDomainSucceeded` | After the update-domain command is successfully processed | Confirms domain metadata update was applied | `domainName`, `updatedAt`, `changedFields` |
 | `UpdateDomainFailed` | After the update-domain command fails (e.g., domain not found) | Surfaces processing failure to callers and audit | `domainName`, `reason`, `failedAt` |
@@ -41,8 +41,8 @@ The domain management capability SHALL emit the following events. Each event SHA
 
 | Event type | When emitted | Purpose | Minimum payload |
 |------------|--------------|---------|-----------------|
-| `DomainRegistrationApproved` | After the approval workflow processes an approval decision | Triggers the provisioning workflow | `domainName`, `ownerAccountId`, `ownerEmail`, `environments`, `approvedBy`, `justification`, `approvedAt` |
-| `DomainRegistrationRejected` | After the approval workflow processes a rejection decision | Triggers rejection notification; audit | `domainName`, `ownerAccountId`, `ownerEmail`, `rejectedBy`, `justification`, `rejectedAt` |
+| `DomainRegistrationApproved` | After the approval workflow processes an approval decision | Triggers the provisioning workflow | `domainName`, `ownerAccountId`, `ownerEmail`, `secondaryOwnerEmails`, `environments`, `approvedBy`, `justification`, `approvedAt` |
+| `DomainRegistrationRejected` | After the approval workflow processes a rejection decision | Triggers rejection notification; audit | `domainName`, `ownerAccountId`, `ownerEmail`, `secondaryOwnerEmails`, `rejectedBy`, `justification`, `rejectedAt` |
 
 #### Events emitted by the provisioning workflow
 
@@ -76,10 +76,12 @@ Domain management is an administrative function of the control plane. Domain own
 
 The set of environments a domain is provisioned into SHALL be determined by the **platform team**, not the requester. The Nexus platform SHALL hold a single configured environment list (default `["dev", "staging", "prod"]`), and every approved domain SHALL be provisioned into the full list. The registration API SHALL NOT accept an `environments` field. All environments of a given domain SHALL be provisioned into the same `ownerAccountId`.
 
+The registration request SHALL include at least one secondary owner email address. Secondary owners are co-managers of the domain who serve as backup contacts when the primary owner is unavailable. At this stage, secondary owner emails are captured for informational purposes only — no notifications are sent to secondary owners.
+
 #### Scenario: Registration command accepted and enqueued
 
-- **WHEN** an authorized domain owner calls the register-domain API with a valid domain name, owner account ID, owner email, and optional description/tags
-- **THEN** API Gateway SHALL validate the request structure and enqueue the command to the domains SQS queue
+- **WHEN** an authorized domain owner calls the register-domain API with a valid domain name, owner account ID, owner email, at least one secondary owner email, and optional description/tags
+- **THEN** API Gateway SHALL validate the request structure (including `secondaryOwnerEmails` with `minItems: 1`) and enqueue the command to the domains SQS queue
 - **AND THEN** the API SHALL return `202 Accepted` with `{"requestId":"<SQS-MessageId>","message":"Domain registration request accepted"}`
 
 #### Scenario: Registration command processed and succeeded event emitted
@@ -87,9 +89,9 @@ The set of environments a domain is provisioned into SHALL be determined by the 
 - **WHEN** the domain command handler processes a register-domain message from the queue
 - **THEN** the handler SHALL validate business rules (naming, reserved names)
 - **AND THEN** read the platform-configured environment list
-- **AND THEN** persist the domain in DynamoDB using a conditional `PutItem` with `domainName` as the partition key and a condition expression of `attribute_not_exists(domainName)` and status `PENDING_APPROVAL` and that environment list stamped onto the `environments` field of the domain record
+- **AND THEN** persist the domain in DynamoDB using a conditional `PutItem` with `domainName` as the partition key and a condition expression of `attribute_not_exists(domainName)` and status `PENDING_APPROVAL` and that environment list stamped onto the `environments` field of the domain record, and `secondaryOwnerEmails` stored as a String Set
 - **AND THEN** start the approval Step Functions workflow
-- **AND THEN** emit `RegisterDomainSucceeded` to the control plane event bus (including the stamped `environments` list)
+- **AND THEN** emit `RegisterDomainSucceeded` to the control plane event bus (including the stamped `environments` list and `secondaryOwnerEmails`)
 
 #### Scenario: Registration command fails due to duplicate domain name
 
@@ -102,6 +104,12 @@ The set of environments a domain is provisioned into SHALL be determined by the 
 - **WHEN** the domain command handler processes a register-domain message and a naming business rule is violated (e.g., reserved name, invalid format)
 - **THEN** the handler SHALL emit `RegisterDomainFailed` to the control plane event bus with the reason
 - **AND THEN** NOT persist any domain record or start any workflow
+
+#### Scenario: Registration rejected due to missing secondary owner emails
+
+- **WHEN** a caller invokes the register-domain API without the `secondaryOwnerEmails` field or with an empty array
+- **THEN** API Gateway SHALL reject the request synchronously with `400 Bad Request`
+- **AND THEN** the malformed request SHALL NOT be enqueued
 
 #### Scenario: Environment list is snapshotted at registration time
 
@@ -117,13 +125,13 @@ The set of environments a domain is provisioned into SHALL be determined by the 
 
 ### Requirement: List Domains
 
-Users SHALL be able to list the domains they have permission to access, with filters and pagination that scale to large organizations. The response SHALL identify each domain by `domainName` and SHALL NOT include a `domainId` field.
+Users SHALL be able to list the domains they have permission to access, with filters and pagination that scale to large organizations. The response SHALL identify each domain by `domainName` and SHALL NOT include a `domainId` field. Each item SHALL include `secondaryOwnerEmails` when present on the domain record.
 
 #### Scenario: List domains with default filters
 
 - **WHEN** a user calls the list-domains API with no filters
 - **THEN** the control plane SHALL return all domains the caller is authorized to see
-- **AND THEN** include basic metadata such as name, description, owner, creation date, and status for each domain
+- **AND THEN** include basic metadata such as name, description, owner, ownerEmail, secondaryOwnerEmails, creation date, and status for each domain
 - **AND THEN** return results in a paginated form that can scale to thousands of domains
 - **AND THEN** the `taskToken` field SHALL NOT be included in the response
 
@@ -141,13 +149,13 @@ Users SHALL be able to list the domains they have permission to access, with fil
 
 ### Requirement: Describe Domain
 
-Users SHALL be able to retrieve detailed information about a specific domain by its domain name, including configuration, resources, and approval metadata. The API path SHALL be `GET /domains/{domainName}`. The `taskToken` field SHALL NOT be returned to domain owner callers. Platform team callers MAY access the `taskToken` when the domain status is `PENDING_APPROVAL`. Resource identifiers SHALL be returned as a map keyed by environment, where each entry contains the per-environment resource ARNs.
+Users SHALL be able to retrieve detailed information about a specific domain by its domain name, including configuration, resources, and approval metadata. The API path SHALL be `GET /domains/{domainName}`. The `taskToken` field SHALL NOT be returned to domain owner callers. Platform team callers MAY access the `taskToken` when the domain status is `PENDING_APPROVAL`. Resource identifiers SHALL be returned as a map keyed by environment, where each entry contains the per-environment resource ARNs. The response SHALL include `secondaryOwnerEmails` when present on the domain record.
 
 #### Scenario: Describe existing domain
 
 - **WHEN** a user calls `GET /domains/{domainName}` with a valid domain name they are authorized to access
 - **THEN** the control plane SHALL perform a `GetItem` on the domains table using `domainName` as the partition key
-- **AND THEN** return domain configuration (name, description, owner, ownerEmail, tags, status, environments)
+- **AND THEN** return domain configuration (name, description, owner, ownerEmail, secondaryOwnerEmails, tags, status, environments)
 - **AND THEN** return resource identifiers as a map keyed by environment when the domain is `ACTIVE`; each entry SHALL contain `platformEventBusArn`, `appEventBusArn`, `schemaRegistryArn`, `subscriptionDlqArn`, `integrationDlqArn`, and `dashboardArn`
 - **AND THEN** return domain-level identifiers (namespace parameter path, RAM share ARN) at the top level, not nested under any environment
 - **AND THEN** return approval metadata (decidedBy, justification, approvedAt/rejectedAt) when available
@@ -194,14 +202,27 @@ Platform team members SHALL be able to approve or reject a domain registration r
 
 ### Requirement: Update Domain
 
-Domain owners SHALL be able to update mutable domain metadata by submitting a command that is processed asynchronously. The update command SHALL only accept `description` and `tags` fields. The domain name SHALL NOT be updatable. Status transitions SHALL NOT be performed via the update command. The API path SHALL be `PUT /domains/{domainName}`. The API SHALL accept the command and return immediately; the outcome SHALL be communicated via an EventBridge event.
+Domain owners SHALL be able to update mutable domain metadata by submitting a command that is processed asynchronously. The update command SHALL accept `description`, `tags`, `ownerEmail`, and `secondaryOwnerEmails` fields. The domain name SHALL NOT be updatable. Status transitions SHALL NOT be performed via the update command. The `ownerAccountId` field SHALL NOT be updatable. The API path SHALL be `PUT /domains/{domainName}`. The API SHALL accept the command and return immediately; the outcome SHALL be communicated via an EventBridge event.
 
 #### Scenario: Update command accepted and enqueued
 
-- **WHEN** a domain owner calls `PUT /domains/{domainName}` with valid fields (description and/or tags)
+- **WHEN** a domain owner calls `PUT /domains/{domainName}` with valid fields (description, tags, ownerEmail, and/or secondaryOwnerEmails)
 - **THEN** API Gateway SHALL validate the request structure and enqueue the command to the domains SQS queue
 - **AND THEN** the `domainName` path parameter SHALL be injected into the message body by the API Gateway VTL mapping template
 - **AND THEN** the API SHALL return `202 Accepted` with `{"requestId":"<SQS-MessageId>","message":"Domain update request accepted"}`
+
+#### Scenario: Update secondary owner emails
+
+- **WHEN** a domain owner calls `PUT /domains/{domainName}` with a `secondaryOwnerEmails` field containing one or more valid email addresses
+- **THEN** the command handler SHALL replace the entire `secondaryOwnerEmails` set on the domain record in DynamoDB
+- **AND THEN** emit `UpdateDomainSucceeded` with `secondaryOwnerEmails` in the `changedFields` list
+
+#### Scenario: Update primary owner email
+
+- **WHEN** a domain owner calls `PUT /domains/{domainName}` with an `ownerEmail` field containing a valid email address
+- **THEN** the command handler SHALL update the `ownerEmail` field on the domain record in DynamoDB
+- **AND THEN** emit `UpdateDomainSucceeded` with `ownerEmail` in the `changedFields` list
+- **AND THEN** subsequent notification emails SHALL be sent to the new owner email address
 
 #### Scenario: Update command processed and succeeded event emitted
 
@@ -276,10 +297,22 @@ The system SHALL assume one AWS account per domain for application-side resource
 
 ### Requirement: Primary and secondary owner model
 
-The domain record SHALL store a primary owner account (`ownerAccountId`). The system SHALL support a future secondary owner model where secondary owners are co-managers of the same AWS account, acting as backup decision-makers when the primary owner is unavailable. Resources always live in the primary owner's account. Secondary ownership is an authorization concern, not a data model concern — the partition key (`domainName`) is compatible with this future evolution.
+The domain record SHALL store a primary owner account (`ownerAccountId`) and a primary owner email (`ownerEmail`). The domain record SHALL also store one or more secondary owner email addresses (`secondaryOwnerEmails`). At least one secondary owner email SHALL be provided at registration time. Secondary owners are co-managers of the domain who serve as backup contacts when the primary owner is unavailable or leaves the domain. Resources always live in the primary owner's account. Secondary owner emails are captured for informational purposes at this stage — no notifications are sent to secondary owners and no authorization logic is applied to them. Both `ownerEmail` and `secondaryOwnerEmails` SHALL be mutable via the update endpoint; the `ownerAccountId` SHALL NOT be mutable after registration.
 
 #### Scenario: Primary owner is the resource host
 
 - **WHEN** a domain is provisioned
 - **THEN** all application-side resources SHALL be created in the primary owner's account
-- **AND THEN** secondary owners (when implemented) SHALL NOT cause resources to be provisioned in additional accounts
+- **AND THEN** secondary owners SHALL NOT cause resources to be provisioned in additional accounts
+
+#### Scenario: At least one secondary owner required at registration
+
+- **WHEN** a domain is registered
+- **THEN** the registration request SHALL include at least one secondary owner email address
+- **AND THEN** the domain record SHALL store all provided secondary owner email addresses
+
+#### Scenario: Owner emails are mutable
+
+- **WHEN** a domain owner updates `ownerEmail` or `secondaryOwnerEmails` via `PUT /domains/{domainName}`
+- **THEN** the corresponding field(s) SHALL be updated on the domain record in DynamoDB
+- **AND THEN** the `ownerAccountId` SHALL NOT be affected
