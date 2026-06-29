@@ -162,8 +162,8 @@ sequenceDiagram
 |--------|------|------|---------|
 | `POST` | `/domains` | Async (SQS) | `domain-registrations` (register) |
 | `GET` | `/domains` | Sync (Lambda proxy) | `list-domains` |
-| `GET` | `/domains/{domainId}` | Sync (Lambda proxy) | `describe-domain` |
-| `PUT` | `/domains/{domainId}` | Async (SQS) | `domain-registrations` (update) |
+| `GET` | `/domains/{domainName}` | Sync (Lambda proxy) | `describe-domain` |
+| `PUT` | `/domains/{domainName}` | Async (SQS) | `domain-registrations` (update) |
 | `POST` | `/domains/registrations/decide` | Sync (Lambda proxy) | `decide-registration` |
 
 The command handler Lambda receives SQS messages with a `HttpMethod` message attribute and dispatches to the appropriate handler (`register` for POST, `update` for PUT).
@@ -185,7 +185,7 @@ sequenceDiagram
     participant DDB as DynamoDB
     participant EB as Nexus Event Bus
 
-    CH->>SFN: StartExecution (domainId, ownerEmail, ...)
+    CH->>SFN: StartExecution (domainName, ownerEmail, ...)
     SFN->>NF: Invoke with taskToken
     NF->>DDB: Store taskToken on domain record
     NF->>NF: Detect new account (query by-owner GSI)
@@ -457,8 +457,7 @@ A single `domains` DynamoDB table stores both domain metadata and registration s
 
 | Attribute | Type | Key |
 |-----------|------|-----|
-| `domainId` | String | Partition key (PK) |
-| `domainName` | String | GSI: `by-name` (PK) |
+| `domainName` | String | Partition key (PK) |
 | `ownerAccountId` | String | GSI: `by-owner` (PK) |
 | `status` | String | GSI: `by-status` (PK) |
 | `description` | String | — |
@@ -480,8 +479,7 @@ A single `domains` DynamoDB table stores both domain metadata and registration s
 
 | Pattern | Index | Key Condition |
 |---------|-------|---------------|
-| Get domain by ID | Table (PK) | `domainId = :id` |
-| Check domain name uniqueness | `by-name` | `domainName = :name` |
+| Get domain by name | Table (PK) | `domainName = :name` |
 | List domains by owner | `by-owner` | `ownerAccountId = :acct` |
 | List domains by status | `by-status` | `status = :status` |
 | Detect new account | `by-owner` | `ownerAccountId = :acct` + filter `status = ACTIVE` |

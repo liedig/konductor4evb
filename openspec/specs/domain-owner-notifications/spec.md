@@ -13,7 +13,7 @@ When a domain registration enters the approval phase, the control plane SHALL se
 #### Scenario: Approval notification sent during workflow wait
 
 - **WHEN** the approval workflow enters the `NotifyAndWait` state
-- **THEN** the workflow SHALL invoke the `SendApprovalNotification` Lambda with the task token, domain ID, domain name, owner account ID, and owner email
+- **THEN** the workflow SHALL invoke the `SendApprovalNotification` Lambda with the task token, domain name, owner account ID, and owner email
 - **AND THEN** the Lambda SHALL persist the task token to the domain record in DynamoDB
 - **AND THEN** the Lambda SHALL construct and send an email via SES to the configured platform team address
 - **AND THEN** the email SHALL include the domain name, owner account ID, owner email, and the task token

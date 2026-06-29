@@ -71,7 +71,7 @@ Domain provisioning SHALL be coordinated by an outer Step Functions workflow (`p
 
 - **WHEN** every `provision-env` execution in the Map state completes successfully
 - **THEN** the outer workflow SHALL update the domain record to `ACTIVE` with a `resourceArns` map keyed by environment, each value containing the per-environment resource ARNs returned by the inner workflow
-- **AND THEN** the outer workflow SHALL emit a `DomainProvisioningSucceeded` event with the domain ID, workflow execution ID, completion timestamp, environments list, per-environment resource ARNs map, namespace parameter path, and `isNewAccount` flag
+- **AND THEN** the outer workflow SHALL emit a `DomainProvisioningSucceeded` event with the domain name, workflow execution ID, completion timestamp, environments list, per-environment resource ARNs map, namespace parameter path, and `isNewAccount` flag
 
 #### Scenario: Any environment fails — succeeded siblings are torn down
 
