@@ -519,6 +519,7 @@ evb-nexus/
 │   │   ├── architecture.md                   # This document
 │   │   ├── decisions.md                      # Decision log
 │   │   └── testing.md                        # Testing strategy
+│   ├── domain-management.md                 # Domain owner guide (register, approve, operate)
 │   └── trust-stack-deployment.md             # App account onboarding guide
 ├── nexus-core-stack.yaml                     # SAM template (core platform resources)
 ├── notifications-stack.yaml                  # Optional SES identity stack
@@ -549,6 +550,7 @@ evb-nexus/
 |----------|---------|
 | [decisions.md](decisions.md) | Why things are built this way — architectural decision log |
 | [testing.md](testing.md) | Testing strategy, smithy-mocks patterns, TDD workflow |
+| [domain-management.md](../domain-management.md) | Domain owner guide — registering, approving, and operating domains |
 | [installation.md](../installation.md) | End-to-end installation guide (prerequisites, deploy, smoke test, uninstall) |
 | [trust-stack-deployment.md](../trust-stack-deployment.md) | Step-by-step guide for onboarding application accounts |
 | [api/openapi.yaml](../../api/openapi.yaml) | Full API contract with request/response schemas |

@@ -92,6 +92,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 │           ├── models.rs             # Domain models
 │           └── namespace.rs          # Resource naming
 ├── docs/
+│   ├── domain-management.md         # Domain owner guide
 │   └── trust-stack-deployment.md     # App account onboarding guide
 ├── nexus-core-stack.yaml             # SAM template (core platform)
 ├── notifications-stack.yaml          # SES identities (optional)
@@ -136,6 +137,8 @@ RegisterDomain ──> PENDING_APPROVAL
 ## Getting Started
 
 See [docs/installation.md](docs/installation.md) for the complete installation guide covering prerequisites, three-stack deployment, smoke test, troubleshooting, and uninstall.
+
+For domain owners, see [docs/domain-management.md](docs/domain-management.md) for the guide to registering, approving, and operating domains.
 
 ## Workflows
 
