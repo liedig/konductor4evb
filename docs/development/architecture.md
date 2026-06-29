@@ -462,6 +462,7 @@ A single `domains` DynamoDB table stores both domain metadata and registration s
 | `status` | String | GSI: `by-status` (PK) |
 | `description` | String | — |
 | `ownerEmail` | String | — |
+| `secondaryOwnerEmails` | String Set (SS) | — |
 | `tags` | Map | — |
 | `environments` | List<String> | — (stamped at registration time from the platform `Environments` parameter) |
 | `resourceArns` | Map<env, PerEnvResourceArns> | — (populated after provisioning; keyed by environment) |

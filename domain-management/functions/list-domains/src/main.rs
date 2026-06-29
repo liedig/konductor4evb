@@ -60,10 +60,16 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
                 .items
                 .iter()
                 .map(|item| {
+                    let secondary_owner_emails: Vec<String> = item
+                        .get("secondaryOwnerEmails")
+                        .and_then(|v| v.as_ss().ok())
+                        .cloned()
+                        .unwrap_or_default();
                     json!({
                         "domainName": get_s(item, "domainName"),
                         "description": get_s(item, "description"),
                         "ownerAccountId": get_s(item, "ownerAccountId"),
+                        "secondaryOwnerEmails": secondary_owner_emails,
                         "status": get_s(item, "status"),
                         "createdAt": get_s(item, "createdAt"),
                     })

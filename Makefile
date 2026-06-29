@@ -30,6 +30,7 @@ help: ## Show this help message
 	@printf "    $(DIM)AWS_REGION$(RESET)                   current: $(CYAN)$(AWS_REGION)$(RESET)\n"
 	@printf "    $(DIM)APP_ACCOUNT_ID$(RESET)               required for: smoke\n"
 	@printf "    $(DIM)OWNER_EMAIL$(RESET)                  required for: smoke\n"
+	@printf "    $(DIM)SECONDARY_OWNER_EMAIL$(RESET)          required for: smoke\n"
 	@printf "    $(DIM)NOTIFICATION_SENDER_EMAIL$(RESET)    required for: deploy-notifications\n"
 	@printf "    $(DIM)PLATFORM_OPERATOR_EMAIL$(RESET)      required for: deploy-notifications\n"
 	@printf "    $(DIM)APP_PROFILE$(RESET)                  required for: deploy-trust, teardown-trust\n"
@@ -53,6 +54,9 @@ endif
 ifndef OWNER_EMAIL
 	$(error OWNER_EMAIL is required — the verified SES recipient for the domain owner)
 endif
+ifndef SECONDARY_OWNER_EMAIL
+	$(error SECONDARY_OWNER_EMAIL is required — at least one secondary owner email for the domain)
+endif
 	@set -euo pipefail; \
 	DOMAIN_NAME="smoke-test"; \
 	echo "$(BOLD)$(CYAN)=== Smoke test: $${DOMAIN_NAME} ===$(RESET)"; \
@@ -67,7 +71,7 @@ endif
 	RESPONSE=$$(awscurl -X POST "$${API_URL}/domains" \
 		--region $(AWS_REGION) \
 		-H "Content-Type: application/json" \
-		-d "{\"domainName\":\"$${DOMAIN_NAME}\",\"ownerAccountId\":\"$(APP_ACCOUNT_ID)\",\"ownerEmail\":\"$(OWNER_EMAIL)\",\"description\":\"Smoke test domain\"}"); \
+		-d "{\"domainName\":\"$${DOMAIN_NAME}\",\"ownerAccountId\":\"$(APP_ACCOUNT_ID)\",\"ownerEmail\":\"$(OWNER_EMAIL)\",\"secondaryOwnerEmails\":[\"$(SECONDARY_OWNER_EMAIL)\"],\"description\":\"Smoke test domain\"}"); \
 	echo "  $${RESPONSE}"; \
 	REQUEST_ID=$$(echo "$${RESPONSE}" | jq -r '.requestId'); \
 	[ "$${REQUEST_ID}" = "null" ] && { echo "  $(BOLD)ERROR: no requestId in response$(RESET)"; exit 1; } || true; \

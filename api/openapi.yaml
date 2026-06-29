@@ -15,6 +15,8 @@ paths:
       operationId: RegisterDomain
       summary: Register a new domain
       x-amazon-apigateway-request-validator: validate-body
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
       requestBody:
         required: true
         content:
@@ -63,6 +65,8 @@ paths:
     get:
       operationId: ListDomains
       summary: List domains
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
       parameters:
         - name: ownerAccountId
           in: query
@@ -111,6 +115,8 @@ paths:
     get:
       operationId: GetDomain
       summary: Get domain details
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
       parameters:
         - name: domainName
           in: path
@@ -151,6 +157,8 @@ paths:
       operationId: UpdateDomain
       summary: Update domain metadata or status
       x-amazon-apigateway-request-validator: validate-body
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
       parameters:
         - name: domainName
           in: path
@@ -208,6 +216,8 @@ paths:
       operationId: DecideRegistration
       summary: Submit approval or rejection decision for a domain registration
       x-amazon-apigateway-request-validator: validate-body
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
       requestBody:
         required: true
         content:
@@ -298,7 +308,7 @@ components:
 
     RegisterDomainRequest:
       type: object
-      required: [domainName, ownerAccountId, ownerEmail]
+      required: [domainName, ownerAccountId, ownerEmail, secondaryOwnerEmails]
       properties:
         domainName:
           type: string
@@ -313,6 +323,12 @@ components:
         ownerEmail:
           type: string
           format: email
+        secondaryOwnerEmails:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: email
         tags:
           type: object
           additionalProperties:
@@ -321,6 +337,7 @@ components:
         domainName: sales
         ownerAccountId: "111122223333"
         ownerEmail: sales-team@example.com
+        secondaryOwnerEmails: ["sales-backup@example.com"]
         description: Sales domain events
 
     DomainSummary:
@@ -339,6 +356,10 @@ components:
           items:
             type: string
           example: ["dev", "staging", "prod"]
+        secondaryOwnerEmails:
+          type: array
+          items:
+            type: string
         createdAt:
           type: string
           format: date-time
@@ -355,6 +376,10 @@ components:
         ownerEmail:
           type: string
           format: email
+        secondaryOwnerEmails:
+          type: array
+          items:
+            type: string
         status:
           type: string
         environments:
@@ -421,6 +446,15 @@ components:
           type: object
           additionalProperties:
             type: string
+        ownerEmail:
+          type: string
+          format: email
+        secondaryOwnerEmails:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            format: email
 
     ListDomainsResponse:
       type: object

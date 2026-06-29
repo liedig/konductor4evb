@@ -13,6 +13,7 @@ States:
         domainName: "{% $states.input.domainName %}"
         ownerAccountId: "{% $states.input.ownerAccountId %}"
         ownerEmail: "{% $states.input.ownerEmail %}"
+        secondaryOwnerEmails: "{% $states.input.secondaryOwnerEmails %}"
         environments: "{% $states.input.environments %}"
     # Capture the registration context before the task token replaces $states.input
     # with the decide payload ({approved, decidedBy, justification}).
@@ -93,6 +94,7 @@ States:
               "domainName": $registration.domainName,
               "ownerAccountId": $registration.ownerAccountId,
               "ownerEmail": $registration.ownerEmail,
+              "secondaryOwnerEmails": $registration.secondaryOwnerEmails,
               "environments": $registration.environments,
               "approvedBy": $states.input.decidedBy,
               "justification": $states.input.justification ? $states.input.justification : '',
@@ -113,6 +115,7 @@ States:
               "domainName": $registration.domainName,
               "ownerAccountId": $registration.ownerAccountId,
               "ownerEmail": $registration.ownerEmail,
+              "secondaryOwnerEmails": $registration.secondaryOwnerEmails,
               "rejectedBy": $states.input.decidedBy,
               "justification": $states.input.justification ? $states.input.justification : '',
               "rejectedAt": $states.context.State.EnteredTime

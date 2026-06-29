@@ -28,6 +28,7 @@ awscurl -X POST "${API_URL}/domains" \
     "domainName": "billing",
     "ownerAccountId": "111122223333",
     "ownerEmail": "billing-team@example.com",
+    "secondaryOwnerEmails": ["billing-backup@example.com"],
     "description": "Billing domain events",
     "tags": {
       "team": "finance",
@@ -43,6 +44,7 @@ awscurl -X POST "${API_URL}/domains" \
 | `domainName` | Yes | Globally unique domain name. Must match `^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$` (lowercase alphanumeric with hyphens, 2-64 characters). Cannot start or end with a hyphen. |
 | `ownerAccountId` | Yes | The 12-digit AWS account ID where your domain's application-side resources will be provisioned. The trust stack must already be deployed in this account. |
 | `ownerEmail` | Yes | Email address for the domain owner. Receives approval and rejection outcome notifications. |
+| `secondaryOwnerEmails` | Yes | One or more secondary owner email addresses. At least one is required. Secondary owners are backup contacts for when the primary owner is unavailable. |
 | `description` | No | Human-readable description (max 256 characters). |
 | `tags` | No | Key-value string map for organisational metadata. |
 
@@ -137,6 +139,7 @@ awscurl -X GET "${API_URL}/domains/billing" --region "${REGION}"
   "description": "Billing domain events",
   "ownerAccountId": "111122223333",
   "ownerEmail": "billing-team@example.com",
+  "secondaryOwnerEmails": ["billing-backup@example.com"],
   "status": "ACTIVE",
   "environments": ["dev", "staging", "prod"],
   "tags": {
@@ -171,6 +174,7 @@ awscurl -X GET "${API_URL}/domains/billing" --region "${REGION}"
 | `description` | Human-readable description. |
 | `ownerAccountId` | AWS account where app-side resources are provisioned. |
 | `ownerEmail` | Domain owner email. |
+| `secondaryOwnerEmails` | Secondary owner email addresses. |
 | `status` | Current lifecycle status (see [Domain Lifecycle](#domain-lifecycle)). |
 | `environments` | Environments this domain is provisioned into. Snapshotted at registration time. |
 | `tags` | Key-value metadata. |
@@ -280,7 +284,8 @@ awscurl -X PUT "${API_URL}/domains/billing" \
 | `domainName` | No | Cannot be renamed. Register a new domain instead. |
 | `status` | No | Status transitions are managed by workflows, not the update API. |
 | `ownerAccountId` | No | Fixed at registration time. |
-| `ownerEmail` | No | Fixed at registration time. |
+| `ownerEmail` | Yes | Mutable via update endpoint. |
+| `secondaryOwnerEmails` | Yes | One or more emails. Replaces the entire set. |
 
 ### Response
 

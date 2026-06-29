@@ -1,7 +1,20 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{ValidationExceptionField, ValidationExceptionReason};
+
+fn deserialize_non_empty_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let vec = Vec::<String>::deserialize(deserializer)?;
+    if vec.is_empty() {
+        return Err(serde::de::Error::custom(
+            "secondaryOwnerEmails must contain at least one email address",
+        ));
+    }
+    Ok(vec)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -66,6 +79,7 @@ pub struct Domain {
     pub description: Option<String>,
     pub owner_account_id: String,
     pub owner_email: String,
+    pub secondary_owner_emails: Option<Vec<String>>,
     pub status: DomainStatus,
     pub environments: Vec<String>,
     pub tags: Option<std::collections::HashMap<String, String>>,
@@ -101,6 +115,8 @@ pub struct RegisterDomainRequest {
     pub description: Option<String>,
     pub owner_account_id: String,
     pub owner_email: String,
+    #[serde(deserialize_with = "deserialize_non_empty_vec")]
+    pub secondary_owner_emails: Vec<String>,
     pub tags: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -240,7 +256,31 @@ mod tests {
             "domainName": "billing",
             "ownerAccountId": "111122223333",
             "ownerEmail": "owner@example.com",
+            "secondaryOwnerEmails": ["backup@example.com"],
             "unexpected": "value"
+        });
+        let parsed: Result<RegisterDomainRequest, _> = serde_json::from_value(value);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn register_domain_request_rejects_empty_secondary_owner_emails() {
+        let value = serde_json::json!({
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com",
+            "secondaryOwnerEmails": []
+        });
+        let parsed: Result<RegisterDomainRequest, _> = serde_json::from_value(value);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn register_domain_request_rejects_missing_secondary_owner_emails() {
+        let value = serde_json::json!({
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com"
         });
         let parsed: Result<RegisterDomainRequest, _> = serde_json::from_value(value);
         assert!(parsed.is_err());

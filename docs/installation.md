@@ -243,13 +243,13 @@ test domain, approves it, verifies ACTIVE status and provisioned resources, then
 deletes the domain:
 
 ```bash
-make smoke AWS_REGION=<region> APP_ACCOUNT_ID=<application-account-id> OWNER_EMAIL=<owner@example.com>
+make smoke AWS_REGION=<region> APP_ACCOUNT_ID=<application-account-id> OWNER_EMAIL=<owner@example.com> SECONDARY_OWNER_EMAIL=<secondary@example.com>
 ```
 
 Example:
 
 ```bash
-make smoke AWS_REGION=us-east-1 APP_ACCOUNT_ID=222233334444 OWNER_EMAIL=owner@example.com
+make smoke AWS_REGION=us-east-1 APP_ACCOUNT_ID=222233334444 OWNER_EMAIL=owner@example.com SECONDARY_OWNER_EMAIL=secondary@example.com
 ```
 
 The smoke test:
@@ -277,7 +277,7 @@ REGION="<region>"
 # Register
 awscurl -X POST "${API_URL}/domains" --region "${REGION}" \
   -H "Content-Type: application/json" \
-  -d '{"domainName":"billing","ownerAccountId":"<app-account-id>","ownerEmail":"<email>","description":"Billing domain"}'
+  -d '{"domainName":"billing","ownerAccountId":"<app-account-id>","ownerEmail":"<email>","secondaryOwnerEmails":["<secondary-email>"],"description":"Billing domain"}'
 
 # Approve
 awscurl -X POST "${API_URL}/domains/registrations/decide" --region "${REGION}" \

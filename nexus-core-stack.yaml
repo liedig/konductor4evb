@@ -252,8 +252,6 @@ Resources:
       TracingEnabled: true
       EndpointConfiguration:
         Type: REGIONAL
-      Auth:
-        DefaultAuthorizer: AWS_IAM
       AccessLogSetting:
         DestinationArn: !GetAtt ApiAccessLogGroup.Arn
         Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'

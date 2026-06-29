@@ -46,6 +46,10 @@ pub async fn handle(
         .item("ownerAccountId", s(&request.owner_account_id))
         .item("status", s(&status))
         .item("ownerEmail", s(&request.owner_email))
+        .item(
+            "secondaryOwnerEmails",
+            AttributeValue::Ss(request.secondary_owner_emails.clone()),
+        )
         .item("createdAt", s(&now))
         .item("updatedAt", s(&now))
         .item("createdBy", s(&request.owner_account_id))
@@ -85,6 +89,7 @@ pub async fn handle(
         "domainName": request.domain_name,
         "ownerAccountId": request.owner_account_id,
         "ownerEmail": request.owner_email,
+        "secondaryOwnerEmails": request.secondary_owner_emails,
         "description": request.description,
         "environments": environments,
     });
@@ -109,6 +114,7 @@ pub async fn handle(
                         "domainName": request.domain_name,
                         "ownerAccountId": request.owner_account_id,
                         "ownerEmail": request.owner_email,
+                        "secondaryOwnerEmails": request.secondary_owner_emails,
                         "status": status,
                         "createdAt": now,
                         "environments": environments,
@@ -348,6 +354,7 @@ mod tests {
                 description: None,
                 owner_account_id: "111122223333".to_string(),
                 owner_email: "owner@example.com".to_string(),
+                secondary_owner_emails: vec!["backup@example.com".to_string()],
                 tags: None,
             }
         }
@@ -434,6 +441,7 @@ mod tests {
                 description: None,
                 owner_account_id: "111122223333".to_string(),
                 owner_email: "owner@example.com".to_string(),
+                secondary_owner_emails: vec!["backup@example.com".to_string()],
                 tags: None,
             };
 
@@ -475,6 +483,7 @@ mod tests {
                 description: Some("Billing domain events".to_string()),
                 owner_account_id: "111122223333".to_string(),
                 owner_email: "owner@example.com".to_string(),
+                secondary_owner_emails: vec!["backup@example.com".to_string()],
                 tags: None,
             };
 

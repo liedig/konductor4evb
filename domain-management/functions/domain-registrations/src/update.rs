@@ -21,6 +21,8 @@ pub struct UpdateDomainMessage {
 pub struct UpdateDomainBody {
     pub description: Option<String>,
     pub tags: Option<HashMap<String, String>>,
+    pub owner_email: Option<String>,
+    pub secondary_owner_emails: Option<Vec<String>>,
 }
 
 pub async fn handle(
@@ -64,15 +66,33 @@ pub async fn handle(
     let now = chrono::Utc::now().to_rfc3339();
     let mut update_expr_parts = vec!["updatedAt = :now".to_string()];
     let mut expr_values = vec![(":now".to_string(), s(&now))];
+    let mut changed_fields = vec![];
 
     if let Some(desc) = message.body.description.as_deref() {
         update_expr_parts.push("description = :desc".to_string());
         expr_values.push((":desc".to_string(), s(desc)));
+        changed_fields.push("description");
     }
 
     if let Some(tags) = &message.body.tags {
         update_expr_parts.push("tags = :tags".to_string());
         expr_values.push((":tags".to_string(), string_map_to_attr(tags)));
+        changed_fields.push("tags");
+    }
+
+    if let Some(email) = message.body.owner_email.as_deref() {
+        update_expr_parts.push("ownerEmail = :ownerEmail".to_string());
+        expr_values.push((":ownerEmail".to_string(), s(email)));
+        changed_fields.push("ownerEmail");
+    }
+
+    if let Some(emails) = &message.body.secondary_owner_emails {
+        update_expr_parts.push("secondaryOwnerEmails = :secondaryOwnerEmails".to_string());
+        expr_values.push((
+            ":secondaryOwnerEmails".to_string(),
+            aws_sdk_dynamodb::types::AttributeValue::Ss(emails.clone()),
+        ));
+        changed_fields.push("secondaryOwnerEmails");
     }
 
     let update_expression = format!("SET {}", update_expr_parts.join(", "));
@@ -111,6 +131,7 @@ pub async fn handle(
                         "domainName": domain_name,
                         "updatedAt": now,
                         "status": get_s(&attrs, "status"),
+                        "changedFields": changed_fields,
                     })
                     .to_string(),
                 )
@@ -166,6 +187,8 @@ mod tests {
             body: UpdateDomainBody {
                 description: description.map(std::string::ToString::to_string),
                 tags: None,
+                owner_email: None,
+                secondary_owner_emails: None,
             },
         }
     }

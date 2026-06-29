@@ -8,7 +8,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 
 ## Key Concepts
 
-- **Domain** -- A logical grouping of related events owned by a team. Each domain gets its own event buses, schema registry, DLQs, and CloudWatch monitoring, all provisioned automatically.
+- **Domain** -- A logical grouping of related events owned by a team. Each domain gets its own event buses, schema registry, DLQs, and CloudWatch monitoring, all provisioned automatically. Each domain has one primary owner and at least one secondary owner (backup contacts for when the primary owner is unavailable).
 - **Platform account** -- The central account where the Nexus runs. Domain event buses live here with policies restricting who can publish.
 - **Application account** -- A team's AWS account. Each gets a trust stack that grants the Nexus cross-account access to create domain resources.
 - **Namespace convention** -- Platform resources follow the fixed `nexus-*` pattern (e.g., `nexus-bus`); the app-account trust role is `{org}-nexus-trust-role`; domain resources follow a configurable `{org}-{env}-{domain}-*` pattern (e.g., `acme-prod-payments-event-bus`) and are provisioned per environment from the platform-configured `Environments` list.

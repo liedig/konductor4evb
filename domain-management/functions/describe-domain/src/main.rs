@@ -37,12 +37,18 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
                 let resource_arns =
                     attr_to_resource_arns_map(&item, "resourceArns").map(|map| json!(map));
                 let environments = get_string_list(&item, "environments").unwrap_or_default();
+                let secondary_owner_emails: Vec<String> = item
+                    .get("secondaryOwnerEmails")
+                    .and_then(|v| v.as_ss().ok())
+                    .cloned()
+                    .unwrap_or_default();
 
                 let mut body = json!({
                     "domainName": get_s(&item, "domainName"),
                     "description": get_s(&item, "description"),
                     "ownerAccountId": get_s(&item, "ownerAccountId"),
                     "ownerEmail": get_s(&item, "ownerEmail"),
+                    "secondaryOwnerEmails": secondary_owner_emails,
                     "status": get_s(&item, "status"),
                     "environments": environments,
                     "tags": attr_to_string_map(&item, "tags"),
