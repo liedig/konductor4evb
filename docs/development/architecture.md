@@ -15,7 +15,7 @@ EventBridge Nexus eliminates this complexity. It gives platform teams a governan
 
 ## System Overview
 
-Nexus runs in a dedicated **platform account** and provisions domain resources into **application accounts** via cross-account IAM roles. All control-plane state lives in the platform account; application accounts only contain the resources their domains need.
+Nexus runs in a dedicated **platform account** and provisions domain resources into **domain accounts** via cross-account IAM roles. All control-plane state lives in the platform account; domain accounts only contain the resources their domains need.
 
 ```mermaid
 graph TB
@@ -41,7 +41,7 @@ graph TB
         dashboard["CloudWatch Dashboard<br/>(per domain)"]
     end
 
-    subgraph app["Application Account"]
+    subgraph app["Domain Account"]
         trustrole["Nexus Trust Role"]
         appbus["Domain Bus<br/>(per domain)"]
         intdlq["Integration DLQ<br/>(per domain)"]
@@ -77,8 +77,8 @@ graph TB
 
 ### Key Design Decisions
 
-- **Three-stack deployment model**: `notifications-stack.yaml` (optional, SES identities), `nexus-core-stack.yaml` (core platform resources, with conditional notification resources), and `trust-stack.yaml` (per application account)
-- **Nexus is a singleton per org** — one deployment of `nexus-core-stack.yaml` per AWS Organization. Platform resources use the fixed `nexus-*` naming (no org or env segment). The app-account trust role is the one exception (`{org}-nexus-trust-role`, org-scoped for cross-org uniqueness). Domain resources use `{org}-{env}-{domain}-*` and are provisioned per environment from the platform-configured `Environments` list.
+- **Three-stack deployment model**: `notifications-stack.yaml` (optional, SES identities), `nexus-core-stack.yaml` (core platform resources, with conditional notification resources), and `trust-stack.yaml` (per domain account)
+- **Nexus is a singleton per org** — one deployment of `nexus-core-stack.yaml` per AWS Organization. Platform resources use the fixed `nexus-*` naming (no org or env segment). The domain-account trust role is the one exception (`{org}-nexus-trust-role`, org-scoped for cross-org uniqueness). Domain resources use `{org}-{env}-{domain}-*` and are provisioned per environment from the platform-configured `Environments` list.
 - **One Lambda per API operation** — small, focused functions with least-privilege IAM
 - **Reads are synchronous** (API Gateway -> Lambda -> DynamoDB); writes are asynchronous (API Gateway -> SQS -> Lambda -> EventBridge)
 - **Step Functions for workflows** — no intermediate Lambdas for AWS API calls; uses SDK integrations with JSONata
@@ -208,14 +208,14 @@ sequenceDiagram
 
 ## Provisioning Workflow
 
-The provisioning workflow is triggered by the `DomainRegistrationApproved` event on the nexus bus. It creates all domain infrastructure across both the platform and application accounts using Step Functions SDK integrations (no intermediate Lambdas).
+The provisioning workflow is triggered by the `DomainRegistrationApproved` event on the nexus bus. It creates all domain infrastructure across both the platform and domain accounts using Step Functions SDK integrations (no intermediate Lambdas).
 
 Since approved domains are provisioned into every environment configured on the platform (e.g., `dev,staging,prod`), provisioning is split across **three state machines**:
 
 | State machine | Role |
 |---------------|------|
 | `provision-domain.asl.yaml` (outer) | Coordinator. Sets status, creates the domain-level namespace + RAM share, then fans out one inner execution per environment via a `Map` state with unbounded concurrency (`MaxConcurrency: 0`). Runs rollback if any env fails. |
-| `provision-env.asl.yaml` (inner) | Creates all per-env resources across platform + app accounts, with an inner saga for rollback of partial state inside a single env. |
+| `provision-env.asl.yaml` (inner) | Creates all per-env resources across platform + domain accounts, with an inner saga for rollback of partial state inside a single env. |
 | `deprovision-env.asl.yaml` | Idempotent teardown of a single env's resource set. Used by the outer workflow's rollback path, and reusable by a future `DELETE /domains` flow. |
 
 **Platform-configured environments.** The list of environments to provision is set once at platform deploy time via the `Environments` SAM parameter (`CommaDelimitedList`, default `dev,staging,prod`). It is NOT supplied per registration request — registration requests only carry `domainName`, `ownerAccountId`, and `ownerEmail`. The command handler stamps the current platform env list onto the domain record at registration time so approvals and provisioning work from a stable snapshot.
@@ -263,8 +263,8 @@ graph TD
     policy --> schema["CreateSchemaRegistry"]
     schema --> dlq["CreateSubscriptionDLQ"]
     dlq --> assume["AssumeAppAccountRole<br/>(STS AssumeRole)"]
-    assume --> appbus["CreateAppEventBus<br/>(in app account)"]
-    appbus --> appdlq["CreateIntegrationDLQ<br/>(in app account)"]
+    assume --> appbus["CreateAppEventBus<br/>(in domain account)"]
+    appbus --> appdlq["CreateIntegrationDLQ<br/>(in domain account)"]
     appdlq --> dash["CreateDashboard"]
     dash --> alarm1["CreateFailedInvocationsAlarm"]
     alarm1 --> alarm2["CreateDlqDepthAlarm"]
@@ -323,7 +323,7 @@ There are **two layers** of compensation:
 
 ## Cross-Account Trust Model
 
-Nexus provisions resources in application accounts by assuming a trust role. Each application account deploys a **trust stack** (CloudFormation template) that creates the IAM role with scoped permissions.
+Nexus provisions resources in domain accounts by assuming a trust role. Each domain account deploys a **trust stack** (CloudFormation template) that creates the IAM role with scoped permissions.
 
 ```mermaid
 graph LR
@@ -331,7 +331,7 @@ graph LR
         provwf["Provisioning Workflow<br/>(Step Functions)"]
     end
 
-    subgraph app["Application Account"]
+    subgraph app["Domain Account"]
         trustrole["nexus-trust-role"]
         appbus["Domain Event Bus"]
         appdlq["Integration DLQ"]
@@ -346,7 +346,7 @@ graph LR
 
 ### Trust Role Permissions
 
-The trust role (`{org}-nexus-trust-role`) is environment-independent — a single role in each app account covers every env the platform provisions into. It grants three scoped policies:
+The trust role (`{org}-nexus-trust-role`) is environment-independent — a single role in each domain account covers every env the platform provisions into. It grants three scoped policies:
 
 | Policy | Actions | Resource Scope |
 |--------|---------|---------------|
@@ -359,9 +359,9 @@ The trust role's `AssumeRolePolicyDocument` allows two principals from the platf
 1. The **Nexus function role** (trust anchor for Lambda-based operations)
 2. The **Provisioning workflow role** (for Step Functions SDK integrations)
 
-### Onboarding a New Application Account
+### Onboarding a New Domain Account
 
-1. Deploy `trust-stack.yaml` in the application account
+1. Deploy `trust-stack.yaml` in the domain account
 2. Pass the Nexus stack outputs (`NexusFunctionRoleArn`, `ProvisioningWorkflowRoleArn`) as parameters
 3. The trust role is immediately available for Nexus to assume
 
@@ -383,7 +383,7 @@ nexus-function-role                   (Lambda trust-anchor role)
 nexus-provisioning-workflow-role      (Step Functions execution role)
 ```
 
-The app-account **trust role** is the one exception: it carries the org prefix as `{org}-nexus-trust-role` (e.g., `acme-nexus-trust-role`) so multiple organizations sharing an app account don't collide.
+The domain-account **trust role** is the one exception: it carries the org prefix as `{org}-nexus-trust-role` (e.g., `acme-nexus-trust-role`) so multiple organizations sharing a domain account don't collide.
 
 **Domain resources** — `{org}-{env}-{domain}-*`, one set per environment in the `Environments` platform parameter:
 
@@ -391,7 +391,7 @@ The app-account **trust role** is the one exception: it carries the org prefix a
 acme-prod-billing-event-bus           (EventBridge bus)
 acme-prod-billing-schema-registry     (Schema registry)
 acme-prod-billing-subscription-dlq    (Platform DLQ)
-acme-prod-billing-integration-dlq     (App account DLQ)
+acme-prod-billing-integration-dlq     (Domain account DLQ)
 acme-prod-billing-dashboard           (CloudWatch dashboard)
 ```
 
@@ -411,9 +411,9 @@ graph LR
     end
 
     subgraph org["AWS Organization"]
-        app1["App Account A"]
-        app2["App Account B"]
-        app3["App Account C"]
+        app1["Domain Account A"]
+        app2["Domain Account B"]
+        app3["Domain Account C"]
     end
 
     ssm --> ram
@@ -422,7 +422,7 @@ graph LR
     ram -->|"shared read access"| app3
 ```
 
-Application accounts can discover domains by reading SSM parameters locally, without any cross-account IAM configuration.
+Domain accounts can discover domains by reading SSM parameters locally, without any cross-account IAM configuration.
 
 ---
 
@@ -491,7 +491,7 @@ The table uses `PAY_PER_REQUEST` billing with point-in-time recovery enabled and
 
 ## Infrastructure as Code
 
-All infrastructure is defined across three CloudFormation templates. The core platform resources use AWS SAM (`nexus-core-stack.yaml`); SES email identities are managed by an optional sibling stack (`notifications-stack.yaml`); and per-application-account trust roles use plain CloudFormation (`trust-stack.yaml`). Step Functions workflows are defined in YAML with JSONata query language.
+All infrastructure is defined across three CloudFormation templates. The core platform resources use AWS SAM (`nexus-core-stack.yaml`); SES email identities are managed by an optional sibling stack (`notifications-stack.yaml`); and per-domain-account trust roles use plain CloudFormation (`trust-stack.yaml`). Step Functions workflows are defined in YAML with JSONata query language.
 
 ### Project Structure
 
@@ -521,10 +521,10 @@ evb-nexus/
 │   │   ├── decisions.md                      # Decision log
 │   │   └── testing.md                        # Testing strategy
 │   ├── domain-management.md                 # Domain owner guide (register, approve, operate)
-│   └── trust-stack-deployment.md             # App account onboarding guide
+│   └── trust-stack-deployment.md             # Domain account onboarding guide
 ├── nexus-core-stack.yaml                     # SAM template (core platform resources)
 ├── notifications-stack.yaml                  # Optional SES identity stack
-├── trust-stack.yaml                          # CloudFormation for app account trust role
+├── trust-stack.yaml                          # CloudFormation for domain account trust role
 ├── samconfig-core.toml                       # SAM config for core stack
 ├── samconfig-notifications.toml              # SAM config for notifications stack
 └── Cargo.toml                                # Rust workspace root
@@ -553,7 +553,7 @@ evb-nexus/
 | [testing.md](testing.md) | Testing strategy, smithy-mocks patterns, TDD workflow |
 | [domain-management.md](../domain-management.md) | Domain owner guide — registering, approving, and operating domains |
 | [installation.md](../installation.md) | End-to-end installation guide (prerequisites, deploy, smoke test, uninstall) |
-| [trust-stack-deployment.md](../trust-stack-deployment.md) | Step-by-step guide for onboarding application accounts |
+| [trust-stack-deployment.md](../trust-stack-deployment.md) | Step-by-step guide for onboarding domain accounts |
 | [api/openapi.yaml](../../api/openapi.yaml) | Full API contract with request/response schemas |
 | [nexus-core-stack.yaml](../../nexus-core-stack.yaml) | SAM template — core platform resources (notification resources conditional) |
 | [notifications-stack.yaml](../../notifications-stack.yaml) | Optional SES identity stack |

@@ -21,7 +21,7 @@ Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
 └──────────────────────┬──────────────────────────┘
                        │ STS AssumeRole
 ┌──────────────────────▼──────────────────────────┐
-│  Application Account (one per team)              │
+│  Domain Account (one per team)                   │
 │                                                  │
 │  3. trust stack (required per account)           │
 │     IAM role granting Nexus cross-account access  │
@@ -46,13 +46,13 @@ Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
 ### AWS environment
 
 - **Platform account**: The AWS account where Nexus runs. You need credentials with permissions to deploy CloudFormation stacks, create IAM roles, and manage API Gateway, Lambda, DynamoDB, EventBridge, and SES resources.
-- **Application account(s)**: One or more AWS accounts where domain resources will be provisioned. You need credentials with permissions to deploy CloudFormation stacks and create IAM roles.
+- **Domain account(s)**: One or more AWS accounts where domain resources will be provisioned. You need credentials with permissions to deploy CloudFormation stacks and create IAM roles.
 - **AWS Organizations**: The platform account must belong to an AWS Organization. Nexus uses AWS RAM to share domain namespace information across accounts. Capture the Organization ARN (e.g., `arn:aws:organizations::123456789012:organization/o-abc123`) — you will need it as a parameter.
 - **Email addresses** (optional): For approval and rejection notifications during testing. Both the sender and recipient addresses must be verified in SES sandbox mode. If you skip this, you can still approve domains via the API directly.
 
 ### Decide on your namespace
 
-Nexus is a singleton per organization. Platform resources follow the fixed `nexus-*` pattern (e.g., `nexus-bus`); the app-account trust role follows `{org}-nexus-trust-role` (org-scoped so it's unique across organizations sharing an app account); domain resources follow `{org}-{env}-{domain}-*` (the env comes from the `Environments` parameter, applied per-domain at provisioning time). Choose a value for:
+Nexus is a singleton per organization. Platform resources follow the fixed `nexus-*` pattern (e.g., `nexus-bus`); the domain-account trust role follows `{org}-nexus-trust-role` (org-scoped so it's unique across organizations sharing a domain account); domain resources follow `{org}-{env}-{domain}-*` (the env comes from the `Environments` parameter, applied per-domain at provisioning time). Choose a value for:
 
 | Parameter | Example | Notes |
 |---|---|---|
@@ -194,11 +194,11 @@ Also note the `ApiEndpoint` output — you will use it in the smoke test.
 
 ---
 
-## Phase 3 — Onboard an application account
+## Phase 3 — Onboard a domain account
 
-Deploy the trust stack in each application account that will own domains. This grants Nexus cross-account access to provision domain resources.
+Deploy the trust stack in each domain account that will own domains. This grants Nexus cross-account access to provision domain resources.
 
-Switch your AWS CLI credentials to the application account, then:
+Switch your AWS CLI credentials to the domain account, then:
 
 ```bash
 aws cloudformation deploy \
@@ -243,7 +243,7 @@ test domain, approves it, verifies ACTIVE status and provisioned resources, then
 deletes the domain:
 
 ```bash
-make smoke AWS_REGION=<region> APP_ACCOUNT_ID=<application-account-id> OWNER_EMAIL=<owner@example.com> SECONDARY_OWNER_EMAIL=<secondary@example.com>
+make smoke AWS_REGION=<region> APP_ACCOUNT_ID=<domain-account-id> OWNER_EMAIL=<owner@example.com> SECONDARY_OWNER_EMAIL=<secondary@example.com>
 ```
 
 Example:
@@ -277,7 +277,7 @@ REGION="<region>"
 # Register
 awscurl -X POST "${API_URL}/domains" --region "${REGION}" \
   -H "Content-Type: application/json" \
-  -d '{"domainName":"billing","ownerAccountId":"<app-account-id>","ownerEmail":"<email>","secondaryOwnerEmails":["<secondary-email>"],"description":"Billing domain"}'
+  -d '{"domainName":"billing","ownerAccountId":"<domain-account-id>","ownerEmail":"<email>","secondaryOwnerEmails":["<secondary-email>"],"description":"Billing domain"}'
 
 # Approve
 awscurl -X POST "${API_URL}/domains/registrations/decide" --region "${REGION}" \
@@ -310,13 +310,13 @@ The `AwsOrganizationArn` parameter is required. Nexus uses AWS RAM to share doma
 
 - Confirm the platform account belongs to an AWS Organization.
 - Verify the Organization ARN is correct (`arn:aws:organizations::...`).
-- Ensure the application account is in the same Organization.
+- Ensure the domain account is in the same Organization.
 
 ### Trust role AssumeRole denied
 
 If domain provisioning fails with `AccessDenied` when assuming the trust role:
 
-- Verify the trust stack is deployed in the target application account.
+- Verify the trust stack is deployed in the target domain account.
 - Check the trust role's trust policy lists the correct platform account role ARNs.
 - Confirm the role ARNs match the `NexusFunctionRoleArn` and `ProvisioningWorkflowRoleArn` outputs from the core stack.
 
@@ -413,9 +413,9 @@ aws cloudformation delete-stack \
   --region <region>
 ```
 
-### 3. Delete trust stacks (in each application account)
+### 3. Delete trust stacks (in each domain account)
 
-Switch credentials to each application account:
+Switch credentials to each domain account:
 
 ```bash
 aws cloudformation delete-stack \

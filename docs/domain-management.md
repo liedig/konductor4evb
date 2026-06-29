@@ -2,7 +2,7 @@
 
 This guide is for **domain owners** — teams who want to register a new EventBridge domain, get it approved, and start using the provisioned infrastructure. It covers the full lifecycle from registration through active operation.
 
-If you are a platform team member responsible for approving registrations or managing the Nexus installation itself, see the [Installation Guide](installation.md) for deployment and the [Trust Stack Deployment Guide](trust-stack-deployment.md) for onboarding application accounts.
+If you are a platform team member responsible for approving registrations or managing the Nexus installation itself, see the [Installation Guide](installation.md) for deployment and the [Trust Stack Deployment Guide](trust-stack-deployment.md) for onboarding domain accounts.
 
 ---
 
@@ -353,7 +353,7 @@ When your domain reaches `ACTIVE`, Nexus has created resources in two AWS accoun
 | Failed invocations alarm | `{org}-{env}-{domain}-failed-invocations-alarm` | Alarm for failed event invocations |
 | DLQ depth alarm | `{org}-{env}-{domain}-dlq-depth-alarm` | Alarm for DLQ message accumulation |
 
-### Application account resources (per environment)
+### Domain account resources (per environment)
 
 | Resource | Name pattern | Purpose |
 |----------|-------------|---------|
@@ -376,8 +376,8 @@ acme-dev-billing-event-bus          (platform account)
 acme-dev-billing-schema-registry    (platform account)
 acme-dev-billing-subscription-dlq   (platform account)
 acme-dev-billing-dashboard          (platform account)
-acme-dev-billing-event-bus          (application account)
-acme-dev-billing-integration-dlq    (application account)
+acme-dev-billing-event-bus          (domain account)
+acme-dev-billing-integration-dlq    (domain account)
 /namespace/billing                  (SSM parameter, shared via RAM)
 ```
 
@@ -425,7 +425,7 @@ The Nexus API uses IAM authentication. Ensure your AWS credentials have permissi
 
 A `DELETE /domains` flow is not yet available. To remove a domain and its resources, contact your platform team. They will need to:
 
-1. Delete per-environment resources (event buses, schema registries, DLQs, dashboards, alarms) in both the platform and application accounts.
+1. Delete per-environment resources (event buses, schema registries, DLQs, dashboards, alarms) in both the platform and domain accounts.
 2. Delete the SSM parameter and remove the domain from the RAM resource share.
 3. Delete the domain record from the DynamoDB table.
 

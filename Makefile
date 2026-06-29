@@ -120,7 +120,7 @@ endif
 	echo ""; \
 	echo "  To clean up, run:"; \
 	echo "    aws dynamodb delete-item --table-name nexus-domains --key '{\"domainName\":{\"S\":\"'$${DOMAIN_NAME}'\"}}' --region $(AWS_REGION)"; \
-	echo "    (domain-level resources in your app account remain until a DELETE flow is built)"
+	echo "    (domain-level resources in your domain account remain until a DELETE flow is built)"
 
 deploy: build deploy-core ## Build then deploy the core stack
 
@@ -143,9 +143,9 @@ teardown-core: ## Delete the Nexus core stack
 teardown-notifications: ## Delete the notifications stack
 	aws cloudformation delete-stack --stack-name nexus-notifications --region $(AWS_REGION)
 
-deploy-trust: ## Deploy the trust stack to an application account (requires APP_PROFILE)
+deploy-trust: ## Deploy the trust stack to a domain account (requires APP_PROFILE)
 ifndef APP_PROFILE
-	$(error APP_PROFILE is required — the AWS CLI profile for the target application account)
+	$(error APP_PROFILE is required — the AWS CLI profile for the target domain account)
 endif
 	@set -euo pipefail; \
 	NEXUS_ROLE_ARN=$$(aws cloudformation describe-stacks \
@@ -174,9 +174,9 @@ endif
 		--region $(AWS_REGION) \
 		--profile $(APP_PROFILE)
 
-teardown-trust: ## Delete the trust stack from an application account (requires APP_PROFILE)
+teardown-trust: ## Delete the trust stack from a domain account (requires APP_PROFILE)
 ifndef APP_PROFILE
-	$(error APP_PROFILE is required — the AWS CLI profile for the target application account)
+	$(error APP_PROFILE is required — the AWS CLI profile for the target domain account)
 endif
 	aws cloudformation delete-stack --stack-name nexus-trust --region $(AWS_REGION) --profile $(APP_PROFILE)
 

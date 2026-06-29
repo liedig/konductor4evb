@@ -6,56 +6,56 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 ## Requirements
 
-### Requirement: Control plane assumed role in application accounts
+### Requirement: Control plane assumed role in domain accounts
 
-EventBridge Nexus SHALL use IAM assumed roles to create and manage resources in application accounts. Each application account that participates in Nexus SHALL have a single dedicated IAM role that Nexus can assume. The trust role SHALL be named `{org}-nexus-trust-role` (no environment segment) because one role serves all environments of all domains in that application account. This is required by the one-domain-one-account model: a domain provisioned into environments `[dev, staging, prod]` places all three envs' resources in the same application account, and Nexus uses one trust role to create them.
+EventBridge Nexus SHALL use IAM assumed roles to create and manage resources in domain accounts. Each domain account that participates in Nexus SHALL have a single dedicated IAM role that Nexus can assume. The trust role SHALL be named `{org}-nexus-trust-role` (no environment segment) because one role serves all environments of all domains in that domain account. This is required by the one-domain-one-account model: a domain provisioned into environments `[dev, staging, prod]` places all three envs' resources in the same domain account, and Nexus uses one trust role to create them.
 
 #### Scenario: Nexus assumes role to create resources across environments
 
-- **WHEN** the provisioning workflow needs to create resources in an application account for any environment of a domain
-- **THEN** Nexus SHALL assume the trust role `{org}-nexus-trust-role` in the target application account using `sts:AssumeRole`
+- **WHEN** the provisioning workflow needs to create resources in a domain account for any environment of a domain
+- **THEN** Nexus SHALL assume the trust role `{org}-nexus-trust-role` in the target domain account using `sts:AssumeRole`
 - **AND THEN** the same assumed role SHALL be used regardless of which environment the resources belong to
 
 #### Scenario: Assumed role does not exist
 
-- **WHEN** Nexus attempts to assume a role in an application account and the role does not exist or the trust policy does not permit the assumption
+- **WHEN** Nexus attempts to assume a role in a domain account and the role does not exist or the trust policy does not permit the assumption
 - **THEN** the provisioning workflow step SHALL fail with a clear error indicating the missing or misconfigured trust role
 - **AND THEN** the error SHALL include the expected role ARN (`{org}-nexus-trust-role`) and the required trust policy configuration
 - **AND THEN** the saga compensation chain SHALL clean up any resources created before the failure
 
-### Requirement: Trust role permissions for application accounts
+### Requirement: Trust role permissions for domain accounts
 
-The trust role in each application account SHALL grant Nexus permissions to: create and delete EventBridge event buses, manage event bus policies, create and delete SQS queues (for DLQs), and create and manage IAM roles for bus-to-bus event delivery. Resource permissions SHALL be scoped by the `{org}-*` prefix so that one role can manage per-env domain resources named `{org}-dev-*`, `{org}-staging-*`, `{org}-prod-*`, and any other env a domain may be provisioned into. The trust role itself has no environment segment.
+The trust role in each domain account SHALL grant Nexus permissions to: create and delete EventBridge event buses, manage event bus policies, create and delete SQS queues (for DLQs), and create and manage IAM roles for bus-to-bus event delivery. Resource permissions SHALL be scoped by the `{org}-*` prefix so that one role can manage per-env domain resources named `{org}-dev-*`, `{org}-staging-*`, `{org}-prod-*`, and any other env a domain may be provisioned into. The trust role itself has no environment segment.
 
 #### Scenario: Trust role permits event bus management across envs
 
-- **WHEN** Nexus assumes the trust role in an application account
+- **WHEN** Nexus assumes the trust role in a domain account
 - **THEN** the role SHALL permit `events:CreateEventBus`, `events:DeleteEventBus`, `events:DescribeEventBus`, `events:PutPermission`, and `events:RemovePermission` for domain event buses matching the `{org}-*` resource pattern, covering all envs
 
 #### Scenario: Trust role permits DLQ management across envs
 
-- **WHEN** Nexus assumes the trust role in an application account
+- **WHEN** Nexus assumes the trust role in a domain account
 - **THEN** the role SHALL permit `sqs:CreateQueue`, `sqs:DeleteQueue`, `sqs:SetQueueAttributes`, and `sqs:GetQueueAttributes` for DLQ queues matching the `{org}-*` resource pattern, covering all envs
 
 #### Scenario: Trust role permits bus-to-bus role management across envs
 
-- **WHEN** Nexus assumes the trust role in an application account
+- **WHEN** Nexus assumes the trust role in a domain account
 - **THEN** the role SHALL permit `iam:CreateRole`, `iam:DeleteRole`, `iam:PutRolePolicy`, and `iam:DeleteRolePolicy` for IAM roles used in bus-to-bus event delivery matching the `{org}-*-b2b-*` pattern
 
 #### Scenario: Trust role follows least privilege
 
-- **WHEN** the trust role is configured in an application account
+- **WHEN** the trust role is configured in a domain account
 - **THEN** the role's permissions SHALL be scoped to domain resources matching the `{org}-*` naming convention
 - **AND THEN** the role SHALL NOT grant broad permissions such as `events:*` or `sqs:*` without resource constraints
 
 ### Requirement: Trust stack installation
 
-Platform teams SHALL deploy a trust stack (CloudFormation/SAM template) in each application account before EventBridge Nexus can manage resources in that account. The Nexus project SHALL provide this template. The trust stack SHALL create the IAM trust role with the correct permissions and trust policy allowing the Nexus execution role and provisioning workflow role in the platform account to assume it. The trust role SHALL be named `{org}-nexus-trust-role`.
+Platform teams SHALL deploy a trust stack (CloudFormation/SAM template) in each domain account before EventBridge Nexus can manage resources in that account. The Nexus project SHALL provide this template. The trust stack SHALL create the IAM trust role with the correct permissions and trust policy allowing the Nexus execution role and provisioning workflow role in the platform account to assume it. The trust role SHALL be named `{org}-nexus-trust-role`.
 
 #### Scenario: Trust stack deployment
 
-- **WHEN** a platform team wants to onboard a new application account to Nexus
-- **THEN** they SHALL deploy the provided trust stack template in the application account
+- **WHEN** a platform team wants to onboard a new domain account to Nexus
+- **THEN** they SHALL deploy the provided trust stack template in the domain account
 - **AND THEN** the template SHALL create an IAM role named `{org}-nexus-trust-role` with a trust policy that permits `sts:AssumeRole` from the Nexus execution role ARN and the provisioning workflow role ARN in the platform account
 - **AND THEN** the role SHALL have the permissions defined in the trust role permissions requirement
 
@@ -68,11 +68,11 @@ Platform teams SHALL deploy a trust stack (CloudFormation/SAM template) in each 
 
 ### Requirement: Bus-to-bus assumed roles for subscription routing
 
-When subscription rules route events from the platform domain bus to a subscriber's domain bus in another account, the delivery SHALL use a bus-to-bus assumed role. The Nexus SHALL create and manage these roles in the platform account. Each role SHALL permit EventBridge to call `events:PutEvents` on the target bus in the subscriber's application account.
+When subscription rules route events from the platform domain bus to a subscriber's domain bus in another account, the delivery SHALL use a bus-to-bus assumed role. The Nexus SHALL create and manage these roles in the platform account. Each role SHALL permit EventBridge to call `events:PutEvents` on the target bus in the subscriber's domain account.
 
 #### Scenario: Bus-to-bus role created for subscription
 
-- **WHEN** a subscription is created that routes events from a domain bus in the platform account to a subscriber's domain bus in an application account
+- **WHEN** a subscription is created that routes events from a domain bus in the platform account to a subscriber's domain bus in a domain account
 - **THEN** the Nexus SHALL create (or reuse) an IAM role in the platform account that permits EventBridge to assume it
 - **AND THEN** the role SHALL have a policy allowing `events:PutEvents` on the specific target event bus ARN in the subscriber's account
 
@@ -84,7 +84,7 @@ When subscription rules route events from the platform domain bus to a subscribe
 
 ### Requirement: Control plane execution role
 
-EventBridge Nexus Lambda functions and Step Functions workflows SHALL execute using IAM roles defined in the Nexus SAM template. These roles SHALL have permissions to: manage EventBridge buses and rules in the platform account, manage DynamoDB tables, manage SQS queues in the platform account, manage CloudWatch resources, manage schema registries, emit events to the Nexus event bus, start Step Functions executions, assume trust roles in application accounts, manage SSM parameters under `/namespace/*`, and manage RAM resource shares.
+EventBridge Nexus Lambda functions and Step Functions workflows SHALL execute using IAM roles defined in the Nexus SAM template. These roles SHALL have permissions to: manage EventBridge buses and rules in the platform account, manage DynamoDB tables, manage SQS queues in the platform account, manage CloudWatch resources, manage schema registries, emit events to the Nexus event bus, start Step Functions executions, assume trust roles in domain accounts, manage SSM parameters under `/namespace/*`, and manage RAM resource shares.
 
 #### Scenario: Nexus role permits platform account operations
 
@@ -93,8 +93,8 @@ EventBridge Nexus Lambda functions and Step Functions workflows SHALL execute us
 
 #### Scenario: Nexus role permits cross-account assumption
 
-- **WHEN** the provisioning workflow needs to create resources in an application account
-- **THEN** the Nexus execution role SHALL permit `sts:AssumeRole` for trust roles in registered application accounts
+- **WHEN** the provisioning workflow needs to create resources in a domain account
+- **THEN** the Nexus execution role SHALL permit `sts:AssumeRole` for trust roles in registered domain accounts
 - **AND THEN** the trust role ARN pattern SHALL be constrained to roles matching `{org}-nexus-trust-role`
 
 #### Scenario: Nexus role permits SSM and RAM operations

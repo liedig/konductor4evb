@@ -1,12 +1,12 @@
 # Trust Stack Deployment Guide
 
-The trust stack grants EventBridge Nexus cross-account access to create and manage domain resources (event buses, DLQs, bus-to-bus IAM roles) in an application account. **One trust role per application account** — the same role serves all environments of all domains owned by that account.
+The trust stack grants EventBridge Nexus cross-account access to create and manage domain resources (event buses, DLQs, bus-to-bus IAM roles) in a domain account. **One trust role per domain account** — the same role serves all environments of all domains owned by that account.
 
 ## Prerequisites
 
 1. The Nexus core stack is deployed in the platform account.
 2. You know the `Organization` value matching the Nexus configuration (default: `acme`).
-3. You have an AWS CLI profile configured with permissions to deploy CloudFormation in the target application account.
+3. You have an AWS CLI profile configured with permissions to deploy CloudFormation in the target domain account.
 
 ## Deploy
 

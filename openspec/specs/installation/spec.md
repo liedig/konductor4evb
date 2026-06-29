@@ -12,7 +12,7 @@ The project SHALL provide a complete, runnable installation guide at `docs/insta
 
 #### Scenario: First-time operator completes installation
 
-- **WHEN** a first-time operator follows `docs/installation.md` from start to finish with one platform account and one application account
+- **WHEN** a first-time operator follows `docs/installation.md` from start to finish with one platform account and one domain account
 - **THEN** they SHALL have the notifications stack, core stack, and trust stack deployed
 - **AND THEN** they SHALL be able to register a domain, approve it, and verify it reaches ACTIVE status
 
@@ -67,13 +67,13 @@ The installation guide SHALL include an uninstall section that walks the operato
 
 ### Requirement: Makefile trust stack deployment target
 
-The project SHALL provide a `deploy-trust` Makefile target that deploys `trust-stack.yaml` to an application account using `aws cloudformation deploy`. The target SHALL accept `APP_PROFILE` (required, the AWS CLI profile for the target application account) and `ORGANIZATION` (optional, defaults to `acme`) as make variables. The target SHALL automatically resolve `NexusFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from the deployed `nexus-core` stack outputs using the platform account credentials, eliminating manual copy-paste of role ARNs. The target SHALL use `--capabilities CAPABILITY_NAMED_IAM` and tag the stack with `Application=nexus Component=trust`.
+The project SHALL provide a `deploy-trust` Makefile target that deploys `trust-stack.yaml` to a domain account using `aws cloudformation deploy`. The target SHALL accept `APP_PROFILE` (required, the AWS CLI profile for the target domain account) and `ORGANIZATION` (optional, defaults to `acme`) as make variables. The target SHALL automatically resolve `NexusFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from the deployed `nexus-core` stack outputs using the platform account credentials, eliminating manual copy-paste of role ARNs. The target SHALL use `--capabilities CAPABILITY_NAMED_IAM` and tag the stack with `Application=nexus Component=trust`.
 
 #### Scenario: Operator deploys trust stack with valid profile
 
 - **WHEN** the operator runs `make deploy-trust APP_PROFILE=demo` after the core stack is deployed
 - **THEN** the target SHALL fetch `NexusFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from the `nexus-core` stack outputs
-- **AND THEN** the target SHALL deploy `trust-stack.yaml` to the application account identified by `APP_PROFILE`
+- **AND THEN** the target SHALL deploy `trust-stack.yaml` to the domain account identified by `APP_PROFILE`
 - **AND THEN** the deployed stack SHALL be named `nexus-trust`
 - **AND THEN** the stack SHALL have tags `Application=nexus` and `Component=trust`
 
@@ -96,12 +96,12 @@ The project SHALL provide a `deploy-trust` Makefile target that deploys `trust-s
 
 ### Requirement: Makefile trust stack teardown target
 
-The project SHALL provide a `teardown-trust` Makefile target that deletes the `nexus-trust` stack from an application account. The target SHALL accept `APP_PROFILE` (required) as a make variable and use `AWS_REGION` for the region.
+The project SHALL provide a `teardown-trust` Makefile target that deletes the `nexus-trust` stack from a domain account. The target SHALL accept `APP_PROFILE` (required) as a make variable and use `AWS_REGION` for the region.
 
-#### Scenario: Operator removes trust stack from application account
+#### Scenario: Operator removes trust stack from domain account
 
 - **WHEN** the operator runs `make teardown-trust APP_PROFILE=demo`
-- **THEN** the target SHALL delete the `nexus-trust` stack from the application account identified by `APP_PROFILE`
+- **THEN** the target SHALL delete the `nexus-trust` stack from the domain account identified by `APP_PROFILE`
 
 #### Scenario: Operator runs teardown-trust without APP_PROFILE
 

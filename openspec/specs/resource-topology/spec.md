@@ -8,7 +8,7 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 ### Requirement: Platform account domain resources
 
-When a domain is provisioned, EventBridge Nexus SHALL create the following resources in the platform account **for each environment** in the domain's `environments` list: a domain event bus, a PutEvent policy restricting publishing to the domain's owning application account, a schema registry with access policies, a subscription rule DLQ (SQS queue), and CloudWatch observability resources (dashboard, alarms, metrics configuration).
+When a domain is provisioned, EventBridge Nexus SHALL create the following resources in the platform account **for each environment** in the domain's `environments` list: a domain event bus, a PutEvent policy restricting publishing to the domain's owning domain account, a schema registry with access policies, a subscription rule DLQ (SQS queue), and CloudWatch observability resources (dashboard, alarms, metrics configuration).
 
 Each environment SHALL produce a disjoint set of resources identifiable by its env segment in the name. A single domain registration request with `environments: ["dev", "staging", "prod"]` SHALL produce three full sets of resources in the platform account.
 
@@ -28,7 +28,7 @@ The Nexus platform itself SHALL separately own control-plane resources that are 
 #### Scenario: PutEvent policy restricts publishing to domain owner
 
 - **WHEN** the domain event bus is created in the platform account
-- **THEN** Nexus SHALL attach a resource policy to the bus that permits `events:PutEvents` only from the domain's owning application account
+- **THEN** Nexus SHALL attach a resource policy to the bus that permits `events:PutEvents` only from the domain's owning domain account
 - **AND THEN** the policy SHALL be identical across environments — all environments of the domain share the same owner account
 
 #### Scenario: Schema registry created per domain-environment
@@ -54,9 +54,9 @@ The Nexus platform itself SHALL separately own control-plane resources that are 
 - **WHEN** the Nexus platform stack is deployed
 - **THEN** the Nexus event bus, domains table, Nexus API, command queues, and platform IAM roles SHALL be created once, named `{org}-nexus-*`, and SHALL NOT be duplicated per environment or per domain
 
-### Requirement: Application account domain resources
+### Requirement: Domain account domain resources
 
-When a domain is provisioned, EventBridge Nexus SHALL create the following resources in the domain's owning application account **for each environment** in the domain's `environments` list: a domain event bus (where the app receives routed events) and an integration rule DLQ (SQS queue). All environments of a given domain SHALL be provisioned into the same application account (the `ownerAccountId` on the domain record).
+When a domain is provisioned, EventBridge Nexus SHALL create the following resources in the domain's owning domain account **for each environment** in the domain's `environments` list: a domain event bus (where the app receives routed events) and an integration rule DLQ (SQS queue). All environments of a given domain SHALL be provisioned into the same domain account (the `ownerAccountId` on the domain record).
 
 #### Scenario: Application resources created per environment
 
@@ -64,32 +64,32 @@ When a domain is provisioned, EventBridge Nexus SHALL create the following resou
 - **THEN** account `111122223333` SHALL contain three domain event buses and three integration DLQs, one per environment, all named according to `{org}-{env}-{domain}-*`
 - **AND THEN** account `111122223333` SHALL have exactly one trust role (`{org}-nexus-trust-role`) serving all three environments
 
-#### Scenario: Domain event bus created in application account
+#### Scenario: Domain event bus created in domain account
 
 - **WHEN** the provisioning workflow runs for a given environment
-- **THEN** Nexus SHALL create a domain event bus in the owning application account, named `{org}-{env}-{domain}-event-bus`
-- **AND THEN** this bus SHALL be the target for subscription rules that route events from the platform domain bus to the application account
+- **THEN** Nexus SHALL create a domain event bus in the owning domain account, named `{org}-{env}-{domain}-event-bus`
+- **AND THEN** this bus SHALL be the target for subscription rules that route events from the platform domain bus to the domain account
 
-#### Scenario: Integration rule DLQ created in application account
+#### Scenario: Integration rule DLQ created in domain account
 
 - **WHEN** the provisioning workflow runs for a given environment
-- **THEN** Nexus SHALL create an SQS queue in the application account named `{org}-{env}-{domain}-integration-dlq` to serve as the dead-letter queue for integration rules
+- **THEN** Nexus SHALL create an SQS queue in the domain account named `{org}-{env}-{domain}-integration-dlq` to serve as the dead-letter queue for integration rules
 - **AND THEN** failed deliveries from integration rules SHALL be routed to this DLQ
 
-### Requirement: One domain bus per subscribing application account
+### Requirement: One domain bus per subscribing domain account
 
-Each subscribing application account SHALL receive events on a dedicated domain event bus per domain. There SHALL be a 1:1 mapping between domain and event bus per application account. Multiple domains operating within a single application account SHALL each have their own separate domain event bus in that account.
+Each subscribing domain account SHALL receive events on a dedicated domain event bus per domain. There SHALL be a 1:1 mapping between domain and event bus per domain account. Multiple domains operating within a single domain account SHALL each have their own separate domain event bus in that account.
 
-#### Scenario: Multiple domains in one application account
+#### Scenario: Multiple domains in one domain account
 
-- **WHEN** an application account owns or subscribes to multiple domains (e.g., billing and sales)
-- **THEN** each domain SHALL have its own dedicated event bus in that application account
+- **WHEN** a domain account owns or subscribes to multiple domains (e.g., billing and sales)
+- **THEN** each domain SHALL have its own dedicated event bus in that domain account
 - **AND THEN** events for each domain SHALL be routed to the corresponding domain-specific bus
 
-#### Scenario: Subscription routing targets application account bus
+#### Scenario: Subscription routing targets domain account bus
 
-- **WHEN** a subscription is created for a consumer in a different application account
-- **THEN** the subscription rule on the platform domain bus SHALL target the domain event bus in the subscriber's application account
+- **WHEN** a subscription is created for a consumer in a different domain account
+- **THEN** the subscription rule on the platform domain bus SHALL target the domain event bus in the subscriber's domain account
 - **AND THEN** the routing SHALL use a bus-to-bus assumed role to deliver events cross-account
 
 ### Requirement: Application team responsibility boundary
@@ -98,7 +98,7 @@ Application teams SHALL only interact with the domain event bus in their own acc
 
 #### Scenario: Application team creates integration rules
 
-- **WHEN** events are delivered to the domain event bus in the application account
+- **WHEN** events are delivered to the domain event bus in the domain account
 - **THEN** the application team SHALL create EventBridge rules on their own domain bus to route events to their consuming applications
 - **AND THEN** the Nexus SHALL NOT manage or interfere with integration rules created by the application team
 
@@ -110,25 +110,25 @@ Application teams SHALL only interact with the domain event bus in their own acc
 
 ### Requirement: Event flow path
 
-Events SHALL flow through a three-stage path: (1) the publishing application calls PutEvents on the domain event bus in the platform account, (2) subscription rules on the platform domain bus match and route events to the subscriber's domain event bus in their application account via bus-to-bus assumed roles, (3) the subscriber's integration rules on their own bus deliver events to their consuming applications.
+Events SHALL flow through a three-stage path: (1) the publishing application calls PutEvents on the domain event bus in the platform account, (2) subscription rules on the platform domain bus match and route events to the subscriber's domain event bus in their domain account via bus-to-bus assumed roles, (3) the subscriber's integration rules on their own bus deliver events to their consuming applications.
 
 #### Scenario: End-to-end event delivery
 
 - **WHEN** a publishing application sends an event to the domain event bus in the platform account
 - **THEN** the event SHALL be evaluated against subscription rules on that bus
-- **AND THEN** matching subscription rules SHALL deliver the event to the target domain event bus in the subscriber's application account using a bus-to-bus assumed role
+- **AND THEN** matching subscription rules SHALL deliver the event to the target domain event bus in the subscriber's domain account using a bus-to-bus assumed role
 - **AND THEN** the subscriber's integration rules SHALL process the event on their own bus
 
 #### Scenario: Subscription rule delivery failure
 
-- **WHEN** a subscription rule on the platform domain bus fails to deliver an event to the subscriber's application account bus
+- **WHEN** a subscription rule on the platform domain bus fails to deliver an event to the subscriber's domain account bus
 - **THEN** the event SHALL be sent to the subscription rule DLQ in the platform account
 - **AND THEN** the DLQ message SHALL include error details (error code, error message, rule ARN, target ARN)
 
 #### Scenario: Integration rule delivery failure
 
 - **WHEN** an integration rule on the subscriber's domain bus fails to deliver an event to the consuming application
-- **THEN** the event SHALL be sent to the integration rule DLQ in the application account
+- **THEN** the event SHALL be sent to the integration rule DLQ in the domain account
 - **AND THEN** the DLQ message SHALL include error details for troubleshooting
 
 ### Requirement: Domain namespace convention
@@ -181,7 +181,7 @@ Each domain SHALL have a stable, environment-independent namespace of the form `
 
 ### Requirement: RAM-shared namespace discovery
 
-All domain namespace SSM parameters SHALL be shared with the AWS Organisation via a single AWS RAM resource share. Application accounts SHALL have read-only access to namespace parameters without requiring cross-account IAM configuration.
+All domain namespace SSM parameters SHALL be shared with the AWS Organisation via a single AWS RAM resource share. Domain accounts SHALL have read-only access to namespace parameters without requiring cross-account IAM configuration.
 
 #### Scenario: RAM share contains all namespace parameters
 
@@ -197,6 +197,6 @@ All domain namespace SSM parameters SHALL be shared with the AWS Organisation vi
 
 #### Scenario: Namespace parameters are read-only to consumers
 
-- **WHEN** an application account accesses a shared namespace parameter
+- **WHEN** a domain account accesses a shared namespace parameter
 - **THEN** the account SHALL be able to read the parameter value
 - **AND THEN** the account SHALL NOT be able to modify or delete the parameter
