@@ -74,11 +74,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .await
         .context("failed to send provisioning-failed email")?;
 
-    tracing::info!(
-        domain_name,
-        owner_email,
-        "provisioning-failed notification sent"
-    );
+    tracing::info!(domain_name, "provisioning-failed notification sent");
 
     Ok(())
 }

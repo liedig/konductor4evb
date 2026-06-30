@@ -5,6 +5,7 @@ use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde_json::{json, Value};
 
 use nexus_common::api;
+use nexus_common::html::escape;
 use nexus_common::models::{ApiError, DecideRequest, Decision};
 
 const EMAIL_LINK_ACTOR: &str = "email-link";
@@ -182,7 +183,7 @@ async fn record_decision(
                     if is_task_gone_success(&service_err) {
                         DecisionOutcome::AlreadyProcessed
                     } else {
-                        DecisionOutcome::Failed(format!("{service_err:?}"))
+                        DecisionOutcome::Failed(format!("{service_err}"))
                     }
                 }
             }
@@ -208,7 +209,7 @@ async fn record_decision(
                     if is_task_gone_failure(&service_err) {
                         DecisionOutcome::AlreadyProcessed
                     } else {
-                        DecisionOutcome::Failed(format!("{service_err:?}"))
+                        DecisionOutcome::Failed(format!("{service_err}"))
                     }
                 }
             }
@@ -231,6 +232,8 @@ fn is_task_gone_failure(err: &SendTaskFailureError) -> bool {
 }
 
 fn html_response(status_code: u16, title: &str, body: &str) -> Value {
+    let title = escape(title);
+    let body = escape(body);
     let html = format!(
         r#"<!doctype html>
 <html lang="en">

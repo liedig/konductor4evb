@@ -47,6 +47,13 @@ pub fn get_string_list(item: &HashMap<String, AttributeValue>, key: &str) -> Opt
     })
 }
 
+pub fn get_string_set(item: &HashMap<String, AttributeValue>, key: &str) -> Vec<String> {
+    item.get(key)
+        .and_then(|v| v.as_ss().ok())
+        .cloned()
+        .unwrap_or_default()
+}
+
 pub fn string_list_to_attr(list: &[String]) -> AttributeValue {
     AttributeValue::L(list.iter().map(|v| s(v)).collect())
 }
@@ -225,6 +232,23 @@ mod tests {
     fn get_string_list_returns_none_for_missing_key() {
         let item = HashMap::new();
         assert!(get_string_list(&item, "environments").is_none());
+    }
+
+    #[test]
+    fn get_string_set_extracts_ss_from_item() {
+        let mut item = HashMap::new();
+        item.insert(
+            "secondaryOwnerEmails".to_string(),
+            AttributeValue::Ss(vec!["a@x.com".into(), "b@x.com".into()]),
+        );
+        let result = get_string_set(&item, "secondaryOwnerEmails");
+        assert_eq!(result, vec!["a@x.com", "b@x.com"]);
+    }
+
+    #[test]
+    fn get_string_set_returns_empty_for_missing_key() {
+        let item = HashMap::new();
+        assert!(get_string_set(&item, "secondaryOwnerEmails").is_empty());
     }
 
     #[test]

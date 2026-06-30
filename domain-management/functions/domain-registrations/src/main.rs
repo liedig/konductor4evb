@@ -3,6 +3,7 @@ use aws_config::BehaviorVersion;
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use serde_json::Value;
 
+use nexus_common::error::ControlPlaneError;
 use nexus_common::models::RegisterDomainRequest;
 
 mod register;
@@ -48,7 +49,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
                 if let Err(e) =
                     register::handle(&clients.ddb, &clients.eb, &clients.sfn, &request).await
                 {
-                    tracing::error!("register failed: {e:?}");
+                    tracing::error!(error = %e, "register failed");
                     return Err(e.into());
                 }
             }
@@ -56,12 +57,17 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
                 let request: update::UpdateDomainMessage =
                     serde_json::from_str(body_str).context("invalid UpdateDomainMessage")?;
                 if let Err(e) = update::handle(&clients.ddb, &clients.eb, &request).await {
-                    tracing::error!("update failed: {e:?}");
+                    tracing::error!(error = %e, "update failed");
                     return Err(e.into());
                 }
             }
             other => {
-                return Err(format!("unrecognised HttpMethod: {other}").into());
+                return Err(ControlPlaneError::ValidationException {
+                    message: format!("unrecognised HttpMethod: {other}"),
+                    reason: nexus_common::error::ValidationExceptionReason::UnknownOperation,
+                    field_list: None,
+                }
+                .into());
             }
         }
     }

@@ -96,7 +96,7 @@ pub struct Domain {
     pub error_detail: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct PerEnvResourceArns {
     pub platform_event_bus_arn: Option<String>,

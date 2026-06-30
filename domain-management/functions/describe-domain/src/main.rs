@@ -5,7 +5,7 @@ use std::env;
 
 use nexus_common::api;
 use nexus_common::dynamodb::{
-    attr_to_resource_arns_map, attr_to_string_map, get_s, get_string_list, s,
+    attr_to_resource_arns_map, attr_to_string_map, get_s, get_string_list, get_string_set, s,
 };
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::ApiError;
@@ -37,11 +37,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
                 let resource_arns =
                     attr_to_resource_arns_map(&item, "resourceArns").map(|map| json!(map));
                 let environments = get_string_list(&item, "environments").unwrap_or_default();
-                let secondary_owner_emails: Vec<String> = item
-                    .get("secondaryOwnerEmails")
-                    .and_then(|v| v.as_ss().ok())
-                    .cloned()
-                    .unwrap_or_default();
+                let secondary_owner_emails = get_string_set(&item, "secondaryOwnerEmails");
 
                 let mut body = json!({
                     "domainName": get_s(&item, "domainName"),
@@ -81,7 +77,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
             )),
         },
         Err(e) => {
-            tracing::error!("DynamoDB error: {e:?}");
+            tracing::error!(error = %e, "DynamoDB get_item failed");
             Ok(api::error_response(
                 500,
                 ApiError {

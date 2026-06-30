@@ -71,6 +71,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .table_name(&table)
         .key("domainName", s(domain_name))
         .update_expression("SET taskToken = :token")
+        .condition_expression("attribute_exists(domainName)")
         .expression_attribute_values(":token", s(task_token))
         .send()
         .await

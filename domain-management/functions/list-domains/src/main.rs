@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use std::env;
 
 use nexus_common::api;
-use nexus_common::dynamodb::{deserialize_pagination_token, get_s, s, serialize_pagination_token};
+use nexus_common::dynamodb::{
+    deserialize_pagination_token, get_s, get_string_set, s, serialize_pagination_token,
+};
 
 struct QueryResult {
     items: Vec<HashMap<String, AttributeValue>>,
@@ -60,11 +62,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
                 .items
                 .iter()
                 .map(|item| {
-                    let secondary_owner_emails: Vec<String> = item
-                        .get("secondaryOwnerEmails")
-                        .and_then(|v| v.as_ss().ok())
-                        .cloned()
-                        .unwrap_or_default();
+                    let secondary_owner_emails = get_string_set(item, "secondaryOwnerEmails");
                     json!({
                         "domainName": get_s(item, "domainName"),
                         "description": get_s(item, "description"),
@@ -87,7 +85,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
             ))
         }
         Err(e) => {
-            tracing::error!("DynamoDB error: {e:?}");
+            tracing::error!(error = %e, "DynamoDB query failed");
             Ok(api::error_response(
                 500,
                 nexus_common::models::ApiError {
@@ -135,7 +133,10 @@ async fn query_by_index(
         }
     }
 
-    let output = query.send().await?;
+    let output = query
+        .send()
+        .await
+        .context("failed to query by-index GSI")?;
     Ok(QueryResult {
         items: output.items.unwrap_or_default(),
         last_key: output.last_evaluated_key,
@@ -154,7 +155,10 @@ async fn scan_all(
             scan = scan.exclusive_start_key(k, v);
         }
     }
-    let output = scan.send().await?;
+    let output = scan
+        .send()
+        .await
+        .context("failed to scan domains table")?;
     Ok(QueryResult {
         items: output.items.unwrap_or_default(),
         last_key: output.last_evaluated_key,

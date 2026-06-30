@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use aws_sdk_dynamodb::operation::put_item::PutItemError;
 use aws_sdk_dynamodb::types::AttributeValue;
 use serde_json::json;
@@ -20,7 +20,11 @@ pub async fn handle(
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
     let environments_raw = env::var("ENVIRONMENTS").context("ENVIRONMENTS not set")?;
     let environments = parse_environments(&environments_raw)
-        .map_err(|e| anyhow!("invalid ENVIRONMENTS value: {e}"))?;
+        .map_err(|e| ControlPlaneError::ValidationException {
+            message: format!("invalid ENVIRONMENTS value: {e}"),
+            reason: nexus_common::error::ValidationExceptionReason::FieldValidationFailed,
+            field_list: None,
+        })?;
 
     if let Err(e) = validate_domain_name(&request.domain_name) {
         emit_failed(
@@ -102,7 +106,8 @@ pub async fn handle(
         .await
         .map_err(|e| ControlPlaneError::StepFunctions(e.to_string()))?;
 
-    eb.put_events()
+    let result = eb
+        .put_events()
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .event_bus_name(&cp_bus)
@@ -127,6 +132,13 @@ pub async fn handle(
         .await
         .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
 
+    if result.failed_entry_count > 0 {
+        tracing::error!(
+            failed_count = result.failed_entry_count,
+            "some RegisterDomainSucceeded events failed to publish"
+        );
+    }
+
     Ok(())
 }
 
@@ -138,7 +150,8 @@ async fn emit_failed(
     owner_email: &str,
     reason: &str,
 ) -> Result<()> {
-    eb.put_events()
+    let result = eb
+        .put_events()
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .event_bus_name(cp_bus)
@@ -158,7 +171,15 @@ async fn emit_failed(
         )
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("EventBridge error: {e}"))?;
+        .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
+
+    if result.failed_entry_count > 0 {
+        tracing::error!(
+            failed_count = result.failed_entry_count,
+            "some RegisterDomainFailed events failed to publish"
+        );
+    }
+
     Ok(())
 }
 
@@ -186,7 +207,9 @@ fn validate_environment_name(name: &str) -> Result<(), String> {
         return Err("length must be 1-32 characters".to_string());
     }
     let mut chars = name.chars();
-    let first = chars.next().unwrap();
+    let Some(first) = chars.next() else {
+        return Err("length must be 1-32 characters".to_string());
+    };
     if !(first.is_ascii_lowercase() || first.is_ascii_digit()) {
         return Err("must start with a lowercase letter or digit".to_string());
     }

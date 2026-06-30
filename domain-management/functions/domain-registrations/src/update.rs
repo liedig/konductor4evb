@@ -63,6 +63,14 @@ pub async fn handle(
         .await;
     }
 
+    if message.body.description.is_none()
+        && message.body.tags.is_none()
+        && message.body.owner_email.is_none()
+        && message.body.secondary_owner_emails.is_none()
+    {
+        return emit_failed(eb, &cp_bus, domain_name, "no fields provided to update").await;
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
     let mut update_expr_parts = vec!["updatedAt = :now".to_string()];
     let mut expr_values = vec![(":now".to_string(), s(&now))];
@@ -120,7 +128,8 @@ pub async fn handle(
         }
     };
 
-    eb.put_events()
+    let result = eb
+        .put_events()
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .event_bus_name(&cp_bus)
@@ -141,6 +150,13 @@ pub async fn handle(
         .await
         .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
 
+    if result.failed_entry_count > 0 {
+        tracing::error!(
+            failed_count = result.failed_entry_count,
+            "some UpdateDomainSucceeded events failed to publish"
+        );
+    }
+
     Ok(())
 }
 
@@ -150,7 +166,8 @@ async fn emit_failed(
     domain_name: &str,
     reason: &str,
 ) -> Result<()> {
-    eb.put_events()
+    let result = eb
+        .put_events()
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .event_bus_name(cp_bus)
@@ -168,7 +185,15 @@ async fn emit_failed(
         )
         .send()
         .await
-        .map_err(|e| anyhow::anyhow!("EventBridge error: {e}"))?;
+        .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
+
+    if result.failed_entry_count > 0 {
+        tracing::error!(
+            failed_count = result.failed_entry_count,
+            "some UpdateDomainFailed events failed to publish"
+        );
+    }
+
     Ok(())
 }
 

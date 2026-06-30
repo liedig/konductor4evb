@@ -77,7 +77,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .await
         .context("failed to send rejection email")?;
 
-    tracing::info!(domain_name, owner_email, "rejection notification sent");
+    tracing::info!(domain_name, "rejection notification sent");
 
     Ok(())
 }

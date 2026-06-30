@@ -71,11 +71,7 @@ async fn handler(event: LambdaEvent<Value>) -> Result<(), Error> {
         .await
         .context("failed to send approval-outcome email")?;
 
-    tracing::info!(
-        domain_name,
-        owner_email,
-        "approval-outcome notification sent"
-    );
+    tracing::info!(domain_name, "approval-outcome notification sent");
 
     Ok(())
 }
