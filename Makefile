@@ -169,7 +169,7 @@ endif
 			NexusRoleArn=$${NEXUS_ROLE_ARN} \
 			ProvisioningWorkflowRoleArn=$${PROVISIONING_ROLE_ARN} \
 			Organization=$(ORGANIZATION) \
-		--tags Application=nexus Component=trust \
+		--tags Application=nexus Component=trust auto-delete=no \
 		--capabilities CAPABILITY_NAMED_IAM \
 		--region $(AWS_REGION) \
 		--profile $(APP_PROFILE)

@@ -18,4 +18,4 @@ resolve_s3 = true
 capabilities = "CAPABILITY_NAMED_IAM"
 confirm_changeset = false
 parameter_overrides = "Organization=acme AwsOrganizationArn=arn:aws:organizations::444433332222:organization/o-lipnxj8tgf NotificationSenderEmail=sliedig+nexus@example.com PlatformOperatorEmail=sliedig+nexus@example.com"
-tags = "Application=nexus Component=core"
+tags = "Application=nexus Component=core auto-delete=no"
