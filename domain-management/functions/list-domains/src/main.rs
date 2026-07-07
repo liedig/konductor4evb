@@ -133,10 +133,7 @@ async fn query_by_index(
         }
     }
 
-    let output = query
-        .send()
-        .await
-        .context("failed to query by-index GSI")?;
+    let output = query.send().await.context("failed to query by-index GSI")?;
     Ok(QueryResult {
         items: output.items.unwrap_or_default(),
         last_key: output.last_evaluated_key,
@@ -155,10 +152,7 @@ async fn scan_all(
             scan = scan.exclusive_start_key(k, v);
         }
     }
-    let output = scan
-        .send()
-        .await
-        .context("failed to scan domains table")?;
+    let output = scan.send().await.context("failed to scan domains table")?;
     Ok(QueryResult {
         items: output.items.unwrap_or_default(),
         last_key: output.last_evaluated_key,

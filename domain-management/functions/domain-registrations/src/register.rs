@@ -19,12 +19,13 @@ pub async fn handle(
         env::var("APPROVAL_STATE_MACHINE_ARN").context("APPROVAL_STATE_MACHINE_ARN not set")?;
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
     let environments_raw = env::var("ENVIRONMENTS").context("ENVIRONMENTS not set")?;
-    let environments = parse_environments(&environments_raw)
-        .map_err(|e| ControlPlaneError::ValidationException {
+    let environments = parse_environments(&environments_raw).map_err(|e| {
+        ControlPlaneError::ValidationException {
             message: format!("invalid ENVIRONMENTS value: {e}"),
             reason: nexus_common::error::ValidationExceptionReason::FieldValidationFailed,
             field_list: None,
-        })?;
+        }
+    })?;
 
     if let Err(e) = validate_domain_name(&request.domain_name) {
         emit_failed(
