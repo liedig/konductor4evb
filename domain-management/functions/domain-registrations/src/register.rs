@@ -4,7 +4,7 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use serde_json::json;
 use std::env;
 
-use nexus_common::dynamodb::s;
+use nexus_common::dynamodb::{s, string_map_to_attr};
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::{DomainStatus, RegisterDomainRequest};
 
@@ -62,6 +62,10 @@ pub async fn handle(
 
     if let Some(desc) = &request.description {
         put_domain = put_domain.item("description", s(desc));
+    }
+
+    if let Some(tags) = &request.tags {
+        put_domain = put_domain.item("tags", string_map_to_attr(tags));
     }
 
     let environments_attr = AttributeValue::L(environments.iter().map(|e| s(e)).collect());

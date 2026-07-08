@@ -53,12 +53,12 @@ pub async fn handle(
         .as_deref()
         .and_then(|status| status.parse::<DomainStatus>().ok());
 
-    if matches!(current_status, Some(DomainStatus::Inactive)) {
+    if !matches!(current_status, Some(DomainStatus::Active)) {
         return emit_failed(
             eb,
             &cp_bus,
             domain_name,
-            "domain is INACTIVE and cannot be modified",
+            "domain is not ACTIVE and cannot be modified",
         )
         .await;
     }
@@ -292,11 +292,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_update_on_inactive_domain() {
+    async fn rejects_update_on_non_active_domain() {
         set_env();
 
         let mut item = active_domain_item();
-        item.insert("status".into(), s("INACTIVE"));
+        item.insert("status".into(), s("PENDING_APPROVAL"));
 
         let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
             GetItemOutput::builder()
