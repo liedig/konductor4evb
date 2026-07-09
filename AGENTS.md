@@ -13,11 +13,14 @@
 - Write tests for critical paths only, not every function
 - AAA pattern (Arrange, Act, Assert)
 - Prefer integration and behavior tests over unit test coverage metrics
+- Follow TDD: see docs/development/testing.md
 - Priority test flows:
-  - Domain registration and lifecycle (register, list, describe, update, delete)
-  - Event publishing (schema validation, DLQ behavior)
-  - Event subscription lifecycle (subscribe, list, describe, update, unsubscribe)
-  - Cross-account automation (IAM/resource policies, rule creation)
+  - Domain registration and lifecycle (register, update, list, describe, decide)
+  - Event publishing (source convention, payload correctness, failed entry handling)
+  - Approval workflow integration (decide handler, task token lifecycle, already-processed detection)
+  - Notification generation (email body construction, HTML escaping, new account detection)
+  - Shared library correctness (DDB helpers, API response mapping, serde models, namespace resolution, validation)
+- When adding new capabilities (e.g., domain deletion, event subscriptions, schema validation, DLQ behavior), include their lifecycle in the priority test flows above
 - Use lightweight unit tests only where they materially reduce risk on complex logic or edge cases
 
 ## Product Naming

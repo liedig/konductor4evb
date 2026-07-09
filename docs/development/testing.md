@@ -44,9 +44,8 @@ flowchart LR
     subgraph Workflow[Development Workflow]
         Code[Code Change] --> Check[cargo check]
         Check --> Clippy[cargo clippy]
-        Clippy --> Unit[Unit Tests]
-        Unit --> Integration[Integration Tests]
-        Integration --> Commit[Commit]
+        Clippy --> Tests[cargo test --workspace]
+        Tests --> Commit[Commit]
     end
 ```
 
@@ -55,7 +54,7 @@ flowchart LR
 | Type | Location | Command | Purpose |
 |------|----------|---------|---------|
 | Unit Tests | `src/*.rs` (inline `#[cfg(test)]` modules) | `cargo test --workspace` | Test isolated logic within each crate |
-| Integration Tests | `tests/*.rs` (per crate) | `cargo test --workspace` | Test cross-module behavior and AWS SDK interactions |
+| Handler Tests | `src/*.rs` (inline `#[cfg(test)]` with smithy-mocks) | `cargo test --workspace` | Test handler behavior with mocked AWS SDK clients |
 | Full Suite | — | `make test` | Run all tests across the workspace |
 
 ## Commands
@@ -82,8 +81,8 @@ make check
 Place unit tests in a `#[cfg(test)]` module at the bottom of the source file they exercise. This keeps tests co-located with the code they verify.
 
 ```rust
-pub fn event_bus_name(env: &str, org: &str, domain: &str) -> String {
-    format!("{env}-{org}-{domain}-event-bus")
+pub fn event_bus_name(org: &str, env: &str, domain: &str) -> String {
+    format!("{org}-{env}-{domain}-event-bus")
 }
 
 #[cfg(test)]
@@ -92,8 +91,8 @@ mod tests {
 
     #[test]
     fn event_bus_name_includes_suffix() {
-        let result = event_bus_name("prod", "acme", "billing");
-        assert_eq!(result, "prod-acme-billing-event-bus");
+        let result = event_bus_name("acme", "prod", "billing");
+        assert_eq!(result, "acme-prod-billing-event-bus");
     }
 }
 ```
@@ -105,35 +104,17 @@ mod tests {
 - Test function names should describe the behavior, not the function name
 - Prefer `assert_eq!` / `assert_ne!` over bare `assert!` for better failure messages
 
-## Integration Tests
+## Handler Tests
 
-For cross-module or AWS SDK behavior, place tests in a `tests/` directory at the crate root. Each `.rs` file in `tests/` compiles as a separate crate with access to the library's public API.
+Handler-level tests that exercise the full request-to-response path with mocked AWS SDK clients serve as the project's integration tests. These live inline in `src/` alongside the handler code, not in separate `tests/` directories.
 
-```text
-lib/nexus-common/
-├── src/
-│   └── lib.rs
-└── tests/
-    └── domain_lifecycle.rs
-```
+A `tests/` directory (which compiles as a separate crate with access to the library's public API) may be used in the future for cross-crate scenarios. Currently, all handler tests are inline because each Lambda crate has a single entry point.
 
-```rust
-use nexus_common::NamespaceResolver;
-
-#[test]
-fn resolver_produces_consistent_naming() {
-    let resolver = NamespaceResolver::default_pattern();
-    let bus = resolver.event_bus_name("prod", "acme", "billing");
-    let registry = resolver.schema_registry_name("prod", "acme", "billing");
-
-    assert!(bus.starts_with("prod-acme-billing"));
-    assert!(registry.starts_with("prod-acme-billing"));
-}
-```
+See the [Mocking AWS SDK Clients](#mocking-aws-sdk-clients-with-smithy-mocks) section below for the smithy-mocks pattern used in handler tests.
 
 ## Async Tests
 
-Lambda handlers and AWS SDK calls are async. Use `#[tokio::test]` for async test functions:
+Lambda handlers and AWS SDK calls are async. Use `#[tokio::test]` for async test functions. All async handler tests use smithy-mocks with injected clients (see sections below):
 
 ```rust
 #[cfg(test)]
@@ -142,20 +123,39 @@ mod tests {
 
     #[tokio::test]
     async fn handler_returns_success_for_valid_input() {
-        let event = serde_json::json!({
-            "domain_name": "billing",
-            "owner_account_id": "123456789012"
-        });
-
-        let result = handle_request(event).await;
+        // Mock clients built with smithy-mocks — see below.
+        let result = handle(&ddb, &eb, &sfn, &request).await;
         assert!(result.is_ok());
     }
 }
 ```
 
+## Handler Structure for Testability
+
+To use smithy-mocks, handler functions must accept SDK clients as parameters rather than constructing them internally. The `main.rs` entrypoint builds real clients from AWS config; the handler function receives them as arguments. This separation is what allows smithy-mocks to inject mock clients in tests.
+
+```rust
+// src/main.rs — thin entrypoint, builds real clients
+async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
+    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+    let ddb = aws_sdk_dynamodb::Client::new(&config);
+    let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
+    Ok(fetch_domain(&ddb, &table, &event.payload).await)
+}
+
+// src/handler.rs — testable, accepts clients as params
+pub async fn fetch_domain(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    event: &Value,
+) -> Value { ... }
+```
+
+Handlers that build their own clients inside the handler function cannot be tested with smithy-mocks without refactoring. See also the rust-reviewer droid (section 8) for the thin-handler pattern.
+
 ## Mocking AWS SDK Clients with Smithy-Mocks
 
-Use [`aws-smithy-mocks`](https://docs.aws.amazon.com/sdk-for-rust/latest/dg/testing-smithy-mocks.html) to test Lambda handlers that call AWS services. This requires zero changes to production code — mock clients are real SDK client types with canned responses.
+Use [`aws-smithy-mocks`](https://docs.aws.amazon.com/sdk-for-rust/latest/dg/testing-smithy-mocks.html) to test Lambda handlers that call AWS services. Mock clients are real SDK client types with canned responses, so no mock-specific code is needed in production handlers. However, handlers must accept SDK clients as parameters — see [Handler Structure for Testability](#handler-structure-for-testability) above.
 
 ### Setup
 
@@ -179,21 +179,22 @@ aws-smithy-mocks = { workspace = true }
 Create mock rules for each SDK operation, build a mock client, and pass it to the function under test:
 
 ```rust
-use aws_sdk_dynamodb::operation::query::QueryOutput;
-use aws_smithy_mocks::{mock, mock_client, RuleMode};
+use aws_sdk_dynamodb::operation::put_item::PutItemError;
+use aws_smithy_mocks::{mock, mock_client};
 
 #[tokio::test]
-async fn rejects_duplicate_domain() {
-    let query_rule = mock!(aws_sdk_dynamodb::Client::query)
-        .match_requests(|req| req.index_name() == Some("by-name"))
-        .then_output(|| QueryOutput::builder().count(1).build());
-
-    let ddb = mock_client!(aws_sdk_dynamodb, [&query_rule]);
+async fn rejects_duplicate_domain_with_failed_event() {
+    let put_rule = mock!(aws_sdk_dynamodb::Client::put_item).then_error(|| {
+        PutItemError::ConditionalCheckFailedException(
+            aws_sdk_dynamodb::types::error::ConditionalCheckFailedException::builder().build(),
+        )
+    });
+    let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
 
     let result = handle(&ddb, &eb, &sfn, &request).await;
 
-    assert!(result.is_ok());
-    assert_eq!(query_rule.num_calls(), 1);
+    assert!(result.is_ok()); // handler emits failed event, does not error
+    assert_eq!(put_rule.num_calls(), 1);
 }
 ```
 
@@ -273,17 +274,15 @@ fn rejects_domain_name_with_special_chars() {
 ```text
 crate-root/
 ├── src/
-│   ├── lib.rs
-│   ├── handler.rs        ← unit tests at bottom via #[cfg(test)]
-│   ├── domain.rs         ← unit tests at bottom via #[cfg(test)]
+│   ├── main.rs           ← thin entrypoint (no tests)
+│   ├── handler.rs        ← unit + handler tests at bottom via #[cfg(test)]
+│   ├── register.rs       ← unit + handler tests at bottom via #[cfg(test)]
 │   └── validation.rs     ← unit tests at bottom via #[cfg(test)]
-└── tests/
-    ├── registration.rs   ← integration tests (public API only)
-    └── lifecycle.rs      ← integration tests (public API only)
+└── tests/                ← reserved for future cross-crate scenarios (currently empty)
 ```
 
-- Unit tests go inline in the module they test
-- Integration tests go in `tests/` and only use the crate's public API
+- All tests go inline in the module they test via `#[cfg(test)]`
+- Handler tests with smithy-mocks go in a nested `mod handle_tests` block within the `#[cfg(test)]` module
 - Name test functions descriptively: `rejects_empty_domain_name` not `test_1`
 
 ## CI Considerations
