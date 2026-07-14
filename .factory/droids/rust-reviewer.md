@@ -20,15 +20,17 @@ Read AGENTS.md
 Read docs/development/testing.md
 ```
 
+> **Source of truth:** The code examples below are snapshots and may lag the
+> codebase. On any conflict, AGENTS.md and `openspec/specs/**/spec.md` win.
+> Verify a suspected stale rule against the spec before flagging.
+
 ## Already Enforced by Clippy — Skip These
 
 The following patterns are enforced at `make check` (`cargo clippy --workspace -- -D warnings`). Do not re-check them in code review:
 
 | Pattern | Clippy Lint | What it catches |
 | ------- | ----------- | --------------- |
-| Unnecessary clones | `clippy::redundant_clone` | `.clone()` on a value that's not consumed |
 | Explicit closure for cloning | `clippy::map_clone` | `.map(\|x\| x.clone())` instead of `.cloned()` |
-| Needless collect | `clippy::needless_collect` | `.collect()` into Vec then iterating again |
 | Unnecessary returns | `clippy::needless_return` | `return x;` at end of function |
 | Unused variables | `clippy::unused_variables` | Variables bound but never read |
 | Dead code | `clippy::dead_code` | Functions/structs never used |
@@ -36,6 +38,7 @@ The following patterns are enforced at `make check` (`cargo clippy --workspace -
 | Missing `&str` where `String` accepted | `clippy::ptr_arg` | `fn f(s: String)` when `&str` suffices |
 | Manual `Option::map` on `Result` | `clippy::manual_map` | Can be simplified |
 | Unnecessary `if let` | `clippy::needless_if` | Can use `Option::map_or` |
+| Manual `Default` impl | `clippy::derivable_impls` | `impl Default` when `#[derive(Default)]` suffices |
 
 > These fire at `make check` and in CI. Reviewing them wastes tokens.
 >
@@ -71,6 +74,8 @@ ddb.put_item()
         }
     })?;
 ```
+
+The same rule applies to state-guarded updates: a `get_item` status check followed by an unconditional `update_item` is the same race. Put the guard on the write (`condition_expression("#status = :active")`).
 
 #### DynamoDB key construction uses domainName, never domainId
 
@@ -139,44 +144,7 @@ RegisterDomainRequest { secondary_owner_emails: vec![] }
 pub secondary_owner_emails: Vec<String>,
 ```
 
-> **Alternative:** Crates like `nonempty` or `non-empty-vec` provide a `NonEmpty<T>` type that enforces non-emptiness at the type level. Using `NonEmpty<String>` instead of `Vec<String>` eliminates the custom deserializer and makes the constraint unrepresentable at compile time. Either approach is compliant.
-
-### 1. Allocation and Clone Patterns
-
-Clippy catches redundant clones, but not **clone strategy** issues in Lambda hot paths:
-
-```rust
-// ❌ NEEDS FIX: Cloning a large struct when a reference would suffice.
-let cloned = request.clone();
-process(&cloned);
-
-// ✅ GOOD: Borrow when possible.
-process(&request);
-```
-
-```rust
-// ❌ NEEDS FIX: String formatting in a loop when push_str or write! is cheaper.
-let mut s = String::new();
-for env in &environments {
-    s = format!("{s}, {env}");
-}
-
-// ✅ GOOD: Use join or push_str.
-let s = environments.join(", ");
-```
-
-```rust
-// ❌ NEEDS FIX: Collecting into Vec just to iterate again.
-let names: Vec<String> = items.iter().map(|i| i.name.clone()).collect();
-for name in &names { ... }
-
-// ✅ GOOD: Iterate directly.
-for name in items.iter().map(|i| &i.name) { ... }
-```
-
-**Rule:** Any `.clone()` on a `Vec<String>`, `HashMap`, or large struct inside a loop processing >10 items is a candidate for borrowing. Flag as **NEEDS FIX**.
-
-### 2. Error Handling Quality
+### 1. Error Handling Quality
 
 > **Note:** Bare `unwrap()`, `expect()` on `Option`/`Result`, and unused `Result` are caught by clippy in most contexts. Focus on what linters cannot catch:
 
@@ -224,48 +192,9 @@ return Err(format!("dynamodb error: {e}").into());
 return Err(ControlPlaneError::DynamoDb(e.to_string()));
 ```
 
-> **Centralize the error-to-response mapping:** Instead of manually matching `ControlPlaneError` variants in every Lambda handler, consider a trait (e.g. `impl Into<ApiGatewayResponse> for ControlPlaneError`) or a single `api::from_control_plane_error` function that all handlers call. This keeps the HTTP status code mapping in one place and prevents drift when new error variants are added.
+> **Centralize the error-to-response mapping:** Instead of manually matching `ControlPlaneError` variants in every Lambda handler, use the single `api::from_control_plane_error` function that all handlers call. This keeps the HTTP status code mapping in one place and prevents drift when new error variants are added.
 
-### 3. Async Safety
-
-Lambda handlers are async, but each invocation is single-threaded. Concurrency bugs are rare, but async-specific issues exist:
-
-```rust
-// ❌ BLOCK: Holding a std::sync::Mutex guard across an .await point (can deadlock with tokio).
-let guard = std_mutex.lock().unwrap();
-do_async_work().await;  // guard still held — deadlock risk
-
-// ✅ REQUIRED: Drop the guard before awaiting, or use tokio::sync::Mutex for guards that
-// must span await points. In most Lambda code, no mutex is needed — state is per-invocation.
-let result = {
-    let guard = std_mutex.lock().unwrap();
-    compute_something(&guard)
-};
-do_async_work(result).await;  // guard already dropped
-```
-
-> `std::sync::Mutex` is fine in async code as long as the guard is not held across an `.await`. The deadlock risk is specific to holding the lock while the runtime parks the task. When in doubt, scope the guard tightly. For CPU-bound or blocking operations that would stall the async runtime, use `tokio::task::spawn_blocking`.
-
-```rust
-// ❌ NEEDS FIX: Blocking call in async handler.
-std::thread::sleep(Duration::from_secs(5));
-
-// ✅ REQUIRED: Use async sleep.
-tokio::time::sleep(Duration::from_secs(5)).await;
-```
-
-```rust
-// ❌ NEEDS FIX: Spawned task without error propagation.
-tokio::spawn(async { do_work().await });
-
-// ✅ GOOD: In Lambda handlers, prefer sequential awaits. If spawning, handle the JoinError.
-let handle = tokio::spawn(async { do_work().await });
-if let Err(e) = handle.await {
-    tracing::error!(error = %e, "spawned task failed");
-}
-```
-
-### 4. DynamoDB Patterns
+### 2. DynamoDB Patterns
 
 > Conditional PutItem for uniqueness is covered in **§0 (TOCTOU)**. The checks below cover the remaining DynamoDB patterns not already addressed there.
 
@@ -291,10 +220,6 @@ let emails: Vec<String> = item.get("secondaryOwnerEmails")
     .unwrap_or_default();
 ```
 
-> **Extension trait pattern:** Prefer `item.get_s("field")` over free functions like `get_s(&item, "field")`. An extension trait on `HashMap<String, AttributeValue>` (e.g. `trait DynamoDbItemExt { fn get_s(&self, key: &str) -> Option<String>; ... }`) gives method-call syntax, better autocomplete, and keeps the item as the receiver. The existing `nexus_common::dynamodb` helpers can be migrated to this pattern incrementally.
->
-> **Deserializing from DDB records:** For non-trivial records, consider `serde_dynamo` to deserialize `HashMap<String, AttributeValue>` directly into a typed struct (`serde_dynamo::from_item::<Domain>(item)`), instead of manually extracting each field with `get_s` / `get_ss` helpers. This eliminates field-name typos, handles absent attributes via `Option`, and centralizes the DDB-to-model mapping. The manual approach is acceptable for 2-3 fields; beyond that, deserialization is more robust.
-
 ```rust
 // ❌ NEEDS FIX: UpdateItem without return values when the updated record is needed downstream.
 ddb.update_item()...send().await?;
@@ -303,6 +228,17 @@ ddb.update_item()...send().await?;
 ddb.update_item()
     .return_values(aws_sdk_dynamodb::types::ReturnValue::AllNew)
     .send().await?;
+```
+
+```rust
+// ✅ GOOD: When a conditional write fails and the caller must distinguish
+// "not found" from "wrong state", request the old item instead of a pre-read:
+ddb.update_item()
+    .condition_expression("attribute_exists(domainName) AND #status = :active")
+    .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld)
+    .send().await;
+// On ConditionalCheckFailedException, inspect ccf.item(): None means not found,
+// Some(item) means the record exists but failed the state guard.
 ```
 
 ```rust
@@ -317,7 +253,7 @@ if let Some(desc) = body.description.as_deref() {
 let expr = format!("SET {}", parts.join(", "));
 ```
 
-### 5. EventBridge Patterns
+### 3. EventBridge Patterns
 
 ```rust
 // ❌ BLOCK: Event source not matching the nexus convention.
@@ -326,8 +262,6 @@ let expr = format!("SET {}", parts.join(", "));
 // ✅ REQUIRED: All domain management events use this source.
 .source("nexus.domain-management")
 ```
-
-> **Define the string once:** A `const EVENT_SOURCE: &str = "nexus.domain-management"` in `nexus_common` (or a wrapper type) ensures the source string is defined in one place and reused everywhere. Reviewers then check that call sites reference the constant, not that they happen to type the correct literal. This also prevents typo drift across handlers.
 
 ```rust
 // ❌ BLOCK: Event detail missing required fields or including stale ones.
@@ -338,19 +272,27 @@ let expr = format!("SET {}", parts.join(", "));
 ```
 
 ```rust
-// ❌ NEEDS FIX: PutEvents with a single entry but not checking the response for per-entry failures.
+// ❌ BLOCK: PutEvents response failures traced but swallowed — the event is lost.
 let resp = eb.put_events()...send().await?;
-// ignoring resp.failed_entry_count
-
-// ✅ REQUIRED: Check failed_entry_count and trace failures.
-let resp = eb.put_events()...send().await
-    .context("failed to put events to EventBridge")?;
 if resp.failed_entry_count > 0 {
     tracing::error!(failed_count = resp.failed_entry_count, "some events failed to publish");
 }
+Ok(())
+
+// ✅ REQUIRED: A failed entry is a lost lifecycle event. Return an error so the
+// SQS-driven handler retries the record — do NOT merely trace and continue.
+let resp = eb.put_events()...send().await
+    .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
+if resp.failed_entry_count > 0 {
+    return Err(ControlPlaneError::EventBridge(format!(
+        "{} event entries failed to publish",
+        resp.failed_entry_count
+    ))
+    .into());
+}
 ```
 
-### 6. Input Validation and Serde
+### 4. Input Validation and Serde
 
 ```rust
 // ❌ BLOCK: Request struct without deny_unknown_fields (allows typos to silently pass).
@@ -370,14 +312,9 @@ pub struct RegisterDomainRequest {
     pub secondary_owner_emails: Vec<String>, // accepts empty vec
 }
 
-// ✅ REQUIRED: Enforce non-empty at the type or deserialization level.
-// Option A: custom deserializer
+// ✅ REQUIRED: Enforce non-empty at the deserialization level.
 #[serde(deserialize_with = "deserialize_non_empty_vec")]
 pub secondary_owner_emails: Vec<String>,
-
-// Option B: NonEmpty type from a crate (compile-time enforcement)
-use nonempty::NonEmpty;
-pub secondary_owner_emails: NonEmpty<String>,
 ```
 
 ```rust
@@ -399,7 +336,7 @@ use nexus_common::{models::RegisterDomainRequest, dynamodb::s, error::ControlPla
 // Exception: use super::* is acceptable in #[cfg(test)] mod tests blocks.
 ```
 
-### 7. Tracing and Logging
+### 5. Tracing and Logging
 
 ```rust
 // ❌ BLOCK: Using println! or eprintln! in Lambda handlers.
@@ -428,7 +365,7 @@ tracing::warn!(domain_name, "domain not found in table");
 tracing::error!(error = %e, "failed to emit event to EventBridge");
 ```
 
-### 8. Crate and Module Design
+### 6. Crate and Module Design
 
 The project is a Cargo workspace with `lib/nexus-common` as the shared library and `domain-management/functions/*` as individual Lambda crates.
 
@@ -442,11 +379,11 @@ use nexus_common::models::RegisterDomainRequest;
 
 ```rust
 // ❌ BLOCK: Business logic in the Lambda binary crate (main.rs with 200+ lines of logic).
-// main.rs should be thin: parse env vars, build clients, call handler.
+// main.rs should be thin: init tracing, build clients, run lambda_runtime.
 
 // ✅ REQUIRED: Handler logic in a library module, main.rs is a thin entrypoint.
 // src/handler.rs: pub async fn handle(...) -> Result<...>
-// src/main.rs: #[tokio::main] async fn main() -> Result<()> { lambda_runtime::run(service_fn(handler)).await }
+// src/main.rs: init tracing, build clients, lambda_runtime::run(service_fn(...))
 ```
 
 ```rust
@@ -458,26 +395,26 @@ pub(crate) fn internal_helper(...) -> ...
 ```
 
 ```rust
-// ❌ BLOCK: AWS SDK client created inside a hot path (per-request) instead of once.
-async fn handler(event: LambdaEvent<Value>) -> Result<()> {
-    let config = aws_config::load_defaults(...).await;  // new config per invocation
+// ❌ BLOCK: aws_config::load_defaults / Client::new inside the handler fn —
+// runs on every warm invocation.
+async fn handle(event: LambdaEvent<Value>) -> Result<()> {
+    let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let ddb = aws_sdk_dynamodb::Client::new(&config);
     ...
 }
 
-// ✅ REQUIRED: AWS SDK clients built once at handler setup, reused across invocations.
-// In Lambda, this means building clients in the handler closure scope:
-async fn handler(event: LambdaEvent<Value>) -> Result<()> {
-    // Clients are built from cached config (Lambda reuses warm instances).
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let ddb = aws_sdk_dynamodb::Client::new(&config);
-    ...
-}
-// Note: Lambda reuses warm instances, so config loading is amortized.
-// For truly cold starts, this is unavoidable. Do NOT flag this pattern — it's the Lambda convention.
+// ✅ REQUIRED: Build config and clients once in main, pass &Client (or a
+// Clients struct) into the handler via the service_fn closure:
+let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+let clients = Clients::new(&config);
+let clients_ref = &clients;
+lambda_runtime::run(service_fn(move |event| async move {
+    handler::handle(clients_ref, event).await
+}))
+.await
 ```
 
-### 9. Type Safety and Stdlib Traits
+### 7. Type Safety
 
 #### Stringly-typed APIs
 
@@ -505,41 +442,7 @@ match status {
 }
 ```
 
-#### Stdlib trait implementations
-
-```rust
-// ❌ NEEDS FIX: Manual conversion function instead of From/Into.
-pub fn from_dynamo_item(item: HashMap<String, AttributeValue>) -> Domain { ... }
-
-// ✅ REQUIRED: Implement From for idiomatic conversions. Callers get .into() for free.
-impl From<HashMap<String, AttributeValue>> for Domain {
-    fn from(item: HashMap<String, AttributeValue>) -> Self { ... }
-}
-```
-
-> **Prefer `serde_dynamo` over manual `From` impls** when the struct fields map 1:1 to DynamoDB attributes. `serde_dynamo::from_item::<Domain>(item)` handles type coercion, absent-field defaults via `Option`, and renames via `#[serde(rename = "domainName")]`. Reserve manual `From` impls for records that require computed fields or cross-table joins. See also the note in **§4** about the extension trait pattern for simple field access.
-
-```rust
-// ❌ NEEDS FIX: Manual Default implementation when all fields have natural defaults.
-impl Default for PerEnvResourceArns {
-    fn default() -> Self {
-        Self {
-            platform_event_bus_arn: None,
-            app_event_bus_arn: None,
-            // ... 4 more None fields
-        }
-    }
-}
-
-// ✅ GOOD: Use #[derive(Default)] when all fields implement Default.
-#[derive(Debug, Clone, Default)]
-pub struct PerEnvResourceArns {
-    pub platform_event_bus_arn: Option<String>,
-    // ...
-}
-```
-
-### 10. File Layout and Module Size Thresholds
+### 8. File Layout and Module Size Thresholds
 
 The project follows a feature-per-Lambda layout. Each Lambda is its own crate under `domain-management/functions/`. The shared library is `lib/nexus-common/`.
 
@@ -549,7 +452,7 @@ The project follows a feature-per-Lambda layout. Each Lambda is its own crate un
 domain-management/functions/domain-registrations/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs           # Thin entrypoint: lambda_runtime::run
+│   ├── main.rs           # Thin entrypoint: init tracing, build clients, lambda_runtime::run
 │   ├── register.rs       # Register domain handler + tests
 │   ├── update.rs         # Update domain handler + tests
 │   └── lib.rs            # Re-exports for integration tests (if needed)
@@ -565,7 +468,7 @@ lib/nexus-common/
 │   ├── models.rs         # Domain models, request/response types
 │   ├── error.rs          # ControlPlaneError enum
 │   ├── api.rs            # API Gateway response helpers
-│   ├── dynamodb.rs       # DynamoDB attribute helpers (extension trait, s(), etc.)
+│   ├── dynamodb.rs       # DynamoDB attribute helpers (s(), get_s(), etc.)
 │   ├── html.rs           # HTML escaping helpers
 │   └── namespace.rs      # Resource naming convention
 ```
@@ -574,13 +477,18 @@ lib/nexus-common/
 
 ```rust
 // ❌ BLOCK: main.rs containing handler logic, validation, and DDB calls.
-// main.rs should be ~10 lines: init tracing, run lambda_runtime.
 
-// ✅ REQUIRED: main.rs is thin. Handler logic in named modules.
-// main.rs:
-fn main() -> Result<(), Error> {
+// ✅ REQUIRED: main.rs is thin — init tracing, build clients once, run the handler.
+#[tokio::main]
+async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt().json().with_env_filter(...).init();
-    lambda_runtime::run(service_fn(handler)).await
+    let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+    let clients = Clients::new(&config);
+    let clients_ref = &clients;
+    lambda_runtime::run(service_fn(move |event| async move {
+        handler::handle(clients_ref, event).await
+    }))
+    .await
 }
 ```
 
@@ -592,9 +500,13 @@ fn main() -> Result<(), Error> {
 | Shared library module | 200 lines | 400 lines | Split by concern |
 | Step Functions ASL file | 100 lines | 200 lines | Extract sub-workflows |
 | Test module | 300 lines | 500 lines | Split by scenario |
-| main.rs | 20 lines | 50 lines | Move logic to handler module |
+| main.rs | 25 lines | 50 lines | Move logic to handler module |
 
 > When a file crosses its threshold, split **by role** (one handler per operation, one concern per module), not by arbitrary line count.
+>
+> Thresholds count **non-test lines**. Measure with the `#[cfg(test)]` module
+> excluded — otherwise well-tested files (e.g. a 700-line file with 450 lines
+> of tests) false-positive despite compliant production code.
 
 ## Review Process
 
@@ -611,58 +523,58 @@ Read docs/development/testing.md
 wc -l path/to/file.rs
 ```
 
+Exclude the `#[cfg(test)]` module when comparing against size thresholds.
+
 ### 3. Check correctness-critical patterns (§0)
 
 - DynamoDB keys use `domainName`, not `domainId`.
-- TOCTOU: uniqueness enforced via conditional writes, not pre-write queries.
+- TOCTOU: uniqueness and state guards enforced via conditional writes, not pre-write queries or reads.
 - Event payloads match the event catalog in the specs.
 - API responses use `nexus_common::api` helpers (or a response newtype).
-- Error variants map to correct HTTP status codes (ideally via a centralized trait).
+- Error variants map to correct HTTP status codes via `api::from_control_plane_error`.
 - Sensitive fields (taskToken) not exposed to unauthorized callers.
 
-### 4. Check error handling chain (§2)
+### 4. Check error handling chain (§1)
 
 - No internal error details in API responses.
 - `anyhow::Context` messages are specific and include the operation.
 - `unwrap()`/`expect()` only in test code or on infallible operations.
 - SDK errors converted to typed `ControlPlaneError` variants for control flow.
 
-### 5. Check DynamoDB patterns (§4)
+### 5. Check DynamoDB patterns (§2)
 
-- Uniqueness enforced via conditional writes (see §0 TOCTOU), not pre-write queries.
+- Uniqueness and state guards enforced via conditional writes (see §0 TOCTOU).
 - String Set (SS) for collections of unique strings.
 - Absent attributes handled with `unwrap_or_default()`, not `unwrap()`.
 - Update expressions built dynamically from present fields only.
-- For non-trivial records: prefer `serde_dynamo` deserialization or an extension trait over manual `get_s`/`get_ss` field access.
+- Conditional-write failures that need cause discrimination use `ReturnValuesOnConditionCheckFailure`, not a pre-read.
 
-### 6. Check EventBridge patterns (§5)
+### 6. Check EventBridge patterns (§3)
 
-- Event source is `nexus.domain-management` (ideally via a shared constant, not repeated literals).
+- Event source is `nexus.domain-management`.
 - Event detail matches the minimum payload from the spec.
-- `failed_entry_count` checked after PutEvents.
+- Failed `put_events` entries surfaced as errors (retried), not merely traced.
 
-### 7. Check serde and validation (§6)
+### 7. Check serde and validation (§4)
 
 - `#[serde(deny_unknown_fields)]` on all request DTOs.
-- Non-empty collections enforced via custom deserializer or `NonEmpty<T>` type from a crate.
+- Non-empty collections enforced via the custom deserializer.
 - Parse errors mapped to user-friendly validation messages.
 - No glob imports in production code; explicit imports only.
 
-### 8. Check tracing (§7)
+### 8. Check tracing (§5)
 
 - Structured `tracing` macros, not `println!`/`eprintln!`.
 - Appropriate log levels (warn for expected conditions, error for failures).
 - No sensitive data (full task tokens, credentials) in trace fields.
 
-### 9. Check crate boundaries and type safety (§8-9)
+### 9. Check crate boundaries and type safety (§6-7)
 
 - Shared types in `nexus-common`, not duplicated across Lambda crates.
-- `main.rs` is thin (entrypoint only).
+- `main.rs` is thin (init tracing, build clients once, run handler).
+- AWS clients constructed in `main` and passed by reference, never inside the handler.
 - `pub` visibility is minimal; prefer `pub(crate)` for internal helpers.
 - Domain status and other domain concepts use enums, not raw strings.
-- Conversions use `From`/`Into` traits or `serde_dynamo`, not manual extraction functions.
-- `#[derive(Default)]` instead of manual `Default` impls when all fields have natural defaults.
-- DDB attribute access uses extension trait method syntax or `serde_dynamo` deserialization, not free-function helpers for non-trivial records.
 
 ## Enforcement
 
@@ -716,7 +628,7 @@ Summary: <one-line verdict> - X issues (APPROVE / NEEDS FIX / BLOCK)
 | Check | Status |
 | ----- | ------ |
 | domainName as partition key | ✅ |
-| Conditional PutItem for uniqueness | ❌ Missing |
+| Conditional PutItem for uniqueness | ✅ |
 | Event payload matches spec | ✅ |
 | No sensitive data in response | ✅ |
 | serde deny_unknown_fields | ✅ |
