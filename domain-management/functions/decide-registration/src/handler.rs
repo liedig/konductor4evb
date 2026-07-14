@@ -10,10 +10,7 @@ use serde_json::{json, Value};
 const EMAIL_LINK_ACTOR: &str = "email-link";
 const EMAIL_LINK_JUSTIFICATION: &str = "Rejected via email link (no justification provided)";
 
-pub async fn handle(event: LambdaEvent<Value>) -> Result<Value, Error> {
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let sfn = aws_sdk_sfn::Client::new(&config);
-
+pub async fn handle(sfn: &aws_sdk_sfn::Client, event: LambdaEvent<Value>) -> Result<Value, Error> {
     let http_method = event
         .payload
         .get("httpMethod")
@@ -21,10 +18,10 @@ pub async fn handle(event: LambdaEvent<Value>) -> Result<Value, Error> {
         .unwrap_or("POST");
 
     if http_method.eq_ignore_ascii_case("GET") {
-        return Ok(handle_get(&sfn, &event.payload).await);
+        return Ok(handle_get(sfn, &event.payload).await);
     }
 
-    Ok(handle_post(&sfn, &event.payload).await)
+    Ok(handle_post(sfn, &event.payload).await)
 }
 
 async fn handle_post(sfn: &aws_sdk_sfn::Client, event: &Value) -> Value {

@@ -5,10 +5,7 @@ use nexus_common::html::escape;
 use serde_json::Value;
 use std::env;
 
-pub async fn handle(event: LambdaEvent<Value>) -> Result<(), Error> {
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let ses = aws_sdk_sesv2::Client::new(&config);
-
+pub async fn handle(ses: &aws_sdk_sesv2::Client, event: LambdaEvent<Value>) -> Result<(), Error> {
     let from_email =
         env::var("NOTIFICATION_SENDER_EMAIL").context("NOTIFICATION_SENDER_EMAIL not set")?;
 

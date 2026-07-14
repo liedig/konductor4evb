@@ -15,9 +15,7 @@ struct QueryResult {
     last_key: Option<HashMap<String, AttributeValue>>,
 }
 
-pub async fn handle(event: LambdaEvent<Value>) -> Result<Value, Error> {
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let ddb = aws_sdk_dynamodb::Client::new(&config);
+pub async fn handle(ddb: &aws_sdk_dynamodb::Client, event: LambdaEvent<Value>) -> Result<Value, Error> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
 
     let owner_filter = api::query_param(&event.payload, "ownerAccountId");
@@ -29,7 +27,7 @@ pub async fn handle(event: LambdaEvent<Value>) -> Result<Value, Error> {
 
     let result = if let Some(owner) = &owner_filter {
         query_by_index(
-            &ddb,
+            ddb,
             &table,
             "by-owner",
             "ownerAccountId",
@@ -40,7 +38,7 @@ pub async fn handle(event: LambdaEvent<Value>) -> Result<Value, Error> {
         .await
     } else if let Some(status) = &status_filter {
         query_by_index(
-            &ddb,
+            ddb,
             &table,
             "by-status",
             "status",
@@ -50,7 +48,7 @@ pub async fn handle(event: LambdaEvent<Value>) -> Result<Value, Error> {
         )
         .await
     } else {
-        scan_all(&ddb, &table, max_results, start_key).await
+        scan_all(ddb, &table, max_results, start_key).await
     };
 
     match result {

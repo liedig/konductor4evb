@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use aws_sdk_dynamodb::operation::put_item::PutItemError;
-use aws_sdk_dynamodb::types::AttributeValue;
+use aws_sdk_dynamodb::types::{AttributeValue, ReturnValuesOnConditionCheckFailure};
+use aws_sdk_sfn::operation::start_execution::StartExecutionError;
 use serde_json::json;
 use std::env;
 
-use nexus_common::dynamodb::{s, string_map_to_attr};
+use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::{DomainStatus, RegisterDomainRequest};
 
@@ -13,6 +14,7 @@ pub async fn handle(
     eb: &aws_sdk_eventbridge::Client,
     sfn: &aws_sdk_sfn::Client,
     request: &RegisterDomainRequest,
+    request_id: &str,
 ) -> Result<()> {
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let state_machine_arn =
@@ -40,7 +42,6 @@ pub async fn handle(
         return Ok(());
     }
 
-    let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     let status = DomainStatus::PendingApproval.to_string();
 
@@ -48,6 +49,7 @@ pub async fn handle(
         .put_item()
         .table_name(&domains_table)
         .item("domainName", s(&request.domain_name))
+        .item("requestId", s(request_id))
         .item("ownerAccountId", s(&request.owner_account_id))
         .item("status", s(&status))
         .item("ownerEmail", s(&request.owner_email))
@@ -58,7 +60,8 @@ pub async fn handle(
         .item("createdAt", s(&now))
         .item("updatedAt", s(&now))
         .item("createdBy", s(&request.owner_account_id))
-        .condition_expression("attribute_not_exists(domainName)");
+        .condition_expression("attribute_not_exists(domainName)")
+        .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld);
 
     if let Some(desc) = &request.description {
         put_domain = put_domain.item("description", s(desc));
@@ -71,22 +74,32 @@ pub async fn handle(
     let environments_attr = AttributeValue::L(environments.iter().map(|e| s(e)).collect());
     put_domain = put_domain.item("environments", environments_attr);
 
+    let mut created_at = now.clone();
+
     match put_domain.send().await {
         Ok(_) => {}
         Err(e) => {
             let service_err = e.into_service_error();
-            if let PutItemError::ConditionalCheckFailedException(_) = service_err {
-                let reason = format!("domain '{}' already exists", request.domain_name);
-                emit_failed(
-                    eb,
-                    &cp_bus,
-                    &request.domain_name,
-                    &request.owner_account_id,
-                    &request.owner_email,
-                    &reason,
-                )
-                .await?;
-                return Ok(());
+            if let PutItemError::ConditionalCheckFailedException(ccf) = &service_err {
+                let existing_request_id =
+                    ccf.item().and_then(|item| get_s(item, "requestId"));
+                if existing_request_id.as_deref() == Some(request_id) {
+                    if let Some(original) = ccf.item().and_then(|item| get_s(item, "createdAt")) {
+                        created_at = original;
+                    }
+                } else {
+                    let reason = format!("domain '{}' already exists", request.domain_name);
+                    emit_failed(
+                        eb,
+                        &cp_bus,
+                        &request.domain_name,
+                        &request.owner_account_id,
+                        &request.owner_email,
+                        &reason,
+                    )
+                    .await?;
+                    return Ok(());
+                }
             } else {
                 return Err(ControlPlaneError::DynamoDb(service_err.to_string()).into());
             }
@@ -103,13 +116,19 @@ pub async fn handle(
         "environments": environments,
     });
 
-    sfn.start_execution()
+    if let Err(e) = sfn
+        .start_execution()
         .state_machine_arn(&state_machine_arn)
         .name(format!("approval-{request_id}"))
         .input(sfn_input.to_string())
         .send()
         .await
-        .map_err(|e| ControlPlaneError::StepFunctions(e.to_string()))?;
+    {
+        let service_err = e.into_service_error();
+        if !matches!(service_err, StartExecutionError::ExecutionAlreadyExists(_)) {
+            return Err(ControlPlaneError::StepFunctions(service_err.to_string()).into());
+        }
+    }
 
     let result = eb
         .put_events()
@@ -126,7 +145,7 @@ pub async fn handle(
                         "ownerEmail": request.owner_email,
                         "secondaryOwnerEmails": request.secondary_owner_emails,
                         "status": status,
-                        "createdAt": now,
+                        "createdAt": created_at,
                         "environments": environments,
                     })
                     .to_string(),
@@ -138,10 +157,11 @@ pub async fn handle(
         .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
 
     if result.failed_entry_count > 0 {
-        tracing::error!(
-            failed_count = result.failed_entry_count,
-            "some RegisterDomainSucceeded events failed to publish"
-        );
+        return Err(ControlPlaneError::EventBridge(format!(
+            "{} RegisterDomainSucceeded event entries failed to publish",
+            result.failed_entry_count
+        ))
+        .into());
     }
 
     Ok(())
@@ -179,10 +199,11 @@ async fn emit_failed(
         .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
 
     if result.failed_entry_count > 0 {
-        tracing::error!(
-            failed_count = result.failed_entry_count,
-            "some RegisterDomainFailed events failed to publish"
-        );
+        return Err(ControlPlaneError::EventBridge(format!(
+            "{} RegisterDomainFailed event entries failed to publish",
+            result.failed_entry_count
+        ))
+        .into());
     }
 
     Ok(())
@@ -419,7 +440,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request()).await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -434,21 +455,98 @@ mod tests {
             let put_rule = mock!(aws_sdk_dynamodb::Client::put_item).then_error(|| {
                 aws_sdk_dynamodb::operation::put_item::PutItemError::ConditionalCheckFailedException(
                     aws_sdk_dynamodb::types::error::ConditionalCheckFailedException::builder()
+                        .item("domainName", s("billing"))
+                        .item("requestId", s("someone-elses-request"))
                         .build(),
                 )
             });
             let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries()
+                        .iter()
+                        .any(|entry| entry.detail_type() == Some("RegisterDomainFailed"))
+                })
                 .then_output(|| PutEventsOutput::builder().build());
             let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
             let sfn = mock_client!(aws_sdk_sfn, &[]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request()).await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
+            assert_eq!(eb_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn retry_of_own_registration_resumes_after_conditional_failure() {
+            set_env();
+
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item).then_error(|| {
+                aws_sdk_dynamodb::operation::put_item::PutItemError::ConditionalCheckFailedException(
+                    aws_sdk_dynamodb::types::error::ConditionalCheckFailedException::builder()
+                        .item("domainName", s("billing"))
+                        .item("requestId", s("msg-1"))
+                        .item("createdAt", s("2024-01-01T00:00:00+00:00"))
+                        .build(),
+                )
+            });
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
+
+            let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries().iter().any(|entry| {
+                        entry.detail_type() == Some("RegisterDomainSucceeded")
+                            && entry
+                                .detail()
+                                .is_some_and(|d| d.contains("2024-01-01T00:00:00+00:00"))
+                    })
+                })
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+            let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
+                StartExecutionOutput::builder()
+                    .execution_arn("arn:exec")
+                    .start_date(aws_sdk_sfn::primitives::DateTime::from_secs(0))
+                    .build()
+                    .unwrap()
+            });
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+
+            assert!(result.is_ok());
+            assert_eq!(put_rule.num_calls(), 1);
+            assert_eq!(sfn_rule.num_calls(), 1);
+            assert_eq!(eb_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn tolerates_execution_already_exists_on_retry() {
+            set_env();
+
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
+                .then_output(|| PutItemOutput::builder().build());
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
+
+            let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+            let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_error(|| {
+                aws_sdk_sfn::operation::start_execution::StartExecutionError::ExecutionAlreadyExists(
+                    aws_sdk_sfn::types::error::ExecutionAlreadyExists::builder().build(),
+                )
+            });
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+
+            assert!(result.is_ok());
+            assert_eq!(sfn_rule.num_calls(), 1);
             assert_eq!(eb_rule.num_calls(), 1);
         }
 
@@ -473,7 +571,7 @@ mod tests {
                 tags: None,
             };
 
-            let result = handle(&ddb, &eb, &sfn, &request).await;
+            let result = handle(&ddb, &eb, &sfn, &request, "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(eb_rule.num_calls(), 1);
@@ -515,7 +613,7 @@ mod tests {
                 tags: None,
             };
 
-            let result = handle(&ddb, &eb, &sfn, &request).await;
+            let result = handle(&ddb, &eb, &sfn, &request, "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -556,7 +654,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request()).await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -597,7 +695,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request()).await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(eb_rule.num_calls(), 1);

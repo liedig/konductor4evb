@@ -7,11 +7,11 @@ use serde_json::Value;
 use std::env;
 use std::fmt::Write;
 
-pub async fn handle(event: LambdaEvent<Value>) -> Result<(), Error> {
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let ddb = aws_sdk_dynamodb::Client::new(&config);
-    let ses = aws_sdk_sesv2::Client::new(&config);
-
+pub async fn handle(
+    ddb: &aws_sdk_dynamodb::Client,
+    ses: &aws_sdk_sesv2::Client,
+    event: LambdaEvent<Value>,
+) -> Result<(), Error> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let to_email =
         env::var("PLATFORM_OPERATOR_EMAIL").context("PLATFORM_OPERATOR_EMAIL not set")?;
