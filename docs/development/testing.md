@@ -2,6 +2,10 @@
 
 ## TDD: Red/Green/Refactor
 
+> **Scope:** What to test is defined by the priority test flows in AGENTS.md —
+> critical paths, not every function. The cycle below describes how to work
+> when implementing those flows.
+
 Follow test-driven development when implementing features:
 
 ```text
@@ -28,7 +32,7 @@ Follow test-driven development when implementing features:
 - Tests guide implementation, not the other way around
 - Never change a test to make it pass - change the implementation
 - Each cycle should be small (minutes, not hours)
-- Commit after each green phase
+- Commit after each green phase (locally; consolidate into conventional commits before review — see AGENTS.md git workflow)
 
 **Anti-patterns to avoid:**
 
@@ -135,23 +139,27 @@ mod tests {
 To use smithy-mocks, handler functions must accept SDK clients as parameters rather than constructing them internally. The `main.rs` entrypoint builds real clients from AWS config; the handler function receives them as arguments. This separation is what allows smithy-mocks to inject mock clients in tests.
 
 ```rust
-// src/main.rs — thin entrypoint, builds real clients
-async fn handler(event: LambdaEvent<Value>) -> Result<Value, Error> {
-    let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
+// src/main.rs — thin entrypoint: build clients once, pass by reference
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    tracing_subscriber::fmt().json().with_env_filter(EnvFilter::from_default_env()).init();
+    let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let ddb = aws_sdk_dynamodb::Client::new(&config);
-    let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
-    Ok(fetch_domain(&ddb, &table, &event.payload).await)
+    let ddb_ref = &ddb;
+    lambda_runtime::run(service_fn(move |event| async move {
+        handler::handle(ddb_ref, event).await
+    }))
+    .await
 }
 
 // src/handler.rs — testable, accepts clients as params
-pub async fn fetch_domain(
+pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
-    table: &str,
-    event: &Value,
-) -> Value { ... }
+    event: LambdaEvent<Value>,
+) -> Result<Value, Error> { ... }
 ```
 
-Handlers that build their own clients inside the handler function cannot be tested with smithy-mocks without refactoring. See also the rust-reviewer droid (section 8) for the thin-handler pattern.
+Handlers that build their own clients inside the handler function cannot be tested with smithy-mocks without refactoring. See also the rust-reviewer droid (section 6, Crate and Module Design) for the client-init and thin-handler rules.
 
 ## Mocking AWS SDK Clients with Smithy-Mocks
 
@@ -282,12 +290,12 @@ crate-root/
 ```
 
 - All tests go inline in the module they test via `#[cfg(test)]`
-- Handler tests with smithy-mocks go in a nested `mod handle_tests` block within the `#[cfg(test)]` module
+- Handler tests with smithy-mocks live in the `#[cfg(test)]` module; use a nested `mod handle_tests` block when a file mixes many pure-logic tests with handler tests (e.g. register.rs)
 - Name test functions descriptively: `rejects_empty_domain_name` not `test_1`
 
 ## CI Considerations
 
-- `make check` runs `cargo check` and `cargo clippy -- -D warnings` (zero warnings policy)
+- `make check` runs `cargo fmt --check`, `cargo check`, and `cargo clippy -- -D warnings` (zero warnings policy)
 - `make test` runs `cargo test --workspace`
 - Both must pass before merging
 - SAM build (`make build`) compiles release binaries for Lambda deployment

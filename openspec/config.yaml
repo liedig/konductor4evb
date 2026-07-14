@@ -21,10 +21,7 @@ context: |
   - **Application teams**: Use simple publish/subscribe APIs; do not manage EventBridge resources directly
 
   ## Conventions
-  - No code comments; write self-explanatory code with clear naming
-  - Alphabetically sorted imports; files under 300 lines
-  - Conventional Commits (feat, fix, refactor, chore, test, docs)
-  - Trunk-based workflow with short-lived feature branches
+  - Coding style, testing strategy, and git workflow: AGENTS.md is the single source of truth — do not restate its rules here
   - Spec-driven development via OpenSpec for all feature planning
 
 rules:
