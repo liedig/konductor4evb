@@ -474,8 +474,25 @@ Register your event schemas in your per-environment schema registries (named `{s
 The approval workflow waits up to 7 days. If your domain has been pending longer than expected:
 
 1. Check the domain status via `GET /domains/{domainName}`.
-2. Contact your platform team — they may not have received the approval email, or the SES identity may not be verified.
-3. If the 7-day timeout has passed, the workflow expires. You will need to re-register the domain (delete the stale record first, or use a different name).
+2. Contact your platform team — the approval email may be sitting unread.
+3. If the 7-day timeout passes, the workflow marks the domain `REJECTED` (`decidedBy: system:timeout`) and you receive the standard rejection notification. Re-register when ready.
+
+### APPROVAL_NOTIFICATION_FAILED
+
+The registration was accepted but the approval request email could not be delivered (most commonly the platform's SES sender identity is unverified or SES is misconfigured). **Nobody rejected your domain** — no decision was ever made, and no owner email is sent (email delivery is exactly what failed).
+
+Recovery is operator-driven:
+
+1. The platform team fixes the notification transport (e.g., verifies the SES identity — see `notifications-stack.yaml`).
+2. They delete the failed record and you re-register, which restarts the approval flow.
+
+Platform operators can find these domains with:
+
+```bash
+awscurl --service execute-api "https://{api-id}.execute-api.{region}.amazonaws.com/v1/domains?status=APPROVAL_NOTIFICATION_FAILED"
+```
+
+Operators should also sweep for records left in `PROVISIONING` by workflow crashes predating the failure-path hardening (2026-07): `?status=PROVISIONING` with no running `nexus-provision-domain` execution means a stuck record — delete it and re-register.
 
 ### PROVISIONING_FAILED
 

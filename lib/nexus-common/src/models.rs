@@ -22,6 +22,7 @@ pub enum DomainStatus {
     PendingApproval,
     Approved,
     Rejected,
+    ApprovalNotificationFailed,
     Provisioning,
     Active,
     ProvisioningFailed,
@@ -34,6 +35,7 @@ impl DomainStatus {
             Self::PendingApproval => "PENDING_APPROVAL",
             Self::Approved => "APPROVED",
             Self::Rejected => "REJECTED",
+            Self::ApprovalNotificationFailed => "APPROVAL_NOTIFICATION_FAILED",
             Self::Provisioning => "PROVISIONING",
             Self::Active => "ACTIVE",
             Self::ProvisioningFailed => "PROVISIONING_FAILED",
@@ -56,6 +58,7 @@ impl std::str::FromStr for DomainStatus {
             "PENDING_APPROVAL" => Ok(Self::PendingApproval),
             "APPROVED" => Ok(Self::Approved),
             "REJECTED" => Ok(Self::Rejected),
+            "APPROVAL_NOTIFICATION_FAILED" => Ok(Self::ApprovalNotificationFailed),
             "PROVISIONING" => Ok(Self::Provisioning),
             "ACTIVE" => Ok(Self::Active),
             "PROVISIONING_FAILED" => Ok(Self::ProvisioningFailed),
@@ -171,6 +174,10 @@ mod tests {
             (DomainStatus::PendingApproval, "\"PENDING_APPROVAL\""),
             (DomainStatus::Approved, "\"APPROVED\""),
             (DomainStatus::Rejected, "\"REJECTED\""),
+            (
+                DomainStatus::ApprovalNotificationFailed,
+                "\"APPROVAL_NOTIFICATION_FAILED\"",
+            ),
             (DomainStatus::Provisioning, "\"PROVISIONING\""),
             (DomainStatus::Active, "\"ACTIVE\""),
             (DomainStatus::ProvisioningFailed, "\"PROVISIONING_FAILED\""),
@@ -187,6 +194,10 @@ mod tests {
             ("\"PENDING_APPROVAL\"", DomainStatus::PendingApproval),
             ("\"APPROVED\"", DomainStatus::Approved),
             ("\"REJECTED\"", DomainStatus::Rejected),
+            (
+                "\"APPROVAL_NOTIFICATION_FAILED\"",
+                DomainStatus::ApprovalNotificationFailed,
+            ),
             ("\"PROVISIONING\"", DomainStatus::Provisioning),
             ("\"ACTIVE\"", DomainStatus::Active),
             ("\"PROVISIONING_FAILED\"", DomainStatus::ProvisioningFailed),
@@ -206,6 +217,10 @@ mod tests {
         );
         assert_eq!(DomainStatus::Approved.to_string(), "APPROVED");
         assert_eq!(DomainStatus::Rejected.to_string(), "REJECTED");
+        assert_eq!(
+            DomainStatus::ApprovalNotificationFailed.to_string(),
+            "APPROVAL_NOTIFICATION_FAILED"
+        );
         assert_eq!(DomainStatus::Provisioning.to_string(), "PROVISIONING");
         assert_eq!(DomainStatus::Active.to_string(), "ACTIVE");
         assert_eq!(
@@ -228,6 +243,10 @@ mod tests {
         assert_eq!(
             "REJECTED".parse::<DomainStatus>(),
             Ok(DomainStatus::Rejected)
+        );
+        assert_eq!(
+            "APPROVAL_NOTIFICATION_FAILED".parse::<DomainStatus>(),
+            Ok(DomainStatus::ApprovalNotificationFailed)
         );
         assert_eq!(
             "PROVISIONING".parse::<DomainStatus>(),

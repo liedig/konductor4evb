@@ -164,7 +164,7 @@ For domain owners, see [docs/domain-management.md](docs/domain-management.md) fo
 
 ### Approval (`approval.asl.yaml`)
 
-Human-in-the-loop registration approval using the Step Functions task-token pattern. The workflow waits up to 7 days for approval via the authenticated POST API or the one-click GET email link. On approve it emits `DomainRegistrationApproved` (which triggers provisioning). On reject (or timeout) it emits `DomainRegistrationRejected`.
+Human-in-the-loop registration approval using the Step Functions task-token pattern. The workflow waits up to 7 days for approval via the authenticated POST API or the one-click GET email link. On approve it emits `DomainRegistrationApproved` (which triggers provisioning). On reject (or timeout) it emits `DomainRegistrationRejected`. If the approval request email itself cannot be delivered, the domain moves to `APPROVAL_NOTIFICATION_FAILED` (not `REJECTED` — no decision was made) and `DomainApprovalNotificationFailed` is emitted for operators.
 
 ### Provisioning (three-workflow split)
 

@@ -84,16 +84,16 @@ Rule of thumb: total delivered events/sec across **all** domains and environment
 
 ## Control-plane throttling during provisioning
 
-These are TPS limits, not counts. They matter because `provision-domain` fans out over environments with unbounded Map concurrency, and **the provisioning workflow steps currently have no Retry blocks** — a throttled API call fails the environment, triggers saga rollback, and lands the domain in `PROVISIONING_FAILED`.
+These are TPS limits, not counts. `provision-domain` fans out over environments with unbounded Map concurrency, so parallel provisioning bursts against them. Every workflow SDK step retries throttling errors with exponential backoff and jitter (throttle-prone CloudWatch/Schemas calls get 5 attempts; standard control-plane calls get 3), so transient throttles are absorbed rather than failing the environment.
 
 | API | Default TPS | Adjustable | Exposure |
 |---|---|---|---|
 | EventBridge control plane (CreateEventBus, PutPermission, PutRule, …) | 50/s shared | No | Safe for interactive onboarding; batch operations (backfill scripts, mass re-subscription) should pace themselves |
-| CloudWatch PutMetricAlarm | **3/s** | Yes (`monitoring` / `L-0720E68F`) | Each domain provisioning fires 2 alarms × E envs in parallel (6 calls). **Two domains approved simultaneously can exceed this.** |
+| CloudWatch PutMetricAlarm | **3/s** | Yes (`monitoring` / `L-0720E68F`) | Each domain provisioning fires 2 alarms × E envs in parallel (6 calls). Workflow retries absorb collisions from a few concurrent approvals; raise the quota for sustained batch onboarding. |
 | CloudWatch PutDashboard | 10/s | Yes | E parallel calls per provisioning; low risk |
 | Schemas CreateRegistry | throttled (429 shares the `TooManyRequestsException` error code with the count limit — read the message) | — | E parallel calls per provisioning |
 
-Operational guidance until retries are added to the workflows: **approve registrations one at a time**, and re-approve on a `PROVISIONING_FAILED` caused by throttling (provisioning is idempotent after rollback). Raising `L-0720E68F` to 10/s removes the realistic collision window.
+If a provisioning still fails after retry exhaustion (sustained throttling, e.g. a large batch onboarding), re-approve the domain — provisioning is idempotent after rollback — and consider raising `L-0720E68F` to 10/s for the onboarding window. Note the schemas caveat: a `Schemas.TooManyRequestsException` caused by the **registry count limit** (not rate) will be retried for ~1 minute before failing; the error message distinguishes the two.
 
 ## Other platform-account limits (fine by default, listed for completeness)
 
@@ -150,6 +150,6 @@ Before an onboarding wave that takes you to **N** total domains (E = envs in the
 - [ ] Event buses quota ≥ (N × E + 2) × 1.2 (`events` / `L-658A4FD9`)
 - [ ] Rules-per-bus quota reviewed for any producer expecting > ~250 subscriptions (`events` / `L-244521F2`)
 - [ ] PutEvents / Invocations TPS sized from aggregate expected event rate (`L-9B653E91`, `L-5540C5E3`)
-- [ ] PutMetricAlarm rate raised if approvals will run concurrently (`monitoring` / `L-0720E68F`)
+- [ ] PutMetricAlarm rate raised for sustained batch onboarding (`monitoring` / `L-0720E68F`) — occasional concurrent approvals are absorbed by workflow retries
 - [ ] SES production access granted (if notifications enabled)
 - [ ] Stale smoke-test registries/buses cleaned up (they consume the same quotas)

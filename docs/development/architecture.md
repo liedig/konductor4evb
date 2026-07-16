@@ -105,12 +105,14 @@ A domain moves through a well-defined status progression from registration to ac
 stateDiagram-v2
     [*] --> PENDING_APPROVAL: POST /domains
     PENDING_APPROVAL --> APPROVED: Decide (ACCEPT)
-    PENDING_APPROVAL --> REJECTED: Decide (REJECT)
+    PENDING_APPROVAL --> REJECTED: Decide (REJECT) or 7-day timeout
+    PENDING_APPROVAL --> APPROVAL_NOTIFICATION_FAILED: Approval email undeliverable
     APPROVED --> PROVISIONING: DomainRegistrationApproved event
     PROVISIONING --> ACTIVE: Provisioning succeeds
     PROVISIONING --> PROVISIONING_FAILED: Provisioning fails (saga rollback)
     ACTIVE --> INACTIVE: Deactivate
     REJECTED --> [*]
+    APPROVAL_NOTIFICATION_FAILED --> [*]
     PROVISIONING_FAILED --> [*]
     INACTIVE --> [*]
 ```
@@ -119,7 +121,8 @@ stateDiagram-v2
 |--------|---------|
 | `PENDING_APPROVAL` | Registration submitted, awaiting human decision |
 | `APPROVED` | Approved by platform admin, provisioning not yet started |
-| `REJECTED` | Registration denied, owner notified via email |
+| `REJECTED` | Registration denied by approver (or expired unanswered after 7 days), owner notified via email |
+| `APPROVAL_NOTIFICATION_FAILED` | Approval request email could not be delivered — no decision was made; operator intervention needed |
 | `PROVISIONING` | Infrastructure creation in progress |
 | `ACTIVE` | All resources created, domain is operational |
 | `PROVISIONING_FAILED` | Infrastructure creation failed, compensating transactions completed |
@@ -205,7 +208,17 @@ sequenceDiagram
     EB->>EB: Triggers provisioning workflow
 ```
 
-**Rejection path:** If the admin rejects, the workflow updates status to `REJECTED`, emits `DomainRegistrationRejected`, and an EventBridge rule triggers the rejection notification Lambda to email the domain owner.
+**Rejection path:** If the admin rejects, the decide Lambda calls `SendTaskFailure` with error `RegistrationRejected` and a JSON cause carrying `decidedBy`/`justification`. The workflow catches that error by name, parses the decision metadata from the cause (falling back to `decidedBy: unknown` if the cause is malformed), updates status to `REJECTED`, and emits `DomainRegistrationRejected` — an EventBridge rule then triggers the rejection notification Lambda to email the domain owner.
+
+**Failure paths are separated by catch route.** The wait state distinguishes three outcomes that must not be conflated:
+
+| Outcome | Signal | Terminal status | Event |
+|---|---|---|---|
+| Human rejection | `RegistrationRejected` custom error | `REJECTED` | `DomainRegistrationRejected` |
+| 7-day timeout | `States.Timeout` | `REJECTED` (`decidedBy: system:timeout`) | `DomainRegistrationRejected` |
+| Notification delivery failure | residual `States.ALL` (e.g., SES identity unverified) | `APPROVAL_NOTIFICATION_FAILED` | `DomainApprovalNotificationFailed` (operator-facing; no owner email — email is the failed dependency) |
+
+The registration context is captured in a Pass state *before* the wait (Task `Assign` only applies on success, so capturing it on the wait state would leave failure paths without it). Every execution path ends with a terminal status write and exactly one lifecycle event.
 
 **New account detection:** The notification Lambda queries the `by-owner` GSI to check if the owner account has any existing `ACTIVE` domains. If this is the first domain for that account, the approval email flags it with a trust-stack deployment advisory.
 
@@ -230,9 +243,11 @@ Since approved domains are provisioned into every environment configured on the 
 **All-or-nothing contract.** The outer workflow produces one of two outcomes:
 
 - **All envs succeed** → domain moves to `ACTIVE`, `DomainProvisioningSucceeded` event emitted with a `resourceArns` map keyed by environment.
-- **Any env fails** → deprovision-env runs over every env that *did* succeed, domain moves to `PROVISIONING_FAILED`, and `DomainProvisioningFailed` is emitted with `failedEnvironment` plus any `compensationErrors` aggregated across rollback runs.
+- **Any env fails** → deprovision-env runs over every env that *did* succeed, domain moves to `PROVISIONING_FAILED`, and `DomainProvisioningFailed` is emitted with `failedEnvironment` plus any `compensationErrors` aggregated across rollback runs. The aggregation uses a JSONata array constructor (`[$rollbackResults.compensationErrors]`) rather than `$reduce`: when no env succeeded (empty rollback set) or when rollback ran cleanly, `$reduce` returns undefined and kills the state with `QueryEvaluationError` — the failure event then never fires and the domain sticks in `PROVISIONING`.
 
 Failures in the domain-level steps (namespace parameter, RAM share) that happen **before** the Map never leave per-env artefacts behind, so their failure path updates status and emits `DomainProvisioningFailed` with `failedEnvironment: null`.
+
+**Retry posture.** Every SDK task state in the four domain-management state machines carries a `Retry` policy (evaluated before `Catch`): throttle-prone APIs (CloudWatch alarms/dashboards, Schemas registries) retry 5 times from 2s with full jitter; standard control-plane calls (EventBridge, SQS, SSM, RAM, DynamoDB, `putEvents`, `startExecution`) retry 3 times from 1s. Deterministic business errors (`ResourceAlreadyExistsException`, conditional-check failures) are excluded and fail fast into compensation. Compensation steps carry the same retries — a throttled delete would otherwise record a spurious compensation error and leak the resource.
 
 **Namespace + RAM persistence.** The SSM parameter (`/namespace/{domain}`) and the RAM resource share are created at the domain level, above the Map — they are environment-independent and are **never** rolled back. This makes the outer workflow safe to re-run on the same domain after a partial failure: the idempotent upserts avoid duplicates, and the existing shared namespace continues to be reused.
 
@@ -449,6 +464,7 @@ The **nexus bus** (`nexus-bus`) carries all internal lifecycle events. It is a p
 | `UpdateDomainFailed` | `nexus.domain-management` | Command handler (update) | — |
 | `DomainRegistrationApproved` | `nexus.domain-management` | Approval workflow | Provision-domain workflow (outer) |
 | `DomainRegistrationRejected` | `nexus.domain-management` | Approval workflow | Rejection notification Lambda |
+| `DomainApprovalNotificationFailed` | `nexus.domain-management` | Approval workflow | — (operator-facing; no owner email — email delivery is the failed dependency) |
 | `DomainProvisioningSucceeded` | `nexus.domain-management` | Provision-domain workflow | — |
 | `DomainProvisioningFailed` | `nexus.domain-management` | Provision-domain workflow | Provisioning-failed notification Lambda |
 | `SubscribeSucceeded` / `SubscribeFailed` | `nexus.event-streams` | Subscription command handler | — |
