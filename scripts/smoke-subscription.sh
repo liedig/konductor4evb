@@ -5,7 +5,9 @@
 # Flow: register schema in producer registry -> subscribe -> publish a
 # conforming event to the producer platform bus -> assert rule matched ->
 # negative checks (mis-stamped event, duplicate subscribe) -> unsubscribe ->
-# assert rules removed and record REMOVED.
+# assert rules removed and record REMOVED -> delete the schema it registered.
+# Self-cleaning: leaves the two domains as they were before the run. To also
+# remove the domains themselves, use `make teardown-domain`.
 #
 # Required env: ORGANIZATION, AWS_REGION, PRODUCER_DOMAIN, CONSUMER_DOMAIN, ENV_NAME
 set -euo pipefail
@@ -120,5 +122,18 @@ if aws events describe-rule --name "${RULE_NAME}" --event-bus-name "${BUS}" \
   echo "ERROR: rule still exists after unsubscribe"; exit 1
 fi
 echo "  record REMOVED, rule gone ✓"
+
+echo ""
+echo "(9/9) Clean up schema ${SCHEMA_NAME} from every environment's registry"
+for REG_ENV in $(aws dynamodb get-item --table-name nexus-domains \
+  --key "{\"domainName\":{\"S\":\"${PRODUCER_DOMAIN}\"}}" \
+  --region "${AWS_REGION}" --output json | jq -r '.Item.environments.L[].S'); do
+  aws schemas delete-schema \
+    --registry-name "${ORGANIZATION}-${REG_ENV}-${PRODUCER_DOMAIN}-schema-registry" \
+    --schema-name "${SCHEMA_NAME}" \
+    --region "${AWS_REGION}" >/dev/null 2>&1 || echo "  (schema already gone in ${REG_ENV})"
+done
+echo "  schema removed ✓"
+
 echo ""
 echo "✓ Subscription smoke test complete"
