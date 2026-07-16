@@ -49,6 +49,7 @@ Globals:
         ORGANIZATION: !Ref Organization
         NAMESPACE_PATTERN: !Ref NamespacePattern
         DOMAINS_TABLE: !Ref DomainsTable
+        EVENT_STREAMS_TABLE: !Ref EventStreamsTable
         NEXUS_EVENT_BUS: !Ref NexusEventBus
         DOMAIN_REGISTRATIONS_QUEUE_URL: !Ref DomainRegistrationsQueue
 
@@ -102,6 +103,43 @@ Resources:
           Projection:
             ProjectionType: ALL
 
+
+  # ---- DynamoDB (event streams) ----
+  # Source of intent for subscriptions; EventBridge rules are the materialization.
+  EventStreamsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub "nexus-event-streams"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: producerDomain
+          AttributeType: S
+        - AttributeName: schemaConsumer
+          AttributeType: S
+        - AttributeName: consumerDomain
+          AttributeType: S
+      KeySchema:
+        - AttributeName: producerDomain
+          KeyType: HASH
+        - AttributeName: schemaConsumer
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: by-consumer
+          KeySchema:
+            - AttributeName: consumerDomain
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
 
   # ---- Dead Letter Queue (read Lambda functions) ----
   LambdaFailureDlq:
@@ -157,6 +195,42 @@ Resources:
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt DomainRegistrationsDlq.Arn
         maxReceiveCount: 3
+
+  SubscriptionsDlq:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub "nexus-subscriptions-dlq"
+      MessageRetentionPeriod: 1209600
+
+  SubscriptionsQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub "nexus-subscriptions-queue"
+      VisibilityTimeout: 30
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt SubscriptionsDlq.Arn
+        maxReceiveCount: 3
+
+  SubscriptionsDlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "nexus-subscriptions-dlq-depth-alarm"
+      AlarmDescription: Subscription commands accumulating in the DLQ — inspect and replay
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SubscriptionsDlq.QueueName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
 
   # ---- CloudWatch Log Groups ----
   ApiAccessLogGroup:
@@ -240,6 +314,35 @@ Resources:
               - sqs:GetQueueAttributes
             Resource:
               - !GetAtt DomainRegistrationsQueue.Arn
+              - !GetAtt SubscriptionsQueue.Arn
+
+  # Assumed by EventBridge to deliver matched events onto consumer app-side
+  # buses cross-account, under the provision-time resource policy on those buses.
+  SubscriptionDeliveryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "nexus-subscription-delivery-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+
+  SubscriptionDeliveryPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: DeliverToAppBuses
+      Roles:
+        - !Ref SubscriptionDeliveryRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - events:PutEvents
+            Resource: !Sub "arn:aws:events:${AWS::Region}:*:event-bus/${Organization}-*"
 
   # ---- API Gateway ----
   NexusApi:
@@ -321,6 +424,155 @@ Resources:
             Path: /domains/{domainName}
             Method: GET
 
+  # ---- Event Stream Functions (Read) ----
+  ListSubscriptionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-list-subscriptions"
+      RetentionInDays: 30
+
+  ListSubscriptionsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ListSubscriptionsLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-list-subscriptions"
+      CodeUri: ./event-streams/functions/list-subscriptions
+      Handler: bootstrap
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:Query, dynamodb:Scan]
+              Resource:
+                - !GetAtt EventStreamsTable.Arn
+                - !Sub "${EventStreamsTable.Arn}/index/*"
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /subscriptions
+            Method: GET
+
+  DescribeSubscriptionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-describe-subscription"
+      RetentionInDays: 30
+
+  DescribeSubscriptionFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: DescribeSubscriptionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-describe-subscription"
+      CodeUri: ./event-streams/functions/describe-subscription
+      Handler: bootstrap
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt EventStreamsTable.Arn
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /subscriptions/{subscriptionId}
+            Method: GET
+
+  ListSchemasLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-list-schemas"
+      RetentionInDays: 30
+
+  ListSchemasFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: ListSchemasLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-list-schemas"
+      CodeUri: ./event-streams/functions/list-schemas
+      Handler: bootstrap
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [schemas:ListSchemas, schemas:ListSchemaVersions, schemas:DescribeSchema]
+              Resource:
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /schemas
+            Method: GET
+
+  DescribeSchemaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-describe-schema"
+      RetentionInDays: 30
+
+  DescribeSchemaFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: DescribeSchemaLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-describe-schema"
+      CodeUri: ./event-streams/functions/describe-schema
+      Handler: bootstrap
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [schemas:ListSchemaVersions, schemas:DescribeSchema]
+              Resource:
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusApi
+            Path: /schemas/{schemaName}
+            Method: GET
+
   # ---- Command Handler Functions ----
   DomainRegistrationsLogGroup:
     Type: AWS::Logs::LogGroup
@@ -367,6 +619,61 @@ Resources:
           Type: SQS
           Properties:
             Queue: !GetAtt DomainRegistrationsQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  SubscriptionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-subscriptions"
+      RetentionInDays: 30
+
+  SubscriptionsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SubscriptionsLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-subscriptions"
+      CodeUri: ./event-streams/functions/subscriptions
+      Handler: bootstrap
+      Environment:
+        Variables:
+          ACTIVATE_SUBSCRIPTION_STATE_MACHINE_ARN: !Ref ActivateSubscriptionWorkflow
+          REMOVE_SUBSCRIPTION_STATE_MACHINE_ARN: !Ref RemoveSubscriptionWorkflow
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:Query]
+              Resource:
+                - !GetAtt EventStreamsTable.Arn
+                - !Sub "${EventStreamsTable.Arn}/index/*"
+            - Effect: Allow
+              Action: [events:PutEvents]
+              Resource: !GetAtt NexusEventBus.Arn
+            - Effect: Allow
+              Action: [events:EnableRule, events:DisableRule]
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${Organization}-*"
+            - Effect: Allow
+              Action: [states:StartExecution]
+              Resource:
+                - !Ref ActivateSubscriptionWorkflow
+                - !Ref RemoveSubscriptionWorkflow
+            - Effect: Allow
+              Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+              Resource: !GetAtt SubscriptionsQueue.Arn
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SubscriptionsQueue.Arn
             BatchSize: 1
             FunctionResponseTypes:
               - ReportBatchItemFailures
@@ -870,6 +1177,102 @@ Resources:
             DeadLetterConfig:
               Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
 
+  SubscriptionWorkflowRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "nexus-subscription-workflow-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+
+  SubscriptionWorkflowPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: SubscriptionWorkflowPolicy
+      Roles:
+        - !Ref SubscriptionWorkflowRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - events:PutRule
+              - events:DeleteRule
+              - events:DescribeRule
+              - events:PutTargets
+              - events:RemoveTargets
+            Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${Organization}-*"
+          - Effect: Allow
+            Action:
+              - events:PutEvents
+            Resource: !GetAtt NexusEventBus.Arn
+          - Effect: Allow
+            Action:
+              - schemas:DescribeSchema
+              - schemas:ListSchemaVersions
+            Resource:
+              - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
+              - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+          - Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource: !GetAtt SubscriptionDeliveryRole.Arn
+            Condition:
+              StringEquals:
+                "iam:PassedToService": events.amazonaws.com
+          - Effect: Allow
+            Action:
+              - cloudwatch:PutMetricAlarm
+              - cloudwatch:DeleteAlarms
+            Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Organization}-*"
+          - Effect: Allow
+            Action:
+              - dynamodb:UpdateItem
+              - dynamodb:GetItem
+            Resource: !GetAtt EventStreamsTable.Arn
+          - Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+            Resource: "*"
+
+  ActivateSubscriptionWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub "nexus-activate-subscription"
+      Role: !GetAtt SubscriptionWorkflowRole.Arn
+      Tracing:
+        Enabled: true
+      DefinitionUri: ./event-streams/state-machines/activate-subscription.asl.yaml
+      DefinitionSubstitutions:
+        EventStreamsTable: !Ref EventStreamsTable
+        NexusEventBus: !GetAtt NexusEventBus.Arn
+        Organization: !Ref Organization
+        SubscriptionDeliveryRoleArn: !GetAtt SubscriptionDeliveryRole.Arn
+        "AWS::Region": !Ref "AWS::Region"
+        "AWS::AccountId": !Ref "AWS::AccountId"
+
+  RemoveSubscriptionWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub "nexus-remove-subscription"
+      Role: !GetAtt SubscriptionWorkflowRole.Arn
+      Tracing:
+        Enabled: true
+      DefinitionUri: ./event-streams/state-machines/remove-subscription.asl.yaml
+      DefinitionSubstitutions:
+        EventStreamsTable: !Ref EventStreamsTable
+        NexusEventBus: !GetAtt NexusEventBus.Arn
+        Organization: !Ref Organization
+
 Outputs:
   ApiEndpoint:
     Description: EventBridge Nexus API endpoint
@@ -889,3 +1292,9 @@ Outputs:
   LambdaFailureDlqUrl:
     Description: Lambda Dead Letter Queue URL for monitoring failed async invocations
     Value: !Ref LambdaFailureDlq
+  EventStreamsTableName:
+    Description: Event streams DynamoDB table name
+    Value: !Ref EventStreamsTable
+  SubscriptionDeliveryRoleArn:
+    Description: Role EventBridge assumes to deliver subscription events to app-side buses
+    Value: !GetAtt SubscriptionDeliveryRole.Arn

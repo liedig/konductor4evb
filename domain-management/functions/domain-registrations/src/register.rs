@@ -81,8 +81,7 @@ pub async fn handle(
         Err(e) => {
             let service_err = e.into_service_error();
             if let PutItemError::ConditionalCheckFailedException(ccf) = &service_err {
-                let existing_request_id =
-                    ccf.item().and_then(|item| get_s(item, "requestId"));
+                let existing_request_id = ccf.item().and_then(|item| get_s(item, "requestId"));
                 if existing_request_id.as_deref() == Some(request_id) {
                     if let Some(original) = ccf.item().and_then(|item| get_s(item, "createdAt")) {
                         created_at = original;

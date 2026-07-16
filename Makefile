@@ -1,4 +1,4 @@
-.PHONY: help build test check smoke deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust clean
+.PHONY: help build test check smoke smoke-subscription backfill-delivery-policy deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
@@ -136,6 +136,18 @@ ifndef PLATFORM_OPERATOR_EMAIL
 endif
 	sam deploy --config-file samconfig-notifications.toml \
 		--parameter-overrides NotificationSenderEmail=$(NOTIFICATION_SENDER_EMAIL) PlatformOperatorEmail=$(PLATFORM_OPERATOR_EMAIL)
+
+backfill-delivery-policy: ## Attach the platform-delivery policy to app buses of pre-existing ACTIVE domains (idempotent)
+	ORGANIZATION=$(ORGANIZATION) AWS_REGION=$(AWS_REGION) ./scripts/backfill-delivery-policy.sh
+
+smoke-subscription: ## End-to-end subscription smoke test (requires PRODUCER_DOMAIN + CONSUMER_DOMAIN, both ACTIVE)
+ifndef PRODUCER_DOMAIN
+	$(error PRODUCER_DOMAIN is required — an ACTIVE domain that will offer the schema)
+endif
+ifndef CONSUMER_DOMAIN
+	$(error CONSUMER_DOMAIN is required — an ACTIVE domain that will subscribe)
+endif
+	ORGANIZATION=$(ORGANIZATION) AWS_REGION=$(AWS_REGION) PRODUCER_DOMAIN=$(PRODUCER_DOMAIN) CONSUMER_DOMAIN=$(CONSUMER_DOMAIN) ./scripts/smoke-subscription.sh
 
 teardown-core: ## Delete the Nexus core stack
 	aws cloudformation delete-stack --stack-name nexus-core --region $(AWS_REGION)

@@ -165,8 +165,15 @@ sequenceDiagram
 | `GET` | `/domains/{domainName}` | Sync (Lambda proxy) | `describe-domain` |
 | `PUT` | `/domains/{domainName}` | Async (SQS) | `domain-registrations` (update) |
 | `POST` | `/domains/registrations/decide` | Sync (Lambda proxy) | `decide-registration` |
+| `POST` | `/subscriptions` | Async (SQS) | `subscriptions` (subscribe) |
+| `GET` | `/subscriptions` | Sync (Lambda proxy) | `list-subscriptions` |
+| `GET` | `/subscriptions/{subscriptionId}` | Sync (Lambda proxy) | `describe-subscription` |
+| `PATCH` | `/subscriptions/{subscriptionId}` | Async (SQS) | `subscriptions` (enable/disable per env) |
+| `DELETE` | `/subscriptions/{subscriptionId}` | Async (SQS) | `subscriptions` (unsubscribe) |
+| `GET` | `/schemas` | Sync (Lambda proxy) | `list-schemas` |
+| `GET` | `/schemas/{schemaName}` | Sync (Lambda proxy) | `describe-schema` |
 
-The command handler Lambda receives SQS messages with a `HttpMethod` message attribute and dispatches to the appropriate handler (`register` for POST, `update` for PUT).
+Each command handler Lambda receives SQS messages with a `HttpMethod` message attribute and dispatches accordingly (`domain-registrations`: register/update; `subscriptions`: subscribe/update-state/unsubscribe). Subscription write integrations also inject the caller's AWS account id (`$context.identity.accountId`) into the message body for ownership validation.
 
 ---
 
@@ -335,13 +342,11 @@ graph LR
         trustrole["nexus-trust-role"]
         appbus["Domain Event Bus"]
         appdlq["Integration DLQ"]
-        b2brole["Bus-to-Bus Role"]
     end
 
     provwf -->|"sts:AssumeRole"| trustrole
-    trustrole -->|"events:CreateEventBus<br/>events:DeleteEventBus"| appbus
+    trustrole -->|"events:CreateEventBus<br/>events:DeleteEventBus<br/>events:PutPermission"| appbus
     trustrole -->|"sqs:CreateQueue<br/>sqs:DeleteQueue"| appdlq
-    trustrole -->|"iam:CreateRole<br/>iam:PutRolePolicy"| b2brole
 ```
 
 ### Trust Role Permissions
@@ -352,7 +357,11 @@ The trust role (`{org}-nexus-trust-role`) is environment-independent — a singl
 |--------|---------|---------------|
 | EventBusManagement | `events:Create/Delete/Describe/PutPermission/RemovePermission` | `{org}-*` event buses |
 | DlqManagement | `sqs:Create/Delete/Set/GetQueueAttributes` | `{org}-*` queues |
-| BusToBusRoleManagement | `iam:Create/Delete/Put/DeleteRolePolicy/GetRole` | `{org}-b2b-*` roles |
+| BusToBusRoleManagement | `iam:Create/Delete/Put/DeleteRolePolicy/GetRole` | `{org}-b2b-*` roles (unused — retained for template compatibility; subscription delivery uses the provision-time resource policy instead) |
+
+### Subscription Delivery Authorization
+
+Cross-account subscription delivery does **not** use per-subscription IAM roles. During `provision-env`, the trust role attaches a resource policy to the app-side domain bus permitting the **platform account** to `events:PutEvents` (`SetAppBusDeliveryPolicy` step). That single grant covers every current and future subscription targeting the bus — subscribe and unsubscribe never touch the consumer account. EventBridge delivers matched events using the platform-side `nexus-subscription-delivery-role`. Domains provisioned before this step existed are covered by the idempotent `make backfill-delivery-policy` target.
 
 The trust role's `AssumeRolePolicyDocument` allows two principals from the platform account:
 
@@ -442,10 +451,78 @@ The **nexus bus** (`nexus-bus`) carries all internal lifecycle events. It is a p
 | `DomainRegistrationRejected` | `nexus.domain-management` | Approval workflow | Rejection notification Lambda |
 | `DomainProvisioningSucceeded` | `nexus.domain-management` | Provision-domain workflow | — |
 | `DomainProvisioningFailed` | `nexus.domain-management` | Provision-domain workflow | Provisioning-failed notification Lambda |
+| `SubscribeSucceeded` / `SubscribeFailed` | `nexus.event-streams` | Subscription command handler | — |
+| `UpdateSubscriptionSucceeded` / `UpdateSubscriptionFailed` | `nexus.event-streams` | Subscription command handler | — |
+| `UnsubscribeSucceeded` / `UnsubscribeFailed` | `nexus.event-streams` | Subscription command handler | — |
+| `SubscriptionActivated` | `nexus.event-streams` | Activate-subscription workflow | — |
+| `SubscriptionActivationFailed` | `nexus.event-streams` | Activate-subscription workflow | — |
+| `SubscriptionRemoved` | `nexus.event-streams` | Remove-subscription workflow | — |
 
-The `DomainProvisioningFailed` payload carries `failedEnvironment` (or `null` for domain-level failures), `failedStep`, `errorCode`, `errorMessage`, and an aggregated `compensationErrors` array from any rollback runs.
+The `DomainProvisioningFailed` payload carries `failedEnvironment` (or `null` for domain-level failures), `failedStep`, `errorCode`, `errorMessage`, and an aggregated `compensationErrors` array from any rollback runs. `SubscriptionActivationFailed` carries the same failure anatomy for the subscription saga.
 
-All events use the source prefix `nexus.domain-management`. The `DomainRegistrationApproved` event is the key orchestration trigger — it initiates the provisioning workflow via an EventBridge rule on the nexus bus.
+Domain-management events use the source `nexus.domain-management`; subscription events use `nexus.event-streams`. The `DomainRegistrationApproved` event is the key orchestration trigger — it initiates the provisioning workflow via an EventBridge rule on the nexus bus.
+
+---
+
+## Event Subscriptions (Schema-First)
+
+Consumers subscribe to a **schema** — the contract — not to a bus or an endpoint: `Subscribe(consumerDomain, producerDomain, schemaName)`. The subscription always binds to the **latest** schema version in each environment's registry, pinned at subscribe time. There is only one representation of an event at any point in time; version pinning makes contract transitions observable and bounded rather than letting subscribers choose versions.
+
+### The Canonical Event Envelope
+
+Every event flowing through Nexus domain buses carries a canonical identity, and subscription rules filter on it:
+
+- `source` — the producing domain's env-independent namespace identity `{org}-{domain}` (e.g., `acme-orders`), derived by the platform, never free-typed
+- `detail-type` — the event name
+- Schema name — `{source}@{detail-type}` (the native EventBridge discovery convention; round-trips to `aws schemas describe-schema`)
+- Schema version — **numeric**, stamped at `detail.metadata.schemaVersion` (`detail` splits into `metadata`/`data`)
+
+```json
+{
+  "source": ["acme-orders"],
+  "detail-type": ["OrderNotification"],
+  "detail": { "metadata": { "schemaVersion": [3] } }
+}
+```
+
+Until the Publish API exists, producers must stamp this envelope themselves; mis-stamped events fail closed (no rule matches — non-delivery, never misdelivery).
+
+### Subscription Materialization
+
+Each subscription materializes as **one rule per environment** on the producer's platform-side bus:
+
+- Rule name: `{consumerDomain}-{detailType}` — version-agnostic, so a future version migration is a `PutRule` pattern update on the same rule (no delete/create window). EventBridge's per-bus rule-name uniqueness doubles as duplicate-subscription enforcement, and `PutRule`-as-upsert makes retried workflow steps idempotent.
+- Target: the consumer's app-side domain bus (same env), delivered via the `nexus-subscription-delivery-role`, with `DeadLetterConfig` on the producer's per-env subscription DLQ.
+- Delivery authorization: a resource policy on the consumer's app-side bus granting the **platform account** `events:PutEvents`, attached once during `provision-env` (`SetAppBusDeliveryPolicy` step). No per-subscription IAM. Pre-existing domains are covered by `make backfill-delivery-policy`.
+- A per-subscription **zero-events alarm** (24h without a delivery, missing data = breaching) flags silently-stopped streams — the failure mode when a producer bumps versions past a pinned subscriber.
+
+### Subscription Flow
+
+```mermaid
+graph LR
+    api["API Gateway<br/>POST /subscriptions"] --> q["Subscriptions Queue"]
+    q --> handler["Subscription Command<br/>Handler Lambda"]
+    handler -->|"validate + PENDING record"| est[("nexus-event-streams")]
+    handler --> wf["Activate-Subscription<br/>Workflow"]
+    wf -->|"per env: resolve latest version,<br/>PutRule + PutTargets + alarm"| rules["Rules on producer<br/>platform buses"]
+    wf -->|"ACTIVE | FAILED"| est
+    wf -->|"SubscriptionActivated"| bus["Nexus Bus"]
+```
+
+Activation is **all-or-nothing across environments**: if the schema is missing in any env or any step fails, compensation deletes the rules created so far and the record becomes `FAILED`. Unsubscribe removes targets, rules, and alarms per env (idempotent), marks the record `REMOVED`, and retains it 90 days via TTL. Orphaned integration rules on the consumer's own bus are the application team's responsibility.
+
+Per-environment **enable/disable** maps to native rule state (e.g., subscribe with prod paused during development; kill switch during incidents). Disabled ≠ removed: the contract stays signed and the pinned version is retained.
+
+### Subscription Lifecycle
+
+```text
+PENDING ──activation succeeds──> ACTIVE ──unsubscribe──> REMOVED (TTL 90d)
+   └──────activation fails──────> FAILED
+```
+
+### Schema Discovery
+
+`GET /schemas?domain={producer}` merges the producer's per-env registries keyed by schema name, reporting the latest version per environment — version skew is visible before subscribing. Read-only; schema registration stays out-of-band (domain owners write to their registries via the AWS Schemas API) until the schema-management thread lands.
 
 ---
 
@@ -487,6 +564,29 @@ A single `domains` DynamoDB table stores both domain metadata and registration s
 
 The table uses `PAY_PER_REQUEST` billing with point-in-time recovery enabled and a `Retain` deletion policy.
 
+### Event Streams Table
+
+The `nexus-event-streams` table is the **source of intent** for subscriptions; EventBridge rules are the materialization. Topology questions are answered from the table, never by enumerating rules across buses.
+
+| Attribute | Type | Key |
+|-----------|------|-----|
+| `producerDomain` | String | Partition key (PK) |
+| `schemaConsumer` | String (`{schemaName}#{consumerDomain}`) | Sort key (SK) |
+| `consumerDomain` | String | GSI: `by-consumer` (PK) |
+| `source` / `detailType` / `schemaName` | String | — |
+| `status` | String (`PENDING\|ACTIVE\|FAILED\|REMOVED`) | — |
+| `environments` | Map<env, {pinnedVersion, ruleName, ruleArn, enabled, status}> | — |
+| `createdAt` / `updatedAt` / `removedAt` | String (ISO 8601) | — |
+| `expiresAt` | Number (epoch) | TTL (removal + 90 days) |
+
+| Pattern | Index | Key Condition |
+|---------|-------|---------------|
+| Subscription by identity | Table (PK+SK) | `producerDomain = :p AND schemaConsumer = :schema#consumer` |
+| Version census for a schema | Table (PK+SK) | `producerDomain = :p AND begins_with(schemaConsumer, :schema#)` |
+| Streams feeding a consumer | `by-consumer` | `consumerDomain = :c` |
+
+The API-facing subscription id is `{consumerDomain}.{producerDomain}.{detailType}` — domain names cannot contain dots, so parsing splits on the first two dots; event names may contain dots safely.
+
 ---
 
 ## Infrastructure as Code
@@ -513,6 +613,16 @@ evb-nexus/
 │       ├── provision-domain.asl.yaml         # Outer coordinator (fan-out over environments)
 │       ├── provision-env.asl.yaml            # Per-env resource creation + inner saga
 │       └── deprovision-env.asl.yaml          # Idempotent per-env teardown
+├── event-streams/
+│   ├── functions/
+│   │   ├── subscriptions/                    # Async: subscribe/PATCH/unsubscribe commands
+│   │   ├── list-subscriptions/               # Sync: list/filter event streams
+│   │   ├── describe-subscription/            # Sync: stream detail by subscription id
+│   │   ├── list-schemas/                     # Sync: schema discovery (per-env latest versions)
+│   │   └── describe-schema/                  # Sync: schema detail + content
+│   └── state-machines/
+│       ├── activate-subscription.asl.yaml    # Per-env rule creation, all-or-nothing + saga
+│       └── remove-subscription.asl.yaml      # Idempotent per-env rule removal
 ├── lib/
 │   └── nexus-common/                         # Shared library (models, DDB helpers, API, validation, namespace)
 ├── docs/

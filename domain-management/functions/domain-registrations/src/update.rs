@@ -235,9 +235,7 @@ mod tests {
         )
     }
 
-    fn failed_event_rule_with_reason(
-        reason: &'static str,
-    ) -> aws_smithy_mocks::Rule {
+    fn failed_event_rule_with_reason(reason: &'static str) -> aws_smithy_mocks::Rule {
         mock!(aws_sdk_eventbridge::Client::put_events)
             .match_requests(move |req| {
                 req.entries().iter().any(|entry| {

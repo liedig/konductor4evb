@@ -75,12 +75,33 @@ States:
     Assign:
       appBus: "{% $states.result %}"
     Output: "{% $states.input %}"
-    Next: CreateIntegrationDlq
+    Next: SetAppBusDeliveryPolicy
     Catch:
       - ErrorEquals:
           - States.ALL
         Next: StartCompensation
         Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateAppEventBus' } }]) %}"
+
+  # One grant covers all current and future subscriptions delivering to this
+  # bus; subscribe never touches the consumer account again. On failure the
+  # compensation chain deletes the app bus, and the policy dies with it.
+  SetAppBusDeliveryPolicy:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:eventbridge:putPermission"
+    Arguments:
+      EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
+      Action: "events:PutEvents"
+      Principal: "${AWS::AccountId}"
+      StatementId: allow-platform-subscription-delivery
+    Credentials:
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+    Output: "{% $states.input %}"
+    Next: CreateIntegrationDlq
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: StartCompensation
+        Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'SetAppBusDeliveryPolicy' } }]) %}"
 
   CreateIntegrationDlq:
     Type: Task
@@ -136,6 +157,18 @@ States:
                   "period": 300,
                   "stat": "Sum",
                   "title": "Subscription DLQ",
+                  "region": "${AWS::Region}"
+                }
+              },
+              {
+                "type": "metric",
+                "properties": {
+                  "metrics": [
+                    [{ "expression": "SEARCH('{AWS/Events,EventBusName,RuleName} EventBusName=\"" & $busName & "\" MetricName=\"Invocations\"', 'Sum', 300)", "label": "", "id": "subs" }]
+                  ],
+                  "period": 300,
+                  "stat": "Sum",
+                  "title": "Per-Subscription Deliveries",
                   "region": "${AWS::Region}"
                 }
               }

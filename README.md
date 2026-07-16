@@ -82,6 +82,16 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 │       ├── provision-domain.asl.yaml # Outer coordinator (fans out over envs)
 │       ├── provision-env.asl.yaml    # Per-env resource creation + inner saga
 │       └── deprovision-env.asl.yaml  # Idempotent per-env teardown
+├── event-streams/
+│   ├── functions/                    # Lambda handlers
+│   │   ├── subscriptions/            # Async writes: subscribe/PATCH/unsubscribe (SQS-triggered)
+│   │   ├── list-subscriptions/       # GET /subscriptions
+│   │   ├── describe-subscription/    # GET /subscriptions/{subscriptionId}
+│   │   ├── list-schemas/             # GET /schemas (discovery)
+│   │   └── describe-schema/          # GET /schemas/{schemaName}
+│   └── state-machines/
+│       ├── activate-subscription.asl.yaml  # Per-env rule creation, all-or-nothing + saga
+│       └── remove-subscription.asl.yaml    # Idempotent per-env rule removal
 ├── lib/
 │   └── nexus-common/                 # Shared library
 │       └── src/
@@ -93,6 +103,7 @@ Cross-account EventBridge setups are complex. Each subscription typically requir
 │           └── namespace.rs          # Resource naming
 ├── docs/
 │   ├── domain-management.md         # Domain owner guide
+│   ├── service-quotas.md             # Capacity planning / quota increases per domain count
 │   └── trust-stack-deployment.md     # Domain account onboarding guide
 ├── nexus-core-stack.yaml             # SAM template (core platform)
 ├── notifications-stack.yaml          # SES identities (optional)
@@ -115,6 +126,13 @@ All endpoints require IAM authentication **except** the `GET` email-link decide 
 | `PUT` | `/domains/{domainName}` | IAM | Update domain metadata (async via SQS) |
 | `POST` | `/domains/registrations/decide` | IAM | Approve or reject a registration (JSON body with task token) |
 | `GET` | `/domains/registrations/decide?decision={approve\|reject}&token={taskToken}` | none | One-click approve/reject via email link (HTML confirmation page) |
+| `POST` | `/subscriptions` | IAM | Subscribe a consumer domain to a producer's event schema (async via SQS; pins latest version per env) |
+| `GET` | `/subscriptions` | IAM | List event streams (filter by consumer, producer, schema, version, status) |
+| `GET` | `/subscriptions/{subscriptionId}` | IAM | Describe a stream (per-env pinned versions, rule ARNs, enablement) |
+| `PATCH` | `/subscriptions/{subscriptionId}` | IAM | Enable/disable per environment (async via SQS) |
+| `DELETE` | `/subscriptions/{subscriptionId}` | IAM | Unsubscribe — removes platform-side rules; record retained 90 days (async via SQS) |
+| `GET` | `/schemas?domain={producer}` | IAM | Discover a producer's schemas (latest version per env) |
+| `GET` | `/schemas/{schemaName}?domain={producer}` | IAM | Describe a schema (per-env versions + content) |
 
 Full API contract: [`api/openapi.yaml`](api/openapi.yaml)
 
@@ -137,6 +155,8 @@ RegisterDomain ──> PENDING_APPROVAL
 ## Getting Started
 
 See [docs/installation.md](docs/installation.md) for the complete installation guide covering prerequisites, three-stack deployment, smoke test, troubleshooting, and uninstall.
+
+Planning to run more than a few domains? Default AWS quotas cap a fresh platform account at **3 domains** — see [docs/service-quotas.md](docs/service-quotas.md) for the quotas to raise at 20/50/100 domains.
 
 For domain owners, see [docs/domain-management.md](docs/domain-management.md) for the guide to registering, approving, and operating domains.
 
@@ -168,6 +188,8 @@ Domain resources are provisioned **once per environment** in the `Environments` 
 | DLQ-depth alarm | Platform | `{org}-{env}-{domain}-dlq-depth-alarm` |
 | Domain event bus | Domain | `{org}-{env}-{domain}-event-bus` |
 | Integration DLQ | Domain | `{org}-{env}-{domain}-integration-dlq` |
+
+Each active subscription additionally materializes one EventBridge rule per environment on the producer's platform bus (`{consumerDomain}-{detailType}`) plus a per-subscription zero-events alarm. The `nexus-event-streams` DynamoDB table is the authoritative registry of subscription topology.
 
 The platform-side and app-side domain buses intentionally share the same name — they're in different accounts, so there's no collision. Tip: to smoke-test end-to-end in a single AWS account (where platform = app), register each domain under a unique `domainName` per run so the test doesn't collide with its own previous attempt.
 

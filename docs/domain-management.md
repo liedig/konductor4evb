@@ -385,6 +385,88 @@ The platform-side and app-side event buses share the same name — they live in 
 
 ---
 
+## Event Subscriptions
+
+Once domains are `ACTIVE`, teams connect them with **schema-first subscriptions**: you subscribe to an event contract (a schema in the producer's registry), and Nexus builds the delivery stream in every environment. You never touch EventBridge rules or cross-account policies on the platform side.
+
+### Discovering schemas
+
+Browse what a producer domain offers:
+
+```bash
+awscurl -X GET "${API_URL}/schemas?domain=orders" --region ${AWS_REGION}
+```
+
+The response lists each schema (named `{source}@{event-name}`, e.g. `acme-orders@OrderNotification`) with the **latest version per environment** — so you can see before subscribing if dev is ahead of prod.
+
+### Subscribing
+
+```bash
+awscurl -X POST "${API_URL}/subscriptions" \
+  --region ${AWS_REGION} \
+  -H "Content-Type: application/json" \
+  -d '{
+    "consumerDomain": "checkout",
+    "producerDomain": "orders",
+    "schemaName": "acme-orders@OrderNotification"
+  }'
+```
+
+Key things to know:
+
+- **You always subscribe to the latest schema version** — it is resolved and pinned per environment when the subscription activates. There is no version parameter: the schema is the contract, and there is one current representation of an event.
+- **The caller's AWS account must own the consumer domain.** Subscribing is a consumer-side action.
+- **Activation is all-or-nothing across environments.** If the schema is missing in any environment's registry, the subscription fails as a whole.
+- **Start with an environment paused** (e.g., avoid production event volume while developing) by passing initial state: `"environments": {"prod": {"enabled": false}}`.
+
+Track progress with `GET /subscriptions/{consumerDomain}.{producerDomain}.{eventName}` — status moves `PENDING → ACTIVE` (or `FAILED` with error detail).
+
+### Consuming events
+
+Once the stream is `ACTIVE`, matching events arrive on **your app-side domain bus** (`{org}-{env}-{consumerDomain}-event-bus`). Processing them is your responsibility: create your own EventBridge rules on your bus targeting your Lambda functions, queues, or state machines. This is the only direct interaction your team has with an event bus — the platform owns everything upstream.
+
+### Pausing and resuming
+
+```bash
+awscurl -X PATCH "${API_URL}/subscriptions/checkout.orders.OrderNotification" \
+  --region ${AWS_REGION} \
+  -H "Content-Type: application/json" \
+  -d '{"environments": {"prod": {"enabled": false}}}'
+```
+
+Disabling flips the delivery rule off atomically — the subscription, its pinned version, and the contract remain intact. Use it for cost control during development or as a kill switch during incidents.
+
+### Unsubscribing
+
+```bash
+awscurl -X DELETE "${API_URL}/subscriptions/checkout.orders.OrderNotification" --region ${AWS_REGION}
+```
+
+Nexus removes the platform-side delivery rules in every environment; the subscription record is retained for 90 days for audit. **Any integration rules you created on your own bus are yours to clean up** — the platform never modifies your bus.
+
+### Producer obligations: the event envelope
+
+Until the Publish API ships, producers put events onto their platform-side bus directly and **must stamp the canonical envelope** — subscription filtering depends on it:
+
+```json
+{
+  "Source": "acme-orders",
+  "DetailType": "OrderNotification",
+  "Detail": {
+    "metadata": { "schemaVersion": 3 },
+    "data": { "orderId": "..." }
+  }
+}
+```
+
+- `Source` is your domain's namespace identity (`{org}-{domain}`) — the same value in every environment.
+- `DetailType` is the event name, matching the schema name's suffix after `@`.
+- `detail.metadata.schemaVersion` must be **numeric** and match a registered schema version. Events with a missing or string-typed version match no subscriptions — they silently deliver to no one.
+
+Register your event schemas in your per-environment schema registries (named `{source}@{event-name}`) via the AWS Schemas API; the registry access policies created at provisioning permit your owner account to write.
+
+---
+
 ## Troubleshooting
 
 ### Domain stuck in PENDING_APPROVAL
@@ -418,6 +500,17 @@ If you try to register a domain name that already exists, you will see a `Regist
 ### API returns 403
 
 The Nexus API uses IAM authentication. Ensure your AWS credentials have permission to invoke the API Gateway. If you are using `awscurl`, verify that your `--region` matches the region where Nexus is deployed.
+
+### Subscription active but no events arriving
+
+1. Confirm the producer is publishing with the canonical envelope — especially a **numeric** `detail.metadata.schemaVersion`. A string-typed version matches no rules.
+2. Compare the version the producer stamps with your pinned version: `GET /subscriptions/{subscriptionId}` shows `pinnedVersion` per environment. If the producer moved to a newer version after you subscribed, your rule no longer matches — this is contract enforcement, not a bug. Coordinate with the producer team.
+3. Check the environment is enabled (`enabled: true` in the per-env map).
+4. Check the per-subscription zero-events alarm and the producer's subscription DLQ for delivery failures.
+
+### Subscribe fails with a validation error
+
+`SubscribeFailed` outcome events carry the reason: both domains must be `ACTIVE`, your account must own the consumer domain, the schema's `source` must match the producer's namespace identity, and the derived rule name (`{consumerDomain}-{eventName}`) must fit EventBridge's 64-character/`[A-Za-z0-9._-]` constraints.
 
 ---
 

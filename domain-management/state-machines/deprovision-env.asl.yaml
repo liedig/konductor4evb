@@ -1,4 +1,7 @@
-Comment: Idempotent per-environment teardown. Collects per-step errors; never hard-fails.
+Comment: >-
+  Idempotent per-environment teardown. Collects per-step errors; never hard-fails.
+  No step is needed for the app-bus platform-delivery resource policy — it is
+  bus-scoped and deleted with the bus.
 QueryLanguage: JSONata
 StartAt: Start
 States:
