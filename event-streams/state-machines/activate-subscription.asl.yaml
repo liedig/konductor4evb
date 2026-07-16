@@ -1,0 +1,332 @@
+Comment: >-
+  Activates an event stream: for every producer environment, resolves the
+  latest schema version, pins it in a rule on the producer's platform bus,
+  and targets the consumer's app-side bus. All-or-nothing across
+  environments — any failure rolls back the rules created so far.
+QueryLanguage: JSONata
+StartAt: ActivateEnvironments
+States:
+
+  ActivateEnvironments:
+    Type: Map
+    MaxConcurrency: 0
+    Items: "{% $states.input.environments %}"
+    ItemSelector:
+      environment: "{% $states.context.Map.Item.Value.name %}"
+      enabled: "{% $states.context.Map.Item.Value.enabled %}"
+      producerDomain: "{% $states.input.producerDomain %}"
+      consumerDomain: "{% $states.input.consumerDomain %}"
+      consumerAccountId: "{% $states.input.consumerAccountId %}"
+      source: "{% $states.input.source %}"
+      detailType: "{% $states.input.detailType %}"
+      schemaName: "{% $states.input.schemaName %}"
+      ruleName: "{% $states.input.ruleName %}"
+    ItemProcessor:
+      ProcessorConfig:
+        Mode: INLINE
+      StartAt: ResolveLatestSchemaVersion
+      States:
+
+        ResolveLatestSchemaVersion:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:schemas:describeSchema"
+          Arguments:
+            RegistryName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-schema-registry' %}"
+            SchemaName: "{% $states.input.schemaName %}"
+          Assign:
+            pinnedVersion: "{% $number($states.result.SchemaVersion) %}"
+          Output: "{% $states.input %}"
+          Next: CreateSubscriptionRule
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: FailEnvActivation
+              Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'ResolveLatestSchemaVersion' } }]) %}"
+
+        # Version-agnostic name; version pinned in the pattern. PutRule is an
+        # upsert, so retries and future version migrations are the same call.
+        CreateSubscriptionRule:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:eventbridge:putRule"
+          Arguments:
+            Name: "{% $states.input.ruleName %}"
+            EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-event-bus' %}"
+            EventPattern: "{% $string({ 'source': [$states.input.source], 'detail-type': [$states.input.detailType], 'detail': { 'metadata': { 'schemaVersion': [$pinnedVersion] } } }) %}"
+            State: "{% $states.input.enabled ? 'ENABLED' : 'DISABLED' %}"
+          Assign:
+            ruleArn: "{% $states.result.RuleArn %}"
+          Output: "{% $states.input %}"
+          Next: AddConsumerBusTarget
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: FailEnvActivation
+              Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateSubscriptionRule' } }]) %}"
+
+        AddConsumerBusTarget:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:eventbridge:putTargets"
+          Arguments:
+            Rule: "{% $states.input.ruleName %}"
+            EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-event-bus' %}"
+            Targets:
+              - Id: consumer-app-bus
+                Arn: "{% 'arn:aws:events:' & '${AWS::Region}' & ':' & $states.input.consumerAccountId & ':event-bus/' & '${Organization}' & '-' & $states.input.environment & '-' & $states.input.consumerDomain & '-event-bus' %}"
+                RoleArn: "${SubscriptionDeliveryRoleArn}"
+                DeadLetterConfig:
+                  Arn: "{% 'arn:aws:sqs:' & '${AWS::Region}' & ':' & '${AWS::AccountId}' & ':' & '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-subscription-dlq' %}"
+                RetryPolicy:
+                  MaximumRetryAttempts: 185
+                  MaximumEventAgeInSeconds: 86400
+          Output: "{% $states.input %}"
+          Next: CreateZeroEventsAlarm
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: DeleteRuleAfterTargetFailure
+              Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'AddConsumerBusTarget' } }]) %}"
+
+        # A version-pinned rule that stops matching goes silent, not to a DLQ.
+        # 24h of zero deliveries (missing data = breaching) flags the stream on
+        # dashboards; no alarm actions, matching the domain alarms' posture.
+        CreateZeroEventsAlarm:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
+          Arguments:
+            AlarmName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.ruleName & '-zero-events-alarm' %}"
+            AlarmDescription: "{% 'No events delivered for subscription ' & $states.input.ruleName & ' on ' & $states.input.producerDomain & ' (' & $states.input.environment & ') for 24h — possible version pin mismatch' %}"
+            Namespace: AWS/Events
+            MetricName: Invocations
+            Dimensions:
+              - Name: EventBusName
+                Value: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-event-bus' %}"
+              - Name: RuleName
+                Value: "{% $states.input.ruleName %}"
+            Statistic: Sum
+            Period: 86400
+            EvaluationPeriods: 1
+            Threshold: 1
+            ComparisonOperator: LessThanThreshold
+            TreatMissingData: breaching
+          Output:
+            status: SUCCEEDED
+            environment: "{% $states.input.environment %}"
+            enabled: "{% $states.input.enabled %}"
+            pinnedVersion: "{% $pinnedVersion %}"
+            ruleName: "{% $states.input.ruleName %}"
+            ruleArn: "{% $ruleArn %}"
+          End: true
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: RemoveTargetsAfterAlarmFailure
+              Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateZeroEventsAlarm' } }]) %}"
+
+        RemoveTargetsAfterAlarmFailure:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:eventbridge:removeTargets"
+          Arguments:
+            Rule: "{% $states.input.ruleName %}"
+            EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-event-bus' %}"
+            Ids:
+              - consumer-app-bus
+          Output: "{% $states.input %}"
+          Next: DeleteRuleAfterTargetFailure
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: DeleteRuleAfterTargetFailure
+              Output: "{% $states.input %}"
+
+        DeleteRuleAfterTargetFailure:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteRule"
+          Arguments:
+            Name: "{% $states.input.ruleName %}"
+            EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-event-bus' %}"
+          Output: "{% $states.input %}"
+          Next: FailEnvActivation
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: FailEnvActivation
+              Output: "{% $states.input %}"
+
+        FailEnvActivation:
+          Type: Pass
+          Output:
+            status: FAILED
+            environment: "{% $states.input.environment %}"
+            error: "{% $states.input.error %}"
+          End: true
+
+    Assign:
+      envResults: "{% $states.result %}"
+      succeededResults: "{% [$states.result[status='SUCCEEDED']] %}"
+      failedResults: "{% [$states.result[status='FAILED']] %}"
+    Output: "{% $states.input %}"
+    Next: CheckAnyEnvFailed
+
+  CheckAnyEnvFailed:
+    Type: Choice
+    Choices:
+      - Condition: "{% $count($failedResults) > 0 %}"
+        Next: RollbackCreatedRules
+    Default: UpdateStreamActive
+
+  UpdateStreamActive:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${EventStreamsTable}"
+      Key:
+        producerDomain:
+          S: "{% $states.input.producerDomain %}"
+        schemaConsumer:
+          S: "{% $states.input.schemaName & '#' & $states.input.consumerDomain %}"
+      UpdateExpression: "SET #s = :status, environments = :envs, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: ACTIVE
+        ":envs":
+          M: "{% $merge($succeededResults.{ $.environment: { 'M': { 'pinnedVersion': { 'N': $string($.pinnedVersion) }, 'ruleName': { 'S': $.ruleName }, 'ruleArn': { 'S': $.ruleArn }, 'enabled': { 'BOOL': $.enabled }, 'status': { 'S': 'ACTIVE' } } } }) %}"
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+    Output: "{% $states.input %}"
+    Next: EmitSubscriptionActivated
+
+  EmitSubscriptionActivated:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.event-streams
+          DetailType: SubscriptionActivated
+          Detail: >-
+            {% $string({
+              "subscriptionId": $states.input.consumerDomain & '.' & $states.input.producerDomain & '.' & $states.input.detailType,
+              "producerDomain": $states.input.producerDomain,
+              "consumerDomain": $states.input.consumerDomain,
+              "schemaName": $states.input.schemaName,
+              "environments": $merge($succeededResults.{ $.environment: { 'pinnedVersion': $.pinnedVersion, 'enabled': $.enabled, 'ruleArn': $.ruleArn } }),
+              "workflowExecutionId": $states.context.Execution.Id,
+              "activatedAt": $states.context.State.EnteredTime
+            }) %}
+    End: true
+
+  RollbackCreatedRules:
+    Type: Map
+    MaxConcurrency: 0
+    Items: "{% $succeededResults %}"
+    ItemSelector:
+      environment: "{% $states.context.Map.Item.Value.environment %}"
+      ruleName: "{% $states.context.Map.Item.Value.ruleName %}"
+      producerDomain: "{% $states.input.producerDomain %}"
+    ItemProcessor:
+      ProcessorConfig:
+        Mode: INLINE
+      StartAt: DeleteZeroEventsAlarm
+      States:
+        DeleteZeroEventsAlarm:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+          Arguments:
+            AlarmNames:
+              - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.ruleName & '-zero-events-alarm' %}"
+          Output: "{% $states.input %}"
+          Next: RemoveRuleTargets
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: RemoveRuleTargets
+              Output: "{% $states.input %}"
+        RemoveRuleTargets:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:eventbridge:removeTargets"
+          Arguments:
+            Rule: "{% $states.input.ruleName %}"
+            EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-event-bus' %}"
+            Ids:
+              - consumer-app-bus
+          Output: "{% $states.input %}"
+          Next: DeleteCreatedRule
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: DeleteCreatedRule
+              Output: "{% $states.input %}"
+        DeleteCreatedRule:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteRule"
+          Arguments:
+            Name: "{% $states.input.ruleName %}"
+            EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-event-bus' %}"
+          Output:
+            environment: "{% $states.input.environment %}"
+            rolledBack: true
+          End: true
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: RecordRollbackFailure
+              Output:
+                environment: "{% $states.input.environment %}"
+                rolledBack: false
+                compensationError: "{% 'Failed to delete rule: ' & $states.errorOutput.Cause %}"
+        RecordRollbackFailure:
+          Type: Pass
+          End: true
+    Assign:
+      rollbackResults: "{% $states.result %}"
+    Output: "{% $states.input %}"
+    Next: UpdateStreamFailed
+
+  UpdateStreamFailed:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${EventStreamsTable}"
+      Key:
+        producerDomain:
+          S: "{% $states.input.producerDomain %}"
+        schemaConsumer:
+          S: "{% $states.input.schemaName & '#' & $states.input.consumerDomain %}"
+      UpdateExpression: "SET #s = :status, errorDetail = :err, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: FAILED
+        ":err":
+          S: "{% $failedResults[0].environment & '/' & $failedResults[0].error.FailedStep & ': ' & $failedResults[0].error.Cause %}"
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+    Output: "{% $states.input %}"
+    Next: EmitSubscriptionActivationFailed
+
+  EmitSubscriptionActivationFailed:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.event-streams
+          DetailType: SubscriptionActivationFailed
+          Detail: >-
+            {% $string({
+              "subscriptionId": $states.input.consumerDomain & '.' & $states.input.producerDomain & '.' & $states.input.detailType,
+              "producerDomain": $states.input.producerDomain,
+              "consumerDomain": $states.input.consumerDomain,
+              "schemaName": $states.input.schemaName,
+              "failedEnvironment": $failedResults[0].environment,
+              "failedStep": $failedResults[0].error.FailedStep,
+              "errorCode": $failedResults[0].error.Error,
+              "errorMessage": $failedResults[0].error.Cause,
+              "compensationErrors": [$rollbackResults.compensationError],
+              "workflowExecutionId": $states.context.Execution.Id,
+              "failedAt": $states.context.State.EnteredTime
+            }) %}
+    End: true

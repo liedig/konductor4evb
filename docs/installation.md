@@ -49,6 +49,7 @@ Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
 - **Domain account(s)**: One or more AWS accounts where domain resources will be provisioned. You need credentials with permissions to deploy CloudFormation stacks and create IAM roles.
 - **AWS Organizations**: The platform account must belong to an AWS Organization. Nexus uses AWS RAM to share domain namespace information across accounts. Capture the Organization ARN (e.g., `arn:aws:organizations::123456789012:organization/o-abc123`) — you will need it as a parameter.
 - **Email addresses** (optional): For approval and rejection notifications during testing. Both the sender and recipient addresses must be verified in SES sandbox mode. If you skip this, you can still approve domains via the API directly.
+- **Service quotas**: Default quotas in the platform account support only **3 domains** (the EventBridge Schema Registry limit is 10 registries per region). Before onboarding more, see [Service Quotas and Capacity Planning](service-quotas.md).
 
 ### Decide on your namespace
 

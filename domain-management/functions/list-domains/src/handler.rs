@@ -15,7 +15,10 @@ struct QueryResult {
     last_key: Option<HashMap<String, AttributeValue>>,
 }
 
-pub async fn handle(ddb: &aws_sdk_dynamodb::Client, event: LambdaEvent<Value>) -> Result<Value, Error> {
+pub async fn handle(
+    ddb: &aws_sdk_dynamodb::Client,
+    event: LambdaEvent<Value>,
+) -> Result<Value, Error> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
 
     let owner_filter = api::query_param(&event.payload, "ownerAccountId");

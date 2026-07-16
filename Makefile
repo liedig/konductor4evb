@@ -1,9 +1,10 @@
-.PHONY: help build test check smoke deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust clean
+.PHONY: help build test check smoke smoke-subscription backfill-delivery-policy deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
 AWS_REGION ?= $(shell aws configure get region 2>/dev/null || echo us-east-1)
 ORGANIZATION ?= acme
+DOMAIN_NAME ?= smoke-test
 
 # Colour codes for help output (tput falls back to empty strings on dumb terminals)
 BOLD := $(shell tput bold 2>/dev/null)
@@ -24,13 +25,16 @@ help: ## Show this help message
 	@awk 'BEGIN {FS = ":.*?## "} /^(deploy|deploy-core|deploy-notifications|deploy-trust):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Teardown$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(teardown-.+):.*## / {printf "    $(YELLOW)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
-	@printf "\n  $(BOLD)Smoke Test$(RESET)\n"
-	@awk 'BEGIN {FS = ":.*?## "} /^smoke:.*## / {printf "    $(MAGENTA)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\n  $(BOLD)Smoke Test$(RESET) $(DIM)(manual — never run by deploy or CI)$(RESET)\n"
+	@awk 'BEGIN {FS = ":.*?## "} /^(smoke|smoke-subscription|backfill-delivery-policy):.*## / {printf "    $(MAGENTA)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Environment variables$(RESET)\n"
 	@printf "    $(DIM)AWS_REGION$(RESET)                   current: $(CYAN)$(AWS_REGION)$(RESET)\n"
+	@printf "    $(DIM)DOMAIN_NAME$(RESET)                  current: $(CYAN)$(DOMAIN_NAME)$(RESET) — used by: smoke, teardown-domain\n"
 	@printf "    $(DIM)APP_ACCOUNT_ID$(RESET)               required for: smoke\n"
 	@printf "    $(DIM)OWNER_EMAIL$(RESET)                  required for: smoke\n"
 	@printf "    $(DIM)SECONDARY_OWNER_EMAIL$(RESET)          required for: smoke\n"
+	@printf "    $(DIM)PRODUCER_DOMAIN$(RESET)              required for: smoke-subscription\n"
+	@printf "    $(DIM)CONSUMER_DOMAIN$(RESET)              required for: smoke-subscription\n"
 	@printf "    $(DIM)NOTIFICATION_SENDER_EMAIL$(RESET)    required for: deploy-notifications\n"
 	@printf "    $(DIM)PLATFORM_OPERATOR_EMAIL$(RESET)      required for: deploy-notifications\n"
 	@printf "    $(DIM)APP_PROFILE$(RESET)                  required for: deploy-trust, teardown-trust\n"
@@ -58,7 +62,7 @@ ifndef SECONDARY_OWNER_EMAIL
 	$(error SECONDARY_OWNER_EMAIL is required — at least one secondary owner email for the domain)
 endif
 	@set -euo pipefail; \
-	DOMAIN_NAME="smoke-test"; \
+	DOMAIN_NAME="$(DOMAIN_NAME)"; \
 	echo "$(BOLD)$(CYAN)=== Smoke test: $${DOMAIN_NAME} ===$(RESET)"; \
 	API_URL=$$(aws cloudformation describe-stacks \
 		--stack-name nexus-core \
@@ -71,7 +75,7 @@ endif
 	RESPONSE=$$(awscurl -X POST "$${API_URL}/domains" \
 		--region $(AWS_REGION) \
 		-H "Content-Type: application/json" \
-		-d "{\"domainName\":\"$${DOMAIN_NAME}\",\"ownerAccountId\":\"$(APP_ACCOUNT_ID)\",\"ownerEmail\":\"$(OWNER_EMAIL)\",\"secondaryOwnerEmails\":[\"$(SECONDARY_OWNER_EMAIL)\"],\"description\":\"Smoke test domain\"}"); \
+		-d "{\"domainName\":\"$${DOMAIN_NAME}\",\"ownerAccountId\":\"$(APP_ACCOUNT_ID)\",\"ownerEmail\":\"$(OWNER_EMAIL)\",\"secondaryOwnerEmails\":[\"$(SECONDARY_OWNER_EMAIL)\"],\"description\":\"Smoke test domain ($${DOMAIN_NAME})\"}"); \
 	echo "  $${RESPONSE}"; \
 	REQUEST_ID=$$(echo "$${RESPONSE}" | jq -r '.requestId'); \
 	[ "$${REQUEST_ID}" = "null" ] && { echo "  $(BOLD)ERROR: no requestId in response$(RESET)"; exit 1; } || true; \
@@ -119,8 +123,7 @@ endif
 	echo "$(BOLD)$(GREEN)✓ Smoke test complete — domain '$${DOMAIN_NAME}' is ACTIVE$(RESET)"; \
 	echo ""; \
 	echo "  To clean up, run:"; \
-	echo "    aws dynamodb delete-item --table-name nexus-domains --key '{\"domainName\":{\"S\":\"'$${DOMAIN_NAME}'\"}}' --region $(AWS_REGION)"; \
-	echo "    (domain-level resources in your domain account remain until a DELETE flow is built)"
+	echo "    make teardown-domain DOMAIN_NAME=$${DOMAIN_NAME}"
 
 deploy: build deploy-core ## Build then deploy the core stack
 
@@ -136,6 +139,21 @@ ifndef PLATFORM_OPERATOR_EMAIL
 endif
 	sam deploy --config-file samconfig-notifications.toml \
 		--parameter-overrides NotificationSenderEmail=$(NOTIFICATION_SENDER_EMAIL) PlatformOperatorEmail=$(PLATFORM_OPERATOR_EMAIL)
+
+backfill-delivery-policy: ## Attach the platform-delivery policy to app buses of pre-existing ACTIVE domains (idempotent)
+	ORGANIZATION=$(ORGANIZATION) AWS_REGION=$(AWS_REGION) ./scripts/backfill-delivery-policy.sh
+
+smoke-subscription: ## End-to-end subscription smoke test (requires PRODUCER_DOMAIN + CONSUMER_DOMAIN, both ACTIVE)
+ifndef PRODUCER_DOMAIN
+	$(error PRODUCER_DOMAIN is required — an ACTIVE domain that will offer the schema)
+endif
+ifndef CONSUMER_DOMAIN
+	$(error CONSUMER_DOMAIN is required — an ACTIVE domain that will subscribe)
+endif
+	ORGANIZATION=$(ORGANIZATION) AWS_REGION=$(AWS_REGION) PRODUCER_DOMAIN=$(PRODUCER_DOMAIN) CONSUMER_DOMAIN=$(CONSUMER_DOMAIN) ./scripts/smoke-subscription.sh
+
+teardown-domain: ## Delete a domain and every resource it provisioned (default DOMAIN_NAME=smoke-test)
+	AWS_REGION=$(AWS_REGION) DOMAIN_NAME=$(DOMAIN_NAME) ./scripts/teardown-domain.sh
 
 teardown-core: ## Delete the Nexus core stack
 	aws cloudformation delete-stack --stack-name nexus-core --region $(AWS_REGION)

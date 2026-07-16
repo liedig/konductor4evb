@@ -134,6 +134,17 @@ pub fn query_param(event: &Value, name: &str) -> Option<String> {
         .map(String::from)
 }
 
+/// The IAM-authenticated caller's AWS account, as populated by API Gateway on
+/// an `aws_proxy` integration (`requestContext.identity.accountId`).
+pub fn caller_account_id(event: &Value) -> Option<String> {
+    event
+        .get("requestContext")
+        .and_then(|rc| rc.get("identity"))
+        .and_then(|i| i.get("accountId"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
 fn cors_headers() -> HashMap<&'static str, &'static str> {
     let mut headers = HashMap::new();
     headers.insert("Content-Type", "application/json");

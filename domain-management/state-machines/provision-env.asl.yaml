@@ -6,6 +6,15 @@ States:
   CreatePlatformEventBus:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:createEventBus"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+          - EventBridge.EventBridgeException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Assign:
@@ -21,6 +30,15 @@ States:
   SetPutEventPolicy:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:putPermission"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+          - EventBridge.EventBridgeException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
       Action: "events:PutEvents"
@@ -37,6 +55,15 @@ States:
   CreateSchemaRegistry:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:schemas:createRegistry"
+    Retry:
+      - ErrorEquals:
+          - Schemas.TooManyRequestsException
+          - Schemas.InternalServerErrorException
+          - Schemas.ServiceUnavailableException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       RegistryName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-schema-registry' %}"
       Description: "{% 'Schema registry for domain ' & $states.input.domainName & ' (' & $states.input.environment & ')' %}"
@@ -53,6 +80,13 @@ States:
   CreateSubscriptionDlq:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:sqs:createQueue"
+    Retry:
+      - ErrorEquals:
+          - Sqs.SqsException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       QueueName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-subscription-dlq' %}"
     Assign:
@@ -68,6 +102,15 @@ States:
   CreateAppEventBus:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:createEventBus"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+          - EventBridge.EventBridgeException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
@@ -75,16 +118,53 @@ States:
     Assign:
       appBus: "{% $states.result %}"
     Output: "{% $states.input %}"
-    Next: CreateIntegrationDlq
+    Next: SetAppBusDeliveryPolicy
     Catch:
       - ErrorEquals:
           - States.ALL
         Next: StartCompensation
         Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateAppEventBus' } }]) %}"
 
+  # One grant covers all current and future subscriptions delivering to this
+  # bus; subscribe never touches the consumer account again. On failure the
+  # compensation chain deletes the app bus, and the policy dies with it.
+  SetAppBusDeliveryPolicy:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:eventbridge:putPermission"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+          - EventBridge.EventBridgeException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Arguments:
+      EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
+      Action: "events:PutEvents"
+      Principal: "${AWS::AccountId}"
+      StatementId: allow-platform-subscription-delivery
+    Credentials:
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+    Output: "{% $states.input %}"
+    Next: CreateIntegrationDlq
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: StartCompensation
+        Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'SetAppBusDeliveryPolicy' } }]) %}"
+
   CreateIntegrationDlq:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:sqs:createQueue"
+    Retry:
+      - ErrorEquals:
+          - Sqs.SqsException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       QueueName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-integration-dlq' %}"
     Credentials:
@@ -102,6 +182,17 @@ States:
   CreateDashboard:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putDashboard"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.LimitExceededFault
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       DashboardName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dashboard' %}"
       DashboardBody: |-
@@ -138,6 +229,18 @@ States:
                   "title": "Subscription DLQ",
                   "region": "${AWS::Region}"
                 }
+              },
+              {
+                "type": "metric",
+                "properties": {
+                  "metrics": [
+                    [{ "expression": "SEARCH('{AWS/Events,EventBusName,RuleName} EventBusName=\"" & $busName & "\" MetricName=\"Invocations\"', 'Sum', 300)", "label": "", "id": "subs" }]
+                  ],
+                  "period": 300,
+                  "stat": "Sum",
+                  "title": "Per-Subscription Deliveries",
+                  "region": "${AWS::Region}"
+                }
               }
             ]
           })
@@ -155,6 +258,17 @@ States:
   CreateFailedInvocationsAlarm:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.LimitExceededFault
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       AlarmName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations-alarm' %}"
       AlarmDescription: "{% 'High failed invocations rate on domain bus ' & $states.input.domainName & ' (' & $states.input.environment & ')' %}"
@@ -182,6 +296,17 @@ States:
   CreateDlqDepthAlarm:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.LimitExceededFault
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       AlarmName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth-alarm' %}"
       AlarmDescription: "{% 'Messages accumulating in subscription DLQ for domain ' & $states.input.domainName & ' (' & $states.input.environment & ')' %}"
@@ -240,6 +365,13 @@ States:
   DeleteIntegrationDlq:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:sqs:deleteQueue"
+    Retry:
+      - ErrorEquals:
+          - Sqs.SqsException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       QueueUrl: "{% $integrationDlq.QueueUrl %}"
     Credentials:
@@ -264,6 +396,15 @@ States:
   DeleteAppEventBus:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+          - EventBridge.EventBridgeException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
@@ -288,6 +429,17 @@ States:
   DeleteDlqDepthAlarm:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.LimitExceededFault
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       AlarmNames:
         - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth-alarm' %}"
@@ -311,6 +463,17 @@ States:
   DeleteFailedInvocAlarm:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.LimitExceededFault
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       AlarmNames:
         - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations-alarm' %}"
@@ -334,6 +497,17 @@ States:
   DeleteDashboard:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteDashboards"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.LimitExceededFault
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       DashboardNames:
         - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dashboard' %}"
@@ -357,6 +531,13 @@ States:
   DeleteSubscriptionDlq:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:sqs:deleteQueue"
+    Retry:
+      - ErrorEquals:
+          - Sqs.SqsException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       QueueUrl: "{% $subscriptionDlq.QueueUrl %}"
     Output: "{% $states.input %}"
@@ -379,6 +560,15 @@ States:
   DeleteSchemaRegistry:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:schemas:deleteRegistry"
+    Retry:
+      - ErrorEquals:
+          - Schemas.TooManyRequestsException
+          - Schemas.InternalServerErrorException
+          - Schemas.ServiceUnavailableException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       RegistryName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-schema-registry' %}"
     Output: "{% $states.input %}"
@@ -401,6 +591,15 @@ States:
   DeletePlatformEventBus:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+          - EventBridge.EventBridgeException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Output: "{% $states.input %}"

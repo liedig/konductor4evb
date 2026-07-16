@@ -1,0 +1,116 @@
+Comment: >-
+  Removes an event stream: deletes the subscription's rules from the
+  producer's platform bus in every environment, idempotently ("already
+  gone" is a no-op), then marks the stream record REMOVED with a 90-day
+  audit TTL. Never touches the consumer's app-side bus — integration rules
+  there are the application team's responsibility.
+QueryLanguage: JSONata
+StartAt: RemoveEnvironments
+States:
+
+  RemoveEnvironments:
+    Type: Map
+    MaxConcurrency: 0
+    Items: "{% $states.input.environments %}"
+    ItemSelector:
+      environment: "{% $states.context.Map.Item.Value %}"
+      producerDomain: "{% $states.input.producerDomain %}"
+      ruleName: "{% $states.input.ruleName %}"
+    ItemProcessor:
+      ProcessorConfig:
+        Mode: INLINE
+      StartAt: DeleteZeroEventsAlarm
+      States:
+        DeleteZeroEventsAlarm:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+          Arguments:
+            AlarmNames:
+              - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.ruleName & '-zero-events-alarm' %}"
+          Output: "{% $states.input %}"
+          Next: RemoveRuleTargets
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: RemoveRuleTargets
+              Output: "{% $states.input %}"
+        RemoveRuleTargets:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:eventbridge:removeTargets"
+          Arguments:
+            Rule: "{% $states.input.ruleName %}"
+            EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-event-bus' %}"
+            Ids:
+              - consumer-app-bus
+          Output: "{% $states.input %}"
+          Next: DeleteSubscriptionRule
+          Catch:
+            - ErrorEquals:
+                - EventBridge.ResourceNotFoundException
+              Next: DeleteSubscriptionRule
+              Output: "{% $states.input %}"
+        DeleteSubscriptionRule:
+          Type: Task
+          Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteRule"
+          Arguments:
+            Name: "{% $states.input.ruleName %}"
+            EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-event-bus' %}"
+          Output:
+            environment: "{% $states.input.environment %}"
+            removed: true
+          End: true
+          Catch:
+            - ErrorEquals:
+                - EventBridge.ResourceNotFoundException
+              Next: TreatAlreadyGoneAsRemoved
+              Output:
+                environment: "{% $states.input.environment %}"
+                removed: true
+        TreatAlreadyGoneAsRemoved:
+          Type: Pass
+          End: true
+    Output: "{% $states.input %}"
+    Next: MarkStreamRemoved
+
+  MarkStreamRemoved:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${EventStreamsTable}"
+      Key:
+        producerDomain:
+          S: "{% $states.input.producerDomain %}"
+        schemaConsumer:
+          S: "{% $states.input.schemaName & '#' & $states.input.consumerDomain %}"
+      UpdateExpression: "SET #s = :status, removedAt = :now, expiresAt = :ttl, updatedAt = :now"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: REMOVED
+        ":now":
+          S: "{% $states.context.State.EnteredTime %}"
+        ":ttl":
+          N: "{% $string($floor($toMillis($states.context.State.EnteredTime) / 1000) + 7776000) %}"
+    Output: "{% $states.input %}"
+    Next: EmitSubscriptionRemoved
+
+  EmitSubscriptionRemoved:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.event-streams
+          DetailType: SubscriptionRemoved
+          Detail: >-
+            {% $string({
+              "subscriptionId": $states.input.consumerDomain & '.' & $states.input.producerDomain & '.' & $states.input.detailType,
+              "producerDomain": $states.input.producerDomain,
+              "consumerDomain": $states.input.consumerDomain,
+              "schemaName": $states.input.schemaName,
+              "environments": $states.input.environments,
+              "workflowExecutionId": $states.context.Execution.Id,
+              "removedAt": $states.context.State.EnteredTime
+            }) %}
+    End: true

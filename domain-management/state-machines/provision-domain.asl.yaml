@@ -6,6 +6,16 @@ States:
   SetProvisioningStatus:
     Type: Task
     Resource: "arn:aws:states:::dynamodb:updateItem"
+    Retry:
+      - ErrorEquals:
+          - DynamoDB.ProvisionedThroughputExceededException
+          - DynamoDB.ThrottlingException
+          - DynamoDB.InternalServerError
+          - DynamoDB.RequestLimitExceeded
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       TableName: "${DomainsTable}"
       Key:
@@ -25,6 +35,16 @@ States:
   CheckNewAccount:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:dynamodb:query"
+    Retry:
+      - ErrorEquals:
+          - DynamoDb.ProvisionedThroughputExceededException
+          - DynamoDb.ThrottlingException
+          - DynamoDb.InternalServerError
+          - DynamoDb.RequestLimitExceeded
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       TableName: "${DomainsTable}"
       IndexName: by-owner
@@ -45,6 +65,15 @@ States:
   CreateNamespaceParameter:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:ssm:putParameter"
+    Retry:
+      - ErrorEquals:
+          - Ssm.TooManyUpdatesException
+          - Ssm.InternalServerError
+          - Ssm.SsmException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Name: "{% '/namespace/' & $states.input.detail.domainName %}"
       Value: "{% '${Organization}' & '-' & $states.input.detail.domainName %}"
@@ -62,6 +91,15 @@ States:
   EnsureRAMResourceShare:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:ram:getResourceShares"
+    Retry:
+      - ErrorEquals:
+          - Ram.ThrottlingException
+          - Ram.ServerInternalException
+          - Ram.ServiceUnavailableException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       ResourceOwner: SELF
       Name: "{% '${Organization}' & '-domain-namespaces' %}"
@@ -86,6 +124,15 @@ States:
   CreateRAMResourceShare:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:ram:createResourceShare"
+    Retry:
+      - ErrorEquals:
+          - Ram.ThrottlingException
+          - Ram.ServerInternalException
+          - Ram.ServiceUnavailableException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Name: "{% '${Organization}' & '-domain-namespaces' %}"
       ResourceArns:
@@ -106,6 +153,15 @@ States:
   AssociateParameterToExistingShare:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:ram:associateResourceShare"
+    Retry:
+      - ErrorEquals:
+          - Ram.ThrottlingException
+          - Ram.ServerInternalException
+          - Ram.ServiceUnavailableException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       ResourceShareArn: "{% $existingShares.ResourceShares[0].ResourceShareArn %}"
       ResourceArns:
@@ -136,6 +192,14 @@ States:
         StartProvisionEnv:
           Type: Task
           Resource: "arn:aws:states:::states:startExecution.sync:2"
+          Retry:
+            - ErrorEquals:
+                - StepFunctions.ThrottlingException
+                - StepFunctions.ExecutionLimitExceeded
+              IntervalSeconds: 1
+              MaxAttempts: 3
+              BackoffRate: 2.0
+              JitterStrategy: FULL
           Arguments:
             StateMachineArn: "${ProvisionEnvStateMachineArn}"
             Input: "{% $states.input %}"
@@ -161,6 +225,9 @@ States:
       envResults: "{% $states.result %}"
       succeededResults: "{% [$states.result[status='SUCCEEDED']] %}"
       failedResults: "{% [$states.result[status='FAILED']] %}"
+      # Pre-assign so the failure-emit state never sees an unassigned variable,
+      # regardless of how the rollback path is reached or reordered.
+      rollbackResults: "{% [] %}"
     Output: "{% $states.input %}"
     Next: CheckAnyEnvFailed
 
@@ -174,6 +241,16 @@ States:
   UpdateDomainActive:
     Type: Task
     Resource: "arn:aws:states:::dynamodb:updateItem"
+    Retry:
+      - ErrorEquals:
+          - DynamoDB.ProvisionedThroughputExceededException
+          - DynamoDB.ThrottlingException
+          - DynamoDB.InternalServerError
+          - DynamoDB.RequestLimitExceeded
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       TableName: "${DomainsTable}"
       Key:
@@ -197,6 +274,14 @@ States:
   EmitProvisioningSucceeded:
     Type: Task
     Resource: "arn:aws:states:::events:putEvents"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Entries:
         - EventBusName: "${NexusEventBus}"
@@ -229,6 +314,14 @@ States:
         StartDeprovisionEnv:
           Type: Task
           Resource: "arn:aws:states:::states:startExecution.sync:2"
+          Retry:
+            - ErrorEquals:
+                - StepFunctions.ThrottlingException
+                - StepFunctions.ExecutionLimitExceeded
+              IntervalSeconds: 1
+              MaxAttempts: 3
+              BackoffRate: 2.0
+              JitterStrategy: FULL
           Arguments:
             StateMachineArn: "${DeprovisionEnvStateMachineArn}"
             Input: "{% $states.input %}"
@@ -253,6 +346,14 @@ States:
   EmitProvisioningFailedAfterRollback:
     Type: Task
     Resource: "arn:aws:states:::events:putEvents"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Entries:
         - EventBusName: "${NexusEventBus}"
@@ -265,14 +366,28 @@ States:
             failedEnvironment: "{% $failedResults[0].environment %}"
             failedStep: "{% $failedResults[0].error.Error %}"
             errorCode: "{% $failedResults[0].error.Error %}"
-            errorMessage: "{% $failedResults[0].error.Cause %}"
-            compensationErrors: "{% $exists($rollbackResults) ? $reduce($rollbackResults[$exists(compensationErrors)].compensationErrors, function($a, $b) { $append($a, $b) }, []) : [] %}"
+            # Cause is absent on some error shapes (e.g. nested-execution
+            # timeout); an undefined Arguments field fails the state.
+            errorMessage: "{% $failedResults[0].error.Cause ? $failedResults[0].error.Cause : '' %}"
+            # Array constructor coerces undefined to [] and flattens: handles
+            # empty rollback set, clean rollback (all compensationErrors: []),
+            # and rollback with errors. A $reduce over these shapes returns
+            # undefined and kills the state with QueryEvaluationError.
+            compensationErrors: "{% [$rollbackResults.compensationErrors] %}"
     Output: "{% $states.input %}"
     Next: UpdateDomainProvisioningFailed
 
   EmitProvisioningFailedDomainLevel:
     Type: Task
     Resource: "arn:aws:states:::events:putEvents"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Entries:
         - EventBusName: "${NexusEventBus}"
@@ -293,6 +408,16 @@ States:
   UpdateDomainProvisioningFailed:
     Type: Task
     Resource: "arn:aws:states:::dynamodb:updateItem"
+    Retry:
+      - ErrorEquals:
+          - DynamoDB.ProvisionedThroughputExceededException
+          - DynamoDB.ThrottlingException
+          - DynamoDB.InternalServerError
+          - DynamoDB.RequestLimitExceeded
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       TableName: "${DomainsTable}"
       Key:
@@ -313,6 +438,16 @@ States:
   UpdateDomainProvisioningFailedDomainLevel:
     Type: Task
     Resource: "arn:aws:states:::dynamodb:updateItem"
+    Retry:
+      - ErrorEquals:
+          - DynamoDB.ProvisionedThroughputExceededException
+          - DynamoDB.ThrottlingException
+          - DynamoDB.InternalServerError
+          - DynamoDB.RequestLimitExceeded
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       TableName: "${DomainsTable}"
       Key:

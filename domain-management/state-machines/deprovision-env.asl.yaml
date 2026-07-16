@@ -1,4 +1,7 @@
-Comment: Idempotent per-environment teardown. Collects per-step errors; never hard-fails.
+Comment: >-
+  Idempotent per-environment teardown. Collects per-step errors; never hard-fails.
+  No step is needed for the app-bus platform-delivery resource policy — it is
+  bus-scoped and deleted with the bus.
 QueryLanguage: JSONata
 StartAt: Start
 States:
@@ -13,6 +16,13 @@ States:
   DeleteIntegrationDlq:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:sqs:deleteQueue"
+    Retry:
+      - ErrorEquals:
+          - Sqs.SqsException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       QueueUrl: "{% $states.input.resourceArns.integrationDlqArn %}"
     Credentials:
@@ -30,6 +40,15 @@ States:
   DeleteAppEventBus:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+          - EventBridge.EventBridgeException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
@@ -47,6 +66,17 @@ States:
   DeleteDlqDepthAlarm:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.LimitExceededFault
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       AlarmNames:
         - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dlq-depth-alarm' %}"
@@ -63,6 +93,17 @@ States:
   DeleteFailedInvocAlarm:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteAlarms"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.LimitExceededFault
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       AlarmNames:
         - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-failed-invocations-alarm' %}"
@@ -79,6 +120,17 @@ States:
   DeleteDashboard:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:deleteDashboards"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.LimitExceededFault
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       DashboardNames:
         - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dashboard' %}"
@@ -95,6 +147,13 @@ States:
   DeleteSubscriptionDlq:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:sqs:deleteQueue"
+    Retry:
+      - ErrorEquals:
+          - Sqs.SqsException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       QueueUrl: "{% $states.input.resourceArns.subscriptionDlqArn %}"
     Output: "{% $states.input %}"
@@ -110,6 +169,15 @@ States:
   DeleteSchemaRegistry:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:schemas:deleteRegistry"
+    Retry:
+      - ErrorEquals:
+          - Schemas.TooManyRequestsException
+          - Schemas.InternalServerErrorException
+          - Schemas.ServiceUnavailableException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       RegistryName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-schema-registry' %}"
     Output: "{% $states.input %}"
@@ -125,6 +193,15 @@ States:
   DeletePlatformEventBus:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:eventbridge:deleteEventBus"
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+          - EventBridge.EventBridgeException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Output: "{% $states.input %}"

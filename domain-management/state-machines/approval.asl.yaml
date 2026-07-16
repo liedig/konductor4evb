@@ -1,7 +1,17 @@
 Comment: Domain registration approval workflow with human-in-the-loop
 QueryLanguage: JSONata
-StartAt: NotifyAndWait
+StartAt: CaptureRegistration
 States:
+
+  # Assign on a Task applies only when the task succeeds, so capturing the
+  # registration on NotifyAndWait would leave $registration unassigned on
+  # every Catch path. Capture in a Pass state, which cannot fail.
+  CaptureRegistration:
+    Type: Pass
+    Assign:
+      registration: "{% $states.input %}"
+    Output: "{% $states.input %}"
+    Next: NotifyAndWait
 
   NotifyAndWait:
     Type: Task
@@ -15,15 +25,35 @@ States:
         ownerEmail: "{% $states.input.ownerEmail %}"
         secondaryOwnerEmails: "{% $states.input.secondaryOwnerEmails %}"
         environments: "{% $states.input.environments %}"
-    # Capture the registration context before the task token replaces $states.input
-    # with the decide payload ({approved, decidedBy, justification}).
-    Assign:
-      registration: "{% $states.input %}"
     TimeoutSeconds: 604800
-    Catch:
+    Retry:
       - ErrorEquals:
-          - States.TaskFailed
-        Next: UpdateStatusRejected
+          - Lambda.ServiceException
+          - Lambda.TooManyRequestsException
+          - Lambda.AWSLambdaException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Catch:
+      # Human rejection: the decide Lambda reports it via SendTaskFailure
+      # with this error name and a JSON cause {approved, decidedBy,
+      # justification}.
+      - ErrorEquals:
+          - RegistrationRejected
+        Next: UpdateStatusRejectedFromDecision
+      # States.Timeout is not matched by States.TaskFailed and needs its own
+      # clause. A 7-day silence is a decision-by-default rejection.
+      - ErrorEquals:
+          - States.Timeout
+        Next: RecordTimeoutRejection
+      # Anything else means the approval request never reached a human
+      # (e.g. SES identity unverified) — that is not a rejection.
+      - ErrorEquals:
+          - States.ALL
+        Next: UpdateStatusNotificationFailed
+        Output:
+          errorMessage: "{% $states.errorOutput.Cause ? $states.errorOutput.Cause : $states.errorOutput.Error %}"
     Next: CheckDecision
 
   CheckDecision:
@@ -31,7 +61,7 @@ States:
     Choices:
       - Condition: "{% $states.input.approved = true %}"
         Next: UpdateStatusApproved
-    Default: UpdateStatusRejected
+    Default: PrepareCallbackRejection
 
   UpdateStatusApproved:
     Type: Task
@@ -55,7 +85,97 @@ States:
           S: "{% $states.context.State.EnteredTime %}"
         ":updatedAt":
           S: "{% $states.context.State.EnteredTime %}"
+    Retry:
+      - ErrorEquals:
+          - DynamoDB.ThrottlingException
+          - DynamoDB.ProvisionedThroughputExceededException
+          - DynamoDB.InternalServerError
+          - DynamoDB.RequestLimitExceeded
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    # Pass the decide payload through; the default Task output is the
+    # DynamoDB response, which would drop decidedBy/justification from the
+    # approved event.
+    Output: "{% $states.input %}"
     Next: EmitApprovedEvent
+
+  # The rejection cause is JSON authored by the decide Lambda. $parse on a
+  # malformed cause (e.g. a manual SendTaskFailure) raises
+  # States.QueryEvaluationError, which a Pass state cannot catch — so the
+  # parse lives on this Task and the catch degrades to the unknown-decider
+  # fallback rather than failing the execution.
+  UpdateStatusRejectedFromDecision:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Assign:
+      rejection:
+        decidedBy: "{% $parse($states.input.Cause).decidedBy ? $parse($states.input.Cause).decidedBy : 'unknown' %}"
+        justification: "{% $parse($states.input.Cause).justification ? $parse($states.input.Cause).justification : '' %}"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainName:
+          S: "{% $registration.domainName %}"
+      UpdateExpression: "SET #s = :status, decidedBy = :decidedBy, justification = :justification, rejectedAt = :rejectedAt, updatedAt = :updatedAt"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: REJECTED
+        ":decidedBy":
+          S: "{% $parse($states.input.Cause).decidedBy ? $parse($states.input.Cause).decidedBy : 'unknown' %}"
+        ":justification":
+          S: "{% $parse($states.input.Cause).justification ? $parse($states.input.Cause).justification : '' %}"
+        ":rejectedAt":
+          S: "{% $states.context.State.EnteredTime %}"
+        ":updatedAt":
+          S: "{% $states.context.State.EnteredTime %}"
+    Retry:
+      - ErrorEquals:
+          - DynamoDB.ThrottlingException
+          - DynamoDB.ProvisionedThroughputExceededException
+          - DynamoDB.InternalServerError
+          - DynamoDB.RequestLimitExceeded
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Catch:
+      - ErrorEquals:
+          - States.QueryEvaluationError
+        Next: PrepareUnknownRejection
+    Next: EmitRejectedEvent
+
+  PrepareUnknownRejection:
+    Type: Pass
+    Assign:
+      rejection:
+        decidedBy: unknown
+        justification: ""
+    Output: "{% $states.input %}"
+    Next: UpdateStatusRejected
+
+  RecordTimeoutRejection:
+    Type: Pass
+    Assign:
+      rejection:
+        decidedBy: "system:timeout"
+        justification: "Approval request expired after 7 days without a decision"
+    Output: "{% $states.input %}"
+    Next: UpdateStatusRejected
+
+  # SendTaskSuccess with approved != true (defensive; the decide Lambda
+  # reports rejections via SendTaskFailure).
+  PrepareCallbackRejection:
+    Type: Pass
+    Assign:
+      rejection:
+        decidedBy: "{% $states.input.decidedBy ? $states.input.decidedBy : 'unknown' %}"
+        justification: "{% $states.input.justification ? $states.input.justification : '' %}"
+    Output: "{% $states.input %}"
+    Next: UpdateStatusRejected
 
   UpdateStatusRejected:
     Type: Task
@@ -72,14 +192,58 @@ States:
         ":status":
           S: REJECTED
         ":decidedBy":
-          S: "{% $states.input.decidedBy %}"
+          S: "{% $rejection.decidedBy %}"
         ":justification":
-          S: "{% $states.input.justification ? $states.input.justification : '' %}"
+          S: "{% $rejection.justification %}"
         ":rejectedAt":
           S: "{% $states.context.State.EnteredTime %}"
         ":updatedAt":
           S: "{% $states.context.State.EnteredTime %}"
+    Retry:
+      - ErrorEquals:
+          - DynamoDB.ThrottlingException
+          - DynamoDB.ProvisionedThroughputExceededException
+          - DynamoDB.InternalServerError
+          - DynamoDB.RequestLimitExceeded
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     Next: EmitRejectedEvent
+
+  # Notification infrastructure failed before a human ever saw the request:
+  # the domain is NOT rejected. Operator intervention required.
+  UpdateStatusNotificationFailed:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Assign:
+      notificationError: "{% $states.input.errorMessage %}"
+    Arguments:
+      TableName: "${DomainsTable}"
+      Key:
+        domainName:
+          S: "{% $registration.domainName %}"
+      UpdateExpression: "SET #s = :status, errorDetail = :err, updatedAt = :updatedAt"
+      ExpressionAttributeNames:
+        "#s": status
+      ExpressionAttributeValues:
+        ":status":
+          S: APPROVAL_NOTIFICATION_FAILED
+        ":err":
+          S: "{% $states.input.errorMessage %}"
+        ":updatedAt":
+          S: "{% $states.context.State.EnteredTime %}"
+    Retry:
+      - ErrorEquals:
+          - DynamoDB.ThrottlingException
+          - DynamoDB.ProvisionedThroughputExceededException
+          - DynamoDB.InternalServerError
+          - DynamoDB.RequestLimitExceeded
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Next: EmitApprovalNotificationFailedEvent
 
   EmitApprovedEvent:
     Type: Task
@@ -100,6 +264,14 @@ States:
               "justification": $states.input.justification ? $states.input.justification : '',
               "approvedAt": $states.context.State.EnteredTime
             }) %}
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     End: true
 
   EmitRejectedEvent:
@@ -116,8 +288,42 @@ States:
               "ownerAccountId": $registration.ownerAccountId,
               "ownerEmail": $registration.ownerEmail,
               "secondaryOwnerEmails": $registration.secondaryOwnerEmails,
-              "rejectedBy": $states.input.decidedBy,
-              "justification": $states.input.justification ? $states.input.justification : '',
+              "rejectedBy": $rejection.decidedBy,
+              "justification": $rejection.justification,
               "rejectedAt": $states.context.State.EnteredTime
             }) %}
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    End: true
+
+  # Operator-facing only: no owner email is triggered by this event — email
+  # delivery is exactly the dependency that failed.
+  EmitApprovalNotificationFailedEvent:
+    Type: Task
+    Resource: "arn:aws:states:::events:putEvents"
+    Arguments:
+      Entries:
+        - EventBusName: "${NexusEventBus}"
+          Source: nexus.domain-management
+          DetailType: DomainApprovalNotificationFailed
+          Detail: >-
+            {% $string({
+              "domainName": $registration.domainName,
+              "errorMessage": $notificationError,
+              "failedAt": $states.context.State.EnteredTime
+            }) %}
+    Retry:
+      - ErrorEquals:
+          - EventBridge.ThrottlingException
+          - EventBridge.InternalException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
     End: true

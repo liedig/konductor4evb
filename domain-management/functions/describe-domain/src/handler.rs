@@ -8,7 +8,10 @@ use nexus_common::error::ControlPlaneError;
 use serde_json::{json, Value};
 use std::env;
 
-pub async fn handle(ddb: &aws_sdk_dynamodb::Client, event: LambdaEvent<Value>) -> Result<Value, Error> {
+pub async fn handle(
+    ddb: &aws_sdk_dynamodb::Client,
+    event: LambdaEvent<Value>,
+) -> Result<Value, Error> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     Ok(fetch_domain(ddb, &table, &event.payload).await)
 }

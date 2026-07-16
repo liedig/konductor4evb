@@ -295,6 +295,358 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DecideFunction.Arn}/invocations"
 
+  /subscriptions:
+    post:
+      operationId: Subscribe
+      summary: Subscribe a consumer domain to a producer domain's event schema
+      description: >
+        Schema-first subscription: binds the consumer to the latest version of
+        the schema in every environment, pinned at subscribe time. No version
+        parameter is accepted — the schema is the contract.
+      x-amazon-apigateway-request-validator: validate-body
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubscribeRequest"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAccepted"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: POST
+        credentials:
+          Fn::GetAtt: [NexusApiSqsRole, Arn]
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
+        requestParameters:
+          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+        requestTemplates:
+          application/json: "Action=SendMessage&MessageBody={\"callerAccountId\":\"$context.identity.accountId\",\"body\":$input.json('$')}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+        responses:
+          default:
+            statusCode: "202"
+            responseTemplates:
+              application/json: |
+                #set($body = $input.path('$'))
+                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
+                {"requestId":"$messageId","message":"Request accepted"}
+        passthroughBehavior: never
+    get:
+      operationId: ListSubscriptions
+      summary: List event subscriptions
+      description: Results are scoped to subscriptions where the caller's account owns the consumer domain, the producer domain, or both — a caller with no relationship to either side of a subscription will never see it, regardless of filters.
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      parameters:
+        - name: consumer
+          in: query
+          schema:
+            type: string
+        - name: producer
+          in: query
+          schema:
+            type: string
+        - name: schema
+          in: query
+          schema:
+            type: string
+        - name: version
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [PENDING, ACTIVE, FAILED, REMOVED]
+        - name: nextToken
+          in: query
+          schema:
+            type: string
+        - name: maxResults
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 100
+      responses:
+        "200":
+          description: List of subscriptions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSubscriptionsResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListSubscriptionsFunction.Arn}/invocations"
+
+  /subscriptions/{subscriptionId}:
+    get:
+      operationId: DescribeSubscription
+      summary: Get full detail of a subscription
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          description: "Format: {consumerDomain}.{producerDomain}.{detailType}"
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Subscription detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubscriptionDetail"
+        "404":
+          description: Subscription not found, or the caller's account owns neither the consumer nor the producer domain (returned rather than 403 so unauthorized callers cannot use this endpoint to confirm a subscription's existence)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSubscriptionFunction.Arn}/invocations"
+    patch:
+      operationId: UpdateSubscription
+      summary: Update per-environment desired state (enable/disable)
+      x-amazon-apigateway-request-validator: validate-body
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSubscriptionRequest"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAccepted"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: POST
+        credentials:
+          Fn::GetAtt: [NexusApiSqsRole, Arn]
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
+        requestParameters:
+          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+        requestTemplates:
+          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$input.params('subscriptionId')\",\"callerAccountId\":\"$context.identity.accountId\",\"body\":$input.json('$')}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+        responses:
+          default:
+            statusCode: "202"
+            responseTemplates:
+              application/json: |
+                #set($body = $input.path('$'))
+                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
+                {"requestId":"$messageId","message":"Request accepted"}
+        passthroughBehavior: never
+    delete:
+      operationId: Unsubscribe
+      summary: Remove a subscription (event stream)
+      description: >
+        Removes the platform-side rules in every environment and marks the
+        stream record REMOVED (retained 90 days for audit). Integration rules
+        on the consumer's own bus are the application team's responsibility.
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      parameters:
+        - name: subscriptionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAccepted"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: POST
+        credentials:
+          Fn::GetAtt: [NexusApiSqsRole, Arn]
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
+        requestParameters:
+          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+        requestTemplates:
+          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$input.params('subscriptionId')\",\"callerAccountId\":\"$context.identity.accountId\"}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+        responses:
+          default:
+            statusCode: "202"
+            responseTemplates:
+              application/json: |
+                #set($body = $input.path('$'))
+                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
+                {"requestId":"$messageId","message":"Request accepted"}
+        passthroughBehavior: never
+
+  /schemas:
+    get:
+      operationId: ListSchemas
+      summary: Discover event schemas offered by a producer domain
+      description: >
+        Read-only schema discovery. Merges the producer's per-environment
+        registries keyed by schema name, reporting the latest version per
+        environment so consumers see version skew before subscribing.
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Schemas offered by the domain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSchemasResponse"
+        "404":
+          description: Domain not found or not active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListSchemasFunction.Arn}/invocations"
+
+  /schemas/{schemaName}:
+    get:
+      operationId: DescribeSchema
+      summary: Describe a schema including per-environment latest versions
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      parameters:
+        - name: schemaName
+          in: path
+          required: true
+          description: "Format: {source}@{detail-type}, URL-encoded"
+          schema:
+            type: string
+        - name: domain
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Schema detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaDetail"
+        "404":
+          description: Domain or schema not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
+
 components:
   schemas:
     CommandAccepted:
@@ -487,6 +839,167 @@ components:
         message:
           type: string
           example: "Decision recorded"
+
+    SubscribeRequest:
+      type: object
+      required: [consumerDomain, producerDomain, schemaName]
+      additionalProperties: false
+      properties:
+        consumerDomain:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$"
+          maxLength: 64
+        producerDomain:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$"
+          maxLength: 64
+        schemaName:
+          type: string
+          description: "Format: {source}@{detail-type}"
+          pattern: "^[^@]+@.+$"
+          maxLength: 128
+        environments:
+          type: object
+          description: >
+            Optional initial per-environment desired state. Omitted
+            environments default to enabled.
+          additionalProperties:
+            $ref: "#/components/schemas/EnvDesiredState"
+      example:
+        consumerDomain: checkout
+        producerDomain: orders
+        schemaName: acme-orders@OrderNotification
+        environments:
+          prod:
+            enabled: false
+
+    EnvDesiredState:
+      type: object
+      required: [enabled]
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+
+    UpdateSubscriptionRequest:
+      type: object
+      required: [environments]
+      additionalProperties: false
+      properties:
+        environments:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            $ref: "#/components/schemas/EnvDesiredState"
+      example:
+        environments:
+          prod:
+            enabled: true
+
+    SubscriptionSummary:
+      type: object
+      properties:
+        subscriptionId:
+          type: string
+          example: checkout.orders.OrderNotification
+        consumerDomain:
+          type: string
+        producerDomain:
+          type: string
+        schemaName:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, ACTIVE, FAILED, REMOVED]
+        environments:
+          type: object
+          description: Per-environment pinned version and state.
+          additionalProperties:
+            $ref: "#/components/schemas/EnvStreamState"
+        createdAt:
+          type: string
+          format: date-time
+
+    SubscriptionDetail:
+      allOf:
+        - $ref: "#/components/schemas/SubscriptionSummary"
+        - type: object
+          properties:
+            source:
+              type: string
+            detailType:
+              type: string
+            updatedAt:
+              type: string
+              format: date-time
+            removedAt:
+              type: string
+              format: date-time
+
+    EnvStreamState:
+      type: object
+      properties:
+        pinnedVersion:
+          type: integer
+          description: Schema version pinned at subscribe time for this environment.
+        ruleArn:
+          type: string
+        enabled:
+          type: boolean
+          description: Desired state.
+        status:
+          type: string
+          description: Materialized state.
+          enum: [PENDING, ACTIVE, FAILED, REMOVED]
+
+    ListSubscriptionsResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubscriptionSummary"
+        nextToken:
+          type: string
+
+    SchemaSummary:
+      type: object
+      properties:
+        schemaName:
+          type: string
+          example: acme-orders@OrderNotification
+        source:
+          type: string
+        detailType:
+          type: string
+        latestVersions:
+          type: object
+          description: Latest schema version per environment (skew visible here).
+          additionalProperties:
+            type: integer
+          example:
+            dev: 5
+            staging: 3
+            prod: 3
+
+    SchemaDetail:
+      allOf:
+        - $ref: "#/components/schemas/SchemaSummary"
+        - type: object
+          properties:
+            content:
+              type: string
+              description: Schema content of the highest latest version across environments.
+
+    ListSchemasResponse:
+      type: object
+      properties:
+        domain:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SchemaSummary"
 
     ErrorResponse:
       type: object
