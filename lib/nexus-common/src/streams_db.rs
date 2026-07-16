@@ -150,25 +150,27 @@ pub async fn get_stream(
 }
 
 /// Version census: every subscriber of a schema, with per-env pinned
-/// versions, in one query — no EventBridge calls.
+/// versions, in one logical call — no EventBridge calls. Pages internally
+/// past DynamoDB's 1MB-per-`Query` limit so callers always see every match.
 pub async fn query_streams_by_schema(
     ddb: &aws_sdk_dynamodb::Client,
     table: &str,
     producer_domain: &str,
     schema_name: &str,
 ) -> Result<Vec<EventStream>> {
-    let output = ddb
-        .query()
-        .table_name(table)
-        .key_condition_expression("#pk = :producer AND begins_with(#sk, :prefix)")
-        .expression_attribute_names("#pk", PK)
-        .expression_attribute_names("#sk", SK)
-        .expression_attribute_values(":producer", s(producer_domain))
-        .expression_attribute_values(":prefix", s(&format!("{schema_name}#")))
-        .send()
-        .await
-        .context("failed to query streams by schema")?;
-    Ok(collect_streams(output.items))
+    let prefix = format!("{schema_name}#");
+    query_all_pages(|exclusive_start_key| {
+        ddb.query()
+            .table_name(table)
+            .key_condition_expression("#pk = :producer AND begins_with(#sk, :prefix)")
+            .expression_attribute_names("#pk", PK)
+            .expression_attribute_names("#sk", SK)
+            .expression_attribute_values(":producer", s(producer_domain))
+            .expression_attribute_values(":prefix", s(&prefix))
+            .set_exclusive_start_key(exclusive_start_key)
+    })
+    .await
+    .context("failed to query streams by schema")
 }
 
 pub async fn query_streams_by_producer(
@@ -176,16 +178,16 @@ pub async fn query_streams_by_producer(
     table: &str,
     producer_domain: &str,
 ) -> Result<Vec<EventStream>> {
-    let output = ddb
-        .query()
-        .table_name(table)
-        .key_condition_expression("#pk = :producer")
-        .expression_attribute_names("#pk", PK)
-        .expression_attribute_values(":producer", s(producer_domain))
-        .send()
-        .await
-        .context("failed to query streams by producer")?;
-    Ok(collect_streams(output.items))
+    query_all_pages(|exclusive_start_key| {
+        ddb.query()
+            .table_name(table)
+            .key_condition_expression("#pk = :producer")
+            .expression_attribute_names("#pk", PK)
+            .expression_attribute_values(":producer", s(producer_domain))
+            .set_exclusive_start_key(exclusive_start_key)
+    })
+    .await
+    .context("failed to query streams by producer")
 }
 
 pub async fn query_streams_by_consumer(
@@ -193,16 +195,62 @@ pub async fn query_streams_by_consumer(
     table: &str,
     consumer_domain: &str,
 ) -> Result<Vec<EventStream>> {
+    query_all_pages(|exclusive_start_key| {
+        ddb.query()
+            .table_name(table)
+            .index_name(BY_CONSUMER_INDEX)
+            .key_condition_expression("consumerDomain = :consumer")
+            .expression_attribute_values(":consumer", s(consumer_domain))
+            .set_exclusive_start_key(exclusive_start_key)
+    })
+    .await
+    .context("failed to query streams by consumer")
+}
+
+/// Runs `build_query` repeatedly, feeding each page's `LastEvaluatedKey` back
+/// in as `ExclusiveStartKey`, until DynamoDB reports no further pages.
+async fn query_all_pages<F>(
+    build_query: F,
+) -> std::result::Result<
+    Vec<EventStream>,
+    aws_sdk_dynamodb::error::SdkError<aws_sdk_dynamodb::operation::query::QueryError>,
+>
+where
+    F: Fn(
+        Option<HashMap<String, AttributeValue>>,
+    ) -> aws_sdk_dynamodb::operation::query::builders::QueryFluentBuilder,
+{
+    let mut items = Vec::new();
+    let mut exclusive_start_key = None;
+    loop {
+        let output = build_query(exclusive_start_key).send().await?;
+        items.extend(collect_streams(output.items));
+        exclusive_start_key = output.last_evaluated_key;
+        if exclusive_start_key.is_none() {
+            break;
+        }
+    }
+    Ok(items)
+}
+
+/// One page of a full-table scan (used only when the caller supplies no
+/// producer/consumer filter), with an opaque `nextToken` cursor for the
+/// caller to continue from.
+pub async fn scan_streams_page(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    max_results: i32,
+    exclusive_start_key: Option<HashMap<String, AttributeValue>>,
+) -> Result<(Vec<EventStream>, Option<HashMap<String, AttributeValue>>)> {
     let output = ddb
-        .query()
+        .scan()
         .table_name(table)
-        .index_name(BY_CONSUMER_INDEX)
-        .key_condition_expression("consumerDomain = :consumer")
-        .expression_attribute_values(":consumer", s(consumer_domain))
+        .limit(max_results)
+        .set_exclusive_start_key(exclusive_start_key)
         .send()
         .await
-        .context("failed to query streams by consumer")?;
-    Ok(collect_streams(output.items))
+        .context("failed to scan event streams table")?;
+    Ok((collect_streams(output.items), output.last_evaluated_key))
 }
 
 /// Marks a stream REMOVED and stamps `removedAt` plus the TTL that expires

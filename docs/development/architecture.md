@@ -493,6 +493,18 @@ Every event flowing through Nexus domain buses carries a canonical identity, and
 - Schema name — `{source}@{detail-type}` (the native EventBridge discovery convention; round-trips to `aws schemas describe-schema`)
 - Schema version — **numeric**, stamped at `detail.metadata.schemaVersion` (`detail` splits into `metadata`/`data`)
 
+An event a producer publishes — every field here is a scalar, exactly as `PutEvents` expects:
+
+```json
+{
+  "Source": "acme-orders",
+  "DetailType": "OrderNotification",
+  "Detail": "{\"metadata\":{\"schemaVersion\":3},\"data\":{\"orderId\":\"o-123\"}}"
+}
+```
+
+The subscription rule Nexus materializes to match it — EventBridge event patterns filter with arrays, not scalars, which is why this looks different from the event above despite matching on the same three fields:
+
 ```json
 {
   "source": ["acme-orders"],
@@ -501,7 +513,7 @@ Every event flowing through Nexus domain buses carries a canonical identity, and
 }
 ```
 
-Until the Publish API exists, producers must stamp this envelope themselves; mis-stamped events fail closed (no rule matches — non-delivery, never misdelivery).
+Until the Publish API exists, producers must stamp the event envelope themselves; mis-stamped events fail closed (no rule matches — non-delivery, never misdelivery).
 
 ### Subscription Materialization
 

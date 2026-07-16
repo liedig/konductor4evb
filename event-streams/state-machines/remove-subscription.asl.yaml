@@ -103,12 +103,14 @@ States:
         - EventBusName: "${NexusEventBus}"
           Source: nexus.event-streams
           DetailType: SubscriptionRemoved
-          Detail:
-            subscriptionId: "{% $states.input.consumerDomain & '.' & $states.input.producerDomain & '.' & $states.input.detailType %}"
-            producerDomain: "{% $states.input.producerDomain %}"
-            consumerDomain: "{% $states.input.consumerDomain %}"
-            schemaName: "{% $states.input.schemaName %}"
-            environments: "{% $states.input.environments %}"
-            workflowExecutionId: "{% $states.context.Execution.Id %}"
-            removedAt: "{% $states.context.State.EnteredTime %}"
+          Detail: >-
+            {% $string({
+              "subscriptionId": $states.input.consumerDomain & '.' & $states.input.producerDomain & '.' & $states.input.detailType,
+              "producerDomain": $states.input.producerDomain,
+              "consumerDomain": $states.input.consumerDomain,
+              "schemaName": $states.input.schemaName,
+              "environments": $states.input.environments,
+              "workflowExecutionId": $states.context.Execution.Id,
+              "removedAt": $states.context.State.EnteredTime
+            }) %}
     End: true

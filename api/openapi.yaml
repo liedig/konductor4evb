@@ -354,6 +354,7 @@ paths:
     get:
       operationId: ListSubscriptions
       summary: List event subscriptions
+      description: Results are scoped to subscriptions where the caller's account owns the consumer domain, the producer domain, or both — a caller with no relationship to either side of a subscription will never see it, regardless of filters.
       x-amazon-apigateway-auth:
         type: AWS_IAM
       parameters:
@@ -434,7 +435,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/SubscriptionDetail"
         "404":
-          description: Subscription not found
+          description: Subscription not found, or the caller's account owns neither the consumer nor the producer domain (returned rather than 403 so unauthorized callers cannot use this endpoint to confirm a subscription's existence)
           content:
             application/json:
               schema:

@@ -205,14 +205,16 @@ States:
         - EventBusName: "${NexusEventBus}"
           Source: nexus.event-streams
           DetailType: SubscriptionActivated
-          Detail:
-            subscriptionId: "{% $states.input.consumerDomain & '.' & $states.input.producerDomain & '.' & $states.input.detailType %}"
-            producerDomain: "{% $states.input.producerDomain %}"
-            consumerDomain: "{% $states.input.consumerDomain %}"
-            schemaName: "{% $states.input.schemaName %}"
-            environments: "{% $merge($succeededResults.{ $.environment: { 'pinnedVersion': $.pinnedVersion, 'enabled': $.enabled, 'ruleArn': $.ruleArn } }) %}"
-            workflowExecutionId: "{% $states.context.Execution.Id %}"
-            activatedAt: "{% $states.context.State.EnteredTime %}"
+          Detail: >-
+            {% $string({
+              "subscriptionId": $states.input.consumerDomain & '.' & $states.input.producerDomain & '.' & $states.input.detailType,
+              "producerDomain": $states.input.producerDomain,
+              "consumerDomain": $states.input.consumerDomain,
+              "schemaName": $states.input.schemaName,
+              "environments": $merge($succeededResults.{ $.environment: { 'pinnedVersion': $.pinnedVersion, 'enabled': $.enabled, 'ruleArn': $.ruleArn } }),
+              "workflowExecutionId": $states.context.Execution.Id,
+              "activatedAt": $states.context.State.EnteredTime
+            }) %}
     End: true
 
   RollbackCreatedRules:
@@ -313,16 +315,18 @@ States:
         - EventBusName: "${NexusEventBus}"
           Source: nexus.event-streams
           DetailType: SubscriptionActivationFailed
-          Detail:
-            subscriptionId: "{% $states.input.consumerDomain & '.' & $states.input.producerDomain & '.' & $states.input.detailType %}"
-            producerDomain: "{% $states.input.producerDomain %}"
-            consumerDomain: "{% $states.input.consumerDomain %}"
-            schemaName: "{% $states.input.schemaName %}"
-            failedEnvironment: "{% $failedResults[0].environment %}"
-            failedStep: "{% $failedResults[0].error.FailedStep %}"
-            errorCode: "{% $failedResults[0].error.Error %}"
-            errorMessage: "{% $failedResults[0].error.Cause %}"
-            compensationErrors: "{% $exists($rollbackResults) ? [$rollbackResults[rolledBack=false].compensationError] : [] %}"
-            workflowExecutionId: "{% $states.context.Execution.Id %}"
-            failedAt: "{% $states.context.State.EnteredTime %}"
+          Detail: >-
+            {% $string({
+              "subscriptionId": $states.input.consumerDomain & '.' & $states.input.producerDomain & '.' & $states.input.detailType,
+              "producerDomain": $states.input.producerDomain,
+              "consumerDomain": $states.input.consumerDomain,
+              "schemaName": $states.input.schemaName,
+              "failedEnvironment": $failedResults[0].environment,
+              "failedStep": $failedResults[0].error.FailedStep,
+              "errorCode": $failedResults[0].error.Error,
+              "errorMessage": $failedResults[0].error.Cause,
+              "compensationErrors": [$rollbackResults.compensationError],
+              "workflowExecutionId": $states.context.Execution.Id,
+              "failedAt": $states.context.State.EnteredTime
+            }) %}
     End: true

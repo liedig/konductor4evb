@@ -453,6 +453,9 @@ Resources:
               Resource:
                 - !GetAtt EventStreamsTable.Arn
                 - !Sub "${EventStreamsTable.Arn}/index/*"
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt DomainsTable.Arn
       Events:
         Api:
           Type: Api
@@ -486,7 +489,9 @@ Resources:
           Statement:
             - Effect: Allow
               Action: [dynamodb:GetItem]
-              Resource: !GetAtt EventStreamsTable.Arn
+              Resource:
+                - !GetAtt EventStreamsTable.Arn
+                - !GetAtt DomainsTable.Arn
       Events:
         Api:
           Type: Api
@@ -1298,3 +1303,6 @@ Outputs:
   SubscriptionDeliveryRoleArn:
     Description: Role EventBridge assumes to deliver subscription events to app-side buses
     Value: !GetAtt SubscriptionDeliveryRole.Arn
+  DeprovisionEnvStateMachineArn:
+    Description: Per-environment teardown workflow ARN (used by provisioning rollback and scripts/teardown-domain.sh)
+    Value: !Ref DeprovisionEnvWorkflow
