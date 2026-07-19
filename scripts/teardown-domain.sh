@@ -42,6 +42,10 @@ else
   for ENV in ${ENVS}; do
     RESOURCE_ARNS=$(echo "${ITEM}" | jq -c ".resourceArns.M.${ENV}.M // {}" | \
       jq -c 'with_entries(.value = (.value.S // .value))')
+    if [ "${RESOURCE_ARNS}" = "{}" ]; then
+      echo "  ${ENV}: no provisioned resources on record (never provisioned) — skipping"
+      continue
+    fi
     EXECUTION_NAME="teardown-${DOMAIN_NAME}-${ENV}-$(date +%s 2>/dev/null || echo manual)"
     INPUT=$(jq -nc \
       --arg env "${ENV}" \
