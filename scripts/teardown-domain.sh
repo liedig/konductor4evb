@@ -58,12 +58,32 @@ else
       --query executionArn --output text)
 
     echo -n "  ${ENV}: deprovisioning..."
+    STATUS="RUNNING"
     for i in $(seq 1 30); do
       STATUS=$(aws stepfunctions describe-execution \
         --execution-arn "${EXECUTION_ARN}" \
         --region "${AWS_REGION}" \
         --query status --output text)
-      [ "${STATUS}" = "SUCCEEDED" ] && { echo " done"; break; }
+      if [ "${STATUS}" = "SUCCEEDED" ]; then
+        # The workflow never hard-fails; per-step delete errors are collected
+        # in compensationErrors, so SUCCEEDED alone does not mean clean.
+        EXEC_OUTPUT=$(aws stepfunctions describe-execution \
+          --execution-arn "${EXECUTION_ARN}" \
+          --region "${AWS_REGION}" \
+          --query output --output text) || EXEC_OUTPUT=""
+        COMP_ERRORS=$(echo "${EXEC_OUTPUT}" | jq -r '.compensationErrors[]?' 2>/dev/null) || COMP_ERRORS=""
+        if [ -z "${EXEC_OUTPUT}" ] || [ "${EXEC_OUTPUT}" = "None" ]; then
+          echo " FAILED (could not read execution output) — see ${EXECUTION_ARN}" >&2
+          FAILURES=$((FAILURES + 1))
+        elif [ -n "${COMP_ERRORS}" ]; then
+          echo " FAILED (resources left behind) — see ${EXECUTION_ARN}" >&2
+          echo "${COMP_ERRORS}" | sed 's/^/    /' >&2
+          FAILURES=$((FAILURES + 1))
+        else
+          echo " done"
+        fi
+        break
+      fi
       if [ "${STATUS}" = "FAILED" ] || [ "${STATUS}" = "TIMED_OUT" ] || [ "${STATUS}" = "ABORTED" ]; then
         echo " FAILED (${STATUS}) — see ${EXECUTION_ARN}" >&2
         FAILURES=$((FAILURES + 1))
@@ -71,6 +91,10 @@ else
       fi
       sleep 2
     done
+    if [ "${STATUS}" = "RUNNING" ]; then
+      echo " TIMED OUT waiting for execution — see ${EXECUTION_ARN}" >&2
+      FAILURES=$((FAILURES + 1))
+    fi
   done
 
   if [ "${FAILURES}" -gt 0 ]; then
