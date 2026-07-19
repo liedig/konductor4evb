@@ -18,7 +18,7 @@
 - [x] 3.1 Add `nexus-event-streams` DynamoDB table: PK `producerDomain`, SK `{schemaName}#{consumerDomain}`, `by-consumer` GSI, TTL on `expiresAt`
 - [x] 3.2 Add subscriptions command queue + DLQ (≥ 14 days retention), wire API Gateway SQS integration role
 - [x] 3.3 Add IAM: subscription command handler role, workflow role (EventBridge PutRule/PutTargets/RemoveTargets/DeleteRule/Enable/DisableRule on `{org}-*-event-bus`, `schemas:DescribeSchema/ListSchemas`, streams table access), delivery role used by rule targets for cross-account PutEvents
-- [ ] 3.4 Run cfn-lint and deploy to a dev stack to verify template validity (cfn-lint passes; deploy deferred until functions/workflows exist)
+- [x] 3.4 Run cfn-lint and deploy to a dev stack to verify template validity (cfn-lint passes; core stack deployed successfully)
 
 ## 4. Provisioning Delta + Backfill
 
