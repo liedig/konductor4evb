@@ -55,7 +55,7 @@
 
 - [x] 10.1 `cargo test --workspace` — all tests pass (108 passed)
 - [x] 10.2 `cargo fmt --check && cargo clippy --workspace -- -D warnings` — clean
-- [x] 10.3 `sam build --config-file samconfig-core.toml --beta-features -c` — succeeds
+- [x] 10.3 `sam build --config-file samconfig-core.toml -c` — succeeds
 
 ## Task Group 11: Deploy and Verify
 

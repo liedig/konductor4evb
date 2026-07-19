@@ -51,7 +51,7 @@ What's left is strictly the Nexus platform cleanup.
 
 - [x] 6.1 `cargo check --workspace && cargo clippy --workspace -- -D warnings`
 - [x] 6.2 `cargo test --workspace`
-- [x] 6.3 `sam build --beta-features -c` succeeds
+- [x] 6.3 `sam build -c` succeeds
 - [x] 6.4 `sam deploy` (or `make deploy-core`) to a clean test account succeeds from an empty CloudFormation state
 - [x] 6.5 Run `make smoke` to validate end-to-end
 

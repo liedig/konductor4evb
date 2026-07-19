@@ -2,7 +2,7 @@
 
 The project has no CI pipeline, no GitHub templates, and only a `main` branch. The Makefile already defines `build`, `test`, `check`, `deploy`, and `clean` targets but `check` is missing `cargo fmt --check`. All code currently merges without automated validation.
 
-The project is a Rust workspace (7 Lambda binary targets + 1 shared lib) built with cargo-lambda and deployed via SAM CLI. The `sam build --beta-features -c` command compiles all Lambdas and packages the SAM template.
+The project is a Rust workspace (7 Lambda binary targets + 1 shared lib) built with cargo-lambda and deployed via SAM CLI. The `sam build -c` command compiles all Lambdas and packages the SAM template.
 
 ## Goals / Non-Goals
 
@@ -32,7 +32,7 @@ The CI workflow uses three jobs with dependencies (`needs`):
 |-----|-------------|--------------|
 | `check` | `cargo fmt --check`, `cargo check --workspace`, `cargo clippy --workspace -- -D warnings` | Fast (~30s). Catches formatting and lint issues before spending time on tests or builds |
 | `test` | `cargo test --workspace` | Currently a near-no-op (no test dependencies yet) but the harness must exist for when tests are added |
-| `build` | `sam validate`, `sam build --beta-features -c` | Expensive (3-8 min). Proves the full Lambda compilation and SAM template are valid. Only runs if check and test pass |
+| `build` | `sam validate`, `sam build -c` | Expensive (3-8 min). Proves the full Lambda compilation and SAM template are valid. Only runs if check and test pass |
 
 **Alternative considered:** Single job running all steps sequentially. Rejected because a formatting failure shouldn't burn 5+ minutes of build time before reporting.
 

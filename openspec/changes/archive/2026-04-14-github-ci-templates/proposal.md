@@ -7,7 +7,7 @@ There is no CI pipeline or GitHub contribution templates. Code changes merge wit
 - Add GitHub Actions CI workflow triggered on PRs and pushes to `develop` and `main`
   - `cargo fmt --check`, `cargo check`, `cargo clippy -D warnings`
   - `cargo test --workspace`
-  - `sam validate` and `sam build --beta-features -c` (with cargo-lambda)
+  - `sam validate` and `sam build -c` (with cargo-lambda)
   - Rust dependency caching for faster repeat builds
 - Add `rust-toolchain.toml` pinning to stable with rustfmt and clippy components
 - Add GitHub issue templates (bug report, feature request, blank escape hatch)

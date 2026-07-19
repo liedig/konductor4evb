@@ -50,7 +50,7 @@
 
 - [x] 8.1 Run `cargo test --workspace` and fix any test failures from `domainId` removal
 - [x] 8.2 Run `cargo fmt --check && cargo check --workspace && cargo clippy --workspace -- -D warnings` and fix any issues
-- [x] 8.3 Run `sam build --config-file samconfig-core.toml --beta-features -c` and verify the build succeeds
+- [x] 8.3 Run `sam build --config-file samconfig-core.toml -c` and verify the build succeeds
 - [x] 8.4 Deploy the core stack to the platform account and verify the DynamoDB table is recreated with `domainName` as the partition key
 
 ## 9. End-to-end verification

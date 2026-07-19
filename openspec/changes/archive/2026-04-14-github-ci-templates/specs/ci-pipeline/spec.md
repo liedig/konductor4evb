@@ -74,7 +74,7 @@ The CI workflow SHALL validate the SAM template and build all Lambda functions a
 #### Scenario: SAM build compiles all Lambdas
 
 - **WHEN** the SAM template is valid
-- **THEN** the build job SHALL execute `sam build --beta-features -c`
+- **THEN** the build job SHALL execute `sam build -c`
 - **AND THEN** fail the job if any Lambda function fails to compile
 
 ### Requirement: Rust toolchain pinning

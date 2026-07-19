@@ -41,7 +41,7 @@ help: ## Show this help message
 	@printf "    $(DIM)ORGANIZATION$(RESET)                 optional for: deploy-trust (default: $(CYAN)$(ORGANIZATION)$(RESET))\n\n"
 
 build: ## sam build (Rust cross-compilation for arm64, cached)
-	sam build --config-file samconfig-core.toml --beta-features -c
+	sam build --config-file samconfig-core.toml -c
 
 test: ## cargo test --workspace
 	cargo test --workspace

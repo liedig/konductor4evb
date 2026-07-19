@@ -92,7 +92,7 @@ Follow-up from an implementation review. Establishes two personas (Platform Oper
 
 - [x] 11.1 `cargo check --workspace && cargo clippy --workspace -- -D warnings`
 - [x] 11.2 `cargo test --workspace` (including new data-model round-trip tests and command-handler env-stamping tests)
-- [x] 11.3 `sam build --beta-features -c` succeeds
+- [x] 11.3 `sam build -c` succeeds
 - [x] 11.4 Deploy to a clean test platform account with default `Environments=dev,staging,prod`; deploy the updated trust stack to a test app account
 - [x] 11.5 Integration smoke: register a domain, approve it, confirm three full env sets provisioned and `resourceArns` map has three entries keyed by env
 - [ ] 11.6 Redeploy platform with `Environments=dev` (single env), register another domain, confirm only one env set is provisioned

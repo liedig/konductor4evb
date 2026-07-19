@@ -11,7 +11,7 @@
 - [x] 3.1 Create `.github/workflows/ci.yml` with triggers on push to `develop`/`main` and pull_request targeting `develop`/`main`
 - [x] 3.2 Add `check` job: install Rust toolchain (via `dtolnay/rust-toolchain` reading `rust-toolchain.toml`), set up `Swatinem/rust-cache`, run `cargo fmt --check`, `cargo check --workspace`, `cargo clippy --workspace -- -D warnings`
 - [x] 3.3 Add `test` job (needs `check`): restore Rust cache, run `cargo test --workspace`
-- [x] 3.4 Add `build` job (needs `test`): restore Rust cache, install `cargo-lambda` and `aws-sam-cli` via pip, run `sam validate`, run `sam build --beta-features -c`
+- [x] 3.4 Add `build` job (needs `test`): restore Rust cache, install `cargo-lambda` and `aws-sam-cli` via pip, run `sam validate`, run `sam build -c`
 
 ## 4. Issue Templates
 

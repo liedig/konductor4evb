@@ -374,7 +374,7 @@ make clean    # removes cargo build artifacts and .aws-sam
 make build    # fresh build
 ```
 
-The `sam build --beta-features -c` command uses a cache (`-c` flag). If you encounter build issues, clearing the cache with `make clean` is the first step.
+The `sam build -c` command uses a cache (`-c` flag). If you encounter build issues, clearing the cache with `make clean` is the first step.
 
 ### DynamoDB table retained after stack delete
 
