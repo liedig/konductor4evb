@@ -71,7 +71,7 @@ async fn handle_post(sfn: &aws_sdk_sfn::Client, event: &Value) -> Value {
             },
         ),
         DecisionOutcome::Failed(msg) => {
-            tracing::error!(error = %msg, "SFN decision call failed");
+            tracing::error!(error = %msg, "nexus-domain-approval decision call failed");
             api::error_response(
                 500,
                 ApiError {
@@ -135,7 +135,7 @@ async fn handle_get(sfn: &aws_sdk_sfn::Client, event: &Value) -> Value {
             "This registration has already been decided or the approval window has expired.",
         ),
         DecisionOutcome::Failed(msg) => {
-            tracing::error!(error = %msg, "SFN decision call failed");
+            tracing::error!(error = %msg, "nexus-domain-approval decision call failed");
             html_response(
                 500,
                 "Error",
