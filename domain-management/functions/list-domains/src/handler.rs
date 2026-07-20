@@ -83,7 +83,7 @@ pub async fn handle(
             ))
         }
         Err(e) => {
-            tracing::error!(error = %e, "DynamoDB query failed");
+            tracing::error!(error = %e, "domains query failed");
             Ok(api::from_control_plane_error(&ControlPlaneError::DynamoDb(
                 e.to_string(),
             )))

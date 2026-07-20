@@ -79,7 +79,7 @@ async fn fetch_domain(ddb: &aws_sdk_dynamodb::Client, table: &str, event: &Value
             }
         },
         Err(e) => {
-            tracing::error!(error = %e, "DynamoDB get_item failed");
+            tracing::error!(error = %e, "domain lookup failed");
             api::from_control_plane_error(&ControlPlaneError::DynamoDb(e.to_string()))
         }
     }
