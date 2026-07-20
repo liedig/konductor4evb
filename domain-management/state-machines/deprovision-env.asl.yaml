@@ -1,7 +1,10 @@
 Comment: >-
-  Idempotent per-environment teardown. Collects per-step errors; never hard-fails.
-  No step is needed for the app-bus platform-delivery resource policy — it is
-  bus-scoped and deleted with the bus.
+  Idempotent per-environment teardown. Not-found responses and steps whose
+  resource identifier is absent from the input are silent no-ops; only genuine
+  failures land in compensationErrors, so a non-empty array means resources
+  were actually left behind. Never hard-fails. No step is needed for the
+  app-bus platform-delivery resource policy — it is bus-scoped and deleted
+  with the bus.
 QueryLanguage: JSONata
 StartAt: Start
 States:
@@ -11,7 +14,15 @@ States:
     Assign:
       compensationErrors: "{% [] %}"
     Output: "{% $states.input %}"
-    Next: DeleteIntegrationDlq
+    Next: CheckIntegrationDlqPresent
+
+  CheckIntegrationDlqPresent:
+    Type: Choice
+    Default: DeleteAppEventBus
+    Choices:
+      - Condition: "{% $exists($states.input.resourceArns.integrationDlqArn) %}"
+        Next: DeleteIntegrationDlq
+    Output: "{% $states.input %}"
 
   DeleteIntegrationDlq:
     Type: Task
@@ -30,6 +41,11 @@ States:
     Output: "{% $states.input %}"
     Next: DeleteAppEventBus
     Catch:
+      - ErrorEquals:
+          - Sqs.QueueDoesNotExistException
+          - Sqs.QueueDoesNotExist
+        Next: DeleteAppEventBus
+        Output: "{% $states.input %}"
       - ErrorEquals:
           - States.ALL
         Next: DeleteAppEventBus
@@ -56,6 +72,10 @@ States:
     Output: "{% $states.input %}"
     Next: DeleteDlqDepthAlarm
     Catch:
+      - ErrorEquals:
+          - EventBridge.ResourceNotFoundException
+        Next: DeleteDlqDepthAlarm
+        Output: "{% $states.input %}"
       - ErrorEquals:
           - States.ALL
         Next: DeleteDlqDepthAlarm
@@ -135,14 +155,27 @@ States:
       DashboardNames:
         - "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dashboard' %}"
     Output: "{% $states.input %}"
-    Next: DeleteSubscriptionDlq
+    Next: CheckSubscriptionDlqPresent
     Catch:
       - ErrorEquals:
+          - CloudWatch.ResourceNotFound
+          - CloudWatch.ResourceNotFoundException
+        Next: CheckSubscriptionDlqPresent
+        Output: "{% $states.input %}"
+      - ErrorEquals:
           - States.ALL
-        Next: DeleteSubscriptionDlq
+        Next: CheckSubscriptionDlqPresent
         Assign:
           compensationErrors: "{% $append($compensationErrors, 'Failed to delete dashboard: ' & $states.errorOutput.Cause) %}"
         Output: "{% $states.input %}"
+
+  CheckSubscriptionDlqPresent:
+    Type: Choice
+    Default: DeleteSchemaRegistry
+    Choices:
+      - Condition: "{% $exists($states.input.resourceArns.subscriptionDlqArn) %}"
+        Next: DeleteSubscriptionDlq
+    Output: "{% $states.input %}"
 
   DeleteSubscriptionDlq:
     Type: Task
@@ -159,6 +192,11 @@ States:
     Output: "{% $states.input %}"
     Next: DeleteSchemaRegistry
     Catch:
+      - ErrorEquals:
+          - Sqs.QueueDoesNotExistException
+          - Sqs.QueueDoesNotExist
+        Next: DeleteSchemaRegistry
+        Output: "{% $states.input %}"
       - ErrorEquals:
           - States.ALL
         Next: DeleteSchemaRegistry
@@ -184,6 +222,11 @@ States:
     Next: DeletePlatformEventBus
     Catch:
       - ErrorEquals:
+          - Schemas.NotFoundException
+          - Schemas.NotFound
+        Next: DeletePlatformEventBus
+        Output: "{% $states.input %}"
+      - ErrorEquals:
           - States.ALL
         Next: DeletePlatformEventBus
         Assign:
@@ -207,6 +250,10 @@ States:
     Output: "{% $states.input %}"
     Next: Done
     Catch:
+      - ErrorEquals:
+          - EventBridge.ResourceNotFoundException
+        Next: Done
+        Output: "{% $states.input %}"
       - ErrorEquals:
           - States.ALL
         Next: Done

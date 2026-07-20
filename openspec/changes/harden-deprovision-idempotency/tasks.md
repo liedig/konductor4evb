@@ -2,13 +2,13 @@
 
 ## 1. Workflow Error Taxonomy
 
-- [ ] 1.1 Add service-specific not-found catches (silent no-op, ordered before the `States.ALL` catch) to each step in `deprovision-env.asl.yaml`: schema registry (`Schemas.NotFoundException`), event buses (`Events.ResourceNotFoundException`), dashboard (CloudWatch not-found), SQS queues (queue-does-not-exist)
-- [ ] 1.2 Add input-presence guards so `DeleteIntegrationDlq` and `DeleteSubscriptionDlq` skip as no-ops when their queue URL is absent from `resourceArns`
-- [ ] 1.3 Update the workflow's header comment: `compensationErrors` non-empty means resources were left behind
+- [x] 1.1 Add service-specific not-found catches (silent no-op, ordered before the `States.ALL` catch) to each step in `deprovision-env.asl.yaml`: schema registry (`Schemas.NotFoundException`), event buses (`EventBridge.ResourceNotFoundException` — the aws-sdk integration uses the `EventBridge.` service prefix, matching the existing retry config), dashboard (CloudWatch `ResourceNotFound`/`ResourceNotFoundException`), SQS queues (`Sqs.QueueDoesNotExistException`/`Sqs.QueueDoesNotExist`). CloudWatch `deleteAlarms` is already a silent no-op on missing alarms, so the two alarm steps need no not-found catch.
+- [x] 1.2 Add input-presence guards so `DeleteIntegrationDlq` and `DeleteSubscriptionDlq` skip as no-ops when their queue URL is absent from `resourceArns` — implemented as `CheckIntegrationDlqPresent` and `CheckSubscriptionDlqPresent` Choice states using `$exists($states.input.resourceArns.<arn>)`.
+- [x] 1.3 Update the workflow's header comment: `compensationErrors` non-empty means resources were left behind
 
 ## 2. Static Validation
 
-- [ ] 2.1 cfn-lint / `sam validate --lint` pass
+- [x] 2.1 cfn-lint / `sam validate --lint` pass
 
 ## 3. Verify in Dev
 
