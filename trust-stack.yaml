@@ -21,15 +21,24 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub "${Organization}-nexus-trust-role"
+      # Principal is the platform account root, constrained to the exact platform
+      # roles via aws:PrincipalArn. Role-ARN principals are pinned to IAM unique
+      # ids at save time and die when the platform stack is redeployed; the
+      # condition is string-matched per request and survives role recreation.
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
-              AWS:
-                - !Ref NexusRoleArn
-                - !Ref ProvisioningWorkflowRoleArn
+              AWS: !Sub
+                - "arn:${AWS::Partition}:iam::${PlatformAccountId}:root"
+                - PlatformAccountId: !Select [4, !Split [":", !Ref NexusRoleArn]]
             Action: sts:AssumeRole
+            Condition:
+              ArnEquals:
+                aws:PrincipalArn:
+                  - !Ref NexusRoleArn
+                  - !Ref ProvisioningWorkflowRoleArn
 
   NexusTrustEventBusPolicy:
     Type: AWS::IAM::Policy

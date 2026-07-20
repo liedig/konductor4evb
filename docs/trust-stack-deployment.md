@@ -64,7 +64,9 @@ After deployment, confirm the trust role exists and has the correct trust policy
 aws iam get-role --role-name <org>-nexus-trust-role
 ```
 
-The trust policy should list both the Nexus function role and provisioning workflow role as allowed principals.
+The trust policy names the platform account root as principal, constrained by an `ArnEquals` condition on `aws:PrincipalArn` to exactly the Nexus function role and the provisioning workflow role. Only those two roles can assume the trust role; the account-root principal alone grants nothing.
+
+This shape is deliberate. IAM resolves role-ARN principals to internal unique IDs when a trust policy is saved, so naming the platform roles directly would sever trust whenever the Nexus core stack is torn down and redeployed (the recreated roles get new unique IDs). The `aws:PrincipalArn` condition is string-matched on every request instead, and both platform role names are deterministic, so trust survives platform redeploys without touching this stack.
 
 ## What the Trust Stack Creates
 
@@ -80,7 +82,7 @@ The role grants scoped permissions for:
 
 ## Updating the Trust Stack
 
-If the Nexus core stack is redeployed and the role ARNs change, re-run the Makefile target (it auto-fetches the latest ARNs):
+Redeploying the Nexus core stack does **not** require any trust stack update: the platform role names are fixed, their ARN strings do not change, and the trust policy's `aws:PrincipalArn` condition keeps matching. Only if the role ARNs themselves change (different platform account, renamed roles) re-run the Makefile target (it auto-fetches the latest ARNs):
 
 ```bash
 make deploy-trust APP_PROFILE=<aws-cli-profile>
@@ -119,6 +121,6 @@ aws cloudformation delete-stack --stack-name nexus-trust --region <region> --pro
 
 | Issue | Resolution |
 |---|---|
-| `AccessDenied` during domain provisioning | Verify the trust role exists in the target account and the trust policy lists the correct platform account role ARNs |
+| `AccessDenied` during domain provisioning | Verify the trust role exists in the target account and its trust policy's `aws:PrincipalArn` condition lists the correct platform role ARNs |
 | Stack fails with `CAPABILITY_NAMED_IAM` error | Add `--capabilities CAPABILITY_NAMED_IAM` to the deploy command |
 | Role name conflict | The role name follows `<org>-nexus-trust-role`. Ensure no pre-existing role with that name exists |

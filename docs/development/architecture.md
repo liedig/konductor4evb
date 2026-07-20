@@ -378,10 +378,12 @@ The trust role (`{org}-nexus-trust-role`) is environment-independent — a singl
 
 Cross-account subscription delivery does **not** use per-subscription IAM roles. During `provision-env`, the trust role attaches a resource policy to the app-side domain bus permitting the **platform account** to `events:PutEvents` (`SetAppBusDeliveryPolicy` step). That single grant covers every current and future subscription targeting the bus — subscribe and unsubscribe never touch the consumer account. EventBridge delivers matched events using the platform-side `nexus-subscription-delivery-role`. Every domain receives this policy at provisioning time (no pre-policy domains exist; the product shipped with the step in place).
 
-The trust role's `AssumeRolePolicyDocument` allows two principals from the platform account:
+The trust role's `AssumeRolePolicyDocument` names the platform account root as principal, constrained by an `ArnEquals` condition on `aws:PrincipalArn` to exactly two roles:
 
 1. The **Nexus function role** (trust anchor for Lambda-based operations)
 2. The **Provisioning workflow role** (for Step Functions SDK integrations)
+
+The condition form (rather than role-ARN principals) is deliberate: IAM pins role-ARN principals to unique IDs at save time, which would sever trust every time the core stack is redeployed. `aws:PrincipalArn` is string-matched per request, and the platform role names are fixed, so trust survives platform redeploys without any trust stack update.
 
 ### Onboarding a New Domain Account
 
