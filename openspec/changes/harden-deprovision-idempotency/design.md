@@ -44,4 +44,4 @@ Alternative rejected: defaulting missing URLs to empty strings and letting the S
 
 ## Open Questions
 
-- Exact error names surfaced by the aws-sdk Step Functions integrations for SQS missing-queue and CloudWatch missing-dashboard (confirm during 3.x verification; the catch lists may need the service's literal exception strings).
+- ~~Exact error names surfaced by the aws-sdk Step Functions integrations for SQS missing-queue and CloudWatch missing-dashboard~~ — **resolved during 3.4 verification**: SQS throws `Sqs.QueueDoesNotExistException`, Schemas throws `Schemas.NotFoundException`. EventBridge `deleteEventBus` and CloudWatch `deleteDashboards` return silent success on missing resources (no exception thrown), so the defensive `EventBridge.ResourceNotFoundException` and `CloudWatch.ResourceNotFound` catches never fire but are harmless.
