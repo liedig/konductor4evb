@@ -376,7 +376,7 @@ The trust role (`{org}-nexus-trust-role`) is environment-independent — a singl
 
 ### Subscription Delivery Authorization
 
-Cross-account subscription delivery does **not** use per-subscription IAM roles. During `provision-env`, the trust role attaches a resource policy to the app-side domain bus permitting the **platform account** to `events:PutEvents` (`SetAppBusDeliveryPolicy` step). That single grant covers every current and future subscription targeting the bus — subscribe and unsubscribe never touch the consumer account. EventBridge delivers matched events using the platform-side `nexus-subscription-delivery-role`. Domains provisioned before this step existed are covered by the idempotent `make backfill-delivery-policy` target.
+Cross-account subscription delivery does **not** use per-subscription IAM roles. During `provision-env`, the trust role attaches a resource policy to the app-side domain bus permitting the **platform account** to `events:PutEvents` (`SetAppBusDeliveryPolicy` step). That single grant covers every current and future subscription targeting the bus — subscribe and unsubscribe never touch the consumer account. EventBridge delivers matched events using the platform-side `nexus-subscription-delivery-role`. Every domain receives this policy at provisioning time (no pre-policy domains exist; the product shipped with the step in place).
 
 The trust role's `AssumeRolePolicyDocument` allows two principals from the platform account:
 
@@ -521,7 +521,7 @@ Each subscription materializes as **one rule per environment** on the producer's
 
 - Rule name: `{consumerDomain}-{detailType}` — version-agnostic, so a future version migration is a `PutRule` pattern update on the same rule (no delete/create window). EventBridge's per-bus rule-name uniqueness doubles as duplicate-subscription enforcement, and `PutRule`-as-upsert makes retried workflow steps idempotent.
 - Target: the consumer's app-side domain bus (same env), delivered via the `nexus-subscription-delivery-role`, with `DeadLetterConfig` on the producer's per-env subscription DLQ.
-- Delivery authorization: a resource policy on the consumer's app-side bus granting the **platform account** `events:PutEvents`, attached once during `provision-env` (`SetAppBusDeliveryPolicy` step). No per-subscription IAM. Pre-existing domains are covered by `make backfill-delivery-policy`.
+- Delivery authorization: a resource policy on the consumer's app-side bus granting the **platform account** `events:PutEvents`, attached once during `provision-env` (`SetAppBusDeliveryPolicy` step). No per-subscription IAM.
 - A per-subscription **zero-events alarm** (24h without a delivery, missing data = breaching) flags silently-stopped streams — the failure mode when a producer bumps versions past a pinned subscriber.
 
 ### Subscription Flow

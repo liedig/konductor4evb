@@ -27,14 +27,4 @@ The inner workflow's resource creation sequence SHALL match the existing per-env
 - **WHEN** the platform-delivery policy attachment fails after the app event bus was created
 - **THEN** compensation SHALL delete the app event bus along with the previously created platform-side resources for this environment
 
-## ADDED Requirements
-
-### Requirement: Delivery policy backfill for pre-existing domains
-
-Domains provisioned before the delivery-policy step existed SHALL be backfilled: for each `ACTIVE` domain and each of its environments, the platform SHALL assume the domain account's trust role and attach the platform delivery resource policy to the app-side domain event bus. The backfill SHALL be idempotent (re-attaching an existing policy statement is a no-op) and safe to re-run. Until a domain is backfilled, subscriptions delivering to it will fail delivery (captured in the subscription DLQ), not fail silently.
-
-#### Scenario: Backfill an existing domain
-
-- **WHEN** the backfill runs for an `ACTIVE` domain with environments dev, staging, and prod
-- **THEN** each of the three app-side buses SHALL carry the platform delivery resource policy afterwards
-- **AND THEN** re-running the backfill SHALL succeed without error or duplicate policy statements
+> Note: a "delivery policy backfill for pre-existing domains" requirement was drafted and later descoped. The product is unreleased, so no environment carries domains provisioned before the delivery-policy step; every domain receives the policy at provisioning time.

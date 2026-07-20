@@ -1,4 +1,4 @@
-.PHONY: help build test check smoke smoke-subscription backfill-delivery-policy deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain clean
+.PHONY: help build test check smoke smoke-subscription deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
@@ -26,7 +26,7 @@ help: ## Show this help message
 	@printf "\n  $(BOLD)Teardown$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(teardown-.+):.*## / {printf "    $(YELLOW)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Smoke Test$(RESET) $(DIM)(manual — never run by deploy or CI)$(RESET)\n"
-	@awk 'BEGIN {FS = ":.*?## "} /^(smoke|smoke-subscription|backfill-delivery-policy):.*## / {printf "    $(MAGENTA)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^(smoke|smoke-subscription):.*## / {printf "    $(MAGENTA)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Environment variables$(RESET)\n"
 	@printf "    $(DIM)AWS_REGION$(RESET)                   current: $(CYAN)$(AWS_REGION)$(RESET)\n"
 	@printf "    $(DIM)DOMAIN_NAME$(RESET)                  current: $(CYAN)$(DOMAIN_NAME)$(RESET) — used by: smoke, teardown-domain\n"
@@ -139,9 +139,6 @@ ifndef PLATFORM_OPERATOR_EMAIL
 endif
 	sam deploy --config-file samconfig-notifications.toml \
 		--parameter-overrides NotificationSenderEmail=$(NOTIFICATION_SENDER_EMAIL) PlatformOperatorEmail=$(PLATFORM_OPERATOR_EMAIL)
-
-backfill-delivery-policy: ## Attach the platform-delivery policy to app buses of pre-existing ACTIVE domains (idempotent)
-	ORGANIZATION=$(ORGANIZATION) AWS_REGION=$(AWS_REGION) ./scripts/backfill-delivery-policy.sh
 
 smoke-subscription: ## End-to-end subscription smoke test (requires PRODUCER_DOMAIN + CONSUMER_DOMAIN, both ACTIVE)
 ifndef PRODUCER_DOMAIN

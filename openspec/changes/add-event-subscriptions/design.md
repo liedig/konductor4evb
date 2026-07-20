@@ -137,15 +137,16 @@ Enablement is a per-env property of a subscription (dev active, prod paused for 
 - **~300 rules/bus soft quota** caps subscriptions per producer per env → monitor stream counts from the table (cheap query); request quota raises per bus as producers grow; the scale target's "distribute across buses" strategy remains available later without API change (rule placement is a materialization detail the table abstracts).
 - **Coarse platform-account PutEvents grant on app buses** → accepted (D3); revisit only if the platform account ever hosts non-control-plane workloads.
 - **Table/rules drift** (partial saga failures, manual console edits) → the table is declared source of intent; compensation shrinks the window; a reconciliation job (diff table vs. rules, report or repair) is noted as follow-up, not required for v1.
-- **Backfill dependency for existing domains** — subscriptions targeting a pre-change domain fail delivery (no resource policy on its app bus) until backfill runs → migration makes backfill a deploy step, and delivery failures surface in the subscription DLQ + alarms rather than silently.
+- **Pre-change domains lack the delivery policy** — subscriptions targeting such a domain would fail delivery (no resource policy on its app bus) → resolved by descoping: the product is unreleased, no installed base exists, and dev stacks are rebuilt from scratch so every domain is provisioned with the policy. A backfill script was built, then removed: live testing showed operator credentials cannot assume the trust role (it trusts only the platform service roles), so the script could never run as designed, and it had no remaining audience.
 - **Per-env version skew recorded, not resolved** — one subscribe call may pin v5 in dev and v3 in prod → faithful recording is the v1 contract; policy belongs to the evolution thread (open follow-up).
 
 ## Migration Plan
 
 1. Deploy core stack update: streams table, subscription command queue + DLQ, new Lambdas, subscribe/unsubscribe workflows, `provision-env` gains the app-bus resource-policy step (new domains are subscription-ready at birth).
-2. Run one-time backfill (script or ops workflow): for each `ACTIVE` domain × env, assume the trust role and `PutPermission` the platform-delivery policy on the app-side bus. Idempotent; safe to re-run.
-3. Publish updated OpenAPI + docs; subscription endpoints become usable.
-4. **Rollback:** subscription resources are additive — disable the API routes and delete created rules (table records retained). The backfilled resource policies are inert without rules targeting the buses and may remain.
+2. Publish updated OpenAPI + docs; subscription endpoints become usable.
+3. **Rollback:** subscription resources are additive — disable the API routes and delete created rules (table records retained). The provisioned resource policies are inert without rules targeting the buses and may remain.
+
+No data migration: the product is unreleased, so no environment carries domains provisioned before the policy step existed (backfill descoped).
 
 ## Open Questions
 

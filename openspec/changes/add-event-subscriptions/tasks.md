@@ -20,12 +20,12 @@
 - [x] 3.3 Add IAM: subscription command handler role, workflow role (EventBridge PutRule/PutTargets/RemoveTargets/DeleteRule/Enable/DisableRule on `{org}-*-event-bus`, `schemas:DescribeSchema/ListSchemas`, streams table access), delivery role used by rule targets for cross-account PutEvents
 - [x] 3.4 Run cfn-lint and deploy to a dev stack to verify template validity (cfn-lint passes; core stack deployed successfully)
 
-## 4. Provisioning Delta + Backfill
+## 4. Provisioning Delta
 
 - [x] 4.1 Add the platform-delivery resource-policy step to `provision-env.asl.yaml` (after app bus creation, via trust role `events:PutPermission`), extend compensation to cover it
 - [x] 4.2 Verify `deprovision-env.asl.yaml` needs no change (policy dies with the bus) and document that in the workflow comment
-- [x] 4.3 Create idempotent backfill (script or ops workflow + Makefile target): for each ACTIVE domain × env, assume trust role, attach delivery policy; safe to re-run
-- [ ] 4.4 Test provisioning end-to-end in dev: new domain's app buses carry the delivery policy; backfill run on a pre-change domain attaches it (requires deployed dev stack)
+- [x] 4.3 ~~Create idempotent backfill~~ — descoped: unreleased product, no pre-change domains exist anywhere; live testing also showed operator credentials cannot assume the trust role, so the script never worked as designed (built, then removed)
+- [x] 4.4 Test provisioning end-to-end in dev: new domain's app buses carry the delivery policy — verified on `billing` across dev/staging/prod (backfill half descoped with 4.3)
 
 ## 5. Subscription Workflows (state-machines)
 
