@@ -304,6 +304,7 @@ In SES sandbox mode, both the sender and recipient email addresses must be verif
 - Confirm the email addresses are correct in the stack parameters.
 - Verify status with `aws ses get-identity-verification-attributes`.
 - SES sandbox only allows sending to verified addresses. You cannot send to arbitrary recipients until you request production access.
+- The `ownerEmail` and `secondaryOwnerEmails` values submitted during domain registration are notification recipients. In SES sandbox mode, each must be a verified SES identity before any approval, rejection, registration-failure, or provisioning-failure notification can be delivered to them. Either verify each owner email as an SES identity, or request SES production access to lift the sandbox restriction.
 
 ### RAM share failed: not in an AWS Organization
 

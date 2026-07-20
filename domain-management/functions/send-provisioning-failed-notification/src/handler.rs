@@ -42,7 +42,8 @@ pub async fn handle(
 
     let html_body = build_provisioning_failed_email_body(domain_name);
 
-    ses.send_email()
+    if let Err(e) = ses
+        .send_email()
         .from_email_address(&from_email)
         .destination(Destination::builder().to_addresses(owner_email).build())
         .content(
@@ -71,7 +72,17 @@ pub async fn handle(
         )
         .send()
         .await
-        .context("failed to send provisioning-failed email")?;
+    {
+        if e.as_service_error()
+            .is_some_and(nexus_common::ses::is_permanent_failure)
+        {
+            tracing::error!(error = %e, "permanent SES failure, acknowledging without retry");
+            return Ok(());
+        }
+        return Err(e)
+            .context("failed to send provisioning-failed email")
+            .map_err(Into::into);
+    }
 
     tracing::info!(domain_name, "provisioning-failed notification sent");
 

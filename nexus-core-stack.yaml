@@ -869,6 +869,38 @@ Resources:
               Action: [ses:SendEmail]
               Resource: "*"
 
+  SendRegistrationFailedNotificationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Condition: NotificationsEnabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-send-registration-failed-notification"
+      RetentionInDays: 30
+
+  SendRegistrationFailedNotificationFunction:
+    Type: AWS::Serverless::Function
+    Condition: NotificationsEnabled
+    DependsOn: SendRegistrationFailedNotificationFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-send-registration-failed-notification"
+      CodeUri: ./domain-management/functions/send-registration-failed-notification
+      Handler: bootstrap
+      Environment:
+        Variables:
+          NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: "*"
+
   # ---- EventBridge Rules ----
   DomainRegistrationApprovedNotificationRule:
     Type: AWS::Events::Rule
@@ -947,6 +979,32 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt DomainProvisioningFailedRule.Arn
+
+  DomainRegistrationFailedRule:
+    Type: AWS::Events::Rule
+    Condition: NotificationsEnabled
+    Properties:
+      Name: !Sub "nexus-domain-registration-failed"
+      EventBusName: !Ref NexusEventBus
+      EventPattern:
+        detail-type:
+          - RegisterDomainFailed
+        source:
+          - nexus.domain-management
+      Targets:
+        - Id: SendRegistrationFailedNotificationTarget
+          Arn: !GetAtt SendRegistrationFailedNotificationFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
+
+  DomainRegistrationFailedRulePermission:
+    Type: AWS::Lambda::Permission
+    Condition: NotificationsEnabled
+    Properties:
+      FunctionName: !Ref SendRegistrationFailedNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DomainRegistrationFailedRule.Arn
 
   # ---- Step Functions ----
   ApprovalWorkflowRole:

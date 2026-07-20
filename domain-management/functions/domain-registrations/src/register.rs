@@ -44,6 +44,7 @@ pub async fn handle(
 
     let now = chrono::Utc::now().to_rfc3339();
     let status = DomainStatus::PendingApproval.to_string();
+    let rejected_status = DomainStatus::Rejected.to_string();
 
     let mut put_domain = ddb
         .put_item()
@@ -60,7 +61,9 @@ pub async fn handle(
         .item("createdAt", s(&now))
         .item("updatedAt", s(&now))
         .item("createdBy", s(&request.owner_account_id))
-        .condition_expression("attribute_not_exists(domainName)")
+        .condition_expression("attribute_not_exists(domainName) OR #status = :rejected")
+        .expression_attribute_names("#status", "status")
+        .expression_attribute_values(":rejected", s(&rejected_status))
         .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld);
 
     if let Some(desc) = &request.description {
@@ -698,6 +701,112 @@ mod tests {
 
             assert!(result.is_ok());
             assert_eq!(eb_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn put_item_uses_widened_condition_admitting_rejected() {
+            set_env();
+
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
+                .match_requests(|req| {
+                    req.condition_expression()
+                        == Some("attribute_not_exists(domainName) OR #status = :rejected")
+                })
+                .then_output(|| PutItemOutput::builder().build());
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
+
+            let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+            let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
+                StartExecutionOutput::builder()
+                    .execution_arn("arn:exec")
+                    .start_date(aws_sdk_sfn::primitives::DateTime::from_secs(0))
+                    .build()
+                    .unwrap()
+            });
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+
+            assert!(result.is_ok());
+            assert_eq!(put_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn reregistration_over_rejected_succeeds_with_fresh_record() {
+            set_env();
+
+            // A REJECTED record passes the widened condition, so PutItem
+            // succeeds and replaces the record wholesale. The handler then
+            // starts a fresh approval workflow and emits RegisterDomainSucceeded.
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
+                .then_output(|| PutItemOutput::builder().build());
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
+
+            let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries()
+                        .iter()
+                        .any(|entry| entry.detail_type() == Some("RegisterDomainSucceeded"))
+                })
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+            let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
+                StartExecutionOutput::builder()
+                    .execution_arn("arn:exec")
+                    .start_date(aws_sdk_sfn::primitives::DateTime::from_secs(0))
+                    .build()
+                    .unwrap()
+            });
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-2").await;
+
+            assert!(result.is_ok());
+            assert_eq!(put_rule.num_calls(), 1);
+            assert_eq!(sfn_rule.num_calls(), 1);
+            assert_eq!(eb_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn duplicate_over_pending_approval_still_emits_failed_event() {
+            set_env();
+
+            // A non-REJECTED record (e.g. PENDING_APPROVAL) still blocks
+            // registration; the conditional failure branch fires and emits
+            // RegisterDomainFailed with "domain already exists".
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item).then_error(|| {
+                aws_sdk_dynamodb::operation::put_item::PutItemError::ConditionalCheckFailedException(
+                    aws_sdk_dynamodb::types::error::ConditionalCheckFailedException::builder()
+                        .item("domainName", s("billing"))
+                        .item("requestId", s("someone-elses-request"))
+                        .item("status", s("PENDING_APPROVAL"))
+                        .build(),
+                )
+            });
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
+
+            let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries()
+                        .iter()
+                        .any(|entry| entry.detail_type() == Some("RegisterDomainFailed"))
+                })
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+            let sfn = mock_client!(aws_sdk_sfn, &[]);
+
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-2").await;
+
+            assert!(result.is_ok());
+            assert_eq!(put_rule.num_calls(), 1);
+            assert_eq!(eb_rule.num_calls(), 1);
+            // sfn has no mock rules — any call would error, so Ok(()) proves
+            // the workflow was not started for a duplicate registration.
         }
     }
 }

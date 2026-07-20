@@ -84,6 +84,7 @@ After you register a domain, the platform team must approve it before any infras
 |-------|------|---------|---------|
 | Approval outcome (approved) | Platform team approves your domain | `ownerEmail` | `Domain Approved: 'billing'` |
 | Approval outcome (rejected) | Platform team rejects your domain | `ownerEmail` | `Domain Registration Rejected: 'billing'` |
+| Registration failure | Registration fails deterministic validation (duplicate name, naming rule violation) | `ownerEmail` | `Domain Registration Failed: 'billing'` |
 | Provisioning failure | Provisioning fails after approval | `ownerEmail` | `Domain Provisioning Issue: 'billing'` |
 
 The approval request email goes to the platform team inbox, not to you. It includes your domain name, owner account ID, owner email, and the environments that will be provisioned. If this is the first domain registered from your AWS account, the email includes a trust-stack deployment advisory for the platform team.
@@ -115,7 +116,7 @@ If your domain is rejected, you receive an email with the rejecter's identity an
 > | Rejected By | admin@example.com |
 > | Justification | Name conflicts with existing bounded context |
 
-A rejected domain remains in the `REJECTED` status permanently. To register under a different name, submit a new registration request.
+A rejected domain can be re-registered under the same name once the issue is corrected. Submit a new registration request with the corrected details and the rejected record is atomically replaced with a fresh `PENDING_APPROVAL` record (new `requestId`, fresh approval cycle). The rejection history remains available through `DomainRegistrationRejected` events on the control plane bus.
 
 ### Approval timeout
 
@@ -326,7 +327,7 @@ Your domain moves through a well-defined status progression:
 |--------|---------|-------------|
 | `PENDING_APPROVAL` | Registration submitted, awaiting platform team decision | Wait for approval email. Contact platform team if it takes longer than expected. |
 | `APPROVED` | Approved, provisioning not yet started | Nothing — this is a transient state. You should see `PROVISIONING` within seconds. |
-| `REJECTED` | Registration denied | Review the rejection email for justification. Register under a different name if appropriate. |
+| `REJECTED` | Registration denied | Review the rejection email for justification. Correct the submission and re-register under the same name. |
 | `PROVISIONING` | Infrastructure creation in progress across all environments | Wait. Typically completes within 1-2 minutes. Poll `GET /domains/{domainName}` to check. |
 | `ACTIVE` | All resources created, domain is operational | Start using your event buses. See [Provisioned Resources](#provisioned-resources). |
 | `PROVISIONING_FAILED` | Resource creation failed, rollback completed | Check the provisioning failure email. Contact your platform team — they can inspect Step Functions execution history for details. |
@@ -512,7 +513,7 @@ The email intentionally does not include technical details. Your platform team c
 
 ### Duplicate registration error
 
-If you try to register a domain name that already exists, you will see a `RegisterDomainFailed` event with reason "domain already exists". Domain names are globally unique. Choose a different name, or if the existing domain is in a failed/rejected state, ask your platform team to clean up the stale record first.
+If you try to register a domain name that already exists in a status other than `REJECTED`, you will see a `RegisterDomainFailed` event with reason "domain already exists" and receive a failure notification email at the submitted `ownerEmail`. Domain names are globally unique while in use. Choose a different name, or if the existing domain is `REJECTED`, simply correct your submission and re-register — the rejected record is replaced atomically.
 
 ### API returns 403
 
