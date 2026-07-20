@@ -120,11 +120,11 @@ async fn handle_get(sfn: &aws_sdk_sfn::Client, event: &Value) -> Value {
             let (title, body) = match decision {
                 Decision::Accept => (
                     "Approved",
-                    "The domain registration has been approved. Provisioning will begin shortly.",
+                    "The domain registration has been approved. Provisioning will begin shortly. You can close this window.",
                 ),
                 Decision::Reject => (
                     "Rejected",
-                    "The domain registration has been rejected. The domain owner will be notified.",
+                    "The domain registration has been rejected. The domain owner will be notified. You can close this window.",
                 ),
             };
             html_response(200, title, body)
