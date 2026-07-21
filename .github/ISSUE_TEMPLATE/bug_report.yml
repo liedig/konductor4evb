@@ -34,7 +34,10 @@ body:
     id: area
     attributes:
       label: Area
-      description: Which part of the system is affected?
+      description: >
+        Which part of the system is affected? Selecting a value here records it
+        in the issue body for triage — GitHub Issue Forms does not auto-apply
+        area labels, so a maintainer will add the matching area:* label during triage.
       options:
         - area:domain-mgmt
         - area:event-streams
@@ -50,7 +53,10 @@ body:
     id: priority
     attributes:
       label: Priority
-      description: How urgent is this?
+      description: >
+        How urgent is this? Selecting a value here records it in the issue body
+        for triage — GitHub Issue Forms does not auto-apply priority labels,
+        so a maintainer will add the matching P0-P3 label during triage.
       options:
         - P0
         - P1

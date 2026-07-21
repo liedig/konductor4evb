@@ -60,7 +60,7 @@ Issues and PRs use a three-axis labeling system (defined in `.github/labels.yml`
 - **Area**: `area:domain-mgmt`, `area:event-streams`, `area:notifications`, `area:trust`, `area:infra`, `area:ci`, `area:deps`, `area:docs`
 - **Status**: `status:needs-triage`, `status:in-progress`, `status:blocked`
 
-Every issue should have at least one type and one area label. New issues default to `status:needs-triage` until assigned a priority.
+New issues auto-receive `type:bug` or `type:feature` and `status:needs-triage` (these are in the issue template's static `labels` list). The area and priority dropdowns in the issue form record the submitter's suggestion in the issue body, but GitHub Issue Forms does not auto-apply those as labels. During triage, a maintainer reads the dropdown selections and applies the matching `area:*` and `P0`-`P3` labels, then removes `status:needs-triage`.
 
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands
