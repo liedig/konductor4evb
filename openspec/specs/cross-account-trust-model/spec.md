@@ -50,14 +50,19 @@ The trust role in each domain account SHALL grant Nexus permissions to: create a
 
 ### Requirement: Trust stack installation
 
-Platform teams SHALL deploy a trust stack (CloudFormation/SAM template) in each domain account before EventBridge Nexus can manage resources in that account. The Nexus project SHALL provide this template. The trust stack SHALL create the IAM trust role with the correct permissions and trust policy allowing the Nexus execution role and provisioning workflow role in the platform account to assume it. The trust role SHALL be named `{org}-nexus-trust-role`.
+Platform teams SHALL deploy a trust stack (CloudFormation/SAM template) in each domain account before EventBridge Nexus can manage resources in that account. The Nexus project SHALL provide this template. The trust stack SHALL create the IAM trust role with the correct permissions and trust policy. The trust policy SHALL name the platform account root as principal and SHALL restrict assumption to exactly the Nexus execution role and the provisioning workflow role via an `ArnEquals` condition on `aws:PrincipalArn`, so that the constraint is string-matched per request rather than pinned to IAM unique principal IDs. The trust role SHALL be named `{org}-nexus-trust-role`.
 
 #### Scenario: Trust stack deployment
 
 - **WHEN** a platform team wants to onboard a new domain account to Nexus
 - **THEN** they SHALL deploy the provided trust stack template in the domain account
-- **AND THEN** the template SHALL create an IAM role named `{org}-nexus-trust-role` with a trust policy that permits `sts:AssumeRole` from the Nexus execution role ARN and the provisioning workflow role ARN in the platform account
+- **AND THEN** the template SHALL create an IAM role named `{org}-nexus-trust-role` whose trust policy permits `sts:AssumeRole` from the platform account root, conditioned via `ArnEquals` on `aws:PrincipalArn` to exactly the Nexus execution role ARN and the provisioning workflow role ARN
 - **AND THEN** the role SHALL have the permissions defined in the trust role permissions requirement
+
+#### Scenario: Assumption restricted to the named platform roles
+
+- **WHEN** any platform-account principal other than the Nexus execution role or the provisioning workflow role attempts `sts:AssumeRole` on the trust role
+- **THEN** the assumption SHALL be denied by the `aws:PrincipalArn` condition
 
 #### Scenario: Trust stack parameterisation
 
@@ -66,21 +71,21 @@ Platform teams SHALL deploy a trust stack (CloudFormation/SAM template) in each 
 - **AND THEN** the trust stack SHALL NOT accept an environment parameter — the trust role name is environment-independent
 - **AND THEN** the trust role permissions SHALL be scoped using the `{org}-*` resource pattern so the single role can manage domain resources across all environments
 
-### Requirement: Bus-to-bus assumed roles for subscription routing
+### Requirement: Platform delivery authorization on app-side buses
 
-When subscription rules route events from the platform domain bus to a subscriber's domain bus in another account, the delivery SHALL use a bus-to-bus assumed role. The Nexus SHALL create and manage these roles in the platform account. Each role SHALL permit EventBridge to call `events:PutEvents` on the target bus in the subscriber's domain account.
+Each app-side domain event bus SHALL carry a resource policy permitting the **platform account** to call `events:PutEvents`, attached once at provisioning time via the trust role's existing `events:PutPermission` capability. This single grant SHALL authorize delivery for all current and future subscriptions targeting that bus — no per-subscription IAM roles or policies SHALL be created. Subscription rules in the platform account SHALL target app-side buses directly under this authorization.
 
-#### Scenario: Bus-to-bus role created for subscription
+#### Scenario: Policy attached during environment provisioning
 
-- **WHEN** a subscription is created that routes events from a domain bus in the platform account to a subscriber's domain bus in a domain account
-- **THEN** the Nexus SHALL create (or reuse) an IAM role in the platform account that permits EventBridge to assume it
-- **AND THEN** the role SHALL have a policy allowing `events:PutEvents` on the specific target event bus ARN in the subscriber's account
+- **WHEN** the per-environment provisioning workflow creates the app-side domain event bus in the domain account
+- **THEN** it SHALL attach a resource policy to that bus permitting `events:PutEvents` from the platform account
+- **AND THEN** the policy SHALL be attached using the trust role's existing `events:PutPermission` grant, requiring no trust-stack change
 
-#### Scenario: Bus-to-bus role cleanup on unsubscribe
+#### Scenario: Subscriptions require no additional authorization
 
-- **WHEN** a subscription is removed and no other subscriptions use the same bus-to-bus assumed role
-- **THEN** the Nexus SHALL delete the assumed role and its associated policies
-- **AND THEN** remaining subscriptions that share a role SHALL NOT be affected by unrelated unsubscribe operations
+- **WHEN** a subscription is created or removed for a consumer domain
+- **THEN** no IAM roles, role policies, or resource policy changes SHALL be made in either account
+- **AND THEN** unsubscribing SHALL leave the provision-time delivery policy in place for other and future subscriptions
 
 ### Requirement: Control plane execution role
 
@@ -102,3 +107,13 @@ EventBridge Nexus Lambda functions and Step Functions workflows SHALL execute us
 - **WHEN** the provisioning workflow creates namespace parameters and manages RAM shares
 - **THEN** the execution role SHALL permit `ssm:PutParameter`, `ssm:GetParameter`, and `ssm:AddTagsToResource` scoped to `arn:aws:ssm:*:${AccountId}:parameter/namespace/*`
 - **AND THEN** the execution role SHALL permit `ram:CreateResourceShare`, `ram:GetResourceShares`, `ram:AssociateResourceShare`, and `ram:ListResources`
+
+### Requirement: Trust survives platform role recreation
+
+The trust relationship between a domain account and the platform SHALL remain valid when the platform roles are deleted and recreated with the same names (for example during a core stack teardown and redeploy). Because both platform roles have deterministic names, their ARN strings are stable, and the `aws:PrincipalArn` condition SHALL continue to match without any change to the deployed trust stack.
+
+#### Scenario: Core stack redeploy does not sever trust
+
+- **WHEN** the platform core stack is torn down and redeployed, recreating the Nexus execution role and provisioning workflow role with new IAM unique principal IDs
+- **THEN** the provisioning workflow SHALL still successfully assume `{org}-nexus-trust-role` in every domain account
+- **AND THEN** no trust stack update or redeploy SHALL be required in any domain account

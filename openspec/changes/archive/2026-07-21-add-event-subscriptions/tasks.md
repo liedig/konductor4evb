@@ -60,7 +60,7 @@
 
 - [x] 9.1 End-to-end smoke test in dev (extend Makefile smoke target): `make smoke-subscription` — register schema in producer registry → subscribe → publish conforming event → assert rule match → disable env and assert rule DISABLED → unsubscribe → assert rules removed and record `REMOVED` (script authored; execution requires deployed stack)
 - [x] 9.2 Negative-path checks: mis-stamped event (string version → no match) and duplicate subscribe (idempotent) in smoke script; missing schema all-or-nothing covered by workflow compensation path + handler unit tests
-- [ ] 9.3 Verify version census query returns per-env pinned versions including a deliberately skewed registry (dev ahead of prod) — requires deployed dev stack
+- [x] 9.3 Verify version census query returns per-env pinned versions including a deliberately skewed registry (dev ahead of prod) — verified: schema `acme-sales@InvoiceCreated` created with v1 in all three registries, v2 added in dev only (deliberate skew); GET /schemas?domain=sales shows per-env latestVersions {dev: 2, staging: 1, prod: 1}; self-subscription activated ACTIVE with per-env pinned versions matching the skew (dev: 2, staging: 1, prod: 1); rule patterns confirmed `schemaVersion:[2]` in dev, `[1]` in staging/prod; DynamoDB version-census query (PK=sales, SK prefix `acme-sales@InvoiceCreated#`) returns the subscriber with per-env pinned versions in a single query. Fixed activation workflow bug: removed unsupported `RetryPolicy` from `PutTargets` for event-bus targets. All test resources cleaned up.
 
 ## 10. Documentation
 

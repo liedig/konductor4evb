@@ -79,7 +79,7 @@ The domain management capability SHALL emit the following events. Each event SHA
 
 ### Requirement: Register Domain
 
-Domain management is an administrative function of the control plane. Domain owners SHALL be able to request registration of a new domain by submitting a command that is processed asynchronously. The API SHALL accept the command and return immediately with a request ID (SQS message ID) and a descriptive message. Each request SHALL go through an approval process; only after approval SHALL the provisioning workflow be triggered. All domain details SHALL be stored in the single domains DynamoDB table. The domain name SHALL be used as the DynamoDB partition key. Uniqueness SHALL be enforced atomically via a conditional `PutItem` with `attribute_not_exists(domainName)` — the system SHALL NOT perform a pre-write query to check for duplicates.
+Domain management is an administrative function of the control plane. Domain owners SHALL be able to request registration of a new domain by submitting a command that is processed asynchronously. The API SHALL accept the command and return immediately with a request ID (SQS message ID) and a descriptive message. Each request SHALL go through an approval process; only after approval SHALL the provisioning workflow be triggered. All domain details SHALL be stored in the single domains DynamoDB table. The domain name SHALL be used as the DynamoDB partition key. Uniqueness SHALL be enforced atomically via a conditional `PutItem` with `attribute_not_exists(domainName) OR #status = :REJECTED` — the system SHALL NOT perform a pre-write query to check for duplicates. A `REJECTED` record SHALL NOT block its domain name: a new registration for that name SHALL atomically replace the rejected record with a fresh registration (new `requestId`, status `PENDING_APPROVAL`, fresh approval cycle); rejection history remains available through the `DomainRegistrationRejected` events on the control plane bus.
 
 The set of environments a domain is provisioned into SHALL be determined by the **platform team**, not the requester. The Nexus platform SHALL hold a single configured environment list (default `["dev", "staging", "prod"]`), and every approved domain SHALL be provisioned into the full list. The registration API SHALL NOT accept an `environments` field. All environments of a given domain SHALL be provisioned into the same `ownerAccountId`.
 
@@ -96,13 +96,20 @@ The registration request SHALL include at least one secondary owner email addres
 - **WHEN** the domain command handler processes a register-domain message from the queue
 - **THEN** the handler SHALL validate business rules (naming, reserved names)
 - **AND THEN** read the platform-configured environment list
-- **AND THEN** persist the domain in DynamoDB using a conditional `PutItem` with `domainName` as the partition key and a condition expression of `attribute_not_exists(domainName)` and status `PENDING_APPROVAL` and that environment list stamped onto the `environments` field of the domain record, and `secondaryOwnerEmails` stored as a String Set
+- **AND THEN** persist the domain in DynamoDB using a conditional `PutItem` with `domainName` as the partition key and a condition expression of `attribute_not_exists(domainName) OR #status = :REJECTED` and status `PENDING_APPROVAL` and that environment list stamped onto the `environments` field of the domain record, and `secondaryOwnerEmails` stored as a String Set
 - **AND THEN** start the approval Step Functions workflow
 - **AND THEN** emit `RegisterDomainSucceeded` to the control plane event bus (including the stamped `environments` list and `secondaryOwnerEmails`)
 
+#### Scenario: Re-registration after rejection replaces the rejected record
+
+- **WHEN** the domain command handler processes a register-domain message for a domain name whose existing record has status `REJECTED`
+- **THEN** the conditional `PutItem` SHALL succeed, replacing the rejected record wholesale with the fresh registration (new `requestId`, new owner details, status `PENDING_APPROVAL`)
+- **AND THEN** a new approval workflow SHALL start and `RegisterDomainSucceeded` SHALL be emitted
+- **AND THEN** the replaced record's rejection fields (`decidedBy`, `justification`, `rejectedAt`) SHALL NOT be carried onto the new record
+
 #### Scenario: Registration command fails due to duplicate domain name
 
-- **WHEN** the conditional `PutItem` fails with `ConditionalCheckFailedException` because a domain with the same name already exists
+- **WHEN** the conditional `PutItem` fails with `ConditionalCheckFailedException` because a domain with the same name already exists in a status other than `REJECTED`
 - **THEN** the handler SHALL emit `RegisterDomainFailed` to the control plane event bus with the reason "domain already exists"
 - **AND THEN** NOT start any workflow
 

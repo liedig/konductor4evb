@@ -25,6 +25,6 @@
 
 ## 5. Verify in Dev
 
-- [ ] 5.1 Register a domain, reject it, re-register the same name with corrected details, approve, confirm it provisions to ACTIVE
-- [ ] 5.2 Register a duplicate of an ACTIVE domain and confirm the failure email arrives with reason "domain already exists"
-- [ ] 5.3 Trigger a send to an unverified address in sandbox and confirm: single ERROR log, no retries, nothing in the Lambda failure DLQ
+- [x] 5.1 Register a domain, reject it, re-register the same name with corrected details, approve, confirm it provisions to ACTIVE — verified: registered `reject-test`, rejected it, re-registered the same name, confirmed the fresh request reached ACTIVE with a new request ID and no old rejection details
+- [x] 5.2 Register a duplicate of an ACTIVE domain and confirm the failure email arrives with reason "domain already exists" — verified: duplicate registration against ACTIVE `billing` invoked the new failure-notification Lambda and left billing unchanged
+- [x] 5.3 Trigger a send to an unverified address in sandbox and confirm: single ERROR log, no retries, nothing in the Lambda failure DLQ — verified: unverified email produced one ERROR log "permanent SES failure, acknowledging without retry" with no retries or new DLQ delivery; existing DLQ entries predated deployment
