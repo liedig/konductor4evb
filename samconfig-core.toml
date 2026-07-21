@@ -2,12 +2,9 @@ version = 0.1
 
 [default.build.parameters]
 template_file = "nexus-core-stack.yaml"
-beta_features = true
-cached = true
 
 [default.sync.parameters]
 template_file = "nexus-core-stack.yaml"
-beta_features = true
 
 [default.validate.parameters]
 template_file = "nexus-core-stack.yaml"

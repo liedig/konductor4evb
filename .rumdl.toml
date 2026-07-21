@@ -1,0 +1,26 @@
+# rumdl configuration — markdown linting for site/docs/
+# See: https://github.com/rvben/rumdl
+
+[MD013]
+# Line length — disabled; docs have tables, long URLs, and mermaid diagrams
+enabled = false
+
+[MD009]
+# Trailing spaces — allow 2 spaces for <br> line breaks (common in markdown)
+br_spaces = 2
+
+[MD046]
+# Code block style — disabled; docs mix fenced and indented blocks
+enabled = false
+
+[MD036]
+# Emphasis used as heading — too many false positives on bold text
+enabled = false
+
+[MD033]
+# Inline HTML — needed for docs with custom elements, admonitions, etc.
+enabled = false
+
+[MD004]
+# Unordered list style — allow any consistent style
+style = "consistent"
