@@ -53,7 +53,7 @@ BREAKING CHANGE(api): remove deprecated v1 endpoints
 
 ## Issue Labels
 
-Issues and PRs use a three-axis labeling system (defined in `.github/labels.yml`, synced by the `Sync Labels` workflow):
+Issues and PRs use a three-axis labeling system (defined in `.github/labels.yml`):
 
 - **Priority**: `P0` (critical), `P1` (high), `P2` (medium), `P3` (low)
 - **Type**: `type:bug`, `type:feature`, `type:refactor`, `type:chore`, `type:test`, `type:docs`, `type:security`
