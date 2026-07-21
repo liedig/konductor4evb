@@ -1,6 +1,6 @@
 name: Bug Report
 description: Report a bug
-labels: ["bug"]
+labels: ["type:bug", "status:needs-triage"]
 body:
   - type: textarea
     id: description
@@ -28,5 +28,33 @@ body:
     attributes:
       label: Actual behaviour
       description: What actually happened?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the system is affected?
+      options:
+        - area:domain-mgmt
+        - area:event-streams
+        - area:notifications
+        - area:trust
+        - area:infra
+        - area:ci
+        - area:deps
+        - area:docs
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How urgent is this?
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
     validations:
       required: true

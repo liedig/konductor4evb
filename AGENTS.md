@@ -51,6 +51,17 @@ refactor(storage): extract database connection logic
 BREAKING CHANGE(api): remove deprecated v1 endpoints
 ```
 
+## Issue Labels
+
+Issues and PRs use a three-axis labeling system (defined in `.github/labels.yml`, synced by the `Sync Labels` workflow):
+
+- **Priority**: `P0` (critical), `P1` (high), `P2` (medium), `P3` (low)
+- **Type**: `type:bug`, `type:feature`, `type:refactor`, `type:chore`, `type:test`, `type:docs`, `type:security`
+- **Area**: `area:domain-mgmt`, `area:event-streams`, `area:notifications`, `area:trust`, `area:infra`, `area:ci`, `area:deps`, `area:docs`
+- **Status**: `status:needs-triage`, `status:in-progress`, `status:blocked`
+
+Every issue should have at least one type and one area label. New issues default to `status:needs-triage` until assigned a priority.
+
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands
 
