@@ -42,42 +42,8 @@ pub async fn handle(
         return Ok(());
     }
 
-    let now = chrono::Utc::now().to_rfc3339();
-    let status = DomainStatus::PendingApproval.to_string();
-    let rejected_status = DomainStatus::Rejected.to_string();
-
-    let mut put_domain = ddb
-        .put_item()
-        .table_name(&domains_table)
-        .item("domainName", s(&request.domain_name))
-        .item("requestId", s(request_id))
-        .item("ownerAccountId", s(&request.owner_account_id))
-        .item("status", s(&status))
-        .item("ownerEmail", s(&request.owner_email))
-        .item(
-            "secondaryOwnerEmails",
-            AttributeValue::Ss(request.secondary_owner_emails.clone()),
-        )
-        .item("createdAt", s(&now))
-        .item("updatedAt", s(&now))
-        .item("createdBy", s(&request.owner_account_id))
-        .condition_expression("attribute_not_exists(domainName) OR #status = :rejected")
-        .expression_attribute_names("#status", "status")
-        .expression_attribute_values(":rejected", s(&rejected_status))
-        .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld);
-
-    if let Some(desc) = &request.description {
-        put_domain = put_domain.item("description", s(desc));
-    }
-
-    if let Some(tags) = &request.tags {
-        put_domain = put_domain.item("tags", string_map_to_attr(tags));
-    }
-
-    let environments_attr = AttributeValue::L(environments.iter().map(|e| s(e)).collect());
-    put_domain = put_domain.item("environments", environments_attr);
-
-    let mut created_at = now.clone();
+    let put_domain = build_put_item(ddb, &domains_table, request, request_id, &environments);
+    let mut created_at = chrono::Utc::now().to_rfc3339();
 
     match put_domain.send().await {
         Ok(_) => {}
@@ -108,6 +74,62 @@ pub async fn handle(
         }
     }
 
+    start_approval_workflow(sfn, &state_machine_arn, request, request_id, &environments).await?;
+
+    emit_succeeded(eb, &cp_bus, request, request_id, &environments, &created_at).await
+}
+
+fn build_put_item(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    request: &RegisterDomainRequest,
+    request_id: &str,
+    environments: &[String],
+) -> aws_sdk_dynamodb::operation::put_item::builders::PutItemFluentBuilder {
+    let now = chrono::Utc::now().to_rfc3339();
+    let status = DomainStatus::PendingApproval.to_string();
+    let rejected_status = DomainStatus::Rejected.to_string();
+
+    let mut put = ddb
+        .put_item()
+        .table_name(table)
+        .item("domainName", s(&request.domain_name))
+        .item("requestId", s(request_id))
+        .item("ownerAccountId", s(&request.owner_account_id))
+        .item("status", s(&status))
+        .item("ownerEmail", s(&request.owner_email))
+        .item(
+            "secondaryOwnerEmails",
+            AttributeValue::Ss(request.secondary_owner_emails.clone()),
+        )
+        .item("createdAt", s(&now))
+        .item("updatedAt", s(&now))
+        .item("createdBy", s(&request.owner_account_id))
+        .condition_expression("attribute_not_exists(domainName) OR #status = :rejected")
+        .expression_attribute_names("#status", "status")
+        .expression_attribute_values(":rejected", s(&rejected_status))
+        .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld);
+
+    if let Some(desc) = &request.description {
+        put = put.item("description", s(desc));
+    }
+    if let Some(tags) = &request.tags {
+        put = put.item("tags", string_map_to_attr(tags));
+    }
+    put = put.item(
+        "environments",
+        AttributeValue::L(environments.iter().map(|e| s(e)).collect()),
+    );
+    put
+}
+
+async fn start_approval_workflow(
+    sfn: &aws_sdk_sfn::Client,
+    state_machine_arn: &str,
+    request: &RegisterDomainRequest,
+    request_id: &str,
+    environments: &[String],
+) -> Result<()> {
     let sfn_input = json!({
         "requestId": request_id,
         "domainName": request.domain_name,
@@ -120,7 +142,7 @@ pub async fn handle(
 
     if let Err(e) = sfn
         .start_execution()
-        .state_machine_arn(&state_machine_arn)
+        .state_machine_arn(state_machine_arn)
         .name(format!("approval-{request_id}"))
         .input(sfn_input.to_string())
         .send()
@@ -131,32 +153,24 @@ pub async fn handle(
             return Err(ControlPlaneError::StepFunctions(service_err.to_string()).into());
         }
     }
+    Ok(())
+}
 
-    let result = eb
-        .put_events()
-        .entries(
-            aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
-                .event_bus_name(&cp_bus)
-                .source("nexus.domain-management")
-                .detail_type("RegisterDomainSucceeded")
-                .detail(
-                    json!({
-                        "requestId": request_id,
-                        "domainName": request.domain_name,
-                        "ownerAccountId": request.owner_account_id,
-                        "ownerEmail": request.owner_email,
-                        "secondaryOwnerEmails": request.secondary_owner_emails,
-                        "status": status,
-                        "createdAt": created_at,
-                        "environments": environments,
-                    })
-                    .to_string(),
-                )
-                .build(),
-        )
-        .send()
-        .await
-        .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
+async fn emit_succeeded(
+    eb: &aws_sdk_eventbridge::Client,
+    cp_bus: &str,
+    request: &RegisterDomainRequest,
+    request_id: &str,
+    environments: &[String],
+    created_at: &str,
+) -> Result<()> {
+    let status = DomainStatus::PendingApproval.to_string();
+    let result = eb.put_events().entries(
+        aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
+            .event_bus_name(cp_bus).source("nexus.domain-management").detail_type("RegisterDomainSucceeded")
+            .detail(json!({"requestId": request_id, "domainName": request.domain_name, "ownerAccountId": request.owner_account_id, "ownerEmail": request.owner_email, "secondaryOwnerEmails": request.secondary_owner_emails, "status": status, "createdAt": created_at, "environments": environments}).to_string())
+            .build(),
+    ).send().await.map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
 
     if result.failed_entry_count > 0 {
         return Err(ControlPlaneError::EventBridge(format!(
@@ -165,7 +179,6 @@ pub async fn handle(
         ))
         .into());
     }
-
     Ok(())
 }
 

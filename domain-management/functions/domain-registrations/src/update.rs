@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use aws_sdk_dynamodb::operation::update_item::UpdateItemError;
-use aws_sdk_dynamodb::types::{ReturnValue, ReturnValuesOnConditionCheckFailure};
+use aws_sdk_dynamodb::types::{AttributeValue, ReturnValue, ReturnValuesOnConditionCheckFailure};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -43,7 +43,6 @@ pub async fn handle(
     {
         return emit_failed(eb, &cp_bus, domain_name, "no fields provided to update").await;
     }
-
     if message
         .body
         .secondary_owner_emails
@@ -60,38 +59,8 @@ pub async fn handle(
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    let mut update_expr_parts = vec!["updatedAt = :now".to_string()];
-    let mut expr_values = vec![(":now".to_string(), s(&now))];
-    let mut changed_fields = vec![];
-
-    if let Some(desc) = message.body.description.as_deref() {
-        update_expr_parts.push("description = :desc".to_string());
-        expr_values.push((":desc".to_string(), s(desc)));
-        changed_fields.push("description");
-    }
-
-    if let Some(tags) = &message.body.tags {
-        update_expr_parts.push("tags = :tags".to_string());
-        expr_values.push((":tags".to_string(), string_map_to_attr(tags)));
-        changed_fields.push("tags");
-    }
-
-    if let Some(email) = message.body.owner_email.as_deref() {
-        update_expr_parts.push("ownerEmail = :ownerEmail".to_string());
-        expr_values.push((":ownerEmail".to_string(), s(email)));
-        changed_fields.push("ownerEmail");
-    }
-
-    if let Some(emails) = &message.body.secondary_owner_emails {
-        update_expr_parts.push("secondaryOwnerEmails = :secondaryOwnerEmails".to_string());
-        expr_values.push((
-            ":secondaryOwnerEmails".to_string(),
-            aws_sdk_dynamodb::types::AttributeValue::Ss(emails.clone()),
-        ));
-        changed_fields.push("secondaryOwnerEmails");
-    }
-
-    let update_expression = format!("SET {}", update_expr_parts.join(", "));
+    let (update_expression, expr_values, changed_fields) =
+        build_update_expression(&message.body, &now);
 
     let mut update = ddb
         .update_item()
@@ -124,29 +93,66 @@ pub async fn handle(
         }
     };
 
-    let attrs = output.attributes.unwrap_or_default();
+    emit_success(
+        eb,
+        &cp_bus,
+        domain_name,
+        &now,
+        &output.attributes.unwrap_or_default(),
+        &changed_fields,
+    )
+    .await
+}
 
-    let result = eb
-        .put_events()
-        .entries(
-            aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
-                .event_bus_name(&cp_bus)
-                .source("nexus.domain-management")
-                .detail_type("UpdateDomainSucceeded")
-                .detail(
-                    json!({
-                        "domainName": domain_name,
-                        "updatedAt": now,
-                        "status": get_s(&attrs, "status"),
-                        "changedFields": changed_fields,
-                    })
-                    .to_string(),
-                )
-                .build(),
-        )
-        .send()
-        .await
-        .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
+fn build_update_expression(
+    body: &UpdateDomainBody,
+    now: &str,
+) -> (String, Vec<(String, AttributeValue)>, Vec<&'static str>) {
+    let mut parts = vec!["updatedAt = :now".to_string()];
+    let mut values = vec![(":now".to_string(), s(now))];
+    let mut changed: Vec<&'static str> = vec![];
+
+    if let Some(desc) = body.description.as_deref() {
+        parts.push("description = :desc".into());
+        values.push((":desc".to_string(), s(desc)));
+        changed.push("description");
+    }
+    if let Some(tags) = &body.tags {
+        parts.push("tags = :tags".into());
+        values.push((":tags".to_string(), string_map_to_attr(tags)));
+        changed.push("tags");
+    }
+    if let Some(email) = body.owner_email.as_deref() {
+        parts.push("ownerEmail = :ownerEmail".into());
+        values.push((":ownerEmail".to_string(), s(email)));
+        changed.push("ownerEmail");
+    }
+    if let Some(emails) = &body.secondary_owner_emails {
+        parts.push("secondaryOwnerEmails = :secondaryOwnerEmails".into());
+        values.push((
+            ":secondaryOwnerEmails".to_string(),
+            AttributeValue::Ss(emails.clone()),
+        ));
+        changed.push("secondaryOwnerEmails");
+    }
+
+    (format!("SET {}", parts.join(", ")), values, changed)
+}
+
+async fn emit_success(
+    eb: &aws_sdk_eventbridge::Client,
+    cp_bus: &str,
+    domain_name: &str,
+    now: &str,
+    attrs: &std::collections::HashMap<String, AttributeValue>,
+    changed_fields: &[&str],
+) -> Result<()> {
+    let result = eb.put_events().entries(
+        aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
+            .event_bus_name(cp_bus).source("nexus.domain-management").detail_type("UpdateDomainSucceeded")
+            .detail(json!({"domainName": domain_name, "updatedAt": now, "status": get_s(attrs, "status"), "changedFields": changed_fields}).to_string())
+            .build(),
+    ).send().await.map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
 
     if result.failed_entry_count > 0 {
         return Err(ControlPlaneError::EventBridge(format!(
@@ -155,7 +161,6 @@ pub async fn handle(
         ))
         .into());
     }
-
     Ok(())
 }
 

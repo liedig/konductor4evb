@@ -93,14 +93,28 @@ pub async fn handle(clients: &Clients, message: &UnsubscribeMessage) -> Result<(
             &clients.eb,
             &cp_bus,
             "UnsubscribeSucceeded",
-            json!({
-                "subscriptionId": message.subscription_id,
-                "idempotent": true,
-            }),
+            json!({"subscriptionId": message.subscription_id, "idempotent": true}),
         )
         .await;
     }
 
+    start_removal_workflow(
+        clients,
+        &state_machine_arn,
+        &stream,
+        &message.subscription_id,
+    )
+    .await?;
+
+    outcome::emit(&clients.eb, &cp_bus, "UnsubscribeSucceeded", json!({"subscriptionId": message.subscription_id, "producerDomain": stream.producer_domain, "consumerDomain": stream.consumer_domain, "schemaName": stream.schema_name})).await
+}
+
+async fn start_removal_workflow(
+    clients: &Clients,
+    state_machine_arn: &str,
+    stream: &nexus_common::streams::EventStream,
+    subscription_id: &str,
+) -> Result<()> {
     let rule_name = stream
         .environments
         .values()
@@ -120,10 +134,10 @@ pub async fn handle(clients: &Clients, message: &UnsubscribeMessage) -> Result<(
     clients
         .sfn
         .start_execution()
-        .state_machine_arn(&state_machine_arn)
+        .state_machine_arn(state_machine_arn)
         .name(format!(
             "remove-{}-{}",
-            sanitize_execution_name(&message.subscription_id),
+            sanitize_execution_name(subscription_id),
             chrono::Utc::now().timestamp()
         ))
         .input(workflow_input.to_string())
@@ -135,18 +149,7 @@ pub async fn handle(clients: &Clients, message: &UnsubscribeMessage) -> Result<(
             )
         })?;
 
-    outcome::emit(
-        &clients.eb,
-        &cp_bus,
-        "UnsubscribeSucceeded",
-        json!({
-            "subscriptionId": message.subscription_id,
-            "producerDomain": stream.producer_domain,
-            "consumerDomain": stream.consumer_domain,
-            "schemaName": stream.schema_name,
-        }),
-    )
-    .await
+    Ok(())
 }
 
 fn sanitize_execution_name(id: &str) -> String {

@@ -52,20 +52,7 @@ pub async fn handle(clients: &Clients, message: &SubscribeMessage, request_id: &
         Ok(validated) => validated,
         Err(reason) => {
             tracing::warn!(subscription_id, reason, "subscribe rejected by validation");
-            return outcome::emit(
-                &clients.eb,
-                &cp_bus,
-                "SubscribeFailed",
-                json!({
-                    "subscriptionId": subscription_id,
-                    "consumerDomain": body.consumer_domain,
-                    "producerDomain": body.producer_domain,
-                    "schemaName": body.schema_name,
-                    "reason": reason,
-                    "failedAt": chrono::Utc::now().to_rfc3339(),
-                }),
-            )
-            .await;
+            return outcome::emit(&clients.eb, &cp_bus, "SubscribeFailed", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "reason": reason, "failedAt": chrono::Utc::now().to_rfc3339()})).await;
         }
     };
     let Validated {
@@ -92,38 +79,51 @@ pub async fn handle(clients: &Clients, message: &SubscribeMessage, request_id: &
                 subscription_id,
                 "subscription already exists; idempotent no-op"
             );
-            return outcome::emit(
-                &clients.eb,
-                &cp_bus,
-                "SubscribeSucceeded",
-                json!({
-                    "subscriptionId": subscription_id,
-                    "consumerDomain": body.consumer_domain,
-                    "producerDomain": body.producer_domain,
-                    "schemaName": body.schema_name,
-                    "status": existing.status,
-                    "idempotent": true,
-                }),
-            )
-            .await;
+            return outcome::emit(&clients.eb, &cp_bus, "SubscribeSucceeded", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "status": existing.status, "idempotent": true})).await;
         }
     }
 
+    let stream = build_pending_stream(
+        body,
+        &schema,
+        &derived_rule_name,
+        &producer.environments,
+        request_id,
+    );
+    streams_db::put_stream(&clients.ddb, &streams_table, &stream).await?;
+
+    let validated = Validated {
+        producer,
+        consumer,
+        schema,
+        rule_name: derived_rule_name,
+    };
+    start_activation_workflow(clients, &state_machine_arn, &validated, body, request_id).await?;
+
+    outcome::emit(&clients.eb, &cp_bus, "SubscribeSucceeded", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "status": StreamStatus::Pending, "requestId": request_id})).await
+}
+
+fn build_pending_stream(
+    body: &SubscribeBody,
+    schema: &SchemaName,
+    derived_rule_name: &str,
+    environments: &[String],
+    request_id: &str,
+) -> EventStream {
     let now = chrono::Utc::now();
-    let environments: HashMap<String, EnvStream> = producer
-        .environments
+    let env_map: HashMap<String, EnvStream> = environments
         .iter()
         .map(|env_name| {
             let enabled = body
                 .environments
                 .get(env_name)
-                .map(|state| state.enabled)
+                .map(|s| s.enabled)
                 .unwrap_or(true);
             (
                 env_name.clone(),
                 EnvStream {
                     pinned_version: None,
-                    rule_name: derived_rule_name.clone(),
+                    rule_name: derived_rule_name.to_string(),
                     rule_arn: None,
                     enabled,
                     status: StreamStatus::Pending,
@@ -132,40 +132,44 @@ pub async fn handle(clients: &Clients, message: &SubscribeMessage, request_id: &
         })
         .collect();
 
-    let stream = EventStream {
+    EventStream {
         producer_domain: body.producer_domain.clone(),
         consumer_domain: body.consumer_domain.clone(),
         source: schema.source.clone(),
         detail_type: schema.detail_type.clone(),
         schema_name: body.schema_name.clone(),
         status: StreamStatus::Pending,
-        environments,
+        environments: env_map,
         request_id: Some(request_id.to_string()),
         created_at: now,
         updated_at: now,
         removed_at: None,
         expires_at: None,
-    };
-    streams_db::put_stream(&clients.ddb, &streams_table, &stream).await?;
+    }
+}
 
+async fn start_activation_workflow(
+    clients: &Clients,
+    state_machine_arn: &str,
+    validated: &Validated,
+    body: &SubscribeBody,
+    request_id: &str,
+) -> Result<()> {
     let workflow_input = json!({
         "producerDomain": body.producer_domain,
         "consumerDomain": body.consumer_domain,
-        "consumerAccountId": consumer.owner_account_id,
-        "source": schema.source,
-        "detailType": schema.detail_type,
+        "consumerAccountId": validated.consumer.owner_account_id,
+        "source": validated.schema.source,
+        "detailType": validated.schema.detail_type,
         "schemaName": body.schema_name,
-        "ruleName": derived_rule_name,
-        "environments": producer.environments.iter().map(|env_name| json!({
-            "name": env_name,
-            "enabled": stream.environments[env_name].enabled,
-        })).collect::<Vec<_>>(),
+        "ruleName": validated.rule_name,
+        "environments": validated.producer.environments.iter().map(|env_name| json!({"name": env_name, "enabled": body.environments.get(env_name).map(|s| s.enabled).unwrap_or(true)})).collect::<Vec<_>>(),
     });
 
     clients
         .sfn
         .start_execution()
-        .state_machine_arn(&state_machine_arn)
+        .state_machine_arn(state_machine_arn)
         .name(format!("activate-{request_id}"))
         .input(workflow_input.to_string())
         .send()
@@ -176,20 +180,7 @@ pub async fn handle(clients: &Clients, message: &SubscribeMessage, request_id: &
             )
         })?;
 
-    outcome::emit(
-        &clients.eb,
-        &cp_bus,
-        "SubscribeSucceeded",
-        json!({
-            "subscriptionId": subscription_id,
-            "consumerDomain": body.consumer_domain,
-            "producerDomain": body.producer_domain,
-            "schemaName": body.schema_name,
-            "status": StreamStatus::Pending,
-            "requestId": request_id,
-        }),
-    )
-    .await
+    Ok(())
 }
 
 struct Validated {

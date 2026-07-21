@@ -39,3 +39,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 aws-smithy-mocks = "0.2"
 uuid = { version = "1", features = ["v4"] }
+
+[workspace.lints.clippy]
+cognitive_complexity = "warn"
+too_many_lines = "warn"
+type_complexity = "warn"
