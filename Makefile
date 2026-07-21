@@ -1,4 +1,4 @@
-.PHONY: help build test check smoke smoke-subscription deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain clean
+.PHONY: help build test check smoke smoke-subscription deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
@@ -27,6 +27,8 @@ help: ## Show this help message
 	@awk 'BEGIN {FS = ":.*?## "} /^(teardown-.+):.*## / {printf "    $(YELLOW)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Smoke Test$(RESET) $(DIM)(manual — never run by deploy or CI)$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(smoke|smoke-subscription):.*## / {printf "    $(MAGENTA)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\n  $(BOLD)Inspect$(RESET)\n"
+	@awk 'BEGIN {FS = ":.*?## "} /^(list-domains|list-schemas|list-subscriptions):.*## / {printf "    $(CYAN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Environment variables$(RESET)\n"
 	@printf "    $(DIM)AWS_REGION$(RESET)                   current: $(CYAN)$(AWS_REGION)$(RESET)\n"
 	@printf "    $(DIM)DOMAIN_NAME$(RESET)                  current: $(CYAN)$(DOMAIN_NAME)$(RESET) — used by: smoke, teardown-domain\n"
@@ -38,7 +40,14 @@ help: ## Show this help message
 	@printf "    $(DIM)NOTIFICATION_SENDER_EMAIL$(RESET)    required for: deploy-notifications\n"
 	@printf "    $(DIM)PLATFORM_OPERATOR_EMAIL$(RESET)      required for: deploy-notifications\n"
 	@printf "    $(DIM)APP_PROFILE$(RESET)                  required for: deploy-trust, teardown-trust\n"
-	@printf "    $(DIM)ORGANIZATION$(RESET)                 optional for: deploy-trust (default: $(CYAN)$(ORGANIZATION)$(RESET))\n\n"
+	@printf "    $(DIM)ORGANIZATION$(RESET)                 optional for: deploy-trust (default: $(CYAN)$(ORGANIZATION)$(RESET))\n"
+	@printf "    $(DIM)DOMAIN_STATUS$(RESET)               optional for: list-domains (filter by status)\n"
+	@printf "    $(DIM)OWNER_ACCOUNT_ID$(RESET)            optional for: list-domains (filter by owner)\n"
+	@printf "    $(DIM)DOMAIN$(RESET)                      required for: list-schemas\n"
+	@printf "    $(DIM)CONSUMER_DOMAIN$(RESET)             optional for: list-subscriptions (filter by consumer)\n"
+	@printf "    $(DIM)PRODUCER_DOMAIN$(RESET)             optional for: list-subscriptions (filter by producer)\n"
+	@printf "    $(DIM)SCHEMA_NAME$(RESET)                 optional for: list-subscriptions (filter by schema)\n"
+	@printf "    $(DIM)SUBSCRIPTION_STATUS$(RESET)         optional for: list-subscriptions (filter by status)\n\n"
 
 build: ## sam build (Rust cross-compilation for arm64, cached)
 	sam build --config-file samconfig-core.toml -c
@@ -124,6 +133,51 @@ endif
 	echo ""; \
 	echo "  To clean up, run:"; \
 	echo "    make teardown-domain DOMAIN_NAME=$${DOMAIN_NAME}"
+
+list-domains: ## List registered domains (optional: DOMAIN_STATUS=, OWNER_ACCOUNT_ID=)
+	@set -euo pipefail; \
+	API_URL=$$(aws cloudformation describe-stacks \
+		--stack-name nexus-core \
+		--query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+		--output text \
+		--region $(AWS_REGION) 2>/dev/null) || { echo "nexus-core stack not found — deploy first with 'make deploy-core'"; exit 1; }; \
+	QUERY=""; \
+	[ -n "$(DOMAIN_STATUS)" ] && QUERY="$${QUERY}&status=$(DOMAIN_STATUS)"; \
+	[ -n "$(OWNER_ACCOUNT_ID)" ] && QUERY="$${QUERY}&ownerAccountId=$(OWNER_ACCOUNT_ID)"; \
+	QUERY=$${QUERY#&}; \
+	URL="$${API_URL}/domains$${QUERY:+?$$QUERY}"; \
+	awscurl -X GET "$$URL" --region $(AWS_REGION) 2>&1 | jq . 2>/dev/null || awscurl -X GET "$$URL" --region $(AWS_REGION)
+
+list-schemas: ## List schemas offered by a domain (required: DOMAIN=, optional: ENV=)
+ifndef DOMAIN
+	$(error DOMAIN is required — the producer domain name to list schemas for)
+endif
+	@set -euo pipefail; \
+	API_URL=$$(aws cloudformation describe-stacks \
+		--stack-name nexus-core \
+		--query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+		--output text \
+		--region $(AWS_REGION) 2>/dev/null) || { echo "nexus-core stack not found — deploy first with 'make deploy-core'"; exit 1; }; \
+	QUERY="domain=$(DOMAIN)"; \
+	[ -n "$(ENV)" ] && QUERY="$${QUERY}&environment=$(ENV)"; \
+	awscurl -X GET "$${API_URL}/schemas?$${QUERY}" \
+		--region $(AWS_REGION) 2>&1 | jq . 2>/dev/null || awscurl -X GET "$${API_URL}/schemas?$${QUERY}" --region $(AWS_REGION)
+
+list-subscriptions: ## List subscriptions (optional: CONSUMER_DOMAIN=, PRODUCER_DOMAIN=, SCHEMA_NAME=, SUBSCRIPTION_STATUS=)
+	@set -euo pipefail; \
+	API_URL=$$(aws cloudformation describe-stacks \
+		--stack-name nexus-core \
+		--query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+		--output text \
+		--region $(AWS_REGION) 2>/dev/null) || { echo "nexus-core stack not found — deploy first with 'make deploy-core'"; exit 1; }; \
+	QUERY=""; \
+	[ -n "$(CONSUMER_DOMAIN)" ] && QUERY="$${QUERY}&consumer=$(CONSUMER_DOMAIN)"; \
+	[ -n "$(PRODUCER_DOMAIN)" ] && QUERY="$${QUERY}&producer=$(PRODUCER_DOMAIN)"; \
+	[ -n "$(SCHEMA_NAME)" ] && QUERY="$${QUERY}&schema=$(SCHEMA_NAME)"; \
+	[ -n "$(SUBSCRIPTION_STATUS)" ] && QUERY="$${QUERY}&status=$(SUBSCRIPTION_STATUS)"; \
+	QUERY=$${QUERY#&}; \
+	URL="$${API_URL}/subscriptions$${QUERY:+?$$QUERY}"; \
+	awscurl -X GET "$$URL" --region $(AWS_REGION) 2>&1 | jq . 2>/dev/null || awscurl -X GET "$$URL" --region $(AWS_REGION)
 
 deploy: build deploy-core ## Build then deploy the core stack
 
