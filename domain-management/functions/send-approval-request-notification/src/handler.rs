@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use aws_sdk_sesv2::error::ProvideErrorMetadata;
 use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
 use lambda_runtime::{Error, LambdaEvent};
 use nexus_common::dynamodb::s;
@@ -20,29 +21,58 @@ pub async fn handle(
     let decide_endpoint_url =
         env::var("DECIDE_ENDPOINT_URL").context("DECIDE_ENDPOINT_URL not set")?;
 
-    let payload = &event.payload;
+    let fields = extract_event_fields(&event.payload)?;
+    let is_new_account = check_is_new_account(ddb, &table, &fields.owner_account_id).await?;
 
+    ddb.update_item()
+        .table_name(&table)
+        .key("domainName", s(&fields.domain_name))
+        .update_expression("SET taskToken = :token")
+        .condition_expression("attribute_exists(domainName)")
+        .expression_attribute_values(":token", s(&fields.task_token))
+        .send()
+        .await
+        .context("failed to persist taskToken to domain record")?;
+
+    let html_body = build_approval_email_body(
+        &fields.domain_name,
+        &fields.owner_account_id,
+        &fields.owner_email,
+        &fields.task_token,
+        is_new_account,
+        &fields.environments,
+        &decide_endpoint_url,
+    );
+
+    send_approval_email(ses, &from_email, &to_email, &fields.domain_name, html_body).await
+}
+
+struct EventFields {
+    task_token: String,
+    domain_name: String,
+    owner_account_id: String,
+    owner_email: String,
+    environments: Vec<String>,
+}
+
+fn extract_event_fields(payload: &Value) -> Result<EventFields, Error> {
     let task_token = payload
         .get("taskToken")
         .and_then(|v| v.as_str())
         .context("missing taskToken")?;
-
     let domain_name = payload
         .get("domainName")
         .and_then(|v| v.as_str())
         .context("missing domainName")?;
-
     let owner_account_id = payload
         .get("ownerAccountId")
         .and_then(|v| v.as_str())
         .context("missing ownerAccountId")?;
-
     let owner_email = payload
         .get("ownerEmail")
         .and_then(|v| v.as_str())
         .context("missing ownerEmail")?;
-
-    let environments: Vec<String> = payload
+    let environments = payload
         .get("environments")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -51,10 +81,23 @@ pub async fn handle(
                 .collect()
         })
         .unwrap_or_default();
+    Ok(EventFields {
+        task_token: task_token.to_string(),
+        domain_name: domain_name.to_string(),
+        owner_account_id: owner_account_id.to_string(),
+        owner_email: owner_email.to_string(),
+        environments,
+    })
+}
 
+async fn check_is_new_account(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    owner_account_id: &str,
+) -> Result<bool, Error> {
     let active_domains = ddb
         .query()
-        .table_name(&table)
+        .table_name(table)
         .index_name("by-owner")
         .key_condition_expression("ownerAccountId = :acct")
         .filter_expression("#s = :active")
@@ -64,33 +107,20 @@ pub async fn handle(
         .send()
         .await
         .context("failed to query by-owner GSI")?;
+    Ok(active_domains.count() == 0)
+}
 
-    let is_new_account = active_domains.count() == 0;
-
-    ddb.update_item()
-        .table_name(&table)
-        .key("domainName", s(domain_name))
-        .update_expression("SET taskToken = :token")
-        .condition_expression("attribute_exists(domainName)")
-        .expression_attribute_values(":token", s(task_token))
-        .send()
-        .await
-        .context("failed to persist taskToken to domain record")?;
-
-    let html_body = build_approval_email_body(
-        domain_name,
-        owner_account_id,
-        owner_email,
-        task_token,
-        is_new_account,
-        &environments,
-        &decide_endpoint_url,
-    );
-
+async fn send_approval_email(
+    ses: &aws_sdk_sesv2::Client,
+    from_email: &str,
+    to_email: &str,
+    domain_name: &str,
+    html_body: String,
+) -> Result<(), Error> {
     if let Err(e) = ses
         .send_email()
-        .from_email_address(&from_email)
-        .destination(Destination::builder().to_addresses(&to_email).build())
+        .from_email_address(from_email)
+        .destination(Destination::builder().to_addresses(to_email).build())
         .content(
             EmailContent::builder()
                 .simple(
@@ -119,6 +149,7 @@ pub async fn handle(
         .await
     {
         if e.as_service_error()
+            .and_then(ProvideErrorMetadata::code)
             .is_some_and(nexus_common::ses::is_permanent_failure)
         {
             tracing::error!(error = %e, "permanent SES failure, acknowledging without retry");
@@ -128,9 +159,7 @@ pub async fn handle(
             .context("failed to send approval email")
             .map_err(Into::into);
     }
-
     tracing::info!(domain_name, "approval notification sent");
-
     Ok(())
 }
 

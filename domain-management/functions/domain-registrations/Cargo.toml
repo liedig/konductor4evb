@@ -25,3 +25,6 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 aws-smithy-mocks = { workspace = true }
+
+[lints]
+workspace = true
