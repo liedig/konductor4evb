@@ -1,6 +1,6 @@
 name: Bug Report
 description: Report a bug
-labels: ["bug"]
+labels: ["type:bug", "status:needs-triage"]
 body:
   - type: textarea
     id: description
@@ -28,5 +28,39 @@ body:
     attributes:
       label: Actual behaviour
       description: What actually happened?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: >
+        Which part of the system is affected? Selecting a value here records it
+        in the issue body for triage — GitHub Issue Forms does not auto-apply
+        area labels, so a maintainer will add the matching area:* label during triage.
+      options:
+        - area:domain-mgmt
+        - area:event-streams
+        - area:notifications
+        - area:trust
+        - area:infra
+        - area:ci
+        - area:deps
+        - area:docs
+    validations:
+      required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: >
+        How urgent is this? Selecting a value here records it in the issue body
+        for triage — GitHub Issue Forms does not auto-apply priority labels,
+        so a maintainer will add the matching P0-P3 label during triage.
+      options:
+        - P0
+        - P1
+        - P2
+        - P3
     validations:
       required: true
