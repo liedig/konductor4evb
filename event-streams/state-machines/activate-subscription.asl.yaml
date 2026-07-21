@@ -75,9 +75,6 @@ States:
                 RoleArn: "${SubscriptionDeliveryRoleArn}"
                 DeadLetterConfig:
                   Arn: "{% 'arn:aws:sqs:' & '${AWS::Region}' & ':' & '${AWS::AccountId}' & ':' & '${Organization}' & '-' & $states.input.environment & '-' & $states.input.producerDomain & '-subscription-dlq' %}"
-                RetryPolicy:
-                  MaximumRetryAttempts: 185
-                  MaximumEventAgeInSeconds: 86400
           Output: "{% $states.input %}"
           Next: CreateZeroEventsAlarm
           Catch:
