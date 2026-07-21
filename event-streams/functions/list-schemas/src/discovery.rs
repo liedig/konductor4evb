@@ -37,19 +37,20 @@ pub async fn active_domain(
     }))
 }
 
-/// Latest version of every schema in each environment's registry, merged and
-/// keyed by schema name. Skew across environments is visible in the result.
-pub async fn latest_versions_by_schema(
+/// All schemas with their latest version, organized per environment.
+/// Each environment maps to its registry name and a list of (schema_name, version) pairs.
+pub async fn schemas_by_environment(
     schemas: &aws_sdk_schemas::Client,
     organization: &str,
     domain_name: &str,
     environments: &[String],
-) -> Result<BTreeMap<String, BTreeMap<String, i64>>> {
-    let mut merged: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
+) -> Result<BTreeMap<String, Vec<(String, i64)>>> {
+    let mut per_env: BTreeMap<String, Vec<(String, i64)>> = BTreeMap::new();
 
     for env_name in environments {
         let registry = format!("{organization}-{env_name}-{domain_name}-schema-registry");
         let mut next_token: Option<String> = None;
+        let mut env_schemas: Vec<(String, i64)> = Vec::new();
         loop {
             let mut request = schemas.list_schemas().registry_name(&registry);
             if let Some(token) = &next_token {
@@ -73,10 +74,7 @@ pub async fn latest_versions_by_schema(
                     continue;
                 };
                 if let Some(version) = latest_version(schemas, &registry, &name).await? {
-                    merged
-                        .entry(name)
-                        .or_default()
-                        .insert(env_name.clone(), version);
+                    env_schemas.push((name, version));
                 }
             }
 
@@ -85,9 +83,11 @@ pub async fn latest_versions_by_schema(
                 break;
             }
         }
+        env_schemas.sort_by(|a, b| a.0.cmp(&b.0));
+        per_env.insert(env_name.clone(), env_schemas);
     }
 
-    Ok(merged)
+    Ok(per_env)
 }
 
 /// The latest version of a schema in one registry — DescribeSchema without a
@@ -120,13 +120,13 @@ pub async fn latest_version(
     }
 }
 
-pub fn schema_summary(schema_name: &str, latest_versions: &BTreeMap<String, i64>) -> Value {
+pub fn schema_entry(schema_name: &str, version: i64) -> Value {
     let (source, detail_type) = schema_name.split_once('@').unwrap_or((schema_name, ""));
     json!({
         "schemaName": schema_name,
         "source": source,
         "detailType": detail_type,
-        "latestVersions": latest_versions,
+        "version": version,
     })
 }
 
@@ -135,16 +135,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schema_summary_splits_identity() {
-        let mut versions = BTreeMap::new();
-        versions.insert("dev".to_string(), 5);
-        versions.insert("prod".to_string(), 3);
+    fn schema_entry_splits_identity() {
+        let entry = schema_entry("acme-orders@OrderNotification", 5);
 
-        let summary = schema_summary("acme-orders@OrderNotification", &versions);
-
-        assert_eq!(summary["source"], "acme-orders");
-        assert_eq!(summary["detailType"], "OrderNotification");
-        assert_eq!(summary["latestVersions"]["dev"], 5);
-        assert_eq!(summary["latestVersions"]["prod"], 3);
+        assert_eq!(entry["source"], "acme-orders");
+        assert_eq!(entry["detailType"], "OrderNotification");
+        assert_eq!(entry["version"], 5);
     }
 }

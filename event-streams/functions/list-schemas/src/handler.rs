@@ -47,22 +47,53 @@ pub async fn handle(
         }
     };
 
-    match discovery::latest_versions_by_schema(
-        schemas,
-        &organization,
-        &domain_name,
-        &domain.environments,
-    )
-    .await
+    let env_filter = api::query_param(&event.payload, "environment");
+
+    let environments: Vec<String> = match &env_filter {
+        Some(env) if domain.environments.contains(env) => vec![env.clone()],
+        Some(env) => {
+            return Ok(api::error_response(
+                404,
+                ApiError {
+                    code: "ResourceNotFoundException".to_string(),
+                    message: format!(
+                        "environment '{env}' is not provisioned for domain '{domain_name}'"
+                    ),
+                    request_id: None,
+                    reason: None,
+                    field_list: None,
+                },
+            ))
+        }
+        None => domain.environments.clone(),
+    };
+
+    match discovery::schemas_by_environment(schemas, &organization, &domain_name, &environments)
+        .await
     {
-        Ok(merged) => {
-            let items: Vec<Value> = merged
+        Ok(per_env) => {
+            let envs: Value = environments
                 .iter()
-                .map(|(name, versions)| discovery::schema_summary(name, versions))
+                .map(|env| {
+                    let registry = format!("{organization}-{env}-{domain_name}-schema-registry");
+                    let schemas: Vec<Value> = per_env
+                        .get(env)
+                        .map(|entries| {
+                            entries
+                                .iter()
+                                .map(|(name, version)| discovery::schema_entry(name, *version))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (
+                        env.clone(),
+                        json!({ "registry": registry, "schemas": schemas }),
+                    )
+                })
                 .collect();
             Ok(api::success_response(
                 200,
-                &json!({ "domain": domain_name, "items": items }),
+                &json!({ "domain": domain_name, "environments": envs }),
             ))
         }
         Err(e) => {

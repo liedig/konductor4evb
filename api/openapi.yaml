@@ -568,9 +568,10 @@ paths:
       operationId: ListSchemas
       summary: Discover event schemas offered by a producer domain
       description: >
-        Read-only schema discovery. Merges the producer's per-environment
-        registries keyed by schema name, reporting the latest version per
-        environment so consumers see version skew before subscribing.
+        Read-only schema discovery. Lists schemas from the producer's
+        per-environment registries. When no environment is specified, returns
+        all environments; when an environment is specified, returns only that
+        environment's registry and schemas.
       x-amazon-apigateway-auth:
         type: AWS_IAM
       parameters:
@@ -579,6 +580,12 @@ paths:
           required: true
           schema:
             type: string
+        - name: environment
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter to a single environment (e.g., dev, staging, prod).
       responses:
         "200":
           description: Schemas offered by the domain
@@ -697,10 +704,16 @@ components:
       properties:
         domainName:
           type: string
+        domainNamespace:
+          type: string
+          description: Environment-independent namespace identity (e.g. acme-billing).
         description:
           type: string
         ownerAccountId:
           type: string
+        ownerEmail:
+          type: string
+          format: email
         status:
           type: string
         environments:
@@ -811,7 +824,7 @@ components:
     ListDomainsResponse:
       type: object
       properties:
-        items:
+        domains:
           type: array
           items:
             $ref: "#/components/schemas/DomainSummary"
@@ -996,10 +1009,41 @@ components:
       properties:
         domain:
           type: string
-        items:
+        environments:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/EnvironmentSchemas"
+          example:
+            dev:
+              registry: acme-dev-sales-schema-registry
+              schemas:
+                - schemaName: acme-sales@InvoiceCreated
+                  source: acme-sales
+                  detailType: InvoiceCreated
+                  version: 1
+
+    EnvironmentSchemas:
+      type: object
+      properties:
+        registry:
+          type: string
+        schemas:
           type: array
           items:
-            $ref: "#/components/schemas/SchemaSummary"
+            $ref: "#/components/schemas/SchemaVersionEntry"
+
+    SchemaVersionEntry:
+      type: object
+      properties:
+        schemaName:
+          type: string
+          example: acme-orders@OrderNotification
+        source:
+          type: string
+        detailType:
+          type: string
+        version:
+          type: integer
 
     ErrorResponse:
       type: object

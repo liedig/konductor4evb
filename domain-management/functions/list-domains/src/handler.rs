@@ -20,6 +20,7 @@ pub async fn handle(
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
+    let org = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
 
     let owner_filter = api::query_param(&event.payload, "ownerAccountId");
     let status_filter = api::query_param(&event.payload, "status");
@@ -60,11 +61,15 @@ pub async fn handle(
                 .items
                 .iter()
                 .map(|item| {
+                    let domain_name = get_s(item, "domainName");
+                    let domain_namespace = domain_name.as_ref().map(|name| format!("{org}-{name}"));
                     let secondary_owner_emails = get_string_set(item, "secondaryOwnerEmails");
                     json!({
-                        "domainName": get_s(item, "domainName"),
+                        "domainName": domain_name,
+                        "domainNamespace": domain_namespace,
                         "description": get_s(item, "description"),
                         "ownerAccountId": get_s(item, "ownerAccountId"),
+                        "ownerEmail": get_s(item, "ownerEmail"),
                         "secondaryOwnerEmails": secondary_owner_emails,
                         "status": get_s(item, "status"),
                         "createdAt": get_s(item, "createdAt"),
@@ -77,7 +82,7 @@ pub async fn handle(
             Ok(api::success_response(
                 200,
                 &json!({
-                    "items": items,
+                    "domains": items,
                     "nextToken": pagination_token,
                 }),
             ))
