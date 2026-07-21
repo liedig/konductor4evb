@@ -1,0 +1,4 @@
+# CODEOWNERS — required by the main-ruleset branch protection rule
+# which enforces require_code_owner_review on PRs to main.
+
+*                          @sliedig
