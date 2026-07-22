@@ -534,10 +534,12 @@ The Nexus API uses IAM authentication. Ensure your AWS credentials have permissi
 
 ## Clean Up
 
-A `DELETE /domains` flow is not yet available. To remove a domain and its resources, contact your platform team. They will need to:
+A `DELETE /domains` API endpoint is not yet available. To remove a domain and its resources, a platform operator can use the teardown script, which drives the same deprovision-env workflow used by the provisioning saga's rollback path:
 
-1. Delete per-environment resources (event buses, schema registries, DLQs, dashboards, alarms) in both the platform and domain accounts.
-2. Delete the SSM parameter and remove the domain from the RAM resource share.
-3. Delete the domain record from the DynamoDB table.
+```bash
+make teardown-domain DOMAIN_NAME=<domainName>
+```
+
+This removes all per-environment resources (event buses, schema registries, DLQs, dashboards, alarms) in both the platform and domain accounts and deletes the domain's DynamoDB record. The SSM namespace parameter and RAM resource share association are not removed by the script and must be cleaned up manually if needed.
 
 If you need to re-register the same domain name after cleanup, ensure all stale resources are removed first to avoid `ResourceAlreadyExistsException` during provisioning.

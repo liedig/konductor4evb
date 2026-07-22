@@ -72,7 +72,7 @@ This stack creates SES email identities for approval and rejection notifications
 ```bash
 sam deploy \
   --config-file samconfig-notifications.toml \
-  --stack-name <org>-nexus-notifications \
+  --stack-name nexus-notifications \
   --parameter-overrides \
     NotificationSenderEmail=<sender@example.com> \
     PlatformOperatorEmail=<platform-team@example.com> \
@@ -111,7 +111,7 @@ Capture the email addresses for Phase 2:
 
 ```bash
 aws cloudformation describe-stacks \
-  --stack-name <org>-nexus-notifications \
+  --stack-name nexus-notifications \
   --query "Stacks[0].Outputs" \
   --region <region>
 ```
@@ -186,7 +186,7 @@ After deployment succeeds, capture the outputs needed for Phase 3:
 
 ```bash
 aws cloudformation describe-stacks \
-  --stack-name <org>-nexus \
+  --stack-name nexus-core \
   --query "Stacks[0].Outputs" \
   --region <region>
 ```
@@ -247,8 +247,7 @@ For detailed instructions including verification and troubleshooting, see
 ## Phase 4 — Smoke test
 
 Verify your installation by running the automated smoke test, which registers a
-test domain, approves it, verifies ACTIVE status and provisioned resources, then
-deletes the domain:
+test domain, approves it, and polls until it reaches ACTIVE status:
 
 ```bash
 make smoke AWS_REGION=<region> APP_ACCOUNT_ID=<domain-account-id> OWNER_EMAIL=<owner@example.com> SECONDARY_OWNER_EMAIL=<secondary@example.com>
@@ -264,15 +263,25 @@ The smoke test:
 
 1. Fetches the API endpoint from the core stack outputs
 2. Registers a domain named `smoke-test` via `awscurl` (IAM-signed request)
-3. Approves the domain via the API
-4. Polls until the domain reaches `ACTIVE` status (up to ~2.5 minutes)
-5. Verifies the describe-domain response:
-   - Shows the configured `environments` list on the domain record (e.g., `["dev","staging","prod"]`)
-   - `resourceArns` is a map keyed by environment, with one entry per configured env
-6. Verifies per-env platform-account resources (event bus, schema registry, DLQ) for each configured env
-7. Deletes the test domain and waits for `DELETED` status
+3. Waits for the approval workflow to publish the task token, then approves the domain via the API
+4. Polls until the domain reaches `ACTIVE` status (up to ~3.5 minutes)
 
-If all steps pass, your Nexus installation is working.
+If all steps pass, your Nexus installation is working. To verify provisioned
+resources, describe the domain and check the `resourceArns` map:
+
+```bash
+awscurl -X GET "${API_URL}/domains/smoke-test" --region <region> | jq .
+```
+
+The response should include an `environments` list (e.g., `["dev","staging","prod"]`)
+and a `resourceArns` map keyed by environment with event bus, schema registry,
+and DLQ ARNs for each.
+
+The smoke test does not delete the domain. To clean up afterward, run:
+
+```bash
+make teardown-domain DOMAIN_NAME=smoke-test
+```
 
 ### Manual smoke test
 
@@ -294,9 +303,6 @@ awscurl -X POST "${API_URL}/domains/registrations/decide" --region "${REGION}" \
 
 # Check status
 awscurl -X GET "${API_URL}/domains/<domainName>" --region "${REGION}"
-
-# Delete
-awscurl -X DELETE "${API_URL}/domains/<domainName>" --region "${REGION}"
 ```
 
 ---
@@ -390,7 +396,7 @@ The `DomainsTable` has `DeletionPolicy: Retain`. When you delete the core stack,
 
 ```bash
 aws dynamodb delete-table \
-  --table-name <org>-<env>-domains \
+  --table-name nexus-domains \
   --region <region>
 ```
 
@@ -408,17 +414,20 @@ Before deleting the stacks, remove all domains to clean up provisioned resources
 # List all domains
 awscurl -X GET "${API_URL}/domains" --region "${REGION}"
 
-# Delete each domain
-awscurl -X DELETE "${API_URL}/domains/<domainName>" --region "${REGION}"
+# Tear down each domain (drives the deprovision-env workflow per environment)
+make teardown-domain DOMAIN_NAME=<domainName>
 ```
 
-Wait for each domain to reach `DELETED` status. The cleanup workflow runs automatically.
+Repeat for each domain. The teardown script drives the same deprovisioning
+workflow used by the provisioning saga's rollback path, removing all per-env
+resources in both the platform and domain accounts before deleting the domain
+record.
 
 ### 2. Delete the core stack
 
 ```bash
 aws cloudformation delete-stack \
-  --stack-name <org>-nexus \
+  --stack-name nexus-core \
   --region <region>
 ```
 
@@ -428,7 +437,7 @@ Switch credentials to each domain account:
 
 ```bash
 aws cloudformation delete-stack \
-  --stack-name <org>-<env>-nexus-trust \
+  --stack-name nexus-trust \
   --region <region>
 ```
 
@@ -436,7 +445,7 @@ aws cloudformation delete-stack \
 
 ```bash
 aws cloudformation delete-stack \
-  --stack-name <org>-nexus-notifications \
+  --stack-name nexus-notifications \
   --region <region>
 ```
 
@@ -444,16 +453,16 @@ aws cloudformation delete-stack \
 
 The following resources are not automatically deleted when their stacks are removed:
 
-- **DynamoDB table**: `<org>-<env>-domains` (retained by `DeletionPolicy`)
-- **CloudWatch log groups**: Under `/aws/lambda/<org>-<env>-*` and `/aws/apigateway/<org>-<env>-*`
+- **DynamoDB table**: `nexus-domains` (retained by `DeletionPolicy`)
+- **CloudWatch log groups**: Under `/aws/lambda/nexus-*` and `/aws/apigateway/nexus-*`
 
 ```bash
 # Delete the retained DynamoDB table
-aws dynamodb delete-table --table-name <org>-<env>-domains --region <region>
+aws dynamodb delete-table --table-name nexus-domains --region <region>
 
 # List and delete log groups
 aws logs describe-log-groups \
-  --log-group-name-prefix "/aws/lambda/<org>-<env>" \
+  --log-group-name-prefix "/aws/lambda/nexus-" \
   --region <region> \
   --query "logGroups[*].logGroupName" --output text
 
