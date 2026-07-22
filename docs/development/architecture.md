@@ -91,7 +91,7 @@ graph TB
 
 Nexus follows an **account-per-domain** principle: one AWS account hosts one domain's application-side resources. The trust stack is deployed once per account, and the `{org}-{env}-{domain}-*` resource naming convention assumes no two domains share an account. This keeps blast radius bounded and trust-role IAM policies simple.
 
-Each domain has a **primary owner** (the account that hosts the resources) and optional **secondary owners** who act as co-managers and backup decision-makers. Secondary owners can approve changes and provide a fallback if the primary owner is unavailable.
+Each domain has a **primary owner** (the account that hosts the resources) and at least one required **secondary owner** who acts as co-manager and backup decision-maker. Secondary owners can approve changes and provide a fallback if the primary owner is unavailable.
 
 Domain names are **globally unique** and serve as the sole domain identifier throughout the system — there is no separate UUID. This follows DDD/EDA principles where the domain name IS the bounded context identifier. Uniqueness is enforced atomically by DynamoDB's partition key constraint.
 

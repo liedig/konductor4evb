@@ -1,196 +1,67 @@
 # EventBridge Nexus
 
-A serverless integration platform for managing AWS EventBridge infrastructure across accounts. It provides domain-level APIs that let teams publish and subscribe to events without manually creating EventBridge rules, IAM policies, or cross-account delivery infrastructure.
+A serverless platform for governing cross-account EventBridge at scale. Register domains, discover schemas, and subscribe to events without touching IAM policies, bus policies, or cross-account delivery infrastructure.
+
+[Installation guide](docs/installation.md) | [Architecture](docs/development/architecture.md) | [API contract](api/openapi.yaml)
 
 ## Why
 
-Cross-account EventBridge setups are complex. Each subscription typically requires coordinating event buses, rules, resource policies, IAM roles, and DLQs across multiple AWS accounts. EventBridge Nexus abstracts that away behind a REST API, reducing time-to-first-event from days to minutes and cutting the number of resources teams need to manage per subscription by roughly 60%.
+Cross-account EventBridge is powerful but operationally complex. Each subscription typically requires coordinating event buses, rules, resource policies, IAM roles, and DLQs across two AWS accounts. Nexus abstracts that so teams can focus on their events, not their infrastructure.
 
-## Key Concepts
+**Governed domains.** Every domain gets event buses, schema registries, DLQs, and CloudWatch monitoring, provisioned automatically across all environments with saga rollback on failure.
 
-- **Domain** -- A logical grouping of related events owned by a team. Each domain gets its own event buses, schema registry, DLQs, and CloudWatch monitoring, all provisioned automatically. Each domain has one primary owner and at least one secondary owner (backup contacts for when the primary owner is unavailable).
-- **Platform account** -- The central account where the Nexus runs. Domain event buses live here with policies restricting who can publish.
-- **Domain account** -- A team's AWS account. Each gets a trust stack that grants the Nexus cross-account access to create domain resources.
-- **Namespace convention** -- Platform resources follow the fixed `nexus-*` pattern (e.g., `nexus-bus`); the domain-account trust role is `{org}-nexus-trust-role`; domain resources follow a configurable `{org}-{env}-{domain}-*` pattern (e.g., `acme-prod-payments-event-bus`) and are provisioned per environment from the platform-configured `Environments` list.
+**Schema-first subscriptions.** Consumers subscribe to a schema contract, not a bus. Nexus pins the latest version per environment, materializes EventBridge rules, and wires cross-account delivery with DLQs and zero-events alarms.
 
-## Architecture
+**Built-in ownership and observability.** Each domain has a primary owner and required secondary owners. Approval workflows, lifecycle events, CloudWatch dashboards, and per-subscription alarms come standard.
+
+## How It Works
 
 ```text
-                           Platform Account
-                    ┌───────────────────────────────┐
-                    │  API Gateway (IAM + email-link) │
-                    │       │                         │
-                    │  Lambda Functions (Rust)        │
-                    │       │                         │
-                    │  DynamoDB     EventBridge       │
-                    │  (nexus-      (nexus-bus:       │
-                    │   domains)     lifecycle)       │
-                    │       │                         │
-                    │  Step Functions                 │
-                    │  ├─ approval (task token)       │
-                    │  ├─ provision-domain (outer)    │
-                    │  ├─ provision-env (per-env saga)│
-                    │  └─ deprovision-env (teardown)  │
-                    │       │                         │
-                    │  Per-env domain resources:      │
-                    │  ├─ Inbound event bus           │
-                    │  ├─ Schema registry             │
-                    │  ├─ Subscription DLQ            │
-                    │  └─ Dashboard + alarms          │
-                    └──────────┬──────────────────────┘
-                               │ STS AssumeRole
-                    ┌──────────▼──────────────────────┐
-                    │       Domain Account             │
-                    │  Trust role ({org}-nexus-trust-  │
-                    │    role, serves all envs)        │
-                    │  Per-env domain resources:       │
-                    │  ├─ Domain event bus             │
-                    │  └─ Integration DLQ              │
-                    └──────────────────────────────────┘
+  Platform Account                         Domain Account
+  ┌──────────────────────┐                 ┌──────────────────┐
+  │  API Gateway          │                │  Trust role       │
+  │  Lambda (Rust)        │── STS ────────▶│  ({org}-nexus-   │
+  │  DynamoDB             │   AssumeRole   │   trust-role)     │
+  │  Step Functions       │                │                   │
+  │  EventBridge bus      │                │  Domain bus       │
+  │  Per-domain resources │                │  Integration DLQ  │
+  └──────────────────────┘                 └──────────────────┘
 ```
 
-## Tech Stack
+Nexus runs in a dedicated platform account. Domain resources are provisioned into domain accounts via cross-account IAM roles. All control-plane state lives in the platform account; domain accounts only contain the resources their domains need.
 
-| Layer | Technology |
+## Core Capabilities
+
+* **Domain lifecycle.** Register a domain via API, get human approval via email or API, and Nexus provisions all resources across every configured environment with all-or-nothing saga rollback. See [Domain Management Guide](docs/domain-management.md).
+
+* **Schema discovery.** Browse a producer's schemas and see version skew across environments before subscribing. Schema registration stays out-of-band (via the AWS Schemas API) until a future schema-management capability lands.
+
+* **Cross-account subscriptions.** Subscribe a consumer domain to a producer's schema. Nexus creates EventBridge rules, wires delivery to the consumer's domain bus, and sets up DLQs and zero-events alarms. Per-environment enable/disable maps to native rule state. See [Domain Management Guide](docs/domain-management.md#event-subscriptions).
+
+* **Multi-environment reliability.** Every domain is provisioned across the platform-configured environment list (default: dev, staging, prod). Provisioning is all-or-nothing; deprovisioning is idempotent. See [Architecture](docs/development/architecture.md).
+
+## Get Started
+
+1. Deploy Nexus into your platform account — see the [Installation Guide](docs/installation.md)
+2. Onboard each domain account with a trust stack — see [Trust Stack Deployment](docs/trust-stack-deployment.md)
+3. Register and approve your first domain — see [Domain Management Guide](docs/domain-management.md)
+
+Default AWS quotas cap a fresh platform account at **3 domains**. See [Service Quotas](docs/service-quotas.md) before onboarding more.
+
+## Documentation
+
+| Audience | Start here |
 |---|---|
-| Language | Rust |
-| Compute | AWS Lambda (cargo-lambda, arm64) |
-| API | API Gateway REST + OpenAPI 3.0 |
-| Database | Amazon DynamoDB (table-per-entity) |
-| Workflows | AWS Step Functions (SDK integrations) |
-| Events | Amazon EventBridge |
-| IaC | AWS SAM |
+| Platform operators | [Installation Guide](docs/installation.md) |
+| Domain owners / producers | [Domain Management Guide](docs/domain-management.md) |
+| Contributors / maintainers | [Architecture](docs/development/architecture.md), [Testing Guide](docs/development/testing.md), [AGENTS.md](AGENTS.md) |
 
-## Project Structure
+## Current Scope
 
-```text
-.
-├── api/
-│   └── openapi.yaml                  # API contract
-├── domain-management/
-│   ├── functions/                    # Lambda handlers
-│   │   ├── domain-registrations/     # Async writes: register + update (SQS-triggered)
-│   │   ├── list-domains/             # GET /domains
-│   │   ├── describe-domain/          # GET /domains/{domainName}
-│   │   ├── decide-registration/      # POST/GET /domains/registrations/decide
-│   │   ├── send-approval-request-notification/    # Invoked by workflow (platform operator email)
-│   │   ├── send-approval-outcome-notification/    # EventBridge-triggered (domain owner)
-│   │   ├── send-rejection-outcome-notification/   # EventBridge-triggered (domain owner)
-│   │   └── send-provisioning-failed-notification/ # EventBridge-triggered (domain owner)
-│   └── state-machines/               # Step Functions ASL (YAML + JSONata)
-│       ├── approval.asl.yaml         # Human-in-the-loop registration approval
-│       ├── provision-domain.asl.yaml # Outer coordinator (fans out over envs)
-│       ├── provision-env.asl.yaml    # Per-env resource creation + inner saga
-│       └── deprovision-env.asl.yaml  # Idempotent per-env teardown
-├── event-streams/
-│   ├── functions/                    # Lambda handlers
-│   │   ├── subscriptions/            # Async writes: subscribe/PATCH/unsubscribe (SQS-triggered)
-│   │   ├── list-subscriptions/       # GET /subscriptions
-│   │   ├── describe-subscription/    # GET /subscriptions/{subscriptionId}
-│   │   ├── list-schemas/             # GET /schemas (discovery)
-│   │   └── describe-schema/          # GET /schemas/{schemaName}
-│   └── state-machines/
-│       ├── activate-subscription.asl.yaml  # Per-env rule creation, all-or-nothing + saga
-│       └── remove-subscription.asl.yaml    # Idempotent per-env rule removal
-├── lib/
-│   └── nexus-common/                 # Shared library
-│       └── src/
-│           ├── api.rs                # API Gateway helpers
-│           ├── dynamodb.rs           # DynamoDB helpers
-│           ├── error.rs              # Error types
-│           ├── html.rs               # HTML response helpers
-│           ├── models.rs             # Domain models
-│           └── namespace.rs          # Resource naming
-├── docs/
-│   ├── domain-management.md         # Domain owner guide
-│   ├── service-quotas.md             # Capacity planning / quota increases per domain count
-│   └── trust-stack-deployment.md     # Domain account onboarding guide
-├── nexus-core-stack.yaml             # SAM template (core platform)
-├── notifications-stack.yaml          # SES identities (optional)
-├── trust-stack.yaml                  # Domain account CloudFormation
-├── samconfig-core.toml               # SAM config for core stack
-├── samconfig-notifications.toml      # SAM config for notifications stack
-├── Makefile
-└── Cargo.toml                        # Workspace root
-```
+- **No Publish API.** Producers publish directly to their platform-side domain bus and must stamp the [canonical event envelope](docs/development/architecture.md#the-canonical-event-envelope). A Publish API is planned.
+- **Schema writes are out-of-band.** Domain owners register schemas via the AWS Schemas API. Schema management within Nexus is a future capability.
+- **No domain deletion API.** Domain teardown is handled by `make teardown-domain`, which drives the same deprovisioning workflow used by the provisioning saga's rollback path. A `DELETE /domains` flow is planned.
 
-## API
+## Technology
 
-All endpoints require IAM authentication **except** the `GET` email-link decide endpoint, which is unauthenticated — the Step Functions task token in the query string is the bearer credential.
-
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `POST` | `/domains` | IAM | Register a new domain (async via SQS) |
-| `GET` | `/domains` | IAM | List domains (filter by owner, status) |
-| `GET` | `/domains/{domainName}` | IAM | Describe a domain (includes per-env `resourceArns` map) |
-| `PUT` | `/domains/{domainName}` | IAM | Update domain metadata (async via SQS) |
-| `POST` | `/domains/registrations/decide` | IAM | Approve or reject a registration (JSON body with task token) |
-| `GET` | `/domains/registrations/decide?decision={approve\|reject}&token={taskToken}` | none | One-click approve/reject via email link (HTML confirmation page) |
-| `POST` | `/subscriptions` | IAM | Subscribe a consumer domain to a producer's event schema (async via SQS; pins latest version per env) |
-| `GET` | `/subscriptions` | IAM | List event streams (filter by consumer, producer, schema, version, status) |
-| `GET` | `/subscriptions/{subscriptionId}` | IAM | Describe a stream (per-env pinned versions, rule ARNs, enablement) |
-| `PATCH` | `/subscriptions/{subscriptionId}` | IAM | Enable/disable per environment (async via SQS) |
-| `DELETE` | `/subscriptions/{subscriptionId}` | IAM | Unsubscribe — removes platform-side rules; record retained 90 days (async via SQS) |
-| `GET` | `/schemas?domain={producer}` | IAM | Discover a producer's schemas (latest version per env) |
-| `GET` | `/schemas/{schemaName}?domain={producer}` | IAM | Describe a schema (per-env versions + content) |
-
-Full API contract: [`api/openapi.yaml`](api/openapi.yaml)
-
-## Domain Lifecycle
-
-```text
-RegisterDomain ──> PENDING_APPROVAL
-                        │
-        Approve ────────┼────── Reject
-           │                      │
-      PROVISIONING              REJECTED
-           │
- provision-domain workflow
- (fans out over environments,
-  saga rollback on any failure)
-        │        │
-     ACTIVE  PROVISIONING_FAILED
-```
-
-## Getting Started
-
-See [docs/installation.md](docs/installation.md) for the complete installation guide covering prerequisites, three-stack deployment, smoke test, troubleshooting, and uninstall.
-
-Planning to run more than a few domains? Default AWS quotas cap a fresh platform account at **3 domains** — see [docs/service-quotas.md](docs/service-quotas.md) for the quotas to raise at 20/50/100 domains.
-
-For domain owners, see [docs/domain-management.md](docs/domain-management.md) for the guide to registering, approving, and operating domains.
-
-## Workflows
-
-### Approval (`approval.asl.yaml`)
-
-Human-in-the-loop registration approval using the Step Functions task-token pattern. The workflow waits up to 7 days for approval via the authenticated POST API or the one-click GET email link. On approve it emits `DomainRegistrationApproved` (which triggers provisioning). On reject (or timeout) it emits `DomainRegistrationRejected`. If the approval request email itself cannot be delivered, the domain moves to `APPROVAL_NOTIFICATION_FAILED` (not `REJECTED` — no decision was made) and `DomainApprovalNotificationFailed` is emitted for operators.
-
-### Provisioning (three-workflow split)
-
-Triggered automatically by `DomainRegistrationApproved`. All-or-nothing across the platform-configured `Environments` list.
-
-- **`provision-domain.asl.yaml`** (outer coordinator) — sets domain status to `PROVISIONING`, creates the env-independent namespace SSM parameter and RAM share, then fans out across the domain's environments using a Map state running `provision-env.sync:2` per entry. On all-success: updates status to `ACTIVE` with a per-env `resourceArns` map and emits `DomainProvisioningSucceeded`. On any-env-failure: fans out `deprovision-env.sync:2` over the envs that had succeeded, updates status to `PROVISIONING_FAILED`, and emits `DomainProvisioningFailed` with `failedEnvironment`, `failedStep`, `errorCode`, `errorMessage`, and aggregated `compensationErrors`.
-- **`provision-env.asl.yaml`** (inner, per-env) — creates the platform-side domain bus, schema registry, subscription DLQ, dashboard, and alarms; assumes the trust role in the domain account to create the matching app-side domain bus and integration DLQ. The platform and app buses share the same name — they live in different accounts, so there's no collision — which simplifies the mental model. Inner saga rolls back any resources it created if a later step fails.
-- **`deprovision-env.asl.yaml`** (reusable teardown) — idempotent delete-everything-in-this-env workflow. Used for rollback today; the primitive for a future `DELETE /domains` flow.
-
-## Resource Topology Per Domain
-
-Domain resources are provisioned **once per environment** in the `Environments` list (default `dev,staging,prod`). Platform resources (bus, table, API, etc.) are singletons with the fixed `nexus-*` pattern — not listed here.
-
-| Resource | Account | Name Pattern |
-|---|---|---|
-| Domain event bus | Platform | `{org}-{env}-{domain}-event-bus` |
-| Schema registry | Platform | `{org}-{env}-{domain}-schema-registry` |
-| Subscription DLQ | Platform | `{org}-{env}-{domain}-subscription-dlq` |
-| CloudWatch dashboard | Platform | `{org}-{env}-{domain}-dashboard` |
-| Failed-invocations alarm | Platform | `{org}-{env}-{domain}-failed-invocations-alarm` |
-| DLQ-depth alarm | Platform | `{org}-{env}-{domain}-dlq-depth-alarm` |
-| Domain event bus | Domain | `{org}-{env}-{domain}-event-bus` |
-| Integration DLQ | Domain | `{org}-{env}-{domain}-integration-dlq` |
-
-Each active subscription additionally materializes one EventBridge rule per environment on the producer's platform bus (`{consumerDomain}-{detailType}`) plus a per-subscription zero-events alarm. The `nexus-event-streams` DynamoDB table is the authoritative registry of subscription topology.
-
-The platform-side and app-side domain buses intentionally share the same name — they're in different accounts, so there's no collision. Tip: to smoke-test end-to-end in a single AWS account (where platform = app), register each domain under a unique `domainName` per run so the test doesn't collide with its own previous attempt.
-
-A single trust role (`{org}-nexus-trust-role`) in each domain account serves all environments.
+Rust Lambda functions on ARM64 Amazon Linux 2023, AWS SAM infrastructure, DynamoDB, Step Functions with JSONata, and EventBridge.

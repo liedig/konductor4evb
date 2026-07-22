@@ -31,9 +31,9 @@ If you need full control over the deployment parameters, use `aws cloudformation
 ```bash
 aws cloudformation deploy \
   --template-file trust-stack.yaml \
-  --stack-name <org>-nexus-trust \
+  --stack-name nexus-trust \
   --parameter-overrides \
-    NexusRoleArn=arn:aws:iam::<platform-account-id>:role/<org>-nexus-function-role \
+    NexusRoleArn=arn:aws:iam::<platform-account-id>:role/nexus-function-role \
     ProvisioningWorkflowRoleArn=arn:aws:iam::<platform-account-id>:role/nexus-provisioning-workflow-role \
     Organization=<org> \
   --tags Application=nexus Component=trust \
@@ -93,7 +93,7 @@ Or update manually:
 ```bash
 aws cloudformation deploy \
   --template-file trust-stack.yaml \
-  --stack-name <org>-nexus-trust \
+  --stack-name nexus-trust \
   --parameter-overrides \
     NexusRoleArn=<new-role-arn> \
     ProvisioningWorkflowRoleArn=<new-workflow-role-arn> \
