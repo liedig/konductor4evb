@@ -50,7 +50,7 @@ help: ## Show this help message
 	@printf "    $(DIM)SUBSCRIPTION_STATUS$(RESET)         optional for: list-subscriptions (filter by status)\n\n"
 
 build: ## sam build (Rust cross-compilation for arm64, cached)
-	sam build --config-file samconfig-core.toml -c -p
+	sam build --config-file samconfig-core.toml -c
 
 test: ## cargo test --workspace
 	cargo test --workspace
