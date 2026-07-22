@@ -20,6 +20,9 @@ members = [
     "event-streams/functions/describe-schema",
 ]
 
+[workspace.package]
+license = "Apache-2.0"
+
 [workspace.dependencies]
 anyhow = "1"
 aws-config = "1"
