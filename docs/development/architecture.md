@@ -216,7 +216,7 @@ sequenceDiagram
 |---|---|---|---|
 | Human rejection | `RegistrationRejected` custom error | `REJECTED` | `DomainRegistrationRejected` |
 | 7-day timeout | `States.Timeout` | `REJECTED` (`decidedBy: system:timeout`) | `DomainRegistrationRejected` |
-| Notification delivery failure | residual `States.ALL` (e.g., SES identity unverified) | `APPROVAL_NOTIFICATION_FAILED` | `DomainApprovalNotificationFailed` (operator-facing; no owner email — email is the failed dependency) |
+| Notification delivery failure | residual `States.ALL` (e.g., SES identity unverified) | `APPROVAL_NOTIFICATION_FAILED` | `DomainApprovalNotificationFailed` (owner-facing "registration delayed" email + operator SNS; no technical detail) |
 
 The registration context is captured in a Pass state *before* the wait (Task `Assign` only applies on success, so capturing it on the wait state would leave failure paths without it). Every execution path ends with a terminal status write and exactly one lifecycle event.
 
@@ -680,7 +680,7 @@ evb-nexus/
 | API | REST via API Gateway with IAM authorization |
 | Database | DynamoDB (PAY_PER_REQUEST, single table) |
 | Workflows | Step Functions (YAML, JSONata, SDK integrations) |
-| Notifications | SES (approval and rejection emails, optional via notifications-stack.yaml) |
+| Notifications | SES for owner emails (approval, rejection, provisioning, registration outcomes); SNS topic for operator lifecycle alerts (optional via notifications-stack.yaml) |
 | Namespace sharing | SSM Advanced Parameters + RAM |
 | IaC | AWS SAM / CloudFormation |
 | Runtime | `provided.al2023` (ARM64, 256 MB) |

@@ -30,11 +30,11 @@ Parameters:
   NotificationSenderEmail:
     Type: String
     Default: ""
-    Description: Verified SES sender address used as the From on all Nexus notification emails. Leave empty to deploy without notification resources.
+    Description: Verified SES sender address used as the From on all Nexus notification emails. Both this and PlatformOperatorEmail must be non-empty to deploy notification resources.
   PlatformOperatorEmail:
     Type: String
     Default: ""
-    Description: Verified SES recipient that receives domain approval requests (the platform team inbox). Leave empty to deploy without notification resources.
+    Description: Verified SES recipient that receives domain approval requests and lifecycle event notifications (the platform team inbox). Both this and NotificationSenderEmail must be non-empty to deploy notification resources.
 
 Globals:
   Function:
@@ -54,7 +54,10 @@ Globals:
         DOMAIN_REGISTRATIONS_QUEUE_URL: !Ref DomainRegistrationsQueue
 
 Conditions:
-  NotificationsEnabled: !Not [!Equals [!Ref NotificationSenderEmail, ""]]
+  NotificationsEnabled:
+    Fn::And:
+      - !Not [!Equals [!Ref NotificationSenderEmail, ""]]
+      - !Not [!Equals [!Ref PlatformOperatorEmail, ""]]
 
 Resources:
   # ---- EventBridge ----
