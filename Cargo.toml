@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+license = "Apache-2.0"
 members = [
     "lib/nexus-common",
     "domain-management/functions/decide-registration",
