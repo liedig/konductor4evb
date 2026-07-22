@@ -36,9 +36,7 @@ pub async fn handle(
         .item
         .context("domain record not found")?;
 
-    let owner_email = item
-        .get("ownerEmail")
-        .and_then(|v| v.as_s().ok())
+    let recipients = nexus_common::ses::recipients_from_item(&item)
         .context("missing ownerEmail on domain record")?;
 
     let html_body = build_provisioning_failed_email_body(domain_name);
@@ -46,7 +44,11 @@ pub async fn handle(
     if let Err(e) = ses
         .send_email()
         .from_email_address(&from_email)
-        .destination(Destination::builder().to_addresses(owner_email).build())
+        .destination(
+            Destination::builder()
+                .set_to_addresses(Some(recipients))
+                .build(),
+        )
         .content(
             EmailContent::builder()
                 .simple(

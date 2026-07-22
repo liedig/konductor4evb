@@ -30,15 +30,7 @@ pub async fn handle(
     })?;
 
     if let Err(e) = validate_domain_name(&request.domain_name) {
-        emit_failed(
-            eb,
-            &cp_bus,
-            &request.domain_name,
-            &request.owner_account_id,
-            &request.owner_email,
-            &e.to_string(),
-        )
-        .await?;
+        emit_failed(eb, &cp_bus, request, &e.to_string()).await?;
         return Ok(());
     }
 
@@ -57,15 +49,7 @@ pub async fn handle(
                     }
                 } else {
                     let reason = format!("domain '{}' already exists", request.domain_name);
-                    emit_failed(
-                        eb,
-                        &cp_bus,
-                        &request.domain_name,
-                        &request.owner_account_id,
-                        &request.owner_email,
-                        &reason,
-                    )
-                    .await?;
+                    emit_failed(eb, &cp_bus, request, &reason).await?;
                     return Ok(());
                 }
             } else {
@@ -185,9 +169,7 @@ async fn emit_succeeded(
 async fn emit_failed(
     eb: &aws_sdk_eventbridge::Client,
     cp_bus: &str,
-    domain_name: &str,
-    owner_account_id: &str,
-    owner_email: &str,
+    request: &RegisterDomainRequest,
     reason: &str,
 ) -> Result<()> {
     let result = eb
@@ -199,9 +181,10 @@ async fn emit_failed(
                 .detail_type("RegisterDomainFailed")
                 .detail(
                     json!({
-                        "domainName": domain_name,
-                        "ownerAccountId": owner_account_id,
-                        "ownerEmail": owner_email,
+                        "domainName": request.domain_name,
+                        "ownerAccountId": request.owner_account_id,
+                        "ownerEmail": request.owner_email,
+                        "secondaryOwnerEmails": request.secondary_owner_emails,
                         "reason": reason,
                         "failedAt": chrono::Utc::now().to_rfc3339(),
                     })
@@ -479,9 +462,15 @@ mod tests {
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .match_requests(|req| {
-                    req.entries()
-                        .iter()
-                        .any(|entry| entry.detail_type() == Some("RegisterDomainFailed"))
+                    req.entries().iter().any(|entry| {
+                        entry.detail_type() == Some("RegisterDomainFailed")
+                            && entry.detail().is_some_and(|d| {
+                                serde_json::from_str::<Value>(d).is_ok_and(|v| {
+                                    v.get("secondaryOwnerEmails")
+                                        == Some(&json!(["backup@example.com"]))
+                                })
+                            })
+                    })
                 })
                 .then_output(|| PutEventsOutput::builder().build());
             let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);

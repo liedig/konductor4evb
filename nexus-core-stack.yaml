@@ -901,6 +901,78 @@ Resources:
               Action: [ses:SendEmail]
               Resource: "*"
 
+  SendProvisioningSucceededNotificationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Condition: NotificationsEnabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-send-provisioning-succeeded-notification"
+      RetentionInDays: 30
+
+  SendProvisioningSucceededNotificationFunction:
+    Type: AWS::Serverless::Function
+    Condition: NotificationsEnabled
+    DependsOn: SendProvisioningSucceededNotificationFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-send-provisioning-succeeded-notification"
+      CodeUri: ./domain-management/functions/send-provisioning-succeeded-notification
+      Handler: bootstrap
+      Environment:
+        Variables:
+          NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
+          DOMAINS_TABLE: !Ref DomainsTable
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: "*"
+
+  SendRegistrationDelayedNotificationFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Condition: NotificationsEnabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-send-registration-delayed-notification"
+      RetentionInDays: 30
+
+  SendRegistrationDelayedNotificationFunction:
+    Type: AWS::Serverless::Function
+    Condition: NotificationsEnabled
+    DependsOn: SendRegistrationDelayedNotificationFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-send-registration-delayed-notification"
+      CodeUri: ./domain-management/functions/send-registration-delayed-notification
+      Handler: bootstrap
+      Environment:
+        Variables:
+          NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
+          DOMAINS_TABLE: !Ref DomainsTable
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: "*"
+
   # ---- EventBridge Rules ----
   DomainRegistrationApprovedNotificationRule:
     Type: AWS::Events::Rule
@@ -1005,6 +1077,120 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt DomainRegistrationFailedRule.Arn
+
+  DomainProvisioningSucceededRule:
+    Type: AWS::Events::Rule
+    Condition: NotificationsEnabled
+    Properties:
+      Name: !Sub "nexus-domain-provisioning-succeeded"
+      EventBusName: !Ref NexusEventBus
+      EventPattern:
+        detail-type:
+          - DomainProvisioningSucceeded
+        source:
+          - nexus.domain-management
+      Targets:
+        - Id: SendProvisioningSucceededNotificationTarget
+          Arn: !GetAtt SendProvisioningSucceededNotificationFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
+
+  DomainProvisioningSucceededRulePermission:
+    Type: AWS::Lambda::Permission
+    Condition: NotificationsEnabled
+    Properties:
+      FunctionName: !Ref SendProvisioningSucceededNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DomainProvisioningSucceededRule.Arn
+
+  DomainApprovalNotificationFailedRule:
+    Type: AWS::Events::Rule
+    Condition: NotificationsEnabled
+    Properties:
+      Name: !Sub "nexus-domain-approval-notification-failed"
+      EventBusName: !Ref NexusEventBus
+      EventPattern:
+        detail-type:
+          - DomainApprovalNotificationFailed
+        source:
+          - nexus.domain-management
+      Targets:
+        - Id: SendRegistrationDelayedNotificationTarget
+          Arn: !GetAtt SendRegistrationDelayedNotificationFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
+
+  DomainApprovalNotificationFailedRulePermission:
+    Type: AWS::Lambda::Permission
+    Condition: NotificationsEnabled
+    Properties:
+      FunctionName: !Ref SendRegistrationDelayedNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DomainApprovalNotificationFailedRule.Arn
+
+  # ---- Platform Operator Notifications (SNS) ----
+  PlatformNotificationsTopic:
+    Type: AWS::SNS::Topic
+    Condition: NotificationsEnabled
+    Properties:
+      TopicName: !Sub "nexus-platform-notifications"
+      DisplayName: Nexus Platform
+
+  PlatformNotificationsTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Condition: NotificationsEnabled
+    Properties:
+      Topics:
+        - !Ref PlatformNotificationsTopic
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref PlatformNotificationsTopic
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt PlatformOperatorNotificationRule.Arn
+
+  # SNS email subscriptions require a one-time confirmation click by the
+  # recipient before messages are delivered.
+  PlatformOperatorSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: NotificationsEnabled
+    Properties:
+      TopicArn: !Ref PlatformNotificationsTopic
+      Protocol: email
+      Endpoint: !Ref PlatformOperatorEmail
+
+  # Forwards every lifecycle event on the nexus bus to operators. The
+  # transformer references only envelope fields guaranteed present on all
+  # events; a per-detail-type path would fail delivery for events lacking it.
+  PlatformOperatorNotificationRule:
+    Type: AWS::Events::Rule
+    Condition: NotificationsEnabled
+    Properties:
+      Name: !Sub "nexus-platform-operator-notifications"
+      EventBusName: !Ref NexusEventBus
+      EventPattern:
+        source:
+          - prefix: "nexus."
+      Targets:
+        - Id: PlatformNotificationsTopicTarget
+          Arn: !Ref PlatformNotificationsTopic
+          DeadLetterConfig:
+            Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
+          InputTransformer:
+            InputPathsMap:
+              detailType: $.detail-type
+              source: $.source
+              time: $.time
+              detail: $.detail
+            InputTemplate: |
+              {"event": <detailType>, "source": <source>, "time": <time>, "detail": <detail>}
 
   # ---- Step Functions ----
   ApprovalWorkflowRole:
