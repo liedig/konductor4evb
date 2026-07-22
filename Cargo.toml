@@ -1,6 +1,5 @@
 [workspace]
 resolver = "2"
-license = "Apache-2.0"
 members = [
     "lib/nexus-common",
     "domain-management/functions/decide-registration",
@@ -18,6 +17,9 @@ members = [
     "event-streams/functions/list-schemas",
     "event-streams/functions/describe-schema",
 ]
+
+[workspace.package]
+license = "Apache-2.0"
 
 [workspace.dependencies]
 anyhow = "1"
