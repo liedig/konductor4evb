@@ -35,12 +35,12 @@
 - [x] 6.1 Complete and retain the audit reconstruction and local-testability exercises for the DynamoDB design
 - [x] 6.2 Complete and retain the policy administration and operational complexity exercises, including concurrent changes, quotas, failures, backup/recovery, alarms, and operator steps
 - [x] 6.3 Complete and retain the AWS account principal, Cognito integration, and hierarchy/inheritance exercises for the DynamoDB design
-- [ ] 6.4 Have two reviewers independently verify qualitative evidence against the frozen readiness rubric, record disagreements and resolutions, and link every conclusion to raw evidence
+- [x] 6.4 Have two reviewers independently verify qualitative evidence against the frozen readiness rubric, record disagreements and resolutions, and link every conclusion to raw evidence
 
 ## 7. Confirm Readiness and Close the Spike
 
 - [x] 7.1 Apply mandatory correctness and non-disclosure behavior plus the frozen readiness rubric and publish a readiness decision for DynamoDB-backed grants
 - [x] 7.2 Document AVP as the rejected alternative, DynamoDB evidence, recommended production SLOs, assumptions, trade-offs, residual risks, conditional remediation if needed, and reevaluation triggers
-- [ ] 7.3 Obtain independent review confirming scenario coverage, evidence traceability, unchanged readiness rubric, and satisfaction of every specification requirement
+- [x] 7.3 Obtain independent review confirming scenario coverage, evidence traceability, unchanged readiness rubric, and satisfaction of every specification requirement
 - [x] 7.4 Destroy all tagged sandbox resources, verify cleanup, and retain sanitized evidence and the final decision under this change
 - [x] 7.5 Update `docs/development/decisions.md` with the spike recommendation and open a separate OpenSpec change for any production authorization implementation

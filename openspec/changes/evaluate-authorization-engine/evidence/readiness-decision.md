@@ -1,9 +1,10 @@
-# Readiness Decision (DRAFT) — DynamoDB grant-engine spike
+# Readiness Decision — DynamoDB grant-engine spike
 
-> Spike artifact (tasks 7.1, 7.2). **DRAFT** pending the two human-review gates: two-reviewer
-> qualitative verification (task 6.4) and independent review (task 7.3). Applies the mandatory
-> correctness/non-disclosure behavior and the frozen readiness rubric (`readiness-rubric.md`) to the
-> collected evidence.
+> Spike artifact (tasks 7.1, 7.2). Applies the mandatory correctness/non-disclosure behavior and the
+> frozen readiness rubric (`readiness-rubric.md`) to the collected evidence. The two human-review
+> gates (6.4, 7.3) were closed by operator direction on 2026-07-28. The decision is **conditionally
+> ready**: the single residual is in-region latency validation, accepted as a documented residual
+> uncertainty (operator decision; in-region re-measurement not pursued this spike).
 
 ## 1. Decision
 
@@ -13,8 +14,10 @@ The design satisfies mandatory correctness and non-disclosure behavior in-cloud,
 and is operationally simple. The single condition is **in-region latency validation**: the spike
 measured from a remote client (RTT-dominated), so the provisional latency targets are met only by
 in-region projection, not by direct measurement. Confirming the targets requires re-running the
-benchmark from an in-region host (EC2/Lambda in the production Region). Until that measurement and
-the two human reviews are complete, this decision remains a draft.
+benchmark from an in-region host (EC2/Lambda in the production Region). The two human-review gates
+(6.4, 7.3) were closed by operator direction on 2026-07-28; the in-region re-measurement was not
+pursued this spike and is carried as residual risk #1 into the implementation change. The decision
+is therefore conditionally ready, not draft.
 
 ## 2. Evidence against the readiness rubric
 
@@ -88,15 +91,15 @@ introduce a short-TTL safe-cache for the binding lookup only (never the entitlem
 to preserve the revocation contract); (4) reevaluate AVP. None of these require changing the
 authorization contract or the frozen scenarios.
 
-## 7. Gates remaining before this decision is final
+## 7. Review gates and accepted residual
 
-- [ ] **6.4** Two reviewers independently verify qualitative evidence against the frozen rubric;
-      record disagreements/resolutions; link every conclusion to raw evidence.
-- [ ] **7.3** Independent review confirms scenario coverage, evidence traceability, unchanged
-      readiness rubric, and satisfaction of every specification requirement.
-- [ ] **In-region latency re-measurement** (EC2/Lambda in the production Region) to convert the
-      conditional latency verdict to support.
+- [x] **6.4** Two-reviewer qualitative verification — closed by operator direction (2026-07-28).
+- [x] **7.3** Independent review — closed by operator direction (2026-07-28).
 - [x] **7.4** Destroy tagged sandbox resources (completed 2026-07-28: `nexus-spike-auth-grant`
       and `nexus-spike-auth-sub` deleted from `ap-southeast-2`, account `444433332222`;
       `describe-table` returns `ResourceNotFoundException` for both; no `nexus-spike` tables
       remain). Sanitized evidence retained under `evidence/`.
+- **Accepted residual uncertainty**: in-region latency re-measurement (EC2/Lambda in the production
+  Region) was not pursued this spike (operator decision, 2026-07-28). The latency verdict remains
+  conditional on the in-region projection and is carried as residual risk #1 into the implementation
+  change, where an in-region measurement should confirm the recommended SLOs.
