@@ -18,7 +18,7 @@ The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /doma
 
 ### Requirement: Publisher resource authorization
 
-Before accessing domain or schema metadata or publishing, Nexus SHALL submit the normalized principal, publisher action, and target domain to the selected authorization engine. A `publisher` resource-role binding MAY bind an issuer-qualified Cognito team group or AWS-account principal to a domain, and a principal MAY have bindings for one or more domains. The `publisher` role SHALL NOT be interpreted as a global Cognito role, and a binding for one domain SHALL NOT authorize another domain.
+Before accessing domain or schema metadata or publishing, Nexus SHALL submit the normalized principal, publisher action, and target domain to the DynamoDB-backed grant engine. A `publisher` resource-role binding MAY bind an issuer-qualified Cognito team group or AWS-account principal to a domain, and a principal MAY have bindings for one or more domains. The `publisher` role SHALL NOT be interpreted as a global Cognito role, and a binding for one domain SHALL NOT authorize another domain.
 
 #### Scenario: Team group binding authorizes its domain
 

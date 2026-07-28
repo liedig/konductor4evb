@@ -2,7 +2,7 @@
 
 - [ ] 1.1 Add a versioned `TrustedPrincipal` model whose OAuth variant carries subject, controlled global roles, and trusted team-group identifiers and whose IAM variant uses the AWS account as `principalId` with optional principal ARN audit provenance
 - [ ] 1.2 Add serialization and validation tests proving malformed or mixed-mechanism principal contexts fail closed, OAuth team groups survive round trips, and IAM principal ARN cannot alter account-level authorization identity
-- [ ] 1.3 Define the downstream resource-authorization interface that accepts `TrustedPrincipal` without selecting an authorization-engine implementation
+- [ ] 1.3 Define the downstream resource-authorization interface that accepts `TrustedPrincipal` without implementing the DynamoDB grant engine
 - [ ] 1.4 Keep OAuth resource mutations disabled or fail closed until the authorization-engine change supplies the resource-policy evaluator
 
 ## 2. Cognito Identity Infrastructure

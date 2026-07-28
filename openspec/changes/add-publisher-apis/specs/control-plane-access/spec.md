@@ -21,7 +21,7 @@ Nexus SHALL expose separate REST API surfaces for OAuth-authenticated interactiv
 
 - **WHEN** equivalent OAuth and IAM principals invoke the same publisher operation for the same domain
 - **THEN** both surfaces SHALL normalize their authenticated principal
-- **AND THEN** both SHALL request the same action and domain resource decision from the selected authorization engine
+- **AND THEN** both SHALL request the same action and domain resource decision from the DynamoDB-backed grant engine
 
 #### Scenario: AWS-native data-plane integration operates
 
@@ -82,12 +82,12 @@ The OAuth platform-administration surface SHALL provide platform-admin operation
 
 ### Requirement: Production publisher binding persistence
 
-Publisher bindings SHALL be durably persisted through the production adapter for the authorization engine selected by `evaluate-authorization-engine`. Each binding SHALL retain a stable binding identifier, role, domain resource, typed principal, creation time, and trusted platform-admin actor. Successful create and revoke responses SHALL mean the mutation is persisted, auditable, and reflected by subsequent current-state authorization decisions. Binding evaluation SHALL be additive and default-deny.
+Publisher bindings SHALL be durably persisted through the production adapter for the DynamoDB-backed grant engine validated by `evaluate-authorization-engine`. Each binding SHALL retain a stable binding identifier, role, domain resource, typed principal, creation time, and trusted platform-admin actor. Successful create and revoke responses SHALL mean the mutation is persisted, auditable, and reflected by subsequent current-state authorization decisions. Binding evaluation SHALL be additive and default-deny.
 
 #### Scenario: Binding survives service restart
 
 - **WHEN** a publisher binding has been created successfully and a Nexus service restarts
-- **THEN** the selected authorization engine SHALL continue to return the binding's publisher allow decision
+- **THEN** the DynamoDB-backed grant engine SHALL continue to return the binding's publisher allow decision
 
 #### Scenario: Binding revocation removes final access
 
@@ -98,7 +98,7 @@ Publisher bindings SHALL be durably persisted through the production adapter for
 #### Scenario: Overlapping binding preserves access
 
 - **WHEN** a principal remains covered by another applicable publisher binding for the same domain after one binding is revoked
-- **THEN** the selected authorization engine SHALL continue to allow publisher actions for that domain
+- **THEN** the DynamoDB-backed grant engine SHALL continue to allow publisher actions for that domain
 
 #### Scenario: Binding mutation is audited
 
@@ -106,9 +106,9 @@ Publisher bindings SHALL be durably persisted through the production adapter for
 - **THEN** Nexus SHALL retain an audit record identifying the binding, action, domain, typed principal, trusted actor, request identifier, timestamp, and outcome
 - **AND THEN** the record SHALL NOT contain bearer tokens or sensitive token claims
 
-### Requirement: Engine-neutral publisher decisions
+### Requirement: Storage-neutral publisher decisions
 
-Publisher schema and event handlers SHALL submit the normalized principal, closed publisher action, and target domain resource to one production authorization interface backed by the selected engine. Cognito team-group bindings SHALL match only trusted issuer-qualified group membership, and AWS-account bindings SHALL match only the trusted account in an IAM principal. The engine SHALL return default denial when no applicable binding exists or when principal context is missing, malformed, or untrusted.
+Publisher schema and event handlers SHALL submit the normalized principal, closed publisher action, and target domain resource to one production authorization interface backed by the DynamoDB grant engine. Cognito team-group bindings SHALL match only trusted issuer-qualified group membership, and AWS-account bindings SHALL match only the trusted account in an IAM principal. The engine SHALL return default denial when no applicable binding exists or when principal context is missing, malformed, or untrusted.
 
 #### Scenario: OAuth group and IAM account parity
 
@@ -123,6 +123,6 @@ Publisher schema and event handlers SHALL submit the normalized principal, close
 
 #### Scenario: Authorization failure denies by default
 
-- **WHEN** the selected authorization engine is unavailable or returns an invalid response
+- **WHEN** the DynamoDB-backed grant engine is unavailable or returns an invalid response
 - **THEN** the publisher operation SHALL be denied
 - **AND THEN** Nexus SHALL perform no target-domain lookup or publisher side effect

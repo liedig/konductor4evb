@@ -2,7 +2,7 @@
 
 ### Requirement: Publisher schema creation API
 
-The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /domains/{domain}/environments/{environment}/schemas` for creating an event schema in the selected domain registry where interactive and automation compatibility is required. Both surfaces SHALL normalize their authenticated principal and require the selected authorization engine to allow the publisher action for that domain through an applicable Cognito team-group or AWS-account binding. The request SHALL identify the event by event name and provide the schema document; Nexus SHALL derive the canonical schema name `{source}@{eventName}` and registry from the active domain and selected environment. Both route contracts SHALL reject a duplicate schema rather than replacing it.
+The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /domains/{domain}/environments/{environment}/schemas` for creating an event schema in the selected domain registry where interactive and automation compatibility is required. Both surfaces SHALL normalize their authenticated principal and require the DynamoDB-backed grant engine to allow the publisher action for that domain through an applicable Cognito team-group or AWS-account binding. The request SHALL identify the event by event name and provide the schema document; Nexus SHALL derive the canonical schema name `{source}@{eventName}` and registry from the active domain and selected environment. Both route contracts SHALL reject a duplicate schema rather than replacing it.
 
 #### Scenario: Authorized publisher creates a schema
 
@@ -30,7 +30,7 @@ The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /doma
 
 ### Requirement: Append-only schema version API
 
-The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /domains/{domain}/environments/{environment}/schemas/{eventName}/versions` for appending a schema version in the selected domain registry where interactive and automation compatibility is required. Both surfaces SHALL normalize their authenticated principal and require the selected authorization engine to allow the publisher action for that domain. Nexus SHALL derive the canonical schema name and SHALL use the Schemas API version operation so existing versions remain immutable. Publisher APIs SHALL NOT expose schema deletion, retirement, version deletion, or historical-version replacement.
+The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /domains/{domain}/environments/{environment}/schemas/{eventName}/versions` for appending a schema version in the selected domain registry where interactive and automation compatibility is required. Both surfaces SHALL normalize their authenticated principal and require the DynamoDB-backed grant engine to allow the publisher action for that domain. Nexus SHALL derive the canonical schema name and SHALL use the Schemas API version operation so existing versions remain immutable. Publisher APIs SHALL NOT expose schema deletion, retirement, version deletion, or historical-version replacement.
 
 #### Scenario: Authorized publisher appends a version
 

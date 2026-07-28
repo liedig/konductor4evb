@@ -2,7 +2,7 @@
 
 The current control-plane API is an API Gateway REST API whose routes are primarily protected by `AWS_IAM`. Several write routes use direct API Gateway-to-SQS service integrations, so inserting an authentication proxy Lambda would weaken the established durable-acceptance path. Approval currently treats a Step Functions task token and caller-supplied decider field as part of the public interaction, which does not establish who is making the decision.
 
-Nexus needs an interactive OAuth/OIDC identity path while retaining AWS account identity for automation. Resource-level policy evaluation is being decided by the separate authorization-engine spike. This change therefore establishes identity validation, coarse global roles, trusted Cognito team-group propagation, account-granular IAM identity, and authorization boundaries without selecting or implementing the final resource policy engine.
+Nexus needs an interactive OAuth/OIDC identity path while retaining AWS account identity for automation. Resource-level policy evaluation uses the DynamoDB-backed grant engine validated by the separate authorization-engine spike. This change therefore establishes identity validation, coarse global roles, trusted Cognito team-group propagation, account-granular IAM identity, and authorization boundaries without implementing the resource policy engine.
 
 ## Goals / Non-Goals
 
@@ -22,7 +22,7 @@ Nexus needs an interactive OAuth/OIDC identity path while retaining AWS account 
 - Publisher API design, subscriber entitlements/catalog design, resource bindings, or schema promotion.
 - Resource-body authorization in the authorizer or materializing all entitlements in authorizer context.
 - Replacing IAM for AWS-native publishing, cross-account provisioning, or EventBridge delivery.
-- Selecting the final resource-policy engine decided by `evaluate-authorization-engine`.
+- Implementing the DynamoDB resource-policy engine validated by `evaluate-authorization-engine`.
 
 ## Decisions
 
@@ -114,7 +114,7 @@ The Step Functions task token remains necessary for `SendTaskSuccess` or `SendTa
 1. Provision the Cognito user pool, OAuth client/configuration, controlled groups, and authorizer without changing IAM routes.
 2. Add the OAuth REST API and trusted-principal model; validate token, global-role, team-group, account-identity, and context behavior.
 3. Add subject/global-role/team-group propagation to proxy integrations and direct SQS mapping templates while preserving existing queue integrations and response semantics; keep IAM `principalId` account-granular.
-4. Add consumer-side authorization interfaces that accept `TrustedPrincipal`; integrate the policy evaluator chosen by the authorization-engine change before enabling protected OAuth resource mutations.
+4. Add consumer-side authorization interfaces that accept `TrustedPrincipal`; integrate the DynamoDB policy evaluator validated by the authorization-engine spike before enabling protected OAuth resource mutations.
 5. Move approval to the OAuth-only route, derive `decidedBy` from trusted context, and update notifications to require sign-in without exposing task tokens as bearer credentials.
 6. Remove the old approval authorization path and caller-asserted decider contract after verifying pending workflows can still be completed through the OAuth route.
 7. Retain IAM routes and AWS-native IAM/resource-policy behavior throughout the migration.
@@ -123,5 +123,5 @@ Rollback before step 6 can disable the OAuth routes while leaving IAM behavior i
 
 ## Open Questions
 
-- Which resource-policy engine and storage model will implement the downstream `TrustedPrincipal` authorization interface? This is resolved by `evaluate-authorization-engine` and does not change the identity contract defined here.
+- How will the DynamoDB grant engine and storage model implement the downstream `TrustedPrincipal` authorization interface? This is validated by `evaluate-authorization-engine` and does not change the identity contract defined here.
 - What customer-facing guidance and supported templates should be provided for external IdP mappings or Cognito pre-token customization? That guidance is deferred; the supported Nexus input remains standard Cognito identity plus trusted `cognito:groups`, with non-global values carried opaquely as team-group identifiers.

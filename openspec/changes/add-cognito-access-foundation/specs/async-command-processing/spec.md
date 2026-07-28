@@ -27,7 +27,7 @@ Every authenticated API surface that uses a direct API Gateway-to-SQS service in
 
 ### Requirement: Durable acceptance is not resource authorization
 
-A `202 Accepted` response from an SQS-backed route SHALL mean only that the structurally valid command and trusted principal context were durably accepted by the queue. API Gateway and the OAuth authorizer SHALL NOT perform request-body or resource-level authorization for the queued command. The queue consumer SHALL perform resource authorization before applying a state change, using the common authorization contract selected by the authorization-engine decision.
+A `202 Accepted` response from an SQS-backed route SHALL mean only that the structurally valid command and trusted principal context were durably accepted by the queue. API Gateway and the OAuth authorizer SHALL NOT perform request-body or resource-level authorization for the queued command. The queue consumer SHALL perform resource authorization before applying a state change, using the common DynamoDB-backed authorization contract validated by the authorization-engine spike.
 
 #### Scenario: Structurally valid but unauthorized command is accepted
 

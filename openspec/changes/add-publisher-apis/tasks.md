@@ -1,9 +1,9 @@
 ## 1. Production Publisher Authorization
 
-- [ ] 1.1 Consume the completed `evaluate-authorization-engine` recommendation and add the selected engine's production resources, configuration, and adapter behind an engine-neutral publisher decision and binding interface
+- [ ] 1.1 Consume the completed `evaluate-authorization-engine` readiness decision and add the DynamoDB grant engine's production resources, configuration, and adapter behind a storage-neutral publisher decision and binding interface
 - [ ] 1.2 Add typed publisher-binding models and validation for issuer-qualified Cognito team groups and twelve-digit AWS accounts, including stable identifiers, domain scope, trusted actor metadata, and rejection of global publisher bindings
 - [ ] 1.3 Add decision tests for trusted OAuth group membership, trusted IAM account identity, OAuth/IAM parity, principal-type isolation, cross-domain denial, additive overlapping bindings, malformed context, and fail-closed engine errors
-- [ ] 1.4 Implement durable publisher-binding persistence and current-state decisions through the selected engine, including required cache invalidation and service-restart behavior
+- [ ] 1.4 Implement durable publisher-binding persistence and current-state decisions through the DynamoDB grant engine, including required cache invalidation and service-restart behavior
 - [ ] 1.5 Add OAuth `platform-admin` handler tests and implementations for create, list, and revoke publisher bindings, including idempotency, non-admin denial, publisher self-administration denial, conflict handling, and token-free audit records
 
 ## 2. Dual-Surface API and Shared Contracts
@@ -33,14 +33,14 @@
 
 - [ ] 5.1 Register the production authorization adapter and new Lambda crates in the Rust workspace, then add SAM resources, configuration, API Gateway Lambda permissions, and synchronous integrations for both control-plane surfaces
 - [ ] 5.2 Grant publisher operation functions only their required domain-state, authorization-decision, Schemas, and EventBridge actions scoped to Nexus-managed resource patterns
-- [ ] 5.3 Grant binding-administration functions only selected-engine binding create/list/revoke and audit permissions, and enforce OAuth `platform-admin` route access
+- [ ] 5.3 Grant binding-administration functions only DynamoDB binding create/list/revoke and audit permissions, and enforce OAuth `platform-admin` route access
 - [ ] 5.4 Update provisioning and managed access policies so application teams cannot directly administer registries or perform generic schema mutation, while retaining platform-admin registry ownership
-- [ ] 5.5 Add infrastructure assertions for OAuth/IAM route parity, distinct authorizers, binding administration isolation, selected-engine persistence, Lambda integrations, publisher IAM allowlists, and absence of publisher registry/bus/policy/rule administration permissions
+- [ ] 5.5 Add infrastructure assertions for OAuth/IAM route parity, distinct authorizers, binding administration isolation, grant-engine persistence, Lambda integrations, publisher IAM allowlists, and absence of publisher registry/bus/policy/rule administration permissions
 
 ## 6. Verification and Documentation
 
 - [ ] 6.1 Run focused crate tests during each red/green/refactor cycle, then run `make check` and `make test` for the complete workspace
 - [ ] 6.2 Validate the SAM template and both control-plane API contracts, including binding administration, OAuth/IAM publisher parity, successful schema creation, append, publication, and all specified error responses
 - [ ] 6.3 Run production-adapter integration tests proving durable create/list/revoke, audit attribution, restart persistence, current-state revocation, overlapping binding behavior, default denial, and OAuth/IAM decision parity
-- [ ] 6.4 Update `docs/development/decisions.md` with the selected production authorization adapter, publisher binding model, dual-surface parity, dedicated synchronous publish Lambda, latest-visible-version semantics, envelope-only validation, and append-only schema rationale
+- [ ] 6.4 Update `docs/development/decisions.md` with the production DynamoDB authorization adapter, publisher binding model, dual-surface parity, dedicated synchronous publish Lambda, latest-visible-version semantics, envelope-only validation, and append-only schema rationale
 - [ ] 6.5 Update `docs/development/architecture.md` with publisher-binding administration and persistence, OAuth/IAM publisher routes, normalized principal decision flow, synchronous schema and publish paths, resource ownership boundaries, and deployed Lambda/IAM resources

@@ -1,6 +1,6 @@
 ## Context
 
-Subscriptions are currently authorized by matching the caller's AWS account to the consumer domain owner, and schema discovery is globally visible to authenticated callers. `add-cognito-access-foundation` introduces separate OAuth and IAM surfaces plus a common trusted-principal contract, `evaluate-authorization-engine` selects the persistence and policy implementation, and `add-publisher-apis` adds publisher domain bindings plus schema creation and append APIs. This design explicitly consumes all three prerequisites rather than reopening or replacing their decisions.
+Subscriptions are currently authorized by matching the caller's AWS account to the consumer domain owner, and schema discovery is globally visible to authenticated callers. `add-cognito-access-foundation` introduces separate OAuth and IAM surfaces plus a common trusted-principal contract, `evaluate-authorization-engine` validates the selected DynamoDB grant persistence and policy implementation, and `add-publisher-apis` adds publisher domain bindings plus schema creation and append APIs. This design explicitly consumes all three prerequisites rather than reopening or replacing their decisions.
 
 The change crosses the access-control, subscription, schema-management, API, and EventBridge materialization boundaries. Authorization must remain current after asynchronous API acceptance, overlapping grants must compose additively, and revocation must stop delivery without deleting the consumer domain's subscription contract.
 
@@ -21,7 +21,7 @@ The change crosses the access-control, subscription, schema-management, API, and
 - Schema registration, promotion, compatibility, or migration design.
 - Enterprise identity-provider group mapping.
 - Management of application-owned rules downstream of a consumer app-side bus.
-- Reconsidering the authorization engine selected by the prerequisite evaluation.
+- Reconsidering the DynamoDB authorization engine validated by the prerequisite spike.
 
 ## Decisions
 
@@ -35,7 +35,7 @@ This prevents a group rename, membership change, or grant replacement from chang
 
 Subscriber operations require both a current subscriber binding for at least one caller Cognito team group or the IAM caller's AWS account and a current grant owned by the consumer domain that covers the producer schema. Coverage is the union of exact-schema and producer-domain grants. Subscription disable and delete require the subscriber binding but deliberately do not require a current entitlement; enable and create require both. A global `platform-admin` may operate subscriptions without a subscriber binding, but create and enable still require the consumer domain to hold a current covering entitlement.
 
-The authorization adapter uses the engine selected by `evaluate-authorization-engine`. Both API surfaces normalize identity through the access-foundation `TrustedPrincipal` and invoke identical typed decisions rather than engine-specific policy or storage APIs. Global roles exist only for OAuth callers: `platform-admin` and `platform-auditor` may inspect all subscriptions, only `platform-admin` may administer bindings and entitlements, and `platform-auditor` remains read-only. IAM callers receive resource roles only through explicit AWS-account bindings.
+The authorization adapter uses the DynamoDB-backed grant engine validated by `evaluate-authorization-engine`. Both API surfaces normalize identity through the access-foundation `TrustedPrincipal` and invoke identical typed decisions rather than engine-specific policy or storage APIs. Global roles exist only for OAuth callers: `platform-admin` and `platform-auditor` may inspect all subscriptions, only `platform-admin` may administer bindings and entitlements, and `platform-auditor` remains read-only. IAM callers receive resource roles only through explicit AWS-account bindings.
 
 ### Place resource contracts on both access surfaces
 
@@ -101,7 +101,7 @@ Nexus continues to manage only one rule per environment from the producer's plat
 
 ## Migration Plan
 
-1. Deploy `add-cognito-access-foundation`, the selected authorization engine, and `add-publisher-apis`, including the publisher schema creation and append routes.
+1. Deploy `add-cognito-access-foundation`, the DynamoDB grant engine, and `add-publisher-apis`, including the publisher schema creation and append routes.
 2. Add Cognito-group and AWS-account role bindings, entitlement administration, common authorization adapters, audit records, and subscription query access paths without changing public routes.
 3. Have platform administrators create subscriber bindings and entitlements for consumer domains that must retain access.
 4. Deploy revocation processing and re-evaluate existing active subscriptions; disable those with no current covering grant and durably record partial failures for retry.
@@ -113,4 +113,4 @@ Rollback SHALL preserve role bindings, entitlements, and any subscriptions disab
 
 ## Open Questions
 
-None. Authorization-engine selection, OAuth/IAM access primitives, and publisher schema operations are prerequisite changes, not decisions owned by this change.
+None. Authorization-engine readiness, OAuth/IAM access primitives, and publisher schema operations are prerequisite changes, not decisions owned by this change.

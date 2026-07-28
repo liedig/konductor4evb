@@ -7,7 +7,7 @@ Application teams need a supported, domain-scoped path to register event contrac
 - Add domain- and environment-scoped APIs for publishers to create schemas and append immutable schema versions in registries managed by the platform.
 - Add a synchronous event publish API that accepts an event name and business data, resolves the latest schema version, constructs the canonical Nexus envelope, and publishes to the selected domain bus.
 - Expose publisher operations on the separate OAuth and IAM control-plane surfaces where caller compatibility requires them; normalize each authenticated caller and apply identical resource-authorization decisions.
-- Add production platform-admin APIs and persistence for Nexus `publisher` resource-role bindings from Cognito team-group and AWS-account principals to one or more domains through the selected authorization engine.
+- Add production platform-admin APIs and persistence for Nexus `publisher` resource-role bindings from Cognito team-group and AWS-account principals to one or more domains through the DynamoDB-backed grant engine.
 - Keep `publisher` resource-scoped rather than a global Cognito role, and keep registries, buses, policies, rules, subscriber grants, and authorization administration outside publisher control.
 - Keep schemas append-only: publishers cannot replace historical versions, delete schemas, or retire schemas.
 - Validate the generated event envelope but do not validate the business payload against its schema.
@@ -31,6 +31,6 @@ These changes add APIs without changing or removing existing API operations.
 
 - Adds matching authenticated route contracts to the separate OAuth and IAM control-plane surfaces for schema writes and synchronous event publishing, plus OAuth platform-admin binding administration.
 - Adds a dedicated synchronous publish Lambda with access to domain metadata, AWS Schemas, and domain EventBridge buses.
-- Adds production binding administration, persistence, decision evaluation, audit, and revocation integration through the authorization engine selected by the prerequisite evaluation.
+- Adds production binding administration, persistence, decision evaluation, audit, and revocation integration through the DynamoDB-backed grant engine validated by the prerequisite spike.
 - Extends schema-management handlers and IAM permissions for publisher-authorized writes while retaining platform ownership of registries.
-- Depends on the Cognito access foundation for separate surfaces and trusted principal context, and on the authorization-engine evaluation for its selected production engine; this change implements the publisher binding slice rather than assuming another change supplies it.
+- Depends on the Cognito access foundation for separate surfaces and trusted principal context, and on the authorization-engine spike for validated production readiness and SLOs; this change implements the publisher binding slice rather than assuming another change supplies it.

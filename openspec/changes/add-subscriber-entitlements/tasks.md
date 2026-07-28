@@ -7,7 +7,7 @@
 
 ## 2. Entitlement Administration and Persistence
 
-- [ ] 2.1 Add persistence access paths for bindings and entitlements by consumer domain, producer domain, exact schema, and revocation state using the selected authorization engine.
+- [ ] 2.1 Add persistence access paths for bindings and entitlements by consumer domain, producer domain, exact schema, and revocation state using the DynamoDB-backed grant engine.
 - [ ] 2.2 Implement platform-admin-only create and revoke operations plus platform-admin and platform-auditor read-only inspection for subscriber bindings and producer entitlements through the access foundation's administration surface.
 - [ ] 2.3 Record auditable actor, target, grant type, scope, and timestamp data for entitlement and binding changes without exposing protected details to unauthorized callers.
 - [ ] 2.4 Add integration tests proving OAuth platform administrators can manage authorization state, `platform-auditor` is read-only, IAM has no global-role bypass, and revoked grants are excluded from new decisions.
@@ -44,7 +44,7 @@
 
 ## 7. Infrastructure and Operations
 
-- [ ] 7.1 Provision authorization and revocation workflow resources, indexes, IAM permissions, retry behavior, and observability needed by the selected authorization engine and existing subscription stack.
+- [ ] 7.1 Provision authorization and revocation workflow resources, indexes, IAM permissions, retry behavior, and observability needed by the DynamoDB-backed grant engine and existing subscription stack.
 - [ ] 7.2 Add metrics, structured audit logs, and alarms for authorization denials, revocation progress, durable partial failures and retries, failed rule disablement, command outcomes, and catalog latency without logging schema content or sensitive claims.
 - [ ] 7.3 Add deployment migration support to seed required subscriber bindings and entitlements before re-evaluating existing active subscriptions, and verify rollback never bulk re-enables unauthorized rules.
 
