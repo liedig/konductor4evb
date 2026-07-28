@@ -38,11 +38,11 @@
     ]
   },
   "baselineGrantSeeds": [
-    {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "group": "payments-publishers"}, "role": "publisher", "domain": "payments-prod", "state": "active", "grantId": "rb-paypub-001"},
-    {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "group": "orders-publishers"}, "role": "publisher", "domain": "orders-prod", "state": "active", "grantId": "rb-ordpub-001"},
+    {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "payments-publishers"}, "role": "publisher", "domain": "payments-prod", "state": "active", "grantId": "rb-paypub-001"},
+    {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "orders-publishers"}, "role": "publisher", "domain": "orders-prod", "state": "active", "grantId": "rb-ordpub-001"},
     {"itemType": "RoleBinding", "principal": {"type": "aws-account", "accountId": "111122223333"}, "role": "publisher", "domain": "orders-prod", "state": "active", "grantId": "rb-ordpub-002"},
-    {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "group": "analytics-subscribers"}, "role": "subscriber", "domain": "analytics-cons", "state": "active", "grantId": "rb-anasub-001"},
-    {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "group": "risk-subscribers"}, "role": "subscriber", "domain": "risk-cons", "state": "active", "grantId": "rb-riksub-001"},
+    {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "analytics-subscribers"}, "role": "subscriber", "domain": "analytics-cons", "state": "active", "grantId": "rb-anasub-001"},
+    {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "risk-subscribers"}, "role": "subscriber", "domain": "risk-cons", "state": "active", "grantId": "rb-riksub-001"},
     {"itemType": "RoleBinding", "principal": {"type": "aws-account", "accountId": "444455556666"}, "role": "subscriber", "domain": "risk-cons", "state": "active", "grantId": "rb-riksub-002"},
     {"itemType": "Entitlement", "consumer": "analytics-cons", "producerDomain": "payments-prod", "scope": "producer-domain", "state": "active", "grantId": "ent-ana-pay-full-001"},
     {"itemType": "Entitlement", "consumer": "risk-cons", "producerDomain": "payments-prod", "schema": "payment-captured", "scope": "exact-schema", "state": "active", "grantId": "ent-rik-pay-cap-001"},
@@ -153,7 +153,7 @@
       "id": "S06-producer-domain-entitlement",
       "scenario": "Producer-domain entitlement",
       "specReference": "Common authorization scenario suite / Producer-domain entitlement",
-      "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "group": "analytics-subscribers"}},
+      "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "analytics-subscribers"}},
       "auditProvenance": {"type": "cognito-subject", "sub": "d4e5f6a7-b8c9-0123-defa-234567890123"},
       "steps": [
         {
@@ -182,7 +182,7 @@
       "id": "S07-exact-schema-entitlement",
       "scenario": "Exact-schema entitlement",
       "specReference": "Common authorization scenario suite / Exact-schema entitlement",
-      "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "group": "risk-subscribers"}},
+      "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "risk-subscribers"}},
       "auditProvenance": {"type": "cognito-subject", "sub": "e5f6a7b8-c9d0-1234-efab-345678901234"},
       "steps": [
         {
@@ -208,7 +208,7 @@
       "precondition": "payments-prod::payment-disputed is registered AFTER ent-ana-pay-full-001 (producer-domain) and ent-rik-pay-cap-001 (exact-schema) are granted. No entitlement mutation occurs when payment-disputed is registered.",
       "steps": [
         {
-          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "group": "analytics-subscribers"}},
+          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "analytics-subscribers"}},
           "action": "schema:discover",
           "resource": {"type": "schema", "producerDomain": "payments-prod", "schema": "payment-disputed"},
           "context": {"authMethod": "oauth", "actingAs": "analytics-cons", "commandId": "cmd-S08a"},
@@ -216,23 +216,22 @@
           "notes": "Domain-wide consumer gains the new schema without entitlement mutation."
         },
         {
-          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "group": "analytics-subscribers"}},
+          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "analytics-subscribers"}},
           "action": "schema:subscribe",
           "resource": {"type": "schema", "producerDomain": "payments-prod", "schema": "payment-disputed"},
           "context": {"authMethod": "oauth", "actingAs": "analytics-cons", "commandId": "cmd-S08b"},
           "expected": "allow"
         },
         {
-          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "group": "risk-subscribers"}},
+          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "risk-subscribers"}},
           "action": "schema:discover",
           "resource": {"type": "schema", "producerDomain": "payments-prod", "schema": "payment-disputed"},
           "context": {"authMethod": "oauth", "actingAs": "risk-cons", "commandId": "cmd-S08c"},
-          "expected": "deny",
-          "denyReason": "no-applicable-entitlement",
-          "notes": "Exact-schema consumer is denied the new schema until a covering entitlement is granted."
+          "expected": "deny-as-unknown",
+          "notes": "Exact-schema consumer is denied the new schema; unauthorized discover is indistinguishable from unknown per the non-disclosure contract."
         },
         {
-          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "group": "risk-subscribers"}},
+          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "risk-subscribers"}},
           "action": "schema:subscribe",
           "resource": {"type": "schema", "producerDomain": "payments-prod", "schema": "payment-disputed"},
           "context": {"authMethod": "oauth", "actingAs": "risk-cons", "commandId": "cmd-S08d"},
@@ -246,7 +245,7 @@
       "id": "S09-additive-grants-union-and-removal",
       "scenario": "Additive grants",
       "specReference": "Common authorization scenario suite / Additive grants",
-      "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "group": "analytics-subscribers"}},
+      "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "analytics-subscribers"}},
       "auditProvenance": {"type": "cognito-subject", "sub": "d4e5f6a7-b8c9-0123-defa-234567890123"},
       "action": "schema:subscribe",
       "resource": {"type": "schema", "producerDomain": "payments-prod", "schema": "payment-captured"},
@@ -280,7 +279,7 @@
         {
           "label": "Revoke sole grant for risk-cons subscription sub-002",
           "revoke": "ent-rik-pay-cap-001",
-          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "group": "risk-subscribers"}},
+          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "risk-subscribers"}},
           "action": "schema:subscribe",
           "resource": {"type": "schema", "producerDomain": "payments-prod", "schema": "payment-captured"},
           "context": {"authMethod": "oauth", "actingAs": "risk-cons", "commandId": "cmd-S10a"},
@@ -291,7 +290,7 @@
         {
           "label": "Revoke one of two overlapping grants for analytics-cons subscription sub-003",
           "revoke": "ent-ana-pay-cap-001",
-          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "group": "analytics-subscribers"}},
+          "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "analytics-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "analytics-subscribers"}},
           "action": "schema:subscribe",
           "resource": {"type": "schema", "producerDomain": "payments-prod", "schema": "payment-captured"},
           "context": {"authMethod": "oauth", "actingAs": "analytics-cons", "commandId": "cmd-S10b"},
@@ -353,7 +352,7 @@
       "id": "S12-unauthorized-non-disclosure",
       "scenario": "Unauthorized non-disclosure",
       "specReference": "Common authorization scenario suite / Unauthorized non-disclosure",
-      "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "group": "risk-subscribers"}},
+      "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "risk-subscribers"}},
       "auditProvenance": {"type": "cognito-subject", "sub": "e5f6a7b8-c9d0-1234-efab-345678901234"},
       "steps": [
         {
@@ -390,7 +389,7 @@
         {
           "label": "Cognito-group command denied after revocation before consume",
           "enqueue": {
-            "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "group": "risk-subscribers"}},
+            "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "risk-subscribers"}},
             "auditProvenance": {"type": "cognito-subject", "sub": "e5f6a7b8-c9d0-1234-efab-345678901234"},
             "action": "schema:subscribe",
             "resource": {"type": "schema", "producerDomain": "payments-prod", "schema": "payment-captured"},
@@ -419,7 +418,7 @@
         {
           "label": "Replay of already-handled command is denied",
           "enqueue": {
-            "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "group": "risk-subscribers"}},
+            "authorizationSubject": {"type": "consumer-domain", "consumerDomain": "risk-cons", "via": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "risk-subscribers"}},
             "auditProvenance": {"type": "cognito-subject", "sub": "e5f6a7b8-c9d0-1234-efab-345678901234"},
             "action": "schema:subscribe",
             "resource": {"type": "schema", "producerDomain": "payments-prod", "schema": "payment-captured"},

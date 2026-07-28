@@ -69,7 +69,7 @@ pub struct AwsAccountBinding {
     pub domain: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GrantSeed {
     pub item_type: String,
@@ -91,7 +91,7 @@ pub struct GrantSeed {
     pub grant_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SeedPrincipal {
     #[serde(rename = "type")]
@@ -102,7 +102,7 @@ pub struct SeedPrincipal {
     pub account_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionSeed {
     pub subscription_id: String,

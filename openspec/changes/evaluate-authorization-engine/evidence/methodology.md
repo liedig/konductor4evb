@@ -9,7 +9,7 @@
 | Manifest | `evidence/fixture-manifest.json` |
 | Manifest version | 1.0 |
 | Frozen at | 2026-07-28 |
-| SHA-256 | `0e291f1b67f6c4b4043c0d1ac7a6f8f9e7b0586705e186da00a9c475f0d4b24f` |
+| SHA-256 | `ec4efb25c034159aafb041bc50061961dc0140c10380ab794ce9067547b441b0` |
 
 The manifest is frozen before any result is collected. Any change to fixtures invalidates the hash and requires re-freezing with a new version. The readiness review (task 6.4, 7.3) confirms the hash is unchanged from the one used to produce evidence.
 

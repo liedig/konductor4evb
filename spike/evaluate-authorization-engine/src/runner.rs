@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use chrono::Utc;
 use serde_json::Value;
 
@@ -19,17 +21,76 @@ impl<'a, A: GrantAdapter> ScenarioRunner<'a, A> {
     pub async fn run_all(&self) -> Vec<ScenarioResult> {
         let mut results = Vec::with_capacity(self.manifest.scenarios.len());
         for scenario in &self.manifest.scenarios {
+            self.seed_scenario(scenario).await;
             results.push(self.run_scenario(scenario).await);
         }
         results
     }
 
+    async fn seed_scenario(&self, scenario: &Scenario) {
+        let grants: Vec<_> = self
+            .manifest
+            .baseline_grant_seeds
+            .iter()
+            .filter(|g| scenario.seed_grants.iter().any(|id| id == &g.grant_id))
+            .cloned()
+            .collect();
+        let subscriptions: Vec<_> = self
+            .manifest
+            .baseline_subscription_seeds
+            .iter()
+            .filter(|s| {
+                scenario
+                    .seed_subscriptions
+                    .iter()
+                    .any(|id| id == &s.subscription_id)
+            })
+            .cloned()
+            .collect();
+        let _ = self.adapter.seed(&grants, &subscriptions).await;
+
+        let growth =
+            parse_growth_schemas(self.manifest.topology.note_on_producer_growth.as_deref());
+        let register_growth = scenario
+            .precondition
+            .as_deref()
+            .map(|p| p.contains("registered AFTER"))
+            .unwrap_or(false);
+        for producer in &self.manifest.topology.producer_domains {
+            for schema in &producer.schemas {
+                let is_growth = growth.iter().any(|(d, s)| d == &producer.id && s == schema);
+                if !is_growth || register_growth {
+                    let _ = self.adapter.register_schema(&producer.id, schema).await;
+                }
+            }
+        }
+    }
+
     async fn run_scenario(&self, scenario: &Scenario) -> ScenarioResult {
+        let tested: HashSet<String> = scenario
+            .steps
+            .iter()
+            .flat_map(|s| s.applicable_grants.iter().cloned())
+            .collect();
+        let mut current: HashSet<String> = scenario
+            .seed_grants
+            .iter()
+            .filter(|g| tested.contains(*g))
+            .cloned()
+            .collect();
+
         let mut step_results = Vec::new();
         if scenario.steps.is_empty() {
             step_results.push(self.run_step(scenario, &Step::default()).await);
         } else {
             for step in &scenario.steps {
+                if !tested.is_empty() {
+                    let target: HashSet<String> = step.applicable_grants.iter().cloned().collect();
+                    for grant_id in current.difference(&target) {
+                        let _ = self.adapter.revoke(grant_id).await;
+                    }
+                    current = target;
+                }
                 step_results.push(self.run_step(scenario, step).await);
             }
         }
@@ -63,7 +124,7 @@ impl<'a, A: GrantAdapter> ScenarioRunner<'a, A> {
             .cloned()
             .unwrap_or(Value::Null);
 
-        let (observed, pass) = match (subject, action, resource, context) {
+        let (observed, mut pass) = match (subject, action, resource, context) {
             (Some(subject), Some(action), Some(resource), Some(context)) => match resource {
                 Resource::SchemaList { producer_domain } => {
                     let visible = self
@@ -82,15 +143,32 @@ impl<'a, A: GrantAdapter> ScenarioRunner<'a, A> {
                         .ok();
                     let expected_decision =
                         parse_expected(&expected_val, step.deny_reason.as_ref());
+                    let deny_without_reason = step.deny_reason.is_none()
+                        && matches!(&expected_val, Value::String(s) if s == "deny");
                     let pass = observed
                         .as_ref()
-                        .map(|observed| *observed == expected_decision)
+                        .map(|observed| {
+                            if deny_without_reason {
+                                matches!(observed, Decision::Deny { .. })
+                            } else {
+                                *observed == expected_decision
+                            }
+                        })
                         .unwrap_or(false);
                     (observed, pass)
                 }
             },
             _ => (None, false),
         };
+
+        if let Some(expected_sub) = step.expected_subscription_state.as_ref() {
+            let actual = self
+                .adapter
+                .subscription_state(&expected_sub.subscription_id)
+                .await
+                .unwrap_or_else(|_| "unknown".to_string());
+            pass = pass && actual == expected_sub.state;
+        }
 
         let command_id = context.map(|context| context.command_id.clone());
         StepResult {
@@ -130,6 +208,20 @@ impl<'a, A: GrantAdapter> ScenarioRunner<'a, A> {
             step.context.as_ref().or(scenario.context.as_ref()),
         )
     }
+}
+
+fn parse_growth_schemas(note: Option<&str>) -> Vec<(String, String)> {
+    let Some(note) = note else {
+        return Vec::new();
+    };
+    note.split_whitespace()
+        .filter_map(|token| {
+            let (domain, schema) = token.split_once("::")?;
+            let schema =
+                schema.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '-' && c != '_');
+            Some((domain.to_string(), schema.to_string()))
+        })
+        .collect()
 }
 
 fn parse_expected(value: &Value, deny_reason: Option<&DenyReason>) -> Decision {

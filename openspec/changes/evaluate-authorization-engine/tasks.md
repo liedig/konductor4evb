@@ -7,7 +7,7 @@
 ## 2. Build Disposable DynamoDB Harness
 
 - [x] 2.1 Build the shared spike runner with Cognito-group and IAM-authenticated AWS account fixtures without changing production Nexus code
-- [ ] 2.2 Build the DynamoDB grant adapter and isolated fixtures implementing the representative grant model: the grant table (role bindings, entitlements, audit records, and the two administration GSIs) plus the subscription fixture store with its consumer/producer revocation access path, evaluating all grants without scans
+- [x] 2.2 Build the DynamoDB grant adapter and isolated fixtures implementing the representative grant model: the grant table (role bindings, entitlements, audit records, and the two administration GSIs) plus the subscription fixture store with its consumer/producer revocation access path, evaluating all grants without scans
 - [ ] 2.3 Add local correctness execution for the DynamoDB adapter, documenting any cloud-service semantic gaps and retaining configuration with secrets removed
 
 ## 3. Verify Common Authorization Semantics

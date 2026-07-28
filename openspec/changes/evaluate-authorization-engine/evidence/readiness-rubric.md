@@ -71,7 +71,7 @@ Every retained result uses the template below. Templates live alongside the evid
 
 ```
 scenarioId:           Sxx-...
-manifestSha256:       0e291f1b...
+manifestSha256:       ec4efb25...
 executedAt:           <RFC3339>
 region:               us-east-1
 expected:             <allow|deny|deny-as-unknown|...>
@@ -102,7 +102,7 @@ provisionalTargetAssessment: <met|missed|exceeded-2x>
 rawSamplesRef:        <path to raw samples>
 executedAt:           <RFC3339>
 region:               us-east-1
-manifestSha256:       0e291f1b...
+manifestSha256:       ec4efb25...
 ```
 
 ### 3.3 Cost worksheet evidence
@@ -143,7 +143,7 @@ reverseIndexMechanism: <text describing how affected subscriptions are found>
 rawTrialsRef:         <path to raw trials>
 executedAt:           <RFC3339>
 region:               us-east-1
-manifestSha256:       0e291f1b...
+manifestSha256:       ec4efb25...
 ```
 
 ### 3.5 Operational exercise evidence
