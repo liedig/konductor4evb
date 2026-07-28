@@ -50,6 +50,30 @@ Producer-domain entitlements are dynamic over current registry contents: a schem
 
 The DynamoDB evaluator will use the smallest representative single-table grant/index shape that can resolve applicable bindings without scans. Evidence must identify denormalization and hierarchy maintenance required to preserve the contract.
 
+### Use a representative grant-table model
+
+The spike harness stores authorization state in a dedicated grant table with three item types:
+
+- **RoleBinding**: `PK = PRINCIPAL#{cognito-group|aws-account}#{issuer-qualified group id | account id}`, `SK = ROLE#{role}#DOMAIN#{domain}`. Carries binding identifier, state, creation metadata, and trusted actor.
+- **Entitlement**: `PK = CONSUMER#{consumerDomain}`, `SK = ENT#PRODUCER#{producerDomain}` for producer-domain grants and `SK = ENT#PRODUCER#{producerDomain}#SCHEMA#{schemaName}` for exact-schema grants.
+- **AuditRecord**: `PK = GRANT#{grantId}#AUDIT`, `SK = TS#{timestamp}`.
+
+Subscriptions are not grant-table items. They belong to the subscription bounded context and live in their own table with their own lifecycle, write paths, and TTL retention. The contract revocation needs from that store is one compound access path: given a consumer domain and producer domain, return candidate subscriptions. The spike models this as a GSI on the subscription table with `PK = CONSUMER#{consumerDomain}#PRODUCER#{producerDomain}` and `SK = SCHEMA#{schemaName}#SUB#{subscriptionId}`.
+
+Two GSIs on the grant table support administration without scans: GSI1 by domain or producer scope, and GSI2 by item type for platform-wide enumeration.
+
+Every required access pattern resolves as a key-condition query. Publisher or subscriber authorization reads the caller's exact binding key once per candidate principal. Entitlement coverage reads `CONSUMER#{consumerDomain}` with `SK begins_with ENT#PRODUCER#{producerDomain}`, returning the producer-domain item and exact-schema items in one query. Catalog expansion reads all entitlement items for a consumer domain. Revocation finds candidate subscriptions through the subscription table's consumer/producer GSI, then re-evaluates each against current entitlements in the grant table.
+
+Coverage is computed at decision time rather than materialized. This keeps producer-domain grants dynamic over registry growth: the grant names the producer domain, never a schema list.
+
+Subscriptions are indexed in their own store by consumer/producer scope, never by the grant that enabled them. Under additive semantics any current grant may cover a subscription, so revocation re-evaluates candidates against all remaining grants instead of following stored grant associations.
+
+Authorization decisions use strongly consistent reads on the grant table. GSIs are eventually consistent, so they serve administration and candidate lookup only and never feed allow decisions. GSI lag on the subscription reverse index can briefly miss a just-created subscription during revocation; this is safe because subscription activation and enable perform a final current-entitlement check before enabling EventBridge rules.
+
+Global platform roles are not stored in this table. The OAuth authorizer resolves `platform-admin` and `platform-auditor` from controlled Cognito group names; the grant engine evaluates resource roles and entitlements. Fixtures still exercise global-role scenarios to prove the decision contract composes with authorizer-supplied roles.
+
+Alternative considered: co-locating subscription link items in the grant table for single-table harness simplicity. Rejected because subscriptions belong to the subscription bounded context with lifecycle and write paths owned by subscription workflows; a second copy in the grant table would need synchronization on every subscription mutation. The spike records the access patterns as the contract; physical layout beyond the grant/subscription split is a production decision.
+
 ### Compare Cognito groups with AWS account principals
 
 Cognito authorization subjects are derived from a trusted issuer and its authenticated group claims. IAM authorization subjects are the authenticated AWS account IDs supplied by the API boundary. IAM roles, users, and assumed-role sessions within the same account do not receive separate Nexus resource grants. Their principal ARN may be retained as audit provenance, but the DynamoDB evaluator must not use it to select domain, schema, publisher, or subscriber grants.
@@ -114,6 +138,15 @@ Every exercise records setup, steps, observed result, failure behavior, required
 Correctness and unauthorized non-disclosure are mandatory. Before measurements, the spike evidence plan declares how the remaining criteria determine production readiness, which observations constitute support or concern, how uncertainty is represented, and which production constraints could block implementation. The rubric covers latency, cost, auditability, local testability, policy administration, operational complexity, AWS account principal support, Cognito integration, hierarchy and inheritance, immediate revocation, and asynchronous handling.
 
 The readiness record presents measurements, qualitative observations, unsupported behavior, uncertainty, and trade-offs. Two reviewers independently verify evidence references and challenge readiness against the declared rubric. The record determines whether the DynamoDB design is ready for production implementation and proposes production latency, throughput, revocation, and subscription-disablement SLOs grounded in the measurements. If it fails mandatory behavior, the result is conditional on the smallest evidenced remediation needed to do so.
+
+### Record explicit reevaluation triggers
+
+The readiness decision records the conditions that reopen the rejected AVP alternative or a third engine:
+
+- decision p99 latency or revocation propagation misses the recommended SLO after documented tuning of the representative grant model;
+- maintaining the subscription reverse index or additive re-evaluation proves operationally unsustainable at evidenced volumes;
+- a product requirement for explicit deny policies, delegation, or condition logic emerges that the additive grant model cannot express;
+- enterprise identity requirements exceed issuer-qualified group and AWS-account bindings, such as per-user resource grants at scale.
 
 ### Keep the spike result reviewable and disposable
 
