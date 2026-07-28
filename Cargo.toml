@@ -18,6 +18,7 @@ members = [
     "event-streams/functions/describe-subscription",
     "event-streams/functions/list-schemas",
     "event-streams/functions/describe-schema",
+    "spike/evaluate-authorization-engine",
 ]
 
 [workspace.package]
