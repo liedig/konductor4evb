@@ -8,14 +8,14 @@
 
 - [x] 2.1 Build the shared spike runner with Cognito-group and IAM-authenticated AWS account fixtures without changing production Nexus code
 - [x] 2.2 Build the DynamoDB grant adapter and isolated fixtures implementing the representative grant model: the grant table (role bindings, entitlements, audit records, and the two administration GSIs) plus the subscription fixture store with its consumer/producer revocation access path, evaluating all grants without scans
-- [ ] 2.3 Add local correctness execution for the DynamoDB adapter, documenting any cloud-service semantic gaps and retaining configuration with secrets removed
+- [x] 2.3 Add local correctness execution for the DynamoDB adapter, documenting any cloud-service semantic gaps and retaining configuration with secrets removed
 
 ## 3. Verify Common Authorization Semantics
 
-- [ ] 3.1 Run and retain evidence for `platform-admin`, `platform-auditor`, Cognito group bindings, domain-scoped publishers, and domain-scoped subscribers
-- [ ] 3.2 Run and retain evidence for producer-domain entitlements, exact-schema entitlements, producer growth after grant (domain-wide consumer gains the new schema without mutation, exact-schema consumer does not), additive overlapping grants, and removal of one overlapping grant
-- [ ] 3.3 Run and retain Cognito-group/AWS-account parity, same-account IAM role/user provenance, forged group context, default-deny, unknown-versus-unauthorized response, and unauthorized list-filtering evidence, confirming IAM principal ARN is audit-only
-- [ ] 3.4 Record every incorrect, unsupported, omitted, or translated scenario and determine whether the DynamoDB design satisfies mandatory correctness and non-disclosure behavior
+- [x] 3.1 Run and retain evidence for `platform-admin`, `platform-auditor`, Cognito group bindings, domain-scoped publishers, and domain-scoped subscribers
+- [x] 3.2 Run and retain evidence for producer-domain entitlements, exact-schema entitlements, producer growth after grant (domain-wide consumer gains the new schema without mutation, exact-schema consumer does not), additive overlapping grants, and removal of one overlapping grant
+- [x] 3.3 Run and retain Cognito-group/AWS-account parity, same-account IAM role/user provenance, forged group context, default-deny, unknown-versus-unauthorized response, and unauthorized list-filtering evidence, confirming IAM principal ARN is audit-only
+- [x] 3.4 Record every incorrect, unsupported, omitted, or translated scenario and determine whether the DynamoDB design satisfies mandatory correctness and non-disclosure behavior
 
 ## 4. Measure Latency and Cost
 
