@@ -173,6 +173,13 @@ sam deploy --config-file samconfig-core.toml \
     PlatformOperatorEmail=platform-team@example.com
 ```
 
+### Confirm the platform notifications subscription
+
+When notifications are enabled, the core stack subscribes `PlatformOperatorEmail` to the `nexus-platform-notifications` SNS topic, which forwards every lifecycle event on the nexus bus to platform operators. SNS email subscriptions require a one-time confirmation:
+
+1. After deploying, check the platform team inbox for an AWS Notification "Subscription Confirmation" email.
+2. Click **Confirm subscription**. Until confirmed, operator notifications are not delivered.
+
 ### Capture stack outputs
 
 After deployment succeeds, capture the outputs needed for Phase 3:

@@ -216,7 +216,7 @@ sequenceDiagram
 |---|---|---|---|
 | Human rejection | `RegistrationRejected` custom error | `REJECTED` | `DomainRegistrationRejected` |
 | 7-day timeout | `States.Timeout` | `REJECTED` (`decidedBy: system:timeout`) | `DomainRegistrationRejected` |
-| Notification delivery failure | residual `States.ALL` (e.g., SES identity unverified) | `APPROVAL_NOTIFICATION_FAILED` | `DomainApprovalNotificationFailed` (operator-facing; no owner email — email is the failed dependency) |
+| Notification delivery failure | residual `States.ALL` (e.g., SES identity unverified) | `APPROVAL_NOTIFICATION_FAILED` | `DomainApprovalNotificationFailed` (owner-facing "registration delayed" email + operator SNS; no technical detail) |
 
 The registration context is captured in a Pass state *before* the wait (Task `Assign` only applies on success, so capturing it on the wait state would leave failure paths without it). Every execution path ends with a terminal status write and exactly one lifecycle event.
 
@@ -461,13 +461,13 @@ The **nexus bus** (`nexus-bus`) carries all internal lifecycle events. It is a p
 | Detail Type | Source | Emitted By | Triggers |
 |------------|--------|-----------|----------|
 | `RegisterDomainSucceeded` | `nexus.domain-management` | Command handler (register) | — |
-| `RegisterDomainFailed` | `nexus.domain-management` | Command handler (register) | — |
+| `RegisterDomainFailed` | `nexus.domain-management` | Command handler (register) | Registration-failed notification Lambda |
 | `UpdateDomainSucceeded` | `nexus.domain-management` | Command handler (update) | — |
 | `UpdateDomainFailed` | `nexus.domain-management` | Command handler (update) | — |
-| `DomainRegistrationApproved` | `nexus.domain-management` | Approval workflow | Provision-domain workflow (outer) |
+| `DomainRegistrationApproved` | `nexus.domain-management` | Approval workflow | Provision-domain workflow (outer); approval-outcome notification Lambda |
 | `DomainRegistrationRejected` | `nexus.domain-management` | Approval workflow | Rejection notification Lambda |
-| `DomainApprovalNotificationFailed` | `nexus.domain-management` | Approval workflow | — (operator-facing; no owner email — email delivery is the failed dependency) |
-| `DomainProvisioningSucceeded` | `nexus.domain-management` | Provision-domain workflow | — |
+| `DomainApprovalNotificationFailed` | `nexus.domain-management` | Approval workflow | Registration-delayed notification Lambda (owner-facing, no technical detail) |
+| `DomainProvisioningSucceeded` | `nexus.domain-management` | Provision-domain workflow | Provisioning-succeeded notification Lambda |
 | `DomainProvisioningFailed` | `nexus.domain-management` | Provision-domain workflow | Provisioning-failed notification Lambda |
 | `SubscribeSucceeded` / `SubscribeFailed` | `nexus.event-streams` | Subscription command handler | — |
 | `UpdateSubscriptionSucceeded` / `UpdateSubscriptionFailed` | `nexus.event-streams` | Subscription command handler | — |
@@ -479,6 +479,8 @@ The **nexus bus** (`nexus-bus`) carries all internal lifecycle events. It is a p
 The `DomainProvisioningFailed` payload carries `failedEnvironment` (or `null` for domain-level failures), `failedStep`, `errorCode`, `errorMessage`, and an aggregated `compensationErrors` array from any rollback runs. `SubscriptionActivationFailed` carries the same failure anatomy for the subscription saga.
 
 Domain-management events use the source `nexus.domain-management`; subscription events use `nexus.event-streams`. The `DomainRegistrationApproved` event is the key orchestration trigger — it initiates the provisioning workflow via an EventBridge rule on the nexus bus.
+
+**Platform operator notifications.** In addition to the per-event owner notifications above, every lifecycle event on the nexus bus (any `source` with the `nexus.` prefix) is forwarded to the `nexus-platform-notifications` SNS topic by a single EventBridge rule with an input transformer, giving platform operators full lifecycle visibility through one subscription point. `PlatformOperatorEmail` is subscribed at deploy time (one-time SNS confirmation required); future notification channel adapters (Slack, SMTP relays) attach as additional topic subscribers. The operator path is SNS-only and independent of SES — in particular, `DomainApprovalNotificationFailed` still reaches operators when SES delivery is the failed dependency.
 
 ---
 
@@ -678,7 +680,7 @@ evb-nexus/
 | API | REST via API Gateway with IAM authorization |
 | Database | DynamoDB (PAY_PER_REQUEST, single table) |
 | Workflows | Step Functions (YAML, JSONata, SDK integrations) |
-| Notifications | SES (approval and rejection emails, optional via notifications-stack.yaml) |
+| Notifications | SES for owner emails (approval, rejection, provisioning, registration outcomes); SNS topic for operator lifecycle alerts (optional via notifications-stack.yaml) |
 | Namespace sharing | SSM Advanced Parameters + RAM |
 | IaC | AWS SAM / CloudFormation |
 | Runtime | `provided.al2023` (ARM64, 256 MB) |

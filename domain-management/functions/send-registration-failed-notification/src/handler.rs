@@ -20,9 +20,7 @@ pub async fn handle(ses: &aws_sdk_sesv2::Client, event: LambdaEvent<Value>) -> R
         .and_then(|v| v.as_str())
         .context("missing domainName in detail")?;
 
-    let owner_email = detail
-        .get("ownerEmail")
-        .and_then(|v| v.as_str())
+    let recipients = nexus_common::ses::recipients_from_detail(detail)
         .context("missing ownerEmail in detail")?;
 
     let reason = detail
@@ -35,7 +33,11 @@ pub async fn handle(ses: &aws_sdk_sesv2::Client, event: LambdaEvent<Value>) -> R
     if let Err(e) = ses
         .send_email()
         .from_email_address(&from_email)
-        .destination(Destination::builder().to_addresses(owner_email).build())
+        .destination(
+            Destination::builder()
+                .set_to_addresses(Some(recipients))
+                .build(),
+        )
         .content(
             EmailContent::builder()
                 .simple(

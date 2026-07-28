@@ -9,6 +9,8 @@ members = [
     "domain-management/functions/send-approval-outcome-notification",
     "domain-management/functions/send-approval-request-notification",
     "domain-management/functions/send-provisioning-failed-notification",
+    "domain-management/functions/send-provisioning-succeeded-notification",
+    "domain-management/functions/send-registration-delayed-notification",
     "domain-management/functions/send-registration-failed-notification",
     "domain-management/functions/send-rejection-outcome-notification",
     "event-streams/functions/subscriptions",
