@@ -41,6 +41,8 @@ Nexus SHALL store producer access as entitlements owned by a consumer domain, in
 - **WHEN** consumer domain `checkout` has an exact producer-schema grant for `orders` and `prezzee-orders@OrderNotification`
 - **THEN** that schema SHALL be entitled in every environment where it exists
 - **AND THEN** no other `orders` schema SHALL be entitled by that grant
+- **AND WHEN** a new schema is later added to `orders`
+- **THEN** that schema SHALL NOT be entitled by the exact-schema grant
 
 ### Requirement: Additive entitlement authorization
 

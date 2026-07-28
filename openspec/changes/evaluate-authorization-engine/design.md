@@ -2,23 +2,20 @@
 
 Nexus currently authenticates API callers with IAM and performs limited ownership checks in handlers. Planned OAuth access, platform roles, domain-scoped publisher and subscriber roles, and producer/schema entitlements require a shared authorization decision model. The selected model must also work after an API request crosses the SQS boundary and must revoke rights quickly enough to stop both new commands and already-materialized subscriptions.
 
-This change is a technical spike, not a production authorization implementation. It compares two candidates:
+This change is a technical spike, not a production authorization implementation. It validates a purpose-built grant model stored in DynamoDB and evaluated by Nexus. DynamoDB is the selected initial engine because Nexus needs to own enterprise group-to-resource mappings and maintain reverse indexes for immediate subscription revocation.
 
-1. A purpose-built grant model stored in DynamoDB and evaluated by Nexus.
-2. Amazon Verified Permissions (AVP), with Nexus identities and resources represented as Cedar entities and grants represented as policies.
-
-The evaluation must remain neutral: common scenario fixtures, mandatory correctness and non-disclosure behavior, the decision rubric, workload profiles, and measurement procedures are fixed before candidate results are collected. The spike runs in an isolated AWS sandbox and retains all reports and evidence under this change directory.
+The evaluation fixes common scenario fixtures, mandatory correctness and non-disclosure behavior, workload profiles, and measurement procedures before results are collected. The spike runs in an isolated AWS sandbox and retains all reports and evidence under this change directory. Amazon Verified Permissions (AVP) is a considered, rejected alternative, not a candidate harness in this spike.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Prove whether each candidate can represent and correctly decide the complete common scenario suite.
-- Compare both candidates with reproducible latency, cost, revocation, security, testability, administration, and operations evidence.
+- Prove that DynamoDB-backed grants can represent and correctly decide the complete common scenario suite.
+- Collect reproducible latency, cost, revocation, security, testability, administration, and operations evidence for the DynamoDB design.
 - Exercise Cognito-group and IAM-authenticated AWS account principals through one engine-neutral authorization contract.
 - Exercise authorization at synchronous API boundaries and at asynchronous SQS handling boundaries.
 - Measure revocation through denial and disablement of affected active subscriptions.
-- Produce one reviewable recommendation with a rejected alternative, trade-offs, risks, and reevaluation triggers.
+- Produce one reviewable readiness decision with the rejected AVP alternative, trade-offs, risks, and reevaluation triggers.
 
 **Non-Goals:**
 
@@ -30,7 +27,7 @@ The evaluation must remain neutral: common scenario fixtures, mandatory correctn
 
 ## Decisions
 
-### Use one engine-neutral authorization contract
+### Use a DynamoDB authorization contract
 
 The harness will define a versioned fixture manifest containing:
 
@@ -41,21 +38,21 @@ The harness will define a versioned fixture manifest containing:
 - `context`: authentication method and command metadata needed by the scenario;
 - grants and expected `allow` or `deny` decisions.
 
-Candidate adapters translate that manifest into DynamoDB items or AVP entities and policies. They return only a decision, reason category, evaluation timestamp, and candidate trace reference. The adapter boundary prevents candidate-specific concepts from changing expected behavior.
+The DynamoDB evaluator translates the manifest into grant items and returns only a decision, reason category, evaluation timestamp, and trace reference. The manifest prevents storage-specific concepts from changing expected behavior.
 
-Alternative considered: write separate scenario suites tailored to each engine. Rejected because differences in fixtures or semantics would make correctness, latency, and administration evidence incomparable.
+Alternative considered: Amazon Verified Permissions (AVP), with Nexus identities and resources represented as Cedar entities and grants represented as policies. Rejected for the initial engine because AVP would still require Nexus-owned mappings and reverse indexes to identify subscriptions affected by entitlement revocation, adding a second authorization representation without removing the reconciliation responsibility.
 
 ### Model grants as additive and make default denial explicit
 
 The shared fixtures contain AWS-account bindings, Cognito-group bindings, global role bindings, role-to-domain bindings, and consumer-to-producer/schema entitlements. Applicable allows form a union; absence of an applicable allow denies access. The spike will not introduce explicit deny grants because deny precedence is a separate product decision and is not required by the agreed scenarios.
 
-The DynamoDB candidate will use the smallest representative single-table grant/index shape that can resolve applicable bindings without scans. The AVP candidate will use a validated Cedar schema, typed entities, entity relationships, and policies that express the same union. Candidate notes must identify any denormalization, policy generation, or hierarchy maintenance needed to preserve the contract.
+Producer-domain entitlements are dynamic over current registry contents: a schema registered after the grant is covered without entitlement mutation. Exact-schema entitlements are a fixed enumeration and do not expand on producer growth.
 
-Alternative considered: force both candidates to use structurally identical storage. Rejected because it would prevent each engine from demonstrating its natural policy and query model; semantic inputs and outputs, not internals, must be identical.
+The DynamoDB evaluator will use the smallest representative single-table grant/index shape that can resolve applicable bindings without scans. Evidence must identify denormalization and hierarchy maintenance required to preserve the contract.
 
 ### Compare Cognito groups with AWS account principals
 
-Cognito authorization subjects are derived from a trusted issuer and its authenticated group claims. IAM authorization subjects are the authenticated AWS account IDs supplied by the API boundary. IAM roles, users, and assumed-role sessions within the same account do not receive separate Nexus resource grants. Their principal ARN may be retained as audit provenance, but candidate adapters must not use it to select domain, schema, publisher, or subscriber grants.
+Cognito authorization subjects are derived from a trusted issuer and its authenticated group claims. IAM authorization subjects are the authenticated AWS account IDs supplied by the API boundary. IAM roles, users, and assumed-role sessions within the same account do not receive separate Nexus resource grants. Their principal ARN may be retained as audit provenance, but the DynamoDB evaluator must not use it to select domain, schema, publisher, or subscriber grants.
 
 The parity scenarios bind a Cognito group and an AWS account to equivalent logical permissions and expect identical decisions. The spike records the trusted boundary context required before each engine call so that AVP is not credited with authentication it does not perform and DynamoDB is not penalized for equivalent boundary work.
 
@@ -63,7 +60,7 @@ Alternative considered: grant Nexus resources to individual IAM role or user ARN
 
 ### Reauthorize asynchronous commands with current grants
 
-An accepted command fixture carries the authorization subject type, the trusted Cognito issuer/group context or AWS account ID, optional Cognito subject or IAM principal ARN audit provenance, request identifier, action, and resource coordinates. It never stores a bearer token or treats the enqueue-time authorization result as durable authority. The handler reconstructs the authorization request and checks current grants immediately before side effects. Candidate logic keys IAM resource grants only by AWS account ID.
+An accepted command fixture carries the authorization subject type, the trusted Cognito issuer/group context or AWS account ID, optional Cognito subject or IAM principal ARN audit provenance, request identifier, action, and resource coordinates. It never stores a bearer token or treats the enqueue-time authorization result as durable authority. The handler reconstructs the authorization request and checks current grants immediately before side effects. DynamoDB grant lookup keys IAM resource grants only by AWS account ID.
 
 The revocation trial pauses a queued command, removes its final applicable grant, waits for the revocation operation to be accepted, and then releases the command. A deterministic denial is recorded as a failed command outcome and acknowledged rather than retried. Tampered, incomplete, or untrusted principal context is denied.
 
@@ -71,7 +68,7 @@ Alternative considered: authorize only before enqueue. Rejected because a queued
 
 ### Evaluate revocation as decision invalidation plus subscription reconciliation
 
-Neither policy engine alone disables EventBridge rules. Each candidate evaluation therefore includes the same engine-neutral revocation contract:
+The DynamoDB grant engine does not itself disable EventBridge rules. The spike therefore includes this revocation contract:
 
 1. accept a grant or entitlement removal;
 2. make new decisions reflect the removal;
@@ -80,19 +77,15 @@ Neither policy engine alone disables EventBridge rules. Each candidate evaluatio
 5. disable every subscription with no remaining authorization;
 6. emit an auditable result.
 
-The trial dataset includes subscriptions authorized by exactly one grant and subscriptions covered by overlapping grants. Decision propagation and complete materialization disablement are timed independently. Candidate-specific mechanisms for finding affected subscriptions must be documented and included in cost and operations evidence.
-
-Alternative considered: rely on short-lived decision caches or periodic full reconciliation. Rejected for the spike baseline because these approaches cannot demonstrate the agreed immediate-revocation behavior without an event-driven invalidation path.
+The trial dataset includes subscriptions authorized by exactly one grant and subscriptions covered by overlapping grants. Decision propagation and complete materialization disablement are timed independently. The DynamoDB reverse-index mechanism for finding affected subscriptions must be documented and included in cost and operations evidence.
 
 ### Use frozen correctness cases and predeclared benchmark procedures
 
 Before collecting results, the harness fixtures and expected outcomes are frozen and hashed. Every scenario runs first as a correctness trial. Any incorrect allow, incorrect deny, cross-tenant disclosure, changed fixture, or omitted scenario fails mandatory correctness or non-disclosure behavior.
 
-Before measurements, the spike evidence plan declares identical warm and cold-path sample sizes, workload volumes, target throughput, Region, client timeouts, retry policy, dataset, and sequential/concurrent profiles. These values are spike methodology, not production requirements. Warm measurements exclude one-time fixture setup but include the complete authorization adapter call. Cold-path measurements run in newly initialized evaluator processes and include client initialization. Reports include p50, p95, p99, throughput, errors, retries, and throttles. The final decision uses these results to recommend production latency and throughput SLOs.
+Before measurements, the spike evidence plan declares warm and cold-path sample sizes, workload volumes, target throughput, Region, client timeouts, retry policy, dataset, and sequential/concurrent profiles. These values are spike methodology, not production requirements. Warm measurements exclude one-time fixture setup but include the complete authorization evaluator call. Cold-path measurements run in newly initialized evaluator processes and include client initialization. Reports include p50, p95, p99, throughput, errors, retries, and throttles. The final decision uses these results to recommend production latency and throughput SLOs.
 
-The evidence plan also declares the number of independent revocation trials and provisional comparison targets before execution. Revocation trials use no authorization decision cache unless both candidates are tested with the same declared cache policy. Reports distinguish time to first denied decision from time to complete disablement of affected subscriptions, and the decision record recommends production SLOs from the observed distributions and operational requirements.
-
-Alternative considered: compare vendor service latency in isolation. Rejected because Nexus cares about end-to-end adapter latency, including required data reads, entity assembly, and policy calls.
+The evidence plan also declares the number of independent revocation trials and provisional targets before execution. Revocation trials use no authorization decision cache. Reports distinguish time to first denied decision from time to complete disablement of affected subscriptions, and the decision record recommends production SLOs from the observed distributions and operational requirements.
 
 ### Project cost from declared workload profiles
 
@@ -116,44 +109,41 @@ Each non-benchmark criterion has a prescribed exercise:
 
 Every exercise records setup, steps, observed result, failure behavior, required custom logic, operator effort, and an evidence reference. Unsupported behavior is retained as evidence rather than approximated away.
 
-### Apply a predeclared neutral evidence rubric
+### Apply a predeclared readiness rubric
 
-Correctness and unauthorized non-disclosure are mandatory. Before measurements, the spike evidence plan declares how the remaining criteria will be compared, which observations constitute support or concern, how uncertainty is represented, and which production constraints could block a recommendation. The rubric covers latency, cost, auditability, local testability, policy administration, operational complexity, AWS account principal support, Cognito integration, hierarchy and inheritance, immediate revocation, and asynchronous handling without assigning invented product weights.
+Correctness and unauthorized non-disclosure are mandatory. Before measurements, the spike evidence plan declares how the remaining criteria determine production readiness, which observations constitute support or concern, how uncertainty is represented, and which production constraints could block implementation. The rubric covers latency, cost, auditability, local testability, policy administration, operational complexity, AWS account principal support, Cognito integration, hierarchy and inheritance, immediate revocation, and asynchronous handling.
 
-The decision matrix presents measurements, qualitative observations, unsupported behavior, uncertainty, and trade-offs side by side. It does not collapse unlike evidence into an arbitrary aggregate score. Two reviewers independently verify evidence references and challenge the recommendation against the declared rubric. The recommendation identifies exactly one candidate, explains why its complete evidence profile better fits Nexus, and proposes production latency, throughput, revocation, and subscription-disablement SLOs grounded in the measurements. If neither candidate satisfies mandatory behavior, the recommendation is conditional on the smallest evidenced remediation needed to do so.
-
-Alternative considered: use fixed numerical thresholds, equal weights, and a zero-to-four aggregate score. Rejected because those values have not been established as Nexus product requirements and could predetermine the outcome. An unstructured narrative was also rejected because a frozen evidence rubric and decision matrix are needed for reproducibility and review.
+The readiness record presents measurements, qualitative observations, unsupported behavior, uncertainty, and trade-offs. Two reviewers independently verify evidence references and challenge readiness against the declared rubric. The record determines whether the DynamoDB design is ready for production implementation and proposes production latency, throughput, revocation, and subscription-disablement SLOs grounded in the measurements. If it fails mandatory behavior, the result is conditional on the smallest evidenced remediation needed to do so.
 
 ### Keep the spike result reviewable and disposable
 
-The spike will retain the frozen fixture manifest and hash, candidate configurations with secrets removed, raw measurement output, cost worksheet, exercise notes, evidence matrix, recommended production SLOs, and final decision in a dedicated evidence area under this change. Temporary sandbox resources are tagged for the spike and destroyed after evidence is captured. The final report links every mandatory result and decision claim to evidence and records the selected engine, rejected alternative, assumptions, residual risks, and reevaluation triggers.
+The spike will retain the frozen fixture manifest and hash, DynamoDB configuration with secrets removed, raw measurement output, cost worksheet, exercise notes, evidence matrix, recommended production SLOs, and final readiness decision in a dedicated evidence area under this change. Temporary sandbox resources are tagged for the spike and destroyed after evidence is captured. The final report links every mandatory result and readiness claim to evidence and records DynamoDB as the selected initial engine, AVP as the rejected alternative, assumptions, residual risks, and reevaluation triggers.
 
 The spike implementation is disposable. A later OpenSpec change must define production authorization behavior and architecture using the recommendation; no harness resource or prototype becomes production infrastructure by default.
 
 ## Risks / Trade-offs
 
 - **[Synthetic workload differs from production traffic]** → Publish the workload model, run the predeclared sensitivity profiles, and retain raw data so assumptions can be recalculated.
-- **[Candidate adapters accidentally implement different semantics]** → Freeze and hash one engine-neutral fixture manifest, run mutation/parity checks, and review all translations.
-- **[AVP and DynamoDB receive unequal optimization effort]** → Limit both to a documented representative design, use the same time box, and record known optimizations not attempted.
+- **[The DynamoDB evaluator accidentally changes authorization semantics]** → Freeze and hash one fixture manifest, run mutation tests, and review all translations.
 - **[AWS service noise distorts latency]** → Use the same Region and time windows, report distributions and retries, repeat anomalous trials, and retain raw samples.
 - **[Revocation timing is confused with subscription workflow latency]** → Report decision invalidation and subscription disablement as separate measurements.
-- **[Qualitative evidence interpretation remains subjective]** → Freeze the comparison rubric, use two independent reviewers, cite evidence, and record disagreements and resolutions.
+- **[Qualitative evidence interpretation remains subjective]** → Freeze the readiness rubric, use two independent reviewers, cite evidence, and record disagreements and resolutions.
 - **[Cost estimates become stale]** → Date every price and preserve formulas and workload assumptions rather than only final totals.
 - **[Prototype security shortcuts are mistaken for production design]** → Label all resources and reports as spike-only, exclude secrets, destroy sandbox resources, and require a separate production change.
-- **[Neither candidate satisfies mandatory behavior]** → Produce a conditional recommendation with the smallest scoped remediation and require proof before production implementation.
+- **[The DynamoDB design does not satisfy mandatory behavior]** → Produce a conditional readiness decision with the smallest scoped remediation and require proof before production implementation.
 
 ## Migration Plan
 
 There is no production migration in this change.
 
-1. Create isolated, tagged sandbox resources for both candidates.
+1. Create isolated, tagged sandbox resources for the DynamoDB evaluator.
 2. Run and retain the frozen correctness, benchmark, revocation, and operational exercises.
 3. Review evidence and publish the decision record.
 4. Destroy sandbox resources and verify cleanup.
-5. Open a separate OpenSpec change for the recommended production architecture; do not reuse spike resources implicitly.
+5. Open a separate OpenSpec change for the DynamoDB production architecture; do not reuse spike resources implicitly.
 
 Rollback consists of stopping the spike, deleting its sandbox resources, and retaining the incomplete evidence with a clear status. Existing Nexus behavior is unaffected.
 
 ## Open Questions
 
-The spike must record, but does not need to settle, the expected production authorization request rate, an organization-specific monthly budget, and whether explicit deny policies will be required later. These unknowns are sensitivity and reevaluation inputs; they do not alter the frozen common scenarios or declared evidence rubric for this comparison.
+The spike must record, but does not need to settle, the expected production authorization request rate, an organization-specific monthly budget, and whether explicit deny policies will be required later. These unknowns are sensitivity and reevaluation inputs; they do not alter the frozen common scenarios or declared readiness rubric.

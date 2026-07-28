@@ -17,6 +17,11 @@ Both catalog operations SHALL require subscriber access to the consumer domain t
 - **WHEN** `checkout` has a producer-domain grant for `orders` and a new schema is added to an `orders` registry
 - **THEN** a subsequent catalog list SHALL include the new schema without changing the grant
 
+#### Scenario: Exact-schema grant conceals a future schema
+
+- **WHEN** `checkout` has only exact-schema grants for `orders` and a new schema is added to an `orders` registry
+- **THEN** a subsequent catalog list SHALL NOT include the new schema
+
 #### Scenario: Catalog list supports filters and pagination
 
 - **WHEN** an authorized subscriber lists a catalog with producer-domain and environment filters and a page token
