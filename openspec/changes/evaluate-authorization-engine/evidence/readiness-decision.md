@@ -96,5 +96,7 @@ authorization contract or the frozen scenarios.
       readiness rubric, and satisfaction of every specification requirement.
 - [ ] **In-region latency re-measurement** (EC2/Lambda in the production Region) to convert the
       conditional latency verdict to support.
-- [ ] **7.4** Destroy tagged sandbox resources (or retain for the in-region re-measurement, by
-      operator decision).
+- [x] **7.4** Destroy tagged sandbox resources (completed 2026-07-28: `nexus-spike-auth-grant`
+      and `nexus-spike-auth-sub` deleted from `ap-southeast-2`, account `444433332222`;
+      `describe-table` returns `ResourceNotFoundException` for both; no `nexus-spike` tables
+      remain). Sanitized evidence retained under `evidence/`.

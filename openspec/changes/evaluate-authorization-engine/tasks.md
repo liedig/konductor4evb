@@ -42,5 +42,5 @@
 - [x] 7.1 Apply mandatory correctness and non-disclosure behavior plus the frozen readiness rubric and publish a readiness decision for DynamoDB-backed grants
 - [x] 7.2 Document AVP as the rejected alternative, DynamoDB evidence, recommended production SLOs, assumptions, trade-offs, residual risks, conditional remediation if needed, and reevaluation triggers
 - [ ] 7.3 Obtain independent review confirming scenario coverage, evidence traceability, unchanged readiness rubric, and satisfaction of every specification requirement
-- [ ] 7.4 Destroy all tagged sandbox resources, verify cleanup, and retain sanitized evidence and the final decision under this change
+- [x] 7.4 Destroy all tagged sandbox resources, verify cleanup, and retain sanitized evidence and the final decision under this change
 - [x] 7.5 Update `docs/development/decisions.md` with the spike recommendation and open a separate OpenSpec change for any production authorization implementation
