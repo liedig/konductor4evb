@@ -83,7 +83,7 @@ These targets bound the readiness rubric; they are not committed SLOs. The readi
 
 | Parameter | Value |
 |---|---|
-| AWS Region | `us-east-1` (matches the Cognito issuer in the frozen manifest) |
+| AWS Region | `ap-southeast-2` (matches the provisioned sandbox account profiles; the Cognito issuer in the frozen manifest is a placeholder string, not a real user pool) |
 | Spike time box | 5 working days from sandbox readiness |
 | Sandbox isolation | Dedicated AWS account (or isolated OU) with all resources tagged `nexus-spike=evaluate-authorization-engine` |
 

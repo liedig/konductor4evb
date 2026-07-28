@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Mutex;
 
@@ -136,6 +136,96 @@ impl DynamoGrantAdapter {
             .map_err(|e| AdapterError::Decision(e.to_string()))?;
         Ok(resp.item.is_some())
     }
+
+    async fn clear_tables(&self) -> Result<(), AdapterError> {
+        use aws_sdk_dynamodb::types::{DeleteRequest, WriteRequest};
+        for (table, key_kind) in [(&self.grant_table, "grant"), (&self.subscription_table, "sub")] {
+            loop {
+                let resp = self
+                    .client
+                    .scan()
+                    .table_name(table)
+                    .consistent_read(true)
+                    .send()
+                    .await
+                    .map_err(|e| AdapterError::Seed(e.to_string()))?;
+                let items: Vec<HashMap<String, AttributeValue>> = resp.items().to_vec();
+                if items.is_empty() {
+                    break;
+                }
+                for chunk in items.chunks(25) {
+                    let writes: Vec<WriteRequest> = chunk
+                        .iter()
+                        .filter_map(|item: &HashMap<String, AttributeValue>| {
+                            let key = match key_kind {
+                                "sub" => {
+                                    let id = item.get("subscription_id")?;
+                                    HashMap::from([("subscription_id".to_string(), id.clone())])
+                                }
+                                _ => {
+                                    let pk = item.get("pk")?;
+                                    let sk = item.get("sk")?;
+                                    HashMap::from([
+                                        ("pk".to_string(), pk.clone()),
+                                        ("sk".to_string(), sk.clone()),
+                                    ])
+                                }
+                            };
+                            let dr = DeleteRequest::builder().set_key(Some(key)).build().ok()?;
+                            Some(WriteRequest::builder().delete_request(dr).build())
+                        })
+                        .collect();
+                    if writes.is_empty() {
+                        continue;
+                    }
+                    self.client
+                        .batch_write_item()
+                        .request_items(table.as_str(), writes)
+                        .send()
+                        .await
+                        .map_err(|e| AdapterError::Seed(e.to_string()))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn reconcile_subscriptions(&self) -> Result<(), AdapterError> {
+        let resp = self
+            .client
+            .scan()
+            .table_name(&self.subscription_table)
+            .consistent_read(true)
+            .send()
+            .await
+            .map_err(|e| AdapterError::Revoke(e.to_string()))?;
+        for item in resp.items() {
+            let is_active = item
+                .get("state")
+                .and_then(|v| v.as_s().ok())
+                .is_some_and(|s| s.as_str() == "active");
+            if !is_active {
+                continue;
+            }
+            let Some(consumer) = item.get("consumer").and_then(|v| v.as_s().ok()).map(String::from) else { continue; };
+            let Some(producer) = item.get("producer_domain").and_then(|v| v.as_s().ok()).map(String::from) else { continue; };
+            let Some(schema) = item.get("schema").and_then(|v| v.as_s().ok()).map(String::from) else { continue; };
+            let Some(sub_id) = item.get("subscription_id").and_then(|v| v.as_s().ok()).map(String::from) else { continue; };
+            if !self.has_coverage(&consumer, &producer, &schema).await? {
+                self.client
+                    .update_item()
+                    .table_name(&self.subscription_table)
+                    .key("subscription_id", AttributeValue::S(sub_id))
+                    .update_expression("SET #st = :disabled")
+                    .expression_attribute_names("#st", "state")
+                    .expression_attribute_values(":disabled", AttributeValue::S("disabled".to_string()))
+                    .send()
+                    .await
+                    .map_err(|e| AdapterError::Revoke(e.to_string()))?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl crate::adapter::GrantAdapter for DynamoGrantAdapter {
@@ -147,6 +237,7 @@ impl crate::adapter::GrantAdapter for DynamoGrantAdapter {
         let grants = grants.to_vec();
         let subscriptions = subscriptions.to_vec();
         async move {
+            self.clear_tables().await?;
             for grant in &grants {
                 if grant.item_type == "RoleBinding" {
                     let Some(principal) = grant.principal.as_ref() else { continue };
@@ -348,6 +439,7 @@ impl crate::adapter::GrantAdapter for DynamoGrantAdapter {
                         .map_err(|e| AdapterError::Revoke(e.to_string()))?;
                 }
             }
+            self.reconcile_subscriptions().await?;
             Ok(())
         }
     }

@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod contract;
+pub mod dynamo;
 pub mod evidence;
 pub mod fixture;
 pub mod in_memory;

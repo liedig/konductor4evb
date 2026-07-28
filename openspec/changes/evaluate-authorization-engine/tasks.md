@@ -19,16 +19,16 @@
 
 ## 4. Measure Latency and Cost
 
-- [ ] 4.1 Run the predeclared warm and cold-start-path sample sizes per principal type under sequential and target-throughput profiles
-- [ ] 4.2 Retain raw samples and report sample count, errors, retries, throttles, throughput, and p50, p95, and p99 latency against the provisional spike targets
-- [ ] 4.3 Build the dated cost worksheet for the predeclared low, expected, and high monthly decision volumes, itemizing requests, storage, administration, audit, monitoring, and revocation processing
+- [x] 4.1 Run the predeclared warm and cold-start-path sample sizes per principal type under sequential and target-throughput profiles
+- [x] 4.2 Retain raw samples and report sample count, errors, retries, throttles, throughput, and p50, p95, and p99 latency against the provisional spike targets
+- [x] 4.3 Build the dated cost worksheet for the predeclared low, expected, and high monthly decision volumes, itemizing requests, storage, administration, audit, monitoring, and revocation processing
 
 ## 5. Measure Revocation and Asynchronous Handling
 
-- [ ] 5.1 Implement the disposable revocation exercise that re-evaluates affected active subscriptions, preserves overlapping access, and simulates disabling every no-longer-authorized materialization
-- [ ] 5.2 Run the predeclared number of revocation trials and retain separate p50, p95, maximum, and failure measures for first denied decision and complete subscription disablement
-- [ ] 5.3 Exercise Cognito-group and IAM-authenticated AWS account commands across enqueue, delayed handling, revocation-before-consume, replay, incomplete context, and tampered context, confirming deterministic denials are acknowledged rather than retried
-- [ ] 5.4 Compare immediate-revocation and asynchronous-handling evidence against the provisional spike targets and draft evidence-based production SLO recommendations
+- [x] 5.1 Implement the disposable revocation exercise that re-evaluates affected active subscriptions, preserves overlapping access, and simulates disabling every no-longer-authorized materialization
+- [x] 5.2 Run the predeclared number of revocation trials and retain separate p50, p95, maximum, and failure measures for first denied decision and complete subscription disablement
+- [x] 5.3 Exercise Cognito-group and IAM-authenticated AWS account commands across enqueue, delayed handling, revocation-before-consume, replay, incomplete context, and tampered context, confirming deterministic denials are acknowledged rather than retried
+- [x] 5.4 Compare immediate-revocation and asynchronous-handling evidence against the provisional spike targets and draft evidence-based production SLO recommendations
 
 ## 6. Complete Operational Exercises
 
