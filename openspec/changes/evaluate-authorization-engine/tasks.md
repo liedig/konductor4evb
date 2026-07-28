@@ -1,8 +1,8 @@
 ## 1. Freeze Evaluation Method
 
-- [ ] 1.1 Create the DynamoDB fixture manifest covering every specified principal, role, domain, schema, entitlement, additive-grant, non-disclosure, revocation, and asynchronous command scenario
-- [ ] 1.2 Record expected decisions, representative list filtering and unknown-resource responses, workload profiles, sample sizes, provisional measurement targets, AWS Region, time box, client settings, and a hash of the frozen fixtures, clearly labeling these values as spike methodology
-- [ ] 1.3 Publish mandatory correctness and non-disclosure behavior, the readiness rubric, uncertainty treatment, production-blocker criteria, and evidence templates before collecting results
+- [x] 1.1 Create the DynamoDB fixture manifest covering every specified principal, role, domain, schema, entitlement, additive-grant, non-disclosure, revocation, and asynchronous command scenario
+- [x] 1.2 Record expected decisions, representative list filtering and unknown-resource responses, workload profiles, sample sizes, provisional measurement targets, AWS Region, time box, client settings, and a hash of the frozen fixtures, clearly labeling these values as spike methodology
+- [x] 1.3 Publish mandatory correctness and non-disclosure behavior, the readiness rubric, uncertainty treatment, production-blocker criteria, and evidence templates before collecting results
 
 ## 2. Build Disposable DynamoDB Harness
 
