@@ -50,7 +50,11 @@ fn app_client_uses_authorization_code_flow_and_standard_scopes() {
     let client = resource(&doc, "NexusUserPoolClient");
     let p = props(client);
     let flows: Vec<&str> = seq(at(p, "AllowedOAuthFlows")).iter().map(text).collect();
-    assert_eq!(flows, vec!["code"], "only authorization-code flow with PKCE");
+    assert_eq!(
+        flows,
+        vec!["code"],
+        "only authorization-code flow with PKCE"
+    );
     let scopes: Vec<&str> = seq(at(p, "AllowedOAuthScopes")).iter().map(text).collect();
     for scope in ["openid", "email", "profile"] {
         assert!(scopes.contains(&scope), "missing scope {scope}");
@@ -100,4 +104,23 @@ fn issuer_and_client_configuration_are_exported() {
     ] {
         assert!(mapping(outputs).get(key).is_some(), "missing output {key}");
     }
+}
+
+#[test]
+fn oauth_authorizer_function_is_least_privilege_and_configured() {
+    let doc = core_template();
+    let func = resource(&doc, "OAuthAuthorizerFunction");
+    let p = props(func);
+    assert_eq!(
+        text(at(p, "CodeUri")),
+        "./control-plane/functions/oauth-authorizer"
+    );
+    let vars = at(&at(p, "Environment"), "Variables");
+    for key in ["COGNITO_ISSUER", "COGNITO_CLIENT_ID", "COGNITO_JWKS_URI"] {
+        assert!(mapping(vars).get(key).is_some(), "missing env var {key}");
+    }
+    assert!(
+        !mapping(p).contains_key("Policies"),
+        "authorizer must have no IAM policies (it only fetches JWKS over HTTPS)"
+    );
 }

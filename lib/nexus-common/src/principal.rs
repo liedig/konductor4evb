@@ -238,7 +238,10 @@ mod tests {
             &["team-payments".to_string(), "team-orders".to_string()]
         );
         assert_eq!(parsed.global_roles(), &[GlobalRole::PlatformAdmin]);
-        assert_eq!(parsed.principal_id(), "a1b2c3d4-1111-2222-3333-444455556666");
+        assert_eq!(
+            parsed.principal_id(),
+            "a1b2c3d4-1111-2222-3333-444455556666"
+        );
         assert_eq!(
             parsed.authentication_mechanism(),
             AuthenticationMechanism::Oauth
@@ -378,7 +381,10 @@ mod tests {
             "platform-auditor"
         );
         for role in [GlobalRole::PlatformAdmin, GlobalRole::PlatformAuditor] {
-            assert_eq!(GlobalRole::from_group_name(role.as_group_name()), Some(role));
+            assert_eq!(
+                GlobalRole::from_group_name(role.as_group_name()),
+                Some(role)
+            );
         }
     }
 

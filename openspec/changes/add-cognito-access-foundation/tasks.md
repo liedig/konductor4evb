@@ -15,13 +15,13 @@
 
 ## 3. OAuth REQUEST Authorizer
 
-- [ ] 3.1 Add the REQUEST Lambda authorizer binary and its least-privilege SAM resources for the OAuth REST API
-- [ ] 3.2 Implement Cognito access-token validation for signature, issuer, expiration, `token_use`, and configured client/audience
-- [ ] 3.3 Implement bounded JWKS caching with refresh on an unknown key identifier and fail-closed error handling
-- [ ] 3.4 Map exact controlled `cognito:groups` values to global roles and preserve other validated values as opaque trusted team-group identifiers without assigning permissions
-- [ ] 3.5 Generate route-scoped execute-api allow/deny policies plus compact subject, global-role, and team-group authorizer context without inspecting request bodies or loading resource entitlements
+- [x] 3.1 Add the REQUEST Lambda authorizer binary and its least-privilege SAM resources for the OAuth REST API
+- [x] 3.2 Implement Cognito access-token validation for signature, issuer, expiration, `token_use`, and configured client/audience
+- [x] 3.3 Implement bounded JWKS caching with refresh on an unknown key identifier and fail-closed error handling
+- [x] 3.4 Map exact controlled `cognito:groups` values to global roles and preserve other validated values as opaque trusted team-group identifiers without assigning permissions
+- [x] 3.5 Generate route-scoped execute-api allow/deny policies plus compact subject, global-role, and team-group authorizer context without inspecting request bodies or loading resource entitlements
 - [ ] 3.6 Disable authorizer-result caching by default and enforce token-specific cache keys and token-expiration bounds if caching is configured
-- [ ] 3.7 Add authorizer tests covering valid tokens, every validation failure, global-role mapping, unknown team-group preservation, compact context, route gates, JWKS rotation, caching bounds, and token redaction
+- [x] 3.7 Add authorizer tests covering valid tokens, every validation failure, global-role mapping, unknown team-group preservation, compact context, route gates, JWKS rotation, caching bounds, and token redaction
 
 ## 4. Separate API Surfaces
 

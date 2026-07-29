@@ -458,6 +458,30 @@ Resources:
       UserPoolId: !Ref NexusUserPool
       Description: Platform auditors (global read-only role; cannot mutate or approve)
 
+  OAuthAuthorizerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-oauth-authorizer"
+      RetentionInDays: 30
+
+  OAuthAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: OAuthAuthorizerLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-oauth-authorizer"
+      CodeUri: ./control-plane/functions/oauth-authorizer
+      Handler: bootstrap
+      Description: REQUEST authorizer validating Cognito access tokens for the interactive OAuth control-plane API
+      Environment:
+        Variables:
+          COGNITO_ISSUER: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}"
+          COGNITO_CLIENT_ID: !Ref NexusUserPoolClient
+          COGNITO_JWKS_URI: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}/.well-known/jwks.json"
+
   # ---- Domain Management Functions (Read) ----
   ListDomainsFunction:
     Type: AWS::Serverless::Function

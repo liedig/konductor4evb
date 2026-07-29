@@ -18,6 +18,7 @@ members = [
     "event-streams/functions/describe-subscription",
     "event-streams/functions/list-schemas",
     "event-streams/functions/describe-schema",
+    "control-plane/functions/oauth-authorizer",
     "spike/evaluate-authorization-engine",
 ]
 
@@ -35,6 +36,8 @@ aws-sdk-sqs = "1"
 aws-sdk-sts = "1"
 aws-sdk-schemas = "1"
 aws-sdk-cloudwatch = "1"
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
 lambda_runtime = "0.13"
 serde = { version = "1", features = ["derive"] }
