@@ -7,11 +7,11 @@
 
 ## 2. Cognito Identity Infrastructure
 
-- [ ] 2.1 Add a dedicated Cognito user pool and configurable access-token lifetime to the SAM control-plane stack
-- [ ] 2.2 Add the OAuth app client, supported OAuth scopes and flows, and parameterized callback/logout URLs without exposing a browser client secret
-- [ ] 2.3 Add controlled Cognito groups for `platform-admin` and `platform-auditor`
-- [ ] 2.4 Export the user-pool issuer, app-client identifier, and interactive OAuth configuration needed by the authorizer and UI
-- [ ] 2.5 Add template tests validating Cognito resources, group names, token lifetime, and secure client settings
+- [x] 2.1 Add a dedicated Cognito user pool and configurable access-token lifetime to the SAM control-plane stack
+- [x] 2.2 Add the OAuth app client, supported OAuth scopes and flows, and parameterized callback/logout URLs without exposing a browser client secret
+- [x] 2.3 Add controlled Cognito groups for `platform-admin` and `platform-auditor`
+- [x] 2.4 Export the user-pool issuer, app-client identifier, and interactive OAuth configuration needed by the authorizer and UI
+- [x] 2.5 Add template tests validating Cognito resources, group names, token lifetime, and secure client settings
 
 ## 3. OAuth REQUEST Authorizer
 

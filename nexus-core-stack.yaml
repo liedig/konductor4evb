@@ -36,6 +36,27 @@ Parameters:
     Default: ""
     Description: Verified SES recipient that receives domain approval requests and lifecycle event notifications (the platform team inbox). Both this and NotificationSenderEmail must be non-empty to deploy notification resources.
 
+  AccessTokenValidityMinutes:
+    Type: Number
+    Default: 60
+    MinValue: 5
+    MaxValue: 1440
+    Description: >
+      Bounded Cognito access-token lifetime (minutes) for the interactive OAuth
+      client. Offline JWT validation cannot revoke an already-issued token, so
+      stale access ends no later than this many minutes after issue.
+  OAuthCallbackUrls:
+    Type: CommaDelimitedList
+    Default: "http://localhost:3000/callback"
+    Description: >
+      Allowed OAuth redirect (callback) URLs for the interactive app client.
+      Must be HTTPS in non-local deployments.
+  OAuthLogoutUrls:
+    Type: CommaDelimitedList
+    Default: "http://localhost:3000/logout"
+    Description: >
+      Allowed OAuth sign-out (logout) URLs for the interactive app client.
+
 Globals:
   Function:
     Runtime: provided.al2023
@@ -371,6 +392,71 @@ Resources:
           Name: AWS::Include
           Parameters:
             Location: ./api/openapi.yaml
+
+  # ---- Cognito Identity (interactive OAuth foundation) ----
+  NexusUserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub "${Organization}-nexus-users"
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+      MfaConfiguration: "OFF"
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireUppercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+
+  NexusUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: !Sub "${Organization}-nexus-${AWS::AccountId}"
+      UserPoolId: !Ref NexusUserPool
+
+  NexusUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref NexusUserPool
+      ClientName: !Sub "${Organization}-nexus-control-plane"
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO]
+      CallbackURLs: !Ref OAuthCallbackUrls
+      LogoutURLs: !Ref OAuthLogoutUrls
+      AccessTokenValidity: !Ref AccessTokenValidityMinutes
+      IdTokenValidity: !Ref AccessTokenValidityMinutes
+      RefreshTokenValidity: 30
+      TokenValidityUnits:
+        AccessToken: minutes
+        IdToken: minutes
+
+  NexusPlatformAdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: platform-admin
+      UserPoolId: !Ref NexusUserPool
+      Description: Platform administrators (global role; may administer domains and approve registrations)
+
+  NexusPlatformAuditorGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: platform-auditor
+      UserPoolId: !Ref NexusUserPool
+      Description: Platform auditors (global read-only role; cannot mutate or approve)
 
   # ---- Domain Management Functions (Read) ----
   ListDomainsFunction:
@@ -1553,3 +1639,18 @@ Outputs:
   DeprovisionEnvStateMachineArn:
     Description: Per-environment teardown workflow ARN (used by provisioning rollback and scripts/teardown-domain.sh)
     Value: !Ref DeprovisionEnvWorkflow
+  CognitoUserPoolId:
+    Description: Cognito user pool ID for interactive control-plane identity
+    Value: !Ref NexusUserPool
+  CognitoUserPoolIssuer:
+    Description: Issuer (iss) URL the OAuth authorizer validates tokens against
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}"
+  CognitoUserPoolClientId:
+    Description: OAuth app client ID for the interactive control-plane client
+    Value: !Ref NexusUserPoolClient
+  CognitoJwksUri:
+    Description: JWKS document URL used by the OAuth authorizer to verify token signatures
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}/.well-known/jwks.json"
+  CognitoOAuthDomain:
+    Description: Hosted UI / OAuth endpoint base URL for the interactive sign-in experience
+    Value: !Sub "https://${NexusUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
