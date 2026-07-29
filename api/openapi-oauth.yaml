@@ -15,8 +15,6 @@ paths:
       operationId: RegisterDomain
       summary: Register a new domain
       x-amazon-apigateway-request-validator: validate-body
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       requestBody:
         required: true
         content:
@@ -65,8 +63,6 @@ paths:
     get:
       operationId: ListDomains
       summary: List domains
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       parameters:
         - name: ownerAccountId
           in: query
@@ -115,8 +111,6 @@ paths:
     get:
       operationId: GetDomain
       summary: Get domain details
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       parameters:
         - name: domainName
           in: path
@@ -157,8 +151,6 @@ paths:
       operationId: UpdateDomain
       summary: Update domain metadata or status
       x-amazon-apigateway-request-validator: validate-body
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       parameters:
         - name: domainName
           in: path
@@ -216,8 +208,6 @@ paths:
       operationId: DecideRegistration
       summary: Submit approval or rejection decision for a domain registration
       x-amazon-apigateway-request-validator: validate-body
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       requestBody:
         required: true
         content:
@@ -248,53 +238,6 @@ paths:
         httpMethod: POST
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DecideFunction.Arn}/invocations"
-    get:
-      operationId: DecideRegistrationViaLink
-      summary: One-click approve or reject a domain registration via email link
-      description: >
-        Unauthenticated endpoint used by the approval-request notification email.
-        The task token is a single-use bearer credential; possession of the token
-        is itself the authorization. Responds with an HTML confirmation page.
-      security: []
-      x-amazon-apigateway-auth:
-        type: NONE
-      parameters:
-        - name: decision
-          in: query
-          required: true
-          schema:
-            type: string
-            enum: [approve, reject]
-        - name: token
-          in: query
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Decision recorded (HTML confirmation page)
-          content:
-            text/html:
-              schema:
-                type: string
-        "400":
-          description: Missing or invalid parameters (HTML page)
-          content:
-            text/html:
-              schema:
-                type: string
-        "500":
-          description: Internal server error (HTML page)
-          content:
-            text/html:
-              schema:
-                type: string
-      x-amazon-apigateway-integration:
-        type: aws_proxy
-        httpMethod: POST
-        uri:
-          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DecideFunction.Arn}/invocations"
-
   /subscriptions:
     post:
       operationId: Subscribe
@@ -304,8 +247,6 @@ paths:
         the schema in every environment, pinned at subscribe time. No version
         parameter is accepted — the schema is the contract.
       x-amazon-apigateway-request-validator: validate-body
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       requestBody:
         required: true
         content:
@@ -355,8 +296,6 @@ paths:
       operationId: ListSubscriptions
       summary: List event subscriptions
       description: Results are scoped to subscriptions where the caller's account owns the consumer domain, the producer domain, or both — a caller with no relationship to either side of a subscription will never see it, regardless of filters.
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       parameters:
         - name: consumer
           in: query
@@ -418,8 +357,6 @@ paths:
     get:
       operationId: DescribeSubscription
       summary: Get full detail of a subscription
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       parameters:
         - name: subscriptionId
           in: path
@@ -455,8 +392,6 @@ paths:
       operationId: UpdateSubscription
       summary: Update per-environment desired state (enable/disable)
       x-amazon-apigateway-request-validator: validate-body
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       parameters:
         - name: subscriptionId
           in: path
@@ -515,8 +450,6 @@ paths:
         Removes the platform-side rules in every environment and marks the
         stream record REMOVED (retained 90 days for audit). Integration rules
         on the consumer's own bus are the application team's responsibility.
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       parameters:
         - name: subscriptionId
           in: path
@@ -572,8 +505,6 @@ paths:
         per-environment registries. When no environment is specified, returns
         all environments; when an environment is specified, returns only that
         environment's registry and schemas.
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       parameters:
         - name: domain
           in: query
@@ -615,8 +546,6 @@ paths:
     get:
       operationId: DescribeSchema
       summary: Describe a schema including per-environment latest versions
-      x-amazon-apigateway-auth:
-        type: AWS_IAM
       parameters:
         - name: schemaName
           in: path

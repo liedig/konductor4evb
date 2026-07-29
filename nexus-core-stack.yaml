@@ -369,12 +369,20 @@ Resources:
             Resource: !Sub "arn:aws:events:${AWS::Region}:*:event-bus/${Organization}-*"
 
   # ---- API Gateway ----
-  NexusApi:
+  IamApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/nexus-iam-api"
+      RetentionInDays: 30
+
+  NexusOAuthApi:
     Type: AWS::Serverless::Api
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      Name: !Sub "nexus-api"
+      Name: !Sub "nexus-NexusOAuthApi"
       StageName: v1
       TracingEnabled: true
       EndpointConfiguration:
@@ -387,11 +395,46 @@ Resources:
           HttpMethod: "*"
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
+      Auth:
+        DefaultAuthorizer: OAuthRequestAuthorizer
+        Authorizers:
+          OAuthRequestAuthorizer:
+            FunctionPayloadType: REQUEST
+            FunctionArn: !GetAtt OAuthAuthorizerFunction.Arn
+            AuthorizerResultTtlInSeconds: 0
+            Identity:
+              Header: Authorization
       DefinitionBody:
         Fn::Transform:
           Name: AWS::Include
           Parameters:
-            Location: ./api/openapi.yaml
+            Location: ./api/openapi-oauth.yaml
+
+  NexusIamApi:
+    Type: AWS::Serverless::Api
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Name: !Sub "nexus-NexusIamApi"
+      StageName: v1
+      TracingEnabled: true
+      EndpointConfiguration:
+        Type: REGIONAL
+      AccessLogSetting:
+        DestinationArn: !GetAtt IamApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+      Auth:
+        DefaultAuthorizer: AWS_IAM
+      DefinitionBody:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: ./api/openapi-iam.yaml
 
   # ---- Cognito Identity (interactive OAuth foundation) ----
   NexusUserPool:
@@ -504,10 +547,16 @@ Resources:
                 - !GetAtt DomainsTable.Arn
                 - !Sub "${DomainsTable.Arn}/index/*"
       Events:
-        Api:
+        OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusApi
+            RestApiId: !Ref NexusOAuthApi
+            Path: /domains
+            Method: GET
+        IamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusIamApi
             Path: /domains
             Method: GET
 
@@ -530,10 +579,16 @@ Resources:
               Action: [dynamodb:GetItem]
               Resource: !GetAtt DomainsTable.Arn
       Events:
-        Api:
+        OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusApi
+            RestApiId: !Ref NexusOAuthApi
+            Path: /domains/{domainName}
+            Method: GET
+        IamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusIamApi
             Path: /domains/{domainName}
             Method: GET
 
@@ -570,10 +625,16 @@ Resources:
               Action: dynamodb:GetItem
               Resource: !GetAtt DomainsTable.Arn
       Events:
-        Api:
+        OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusApi
+            RestApiId: !Ref NexusOAuthApi
+            Path: /subscriptions
+            Method: GET
+        IamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusIamApi
             Path: /subscriptions
             Method: GET
 
@@ -606,10 +667,16 @@ Resources:
                 - !GetAtt EventStreamsTable.Arn
                 - !GetAtt DomainsTable.Arn
       Events:
-        Api:
+        OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusApi
+            RestApiId: !Ref NexusOAuthApi
+            Path: /subscriptions/{subscriptionId}
+            Method: GET
+        IamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusIamApi
             Path: /subscriptions/{subscriptionId}
             Method: GET
 
@@ -645,10 +712,16 @@ Resources:
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
       Events:
-        Api:
+        OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusApi
+            RestApiId: !Ref NexusOAuthApi
+            Path: /schemas
+            Method: GET
+        IamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusIamApi
             Path: /schemas
             Method: GET
 
@@ -684,10 +757,16 @@ Resources:
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
       Events:
-        Api:
+        OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusApi
+            RestApiId: !Ref NexusOAuthApi
+            Path: /schemas/{schemaName}
+            Method: GET
+        IamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusIamApi
             Path: /schemas/{schemaName}
             Method: GET
 
@@ -831,15 +910,9 @@ Resources:
         ApiPost:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusApi
+            RestApiId: !Ref NexusOAuthApi
             Path: /domains/registrations/decide
             Method: POST
-        ApiGet:
-          Type: Api
-          Properties:
-            RestApiId: !Ref NexusApi
-            Path: /domains/registrations/decide
-            Method: GET
 
   # ---- Approval Notification Functions ----
   SendApprovalRequestNotificationFunctionLogGroup:
@@ -866,7 +939,7 @@ Resources:
           DOMAINS_TABLE: !Ref DomainsTable
           NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
           PLATFORM_OPERATOR_EMAIL: !Ref PlatformOperatorEmail
-          DECIDE_ENDPOINT_URL: !Sub "https://${NexusApi}.execute-api.${AWS::Region}.amazonaws.com/v1/domains/registrations/decide"
+          DECIDE_ENDPOINT_URL: !Sub "https://${NexusOAuthApi}.execute-api.${AWS::Region}.amazonaws.com/v1/domains/registrations/decide"
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
@@ -1636,9 +1709,12 @@ Resources:
         Organization: !Ref Organization
 
 Outputs:
-  ApiEndpoint:
-    Description: EventBridge Nexus API endpoint
-    Value: !Sub "https://${NexusApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+  OAuthApiEndpoint:
+    Description: Interactive OAuth control-plane API endpoint
+    Value: !Sub "https://${NexusOAuthApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+  IamApiEndpoint:
+    Description: AWS_IAM control-plane API endpoint for automation
+    Value: !Sub "https://${NexusIamApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
   NexusEventBusArn:
     Description: EventBridge Nexus event bus ARN
     Value: !GetAtt NexusEventBus.Arn

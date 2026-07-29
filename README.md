@@ -2,7 +2,7 @@
 
 A serverless platform for governing cross-account EventBridge at scale. Register domains, discover schemas, and subscribe to events without touching IAM policies, bus policies, or cross-account delivery infrastructure.
 
-[Installation guide](docs/installation.md) | [Architecture](docs/development/architecture.md) | [API contract](api/openapi.yaml)
+[Installation guide](docs/installation.md) | [Architecture](docs/development/architecture.md) | [API contracts](api/) (OAuth: `openapi-oauth.yaml`, IAM: `openapi-iam.yaml`)
 
 ## Why
 

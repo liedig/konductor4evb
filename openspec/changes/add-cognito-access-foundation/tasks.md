@@ -20,16 +20,16 @@
 - [x] 3.3 Implement bounded JWKS caching with refresh on an unknown key identifier and fail-closed error handling
 - [x] 3.4 Map exact controlled `cognito:groups` values to global roles and preserve other validated values as opaque trusted team-group identifiers without assigning permissions
 - [x] 3.5 Generate route-scoped execute-api allow/deny policies plus compact subject, global-role, and team-group authorizer context without inspecting request bodies or loading resource entitlements
-- [ ] 3.6 Disable authorizer-result caching by default and enforce token-specific cache keys and token-expiration bounds if caching is configured
+- [x] 3.6 Disable authorizer-result caching by default and enforce token-specific cache keys and token-expiration bounds if caching is configured
 - [x] 3.7 Add authorizer tests covering valid tokens, every validation failure, global-role mapping, unknown team-group preservation, compact context, route gates, JWKS rotation, caching bounds, and token redaction
 
 ## 4. Separate API Surfaces
 
-- [ ] 4.1 Split the OpenAPI contract and SAM resources into explicit OAuth and AWS_IAM REST API surfaces at the static `v1` stage
-- [ ] 4.2 Attach the REQUEST authorizer only to OAuth methods and retain AWS_IAM authorization with AWS account `principalId` on IAM methods
-- [ ] 4.3 Assign current control-plane routes to the appropriate surface, with approval exposed only on OAuth and no mixed-auth method
-- [ ] 4.4 Preserve IAM-based AWS-native publishing, cross-account provisioning, and EventBridge delivery configuration unchanged
-- [ ] 4.5 Add contract and template tests that reject unintended unauthenticated, mixed-auth, or IAM approval exposure
+- [x] 4.1 Split the OpenAPI contract and SAM resources into explicit OAuth and AWS_IAM REST API surfaces at the static `v1` stage
+- [x] 4.2 Attach the REQUEST authorizer only to OAuth methods and retain AWS_IAM authorization with AWS account `principalId` on IAM methods
+- [x] 4.3 Assign current control-plane routes to the appropriate surface, with approval exposed only on OAuth and no mixed-auth method
+- [x] 4.4 Preserve IAM-based AWS-native publishing, cross-account provisioning, and EventBridge delivery configuration unchanged
+- [x] 4.5 Add contract and template tests that reject unintended unauthenticated, mixed-auth, or IAM approval exposure
 
 ## 5. Trusted Context Propagation
 
