@@ -142,6 +142,15 @@ impl TrustedPrincipal {
         }
     }
 
+    /// The AWS account ID for IAM principals, or `None` for OAuth principals
+    /// who have no account-level binding without the resource-policy engine.
+    pub fn iam_account_id(&self) -> Option<&str> {
+        match self {
+            Self::Iam(p) => Some(&p.account_id),
+            Self::OAuth(_) => None,
+        }
+    }
+
     /// The coarse global roles for this principal (always empty for IAM).
     pub fn global_roles(&self) -> &[GlobalRole] {
         match self {

@@ -5,6 +5,7 @@ use std::env;
 
 use crate::discovery;
 use nexus_common::api;
+use nexus_common::principal_context::log_principal;
 use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
 use nexus_common::models::ApiError;
 
@@ -14,6 +15,9 @@ pub async fn handle(
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
+
+    let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
+    let _ = log_principal(request_context);
 
     let Some(domain_name) = api::query_param(&event.payload, "domain") else {
         return Ok(api::from_control_plane_error(

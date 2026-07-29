@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::env;
 
 use nexus_common::api;
+use nexus_common::principal_context::log_principal;
 use nexus_common::dynamodb::{get_s, get_string_list, s};
 use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
 use nexus_common::models::{ApiError, DomainStatus};
@@ -16,6 +17,9 @@ pub async fn handle(
 ) -> Result<Value, Error> {
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
+
+    let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
+    let _ = log_principal(request_context);
 
     let Some(schema_name) = api::path_param(&event.payload, "schemaName") else {
         return Ok(validation("missing schemaName path parameter"));

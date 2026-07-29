@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_runtime::{Error, LambdaEvent};
 use nexus_common::api;
+use nexus_common::principal_context::log_principal;
 use nexus_common::dynamodb::{
     deserialize_pagination_token, get_s, get_string_set, s, serialize_pagination_token,
 };
@@ -21,6 +22,9 @@ pub async fn handle(
 ) -> Result<Value, Error> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let org = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
+
+    let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
+    let _ = log_principal(request_context);
 
     let owner_filter = api::query_param(&event.payload, "ownerAccountId");
     let status_filter = api::query_param(&event.payload, "status");

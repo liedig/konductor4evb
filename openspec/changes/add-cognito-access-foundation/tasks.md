@@ -33,12 +33,12 @@
 
 ## 5. Trusted Context Propagation
 
-- [ ] 5.1 Parse OAuth subject, global roles, and trusted team groups from authorizer context and IAM account identity plus optional ARN audit provenance from request context into the common trusted-principal type in proxy Lambda handlers
-- [ ] 5.2 Update domain direct API Gateway-to-SQS mapping templates to serialize OAuth subject/global-role/team-group context or IAM account identity into a versioned trusted-principal envelope while preserving existing service integrations
-- [ ] 5.3 Ensure mapping templates overwrite or reject caller-supplied identity, account, group, role, and decider fields
-- [ ] 5.4 Update domain queue consumers to parse the trusted-principal envelope and invoke the resource-authorization interface before state changes
-- [ ] 5.5 Preserve `202 Accepted` as durable queue acceptance and emit the established deterministic failure outcome when consumer-side authorization denies a command
-- [ ] 5.6 Add mapping and consumer tests for OAuth team-group preservation, absence of entitlements, IAM account-level binding despite differing principal ARNs, malicious body identity fields, missing context, and authorization denial without mutation
+- [x] 5.1 Parse OAuth subject, global roles, and trusted team groups from authorizer context and IAM account identity plus optional ARN audit provenance from request context into the common trusted-principal type in proxy Lambda handlers
+- [x] 5.2 Update domain direct API Gateway-to-SQS mapping templates to serialize OAuth subject/global-role/team-group context or IAM account identity into a versioned trusted-principal envelope while preserving existing service integrations
+- [x] 5.3 Ensure mapping templates overwrite or reject caller-supplied identity, account, group, role, and decider fields
+- [x] 5.4 Update domain queue consumers to parse the trusted-principal envelope and invoke the resource-authorization interface before state changes
+- [x] 5.5 Preserve `202 Accepted` as durable queue acceptance and emit the established deterministic failure outcome when consumer-side authorization denies a command
+- [x] 5.6 Add mapping and consumer tests for OAuth team-group preservation, absence of entitlements, IAM account-level binding despite differing principal ARNs, malicious body identity fields, missing context, and authorization denial without mutation
 
 ## 6. OAuth-Only Approval
 

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use lambda_runtime::{Error, LambdaEvent};
 use nexus_common::api;
+use nexus_common::principal_context::log_principal;
 use nexus_common::dynamodb::{
     attr_to_resource_arns_map, attr_to_string_map, get_s, get_string_list, get_string_set, s,
 };
@@ -13,6 +14,10 @@ pub async fn handle(
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
+
+    let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
+    let _ = log_principal(request_context);
+
     Ok(fetch_domain(ddb, &table, &event.payload).await)
 }
 

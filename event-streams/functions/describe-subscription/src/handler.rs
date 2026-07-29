@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use std::env;
 
 use nexus_common::api;
+use nexus_common::principal_context::log_principal;
 use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
 use nexus_common::streams::SubscriptionId;
 use nexus_common::streams_db;
@@ -16,7 +17,10 @@ pub async fn handle(
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
 
-    let Some(caller_account_id) = api::caller_account_id(&event.payload) else {
+    let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
+    let principal = log_principal(request_context);
+
+    let Some(caller_account_id) = principal.ok().and_then(|p| p.iam_account_id().map(String::from)) else {
         return Ok(api::from_control_plane_error(&api::validation_error(
             "missing caller identity",
         )));
@@ -173,6 +177,40 @@ mod tests {
         let response = handle(&ddb, event).await.unwrap();
 
         assert_eq!(response["statusCode"], 400);
+    }
+
+    #[tokio::test]
+    async fn oauth_caller_without_iam_account_is_rejected() {
+        std::env::set_var("EVENT_STREAMS_TABLE", "streams");
+        std::env::set_var("DOMAINS_TABLE", "domains");
+        std::env::set_var("ORGANIZATION", "acme");
+        let config = aws_config::SdkConfig::builder()
+            .behavior_version(aws_config::BehaviorVersion::latest())
+            .build();
+        let ddb = aws_sdk_dynamodb::Client::new(&config);
+
+        let event = LambdaEvent::new(
+            json!({
+                "pathParameters": { "subscriptionId": "checkout.orders.OrderNotification" },
+                "requestContext": {
+                    "authorizer": {
+                        "authenticationMechanism": "oauth",
+                        "principalId": "user-abc-123",
+                        "issuer": "https://cognito-idp.example.com/test",
+                        "clientId": "test-client",
+                        "globalRoles": "[\"platform-admin\"]",
+                        "teamGroups": "[\"team-payments\"]"
+                    }
+                }
+            }),
+            LambdaContext::default(),
+        );
+        let response = handle(&ddb, event).await.unwrap();
+
+        assert_eq!(response["statusCode"], 400);
+        let body: Value = serde_json::from_str(response["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["code"], "ValidationException");
+        assert!(body["message"].as_str().unwrap().contains("missing caller identity"));
     }
 
     fn stream_between(consumer: &str, producer: &str) -> nexus_common::streams::EventStream {

@@ -16,6 +16,23 @@ use serde_json::Value;
 
 use crate::principal::{GlobalRole, TrustedPrincipal, TRUSTED_PRINCIPAL_VERSION};
 
+/// Parses the trusted principal from the proxy `requestContext` and emits a
+/// structured log line. Returns the parsed principal so callers that need the
+/// identity (e.g. for ownership checks) can use it; callers that only need
+/// audit provenance can discard the result.
+pub fn log_principal(request_context: &Value) -> CtxResult<TrustedPrincipal> {
+    let result = TrustedPrincipal::from_proxy_request_context(request_context);
+    match &result {
+        Ok(p) => tracing::info!(
+            mechanism = ?p.authentication_mechanism(),
+            principal_id = %p.principal_id(),
+            "authenticated principal"
+        ),
+        Err(e) => tracing::warn!(error = %e, "trusted-principal context unavailable"),
+    }
+    result
+}
+
 /// SQS message-attribute names that carry the versioned trusted-principal
 /// envelope alongside the command payload body.
 pub mod attr {

@@ -8,7 +8,7 @@ use nexus_common::principal::{
     AuthenticationMechanism, AuthorizationDecision, FoundationAuthorizer, GlobalRole,
     ResourceAuthorizer, TrustedPrincipal,
 };
-use nexus_common::principal_context::{attr, PrincipalContextError};
+use nexus_common::principal_context::{attr, log_principal, PrincipalContextError};
 
 fn attrs(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs
@@ -192,4 +192,44 @@ async fn foundation_authorizer_retains_iam_and_denies_oauth() {
         authorizer.authorize(&oauth, "domains:Register", "domain:x").await,
         AuthorizationDecision::Deny
     );
+}
+
+#[test]
+fn log_principal_returns_iam_from_proxy_context() {
+    let ctx = serde_json::json!({
+        "identity": {
+            "accountId": "111122223333",
+            "userArn": "arn:aws:sts::111122223333:assumed-role/nexus-trust-role/session"
+        }
+    });
+    let principal = log_principal(&ctx).unwrap();
+    assert_eq!(principal.authentication_mechanism(), AuthenticationMechanism::Iam);
+    assert_eq!(principal.principal_id(), "111122223333");
+    assert_eq!(principal.iam_account_id(), Some("111122223333"));
+}
+
+#[test]
+fn log_principal_returns_oauth_from_authorizer_context() {
+    let ctx = serde_json::json!({
+        "authorizer": {
+            "authenticationMechanism": "oauth",
+            "principalId": "user-abc-123",
+            "issuer": "https://cognito-idp.example.com/pool",
+            "clientId": "client123",
+            "globalRoles": "[\"platform-admin\"]",
+            "teamGroups": "[\"team-payments\"]"
+        }
+    });
+    let principal = log_principal(&ctx).unwrap();
+    assert_eq!(principal.authentication_mechanism(), AuthenticationMechanism::Oauth);
+    assert_eq!(principal.principal_id(), "user-abc-123");
+    assert_eq!(principal.iam_account_id(), None);
+    assert_eq!(principal.global_roles(), &[GlobalRole::PlatformAdmin]);
+}
+
+#[test]
+fn log_principal_returns_error_for_missing_context() {
+    let ctx = serde_json::json!({});
+    let err = log_principal(&ctx).unwrap_err();
+    assert!(matches!(err, PrincipalContextError::MissingContext));
 }
