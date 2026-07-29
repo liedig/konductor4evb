@@ -20,7 +20,9 @@ Nexus runs in a dedicated **platform account** and provisions domain resources i
 ```mermaid
 graph TB
     subgraph platform["Platform Account"]
-        api["API Gateway<br/>(IAM Auth)"]
+        api["API Gateway<br/>(OAuth + IAM surfaces)"]
+        cognito["Cognito User Pool<br/>(platform-admin / auditor)"]
+        authorizer["OAuth REQUEST<br/>Authorizer Lambda"]
         sqs["SQS Command Queue"]
         handler["Command Handler<br/>Lambda"]
         listfn["List Domains<br/>Lambda"]
@@ -132,7 +134,13 @@ stateDiagram-v2
 
 ## API Layer
 
-The REST API uses IAM authorization and is defined in `api/openapi.yaml`. Write operations are asynchronous — API Gateway validates the request body and pushes it directly to SQS without invoking a Lambda.
+Nexus exposes two separate API Gateway surfaces at the static `v1` stage, each with its own OpenAPI contract and authorization model:
+
+- **OAuth surface** (`api/openapi-oauth.yaml`): interactive users authenticate via a Cognito user pool with controlled groups (`platform-admin`, `platform-auditor`). A REQUEST-type Lambda authorizer validates the Cognito access token (signature, issuer, expiration, `token_use`, client/audience), maps `cognito:groups` to global roles, preserves other groups as opaque team-group identifiers, and emits route-scoped allow/deny policies. Authorizer context is never cached by default (token-specific cache keys if enabled). Write operations are asynchronous (API Gateway validates the body and pushes to SQS); the decide endpoint is a direct Lambda proxy.
+
+- **IAM surface** (`api/openapi-iam.yaml`): AWS-native automation callers authenticate with SigV4. The caller's AWS account ID serves as the principal identifier. Read endpoints (list, describe) and publisher/subscription management are available on this surface. Approval is OAuth-only and not exposed on the IAM surface.
+
+Both surfaces inject a versioned **trusted-principal envelope** into SQS message attributes via VTL mapping templates, sourcing every identity field from API Gateway authorization context (`$context.authorizer.*` for OAuth, `$context.identity.*` for IAM), never from the request body. Consumer Lambda handlers reconstruct the `TrustedPrincipal` from this envelope and invoke the resource-authorization interface before any state change. Until the DynamoDB grant-engine change lands, `FoundationAuthorizer` allows IAM mutations and denies OAuth mutations (fail-closed).
 
 ```mermaid
 sequenceDiagram
@@ -144,20 +152,33 @@ sequenceDiagram
     participant EB as Nexus Event Bus
 
     Note over Client, EB: Write Path (POST /domains, PUT /domains/{id})
-    Client->>APIGW: POST /domains (IAM-signed)
+    Client->>APIGW: POST /domains (OAuth token or IAM-signed)
     APIGW->>APIGW: Validate request body (OpenAPI schema)
-    APIGW->>SQS: SendMessage (AWS service integration)
+    APIGW->>SQS: SendMessage + trusted-principal envelope (message attributes)
     SQS-->>Client: 202 Accepted {requestId}
     SQS->>Lambda: Invoke (batch size 1)
+    Lambda->>Lambda: Reconstruct TrustedPrincipal from envelope
+    Lambda->>Lambda: Authorize before state change
     Lambda->>DDB: PutItem / UpdateItem
     Lambda->>EB: PutEvents (outcome event)
 
     Note over Client, EB: Read Path (GET /domains, GET /domains/{id})
-    Client->>APIGW: GET /domains (IAM-signed)
+    Client->>APIGW: GET /domains (OAuth token or IAM-signed)
     APIGW->>Lambda: Invoke (Lambda proxy)
+    Lambda->>Lambda: Parse TrustedPrincipal from requestContext
     Lambda->>DDB: Query / GetItem
     Lambda-->>Client: 200 OK {items}
 ```
+
+### Identity and Authorization
+
+Nexus separates **interactive identity** (OAuth/Cognito) from **automation identity** (IAM/AWS account). The `TrustedPrincipal` contract normalizes both: the OAuth variant carries the Cognito subject, controlled global roles, and trusted team-group identifiers; the IAM variant carries the AWS account ID as the principal identifier with optional principal ARN audit provenance.
+
+The OAuth authorizer maps exact `cognito:groups` values to global roles (`platform-admin` -> `PlatformAdmin`, `platform-auditor` -> `PlatformAuditor`) and preserves all other validated group names as opaque team-group identifiers without assigning permissions. Route-level access is enforced by the authorizer: `platform-admin` may access any method, `platform-auditor` may only GET. The approval (decide) endpoint is OAuth POST-only and additionally requires `platform-admin` in the handler (defense-in-depth).
+
+Approval decisions derive `decidedBy` from the trusted OAuth principal context, not from caller-supplied input. The `decidedBy` field is removed from the `DecideRequest` schema and rejected by `deny_unknown_fields`. The email-link bearer GET approval path has been removed; approval notification emails direct operators to sign in to Nexus rather than providing unauthenticated decision URLs. Task tokens remain the Step Functions callback mechanism, supplied in the authenticated POST body.
+
+The resource-authorization interface (`ResourceAuthorizer` trait) accepts `TrustedPrincipal` and returns `Allow` or `Deny`. The current `FoundationAuthorizer` implementation allows IAM and denies OAuth mutations. A separate OpenSpec change will implement the production DynamoDB grant engine; until then, OAuth mutations fail closed with a deterministic failure outcome (EventBridge `*Failed` event + SQS ack, no retry).
 
 ### Endpoints
 
@@ -677,7 +698,7 @@ evb-nexus/
 | Layer | Technology |
 |-------|-----------|
 | Language | Rust (cargo-lambda, aws-sdk-rust, serde, tokio) |
-| API | REST via API Gateway with IAM authorization |
+| API | REST via API Gateway with separate OAuth (Cognito + REQUEST authorizer) and AWS_IAM surfaces |
 | Database | DynamoDB (PAY_PER_REQUEST, single table) |
 | Workflows | Step Functions (YAML, JSONata, SDK integrations) |
 | Notifications | SES for owner emails (approval, rejection, provisioning, registration outcomes); SNS topic for operator lifecycle alerts (optional via notifications-stack.yaml) |

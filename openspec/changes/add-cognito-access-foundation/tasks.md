@@ -51,9 +51,9 @@
 
 ## 7. Migration, Operations, and Documentation
 
-- [ ] 7.1 Add metrics and safe logs for authorizer allows/denies, token-validation categories, JWKS refresh, and consumer authorization denials without logging tokens or sensitive claims
-- [ ] 7.2 Add deployment checks and a cutover sequence that provisions OAuth access before removing the bearer approval path and never re-enables unauthenticated approval during rollback
-- [ ] 7.3 Update `docs/development/architecture.md` with separate API surfaces, Cognito identity flow, trusted team-group propagation, account-granular IAM identity, and asynchronous authorization boundaries
-- [ ] 7.4 Update `docs/development/decisions.md` with the OAuth/IAM separation, REQUEST authorizer, global-role and team-group handling, account-level IAM binding, caching/revocation, and approval decisions
-- [ ] 7.5 Document the dependency on `evaluate-authorization-engine` and the deferred enterprise federation/group-customization guidance without defining publisher or subscriber bindings
-- [ ] 7.6 Run formatting, unit and integration tests, linting, SAM/OpenAPI validation, and strict OpenSpec validation
+- [x] 7.1 Add metrics and safe logs for authorizer allows/denies, token-validation categories, JWKS refresh, and consumer authorization denials without logging tokens or sensitive claims
+- [x] 7.2 Add deployment checks and a cutover sequence that provisions OAuth access before removing the bearer approval path and never re-enables unauthenticated approval during rollback
+- [x] 7.3 Update `docs/development/architecture.md` with separate API surfaces, Cognito identity flow, trusted team-group propagation, account-granular IAM identity, and asynchronous authorization boundaries
+- [x] 7.4 Update `docs/development/decisions.md` with the OAuth/IAM separation, REQUEST authorizer, global-role and team-group handling, account-level IAM binding, caching/revocation, and approval decisions
+- [x] 7.5 Document the dependency on `evaluate-authorization-engine` and the deferred enterprise federation/group-customization guidance without defining publisher or subscriber bindings
+- [x] 7.6 Run formatting, unit and integration tests, linting, SAM/OpenAPI validation, and strict OpenSpec validation

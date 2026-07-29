@@ -61,6 +61,7 @@ pub async fn handle(
         .authorize(principal, "subscriptions:Subscribe", &subscription_id)
         .await;
     if !decision.is_allowed() {
+        tracing::warn!(action = "subscriptions:Subscribe", subscription_id, "consumer authorization denied");
         return outcome::emit(&clients.eb, &cp_bus, "SubscribeFailed", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "reason": OAUTH_MUTATIONS_DISABLED, "failedAt": chrono::Utc::now().to_rfc3339()})).await;
     }
 

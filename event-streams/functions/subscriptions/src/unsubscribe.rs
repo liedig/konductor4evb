@@ -47,6 +47,7 @@ pub async fn handle(
         .authorize(principal, "subscriptions:Unsubscribe", &message.subscription_id)
         .await;
     if !decision.is_allowed() {
+        tracing::warn!(action = "subscriptions:Unsubscribe", subscription_id = %message.subscription_id, "consumer authorization denied");
         return emit_failed(OAUTH_MUTATIONS_DISABLED.to_string()).await;
     }
 

@@ -45,6 +45,7 @@ pub async fn handle(
         .authorize(principal, "domains:Update", domain_name)
         .await;
     if !decision.is_allowed() {
+        tracing::warn!(action = "domains:Update", domain = domain_name, "consumer authorization denied");
         return emit_failed(eb, &cp_bus, domain_name, OAUTH_MUTATIONS_DISABLED).await;
     }
 

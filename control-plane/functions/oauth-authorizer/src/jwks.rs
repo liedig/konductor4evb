@@ -89,6 +89,7 @@ where
             }
         }
 
+        tracing::debug!(kid, "JWKS cache miss, refreshing key set");
         let keys = (self.fetch)().await?;
         let resolved = keys.get(kid).cloned();
         let mut cache = self.cache.write().await;
