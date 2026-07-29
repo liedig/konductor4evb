@@ -129,7 +129,6 @@ pub struct RegisterDomainRequest {
 pub struct DecideRequest {
     pub task_token: String,
     pub decision: Decision,
-    pub decided_by: String,
     pub justification: Option<String>,
 }
 
@@ -312,6 +311,28 @@ mod tests {
             "decision": "ACCEPT",
             "decidedBy": "admin@example.com",
             "unexpected": "value"
+        });
+        let parsed: Result<DecideRequest, _> = serde_json::from_value(value);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn decide_request_parses_without_decided_by() {
+        let value = serde_json::json!({
+            "taskToken": "token",
+            "decision": "ACCEPT",
+        });
+        let parsed: DecideRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.task_token, "token");
+        assert_eq!(parsed.decision, Decision::Accept);
+    }
+
+    #[test]
+    fn decide_request_rejects_caller_supplied_decided_by() {
+        let value = serde_json::json!({
+            "taskToken": "token",
+            "decision": "ACCEPT",
+            "decidedBy": "attacker",
         });
         let parsed: Result<DecideRequest, _> = serde_json::from_value(value);
         assert!(parsed.is_err());

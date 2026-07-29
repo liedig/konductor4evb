@@ -749,15 +749,13 @@ components:
 
     DecideRequest:
       type: object
-      required: [taskToken, decision, decidedBy]
+      required: [taskToken, decision]
       properties:
         taskToken:
           type: string
         decision:
           type: string
           enum: [ACCEPT, REJECT]
-        decidedBy:
-          type: string
         justification:
           type: string
           maxLength: 512

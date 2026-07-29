@@ -42,12 +42,12 @@
 
 ## 6. OAuth-Only Approval
 
-- [ ] 6.1 Change the approval OpenAPI schema and route to require OAuth `platform-admin` and stop treating caller-supplied `decidedBy` as authoritative
-- [ ] 6.2 Update the decide Lambda to derive `decidedBy` from trusted OAuth principal context before issuing Step Functions callbacks
-- [ ] 6.3 Reject task-token-only, `platform-auditor`, unauthenticated, and IAM approval attempts before any Step Functions callback
-- [ ] 6.4 Update approval email generation to direct operators to sign in and remove task tokens and unauthenticated decision URLs from email content
-- [ ] 6.5 Verify existing pending approval workflows can complete through the authenticated route while task tokens remain callback state
-- [ ] 6.6 Add approval tests covering accept, reject, trusted decider identity, token-only denial, role denial, expired callback state, and notification content
+- [x] 6.1 Change the approval OpenAPI schema and route to require OAuth `platform-admin` and stop treating caller-supplied `decidedBy` as authoritative
+- [x] 6.2 Update the decide Lambda to derive `decidedBy` from trusted OAuth principal context before issuing Step Functions callbacks
+- [x] 6.3 Reject task-token-only, `platform-auditor`, unauthenticated, and IAM approval attempts before any Step Functions callback
+- [x] 6.4 Update approval email generation to direct operators to sign in and remove task tokens and unauthenticated decision URLs from email content
+- [x] 6.5 Verify existing pending approval workflows can complete through the authenticated route while task tokens remain callback state
+- [x] 6.6 Add approval tests covering accept, reject, trusted decider identity, token-only denial, role denial, expired callback state, and notification content
 
 ## 7. Migration, Operations, and Documentation
 

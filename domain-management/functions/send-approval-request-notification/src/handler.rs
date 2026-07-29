@@ -6,7 +6,6 @@ use nexus_common::dynamodb::s;
 use nexus_common::html::escape;
 use serde_json::Value;
 use std::env;
-use std::fmt::Write;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -18,8 +17,6 @@ pub async fn handle(
         env::var("PLATFORM_OPERATOR_EMAIL").context("PLATFORM_OPERATOR_EMAIL not set")?;
     let from_email =
         env::var("NOTIFICATION_SENDER_EMAIL").context("NOTIFICATION_SENDER_EMAIL not set")?;
-    let decide_endpoint_url =
-        env::var("DECIDE_ENDPOINT_URL").context("DECIDE_ENDPOINT_URL not set")?;
 
     let fields = extract_event_fields(&event.payload)?;
     let is_new_account = check_is_new_account(ddb, &table, &fields.owner_account_id).await?;
@@ -38,10 +35,8 @@ pub async fn handle(
         &fields.domain_name,
         &fields.owner_account_id,
         &fields.owner_email,
-        &fields.task_token,
         is_new_account,
         &fields.environments,
-        &decide_endpoint_url,
     );
 
     send_approval_email(ses, &from_email, &to_email, &fields.domain_name, html_body).await
@@ -167,10 +162,8 @@ fn build_approval_email_body(
     domain_name: &str,
     owner_account_id: &str,
     owner_email: &str,
-    task_token: &str,
     is_new_account: bool,
     environments: &[String],
-    decide_endpoint_url: &str,
 ) -> String {
     let domain_name = escape(domain_name);
     let owner_account_id = escape(owner_account_id);
@@ -192,14 +185,6 @@ Ensure the trust-stack has been deployed to this account before approving.
     };
     let environments_display = escape(&environments_display);
 
-    let encoded_token = url_encode(task_token);
-    let approve_url = escape(&format!(
-        "{decide_endpoint_url}?decision=approve&token={encoded_token}"
-    ));
-    let reject_url = escape(&format!(
-        "{decide_endpoint_url}?decision=reject&token={encoded_token}"
-    ));
-
     format!(
         r#"<html>
 <body>
@@ -214,29 +199,11 @@ Ensure the trust-stack has been deployed to this account before approving.
 <tr><td><strong>Environments</strong></td><td>{environments_display}</td></tr>
 </table>
 <p style="margin-top:24px">
-  <a href="{approve_url}" style="display:inline-block;background-color:#1d8102;color:#ffffff;padding:10px 20px;margin-right:8px;text-decoration:none;border-radius:4px">Approve</a>
-  <a href="{reject_url}" style="display:inline-block;background-color:#b31b1b;color:#ffffff;padding:10px 20px;text-decoration:none;border-radius:4px">Reject</a>
+  Sign in to EventBridge Nexus to review and approve or reject this domain registration request.
 </p>
 </body>
 </html>"#
     )
-}
-fn url_encode(input: &str) -> String {
-    let mut out = String::with_capacity(input.len() * 3);
-    for byte in input.bytes() {
-        let is_unreserved = byte.is_ascii_alphanumeric()
-            || byte == b'-'
-            || byte == b'_'
-            || byte == b'.'
-            || byte == b'~';
-        if is_unreserved {
-            out.push(byte as char);
-        } else {
-            out.push('%');
-            write!(&mut out, "{byte:02X}").unwrap();
-        }
-    }
-    out
 }
 
 #[cfg(test)]
@@ -247,18 +214,10 @@ mod tests {
         vec!["dev".into(), "staging".into(), "prod".into()]
     }
 
-    const DECIDE_URL: &str = "https://api.example.com/dev/domains/registrations/decide";
-
     #[test]
     fn approval_email_body_contains_domain_name() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            false,
-            &envs(),
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", false, &envs(),
         );
         assert!(body.contains("billing"));
     }
@@ -266,13 +225,7 @@ mod tests {
     #[test]
     fn approval_email_body_contains_owner_account_id() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            false,
-            &envs(),
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", false, &envs(),
         );
         assert!(body.contains("111122223333"));
     }
@@ -280,57 +233,33 @@ mod tests {
     #[test]
     fn approval_email_body_contains_owner_email() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            false,
-            &envs(),
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", false, &envs(),
         );
         assert!(body.contains("owner@example.com"));
     }
 
     #[test]
-    fn approval_email_body_contains_approve_and_reject_links() {
+    fn approval_email_body_contains_sign_in_message() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            false,
-            &envs(),
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", false, &envs(),
         );
-        assert!(body.contains(&format!("{DECIDE_URL}?decision=approve&amp;token=tok-1")));
-        assert!(body.contains(&format!("{DECIDE_URL}?decision=reject&amp;token=tok-1")));
+        assert!(body.contains("Sign in to EventBridge Nexus"));
     }
 
     #[test]
-    fn approval_email_body_url_encodes_task_token_special_chars() {
+    fn approval_email_body_does_not_contain_task_token_links() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "AQC+abc/def=",
-            false,
-            &envs(),
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", false, &envs(),
         );
-        assert!(body.contains("token=AQC%2Babc%2Fdef%3D"));
-        assert!(!body.contains("token=AQC+abc/def="));
+        assert!(!body.contains("decision=approve"));
+        assert!(!body.contains("decision=reject"));
+        assert!(!body.contains("token="));
     }
 
     #[test]
     fn approval_email_body_escapes_html_input() {
         let body = build_approval_email_body(
-            "<billing>",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            false,
-            &["dev<script>".to_string()],
-            DECIDE_URL,
+            "<billing>", "111122223333", "owner@example.com", false, &["dev<script>".to_string()],
         );
         assert!(body.contains("&lt;billing&gt;"));
         assert!(!body.contains("<billing>"));
@@ -340,13 +269,7 @@ mod tests {
     #[test]
     fn approval_email_body_contains_heading() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            false,
-            &envs(),
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", false, &envs(),
         );
         assert!(body.contains("Approval Required"));
     }
@@ -354,13 +277,7 @@ mod tests {
     #[test]
     fn new_account_shows_trust_stack_notice() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            true,
-            &envs(),
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", true, &envs(),
         );
         assert!(body.contains("New Account Detected"));
         assert!(body.contains("trust-stack"));
@@ -369,13 +286,7 @@ mod tests {
     #[test]
     fn known_account_omits_trust_stack_notice() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            false,
-            &envs(),
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", false, &envs(),
         );
         assert!(!body.contains("New Account Detected"));
     }
@@ -383,13 +294,7 @@ mod tests {
     #[test]
     fn approval_email_body_lists_environments() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            false,
-            &envs(),
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", false, &envs(),
         );
         assert!(body.contains("dev, staging, prod"));
     }
@@ -397,24 +302,8 @@ mod tests {
     #[test]
     fn approval_email_body_handles_empty_environments() {
         let body = build_approval_email_body(
-            "billing",
-            "111122223333",
-            "owner@example.com",
-            "tok-1",
-            false,
-            &[],
-            DECIDE_URL,
+            "billing", "111122223333", "owner@example.com", false, &[],
         );
         assert!(body.contains("(none configured)"));
-    }
-
-    #[test]
-    fn url_encode_preserves_unreserved_chars() {
-        assert_eq!(url_encode("abcXYZ123-_.~"), "abcXYZ123-_.~");
-    }
-
-    #[test]
-    fn url_encode_encodes_reserved_chars() {
-        assert_eq!(url_encode("+/=&? "), "%2B%2F%3D%26%3F%20");
     }
 }

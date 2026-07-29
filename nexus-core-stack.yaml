@@ -939,7 +939,6 @@ Resources:
           DOMAINS_TABLE: !Ref DomainsTable
           NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
           PLATFORM_OPERATOR_EMAIL: !Ref PlatformOperatorEmail
-          DECIDE_ENDPOINT_URL: !Sub "https://${NexusOAuthApi}.execute-api.${AWS::Region}.amazonaws.com/v1/domains/registrations/decide"
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
