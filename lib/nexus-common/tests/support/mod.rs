@@ -2,6 +2,10 @@
 //! functions (`!Ref`, `!Sub`, ...) parse as `Value::Tagged`; `untag` unwraps
 //! them so assertions can target the underlying scalar/sequence/mapping.
 
+// Shared helpers are compiled into each test binary; not every binary uses
+// every helper.
+#![allow(dead_code)]
+
 use serde_yaml::{Mapping, Value};
 use std::path::PathBuf;
 
@@ -45,7 +49,7 @@ pub fn at<'a>(v: &'a Value, key: &str) -> &'a Value {
 
 /// Looks up a top-level resource by logical id.
 pub fn resource<'a>(doc: &'a Value, logical_id: &str) -> &'a Value {
-    at(&at(doc, "Resources"), logical_id)
+    at(at(doc, "Resources"), logical_id)
 }
 
 /// The `Properties` node of a resource.

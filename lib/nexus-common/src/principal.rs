@@ -213,6 +213,31 @@ impl ResourceAuthorizer for FailClosedAuthorizer {
     }
 }
 
+/// The [`ResourceAuthorizer`] wired at the consumer boundary before the
+/// authorization-engine change integrates the resource-policy evaluator.
+///
+/// It retains the existing AWS-native, account-granular IAM behavior (allow)
+/// so current automation is unaffected, and keeps OAuth resource mutations
+/// fail closed (deny) because team-group-to-resource binding is not yet
+/// defined. When the DynamoDB-backed engine lands it replaces this type and
+/// evaluates grants for both mechanisms.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FoundationAuthorizer;
+
+impl ResourceAuthorizer for FoundationAuthorizer {
+    async fn authorize(
+        &self,
+        principal: &TrustedPrincipal,
+        _action: &str,
+        _resource: &str,
+    ) -> AuthorizationDecision {
+        match principal.authentication_mechanism() {
+            AuthenticationMechanism::Iam => AuthorizationDecision::Allow,
+            AuthenticationMechanism::Oauth => AuthorizationDecision::Deny,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

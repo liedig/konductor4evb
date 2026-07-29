@@ -6,6 +6,7 @@ pub mod html;
 pub mod models;
 pub mod namespace;
 pub mod principal;
+pub mod principal_context;
 pub mod ses;
 pub mod streams;
 pub mod streams_db;

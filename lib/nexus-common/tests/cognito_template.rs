@@ -15,7 +15,7 @@ fn cognito_identity_resources_exist() {
         ("NexusPlatformAuditorGroup", "AWS::Cognito::UserPoolGroup"),
     ] {
         assert_eq!(
-            text(at(&resource(&doc, logical_id), "Type")),
+            text(at(resource(&doc, logical_id), "Type")),
             expected_type,
             "{logical_id} should be a {expected_type}"
         );
@@ -115,7 +115,7 @@ fn oauth_authorizer_function_is_least_privilege_and_configured() {
         text(at(p, "CodeUri")),
         "./control-plane/functions/oauth-authorizer"
     );
-    let vars = at(&at(p, "Environment"), "Variables");
+    let vars = at(at(p, "Environment"), "Variables");
     for key in ["COGNITO_ISSUER", "COGNITO_CLIENT_ID", "COGNITO_JWKS_URI"] {
         assert!(mapping(vars).get(key).is_some(), "missing env var {key}");
     }

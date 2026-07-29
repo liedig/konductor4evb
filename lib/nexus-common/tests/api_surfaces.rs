@@ -57,10 +57,10 @@ fn two_apis_exist_at_the_static_v1_stage() {
         ("NexusIamApi", "./api/openapi-iam.yaml"),
     ] {
         let api = resource(&doc, logical_id);
-        assert_eq!(text(at(&api, "Type")), "AWS::Serverless::Api");
-        assert_eq!(text(at(&props(api), "StageName")), "v1");
-        let include = at(&at(&props(api), "DefinitionBody"), "Fn::Transform");
-        assert_eq!(text(at(&at(&include, "Parameters"), "Location")), location);
+        assert_eq!(text(at(api, "Type")), "AWS::Serverless::Api");
+        assert_eq!(text(at(props(api), "StageName")), "v1");
+        let include = at(at(props(api), "DefinitionBody"), "Fn::Transform");
+        assert_eq!(text(at(at(include, "Parameters"), "Location")), location);
     }
 }
 
@@ -68,19 +68,19 @@ fn two_apis_exist_at_the_static_v1_stage() {
 fn oauth_api_attaches_request_authorizer_with_caching_disabled() {
     let doc = core_template();
     let api = resource(&doc, "NexusOAuthApi");
-    let auth = at(&props(api), "Auth");
-    assert_eq!(text(at(&auth, "DefaultAuthorizer")), "OAuthRequestAuthorizer");
-    let authorizer = at(&at(&auth, "Authorizers"), "OAuthRequestAuthorizer");
-    assert_eq!(text(at(&authorizer, "FunctionPayloadType")), "REQUEST");
+    let auth = at(props(api), "Auth");
+    assert_eq!(text(at(auth, "DefaultAuthorizer")), "OAuthRequestAuthorizer");
+    let authorizer = at(at(auth, "Authorizers"), "OAuthRequestAuthorizer");
+    assert_eq!(text(at(authorizer, "FunctionPayloadType")), "REQUEST");
     assert_eq!(
-        int(at(&authorizer, "AuthorizerResultTtlInSeconds")),
+        int(at(authorizer, "AuthorizerResultTtlInSeconds")),
         0,
         "authorizer result caching must be disabled by default"
     );
-    let identity = at(&authorizer, "Identity");
-    assert_eq!(text(at(&identity, "Header")), "Authorization");
+    let identity = at(authorizer, "Identity");
+    assert_eq!(text(at(identity, "Header")), "Authorization");
     assert_eq!(
-        text(at(&authorizer, "FunctionArn")),
+        text(at(authorizer, "FunctionArn")),
         "OAuthAuthorizerFunction.Arn"
     );
 }
@@ -89,8 +89,8 @@ fn oauth_api_attaches_request_authorizer_with_caching_disabled() {
 fn iam_api_uses_aws_iam_authorization() {
     let doc = core_template();
     let api = resource(&doc, "NexusIamApi");
-    let auth = at(&props(api), "Auth");
-    assert_eq!(text(at(&auth, "DefaultAuthorizer")), "AWS_IAM");
+    let auth = at(props(api), "Auth");
+    assert_eq!(text(at(auth, "DefaultAuthorizer")), "AWS_IAM");
 }
 
 #[test]
@@ -155,12 +155,12 @@ fn read_functions_are_exposed_on_both_surfaces() {
         "DescribeSchemaFunction",
     ] {
         let func = resource(&doc, logical_id);
-        let events = mapping(&at(&props(func), "Events"));
+        let events = mapping(at(props(func), "Events"));
         for event_name in ["OAuthApi", "IamApi"] {
             let event = events
                 .get(event_name)
                 .unwrap_or_else(|| panic!("{logical_id} missing {event_name} event"));
-            assert_eq!(text(at(&event, "Type")), "Api");
+            assert_eq!(text(at(event, "Type")), "Api");
         }
     }
 }
@@ -169,10 +169,10 @@ fn read_functions_are_exposed_on_both_surfaces() {
 fn decide_function_is_oauth_post_only() {
     let doc = core_template();
     let func = resource(&doc, "DecideFunction");
-    let events = mapping(&at(&props(func), "Events"));
+    let events = mapping(at(props(func), "Events"));
     assert_eq!(events.len(), 1, "decide must have exactly one API event");
-    let event = at(&events.get("ApiPost").expect("ApiPost event"), "Properties");
-    assert_eq!(text(at(&event, "Method")), "POST");
-    assert_eq!(text(at(&event, "RestApiId")), "NexusOAuthApi");
+    let event = at(events.get("ApiPost").expect("ApiPost event"), "Properties");
+    assert_eq!(text(at(event, "Method")), "POST");
+    assert_eq!(text(at(event, "RestApiId")), "NexusOAuthApi");
     assert!(events.get("ApiGet").is_none(), "bearer GET decide must be removed");
 }
