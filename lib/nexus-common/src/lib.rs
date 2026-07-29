@@ -5,6 +5,7 @@ pub mod error;
 pub mod html;
 pub mod models;
 pub mod namespace;
+pub mod principal;
 pub mod ses;
 pub mod streams;
 pub mod streams_db;
