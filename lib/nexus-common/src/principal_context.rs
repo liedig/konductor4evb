@@ -108,6 +108,26 @@ fn build_iam(account_id: &str, principal_arn: Option<&str>) -> TrustedPrincipal 
     TrustedPrincipal::iam(account_id, arn)
 }
 
+/// Extracts the `name -> stringValue` map from an SQS record's
+/// `messageAttributes`, ignoring non-string attributes. Missing attributes
+/// yield an empty map, which [`TrustedPrincipal::from_sqs_attributes`] then
+/// rejects as a missing envelope.
+pub fn sqs_attribute_map(record: &Value) -> HashMap<String, String> {
+    record
+        .get("messageAttributes")
+        .and_then(Value::as_object)
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(name, attr)| {
+                    attr.get("stringValue")
+                        .and_then(Value::as_str)
+                        .map(|s| (name.clone(), s.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl TrustedPrincipal {
     /// Reconstructs a principal from the SQS message attributes written by the
     /// domain and subscription mapping templates.

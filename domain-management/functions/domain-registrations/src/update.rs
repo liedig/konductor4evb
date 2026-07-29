@@ -9,6 +9,7 @@ use std::env;
 use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::DomainStatus;
+use nexus_common::principal::{FoundationAuthorizer, ResourceAuthorizer, TrustedPrincipal};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -27,14 +28,25 @@ pub struct UpdateDomainBody {
     pub secondary_owner_emails: Option<Vec<String>>,
 }
 
+const OAUTH_MUTATIONS_DISABLED: &str =
+    "unauthorized: interactive OAuth mutations are not yet enabled";
+
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
     eb: &aws_sdk_eventbridge::Client,
     message: &UpdateDomainMessage,
+    principal: &TrustedPrincipal,
 ) -> Result<()> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
     let domain_name = &message.domain_name;
+
+    let decision = FoundationAuthorizer
+        .authorize(principal, "domains:Update", domain_name)
+        .await;
+    if !decision.is_allowed() {
+        return emit_failed(eb, &cp_bus, domain_name, OAUTH_MUTATIONS_DISABLED).await;
+    }
 
     if message.body.description.is_none()
         && message.body.tags.is_none()
@@ -277,7 +289,7 @@ mod tests {
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
         let message = update_message("billing", Some("Updated billing domain"));
-        let result = handle(&ddb, &eb, &message).await;
+        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
 
         assert!(result.is_ok());
         assert_eq!(update_rule.num_calls(), 1);
@@ -306,7 +318,7 @@ mod tests {
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
         let message = update_message("billing", Some("Updated billing domain"));
-        let result = handle(&ddb, &eb, &message).await;
+        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
 
         assert!(result.is_ok());
         assert_eq!(update_rule.num_calls(), 1);
@@ -324,7 +336,7 @@ mod tests {
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
         let message = update_message("nonexistent", Some("desc"));
-        let result = handle(&ddb, &eb, &message).await;
+        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
 
         assert!(result.is_ok());
         assert_eq!(update_rule.num_calls(), 1);
@@ -346,7 +358,7 @@ mod tests {
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
         let message = update_message("billing", Some("Should not work"));
-        let result = handle(&ddb, &eb, &message).await;
+        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
 
         assert!(result.is_ok());
         assert_eq!(update_rule.num_calls(), 1);
@@ -371,7 +383,7 @@ mod tests {
                 secondary_owner_emails: Some(vec![]),
             },
         };
-        let result = handle(&ddb, &eb, &message).await;
+        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
 
         assert!(result.is_ok());
         assert_eq!(eb_rule.num_calls(), 1);

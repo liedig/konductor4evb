@@ -6,6 +6,8 @@ use crate::register;
 use crate::update;
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::RegisterDomainRequest;
+use nexus_common::principal::TrustedPrincipal;
+use nexus_common::principal_context::sqs_attribute_map;
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
@@ -60,6 +62,10 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
         .and_then(|b| b.as_str())
         .context("missing SQS record body")?;
 
+    let attributes = sqs_attribute_map(record);
+    let principal = TrustedPrincipal::from_sqs_attributes(&attributes)
+        .context("invalid trusted-principal envelope")?;
+
     match http_method {
         "POST" => {
             let request: RegisterDomainRequest =
@@ -69,6 +75,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
                 &clients.eb,
                 &clients.sfn,
                 &request,
+                &principal,
                 message_id,
             )
             .await
@@ -76,7 +83,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
         "PUT" => {
             let request: update::UpdateDomainMessage =
                 serde_json::from_str(body_str).context("invalid UpdateDomainMessage")?;
-            update::handle(&clients.ddb, &clients.eb, &request).await
+            update::handle(&clients.ddb, &clients.eb, &request, &principal).await
         }
         other => Err(ControlPlaneError::ValidationException {
             message: format!("unrecognised HttpMethod: {other}"),
@@ -125,11 +132,21 @@ mod tests {
         }
     }
 
+    fn iam_envelope(method: &str) -> Value {
+        json!({
+            "HttpMethod": { "stringValue": method },
+            "PrincipalVersion": { "stringValue": "1" },
+            "AuthMechanism": { "stringValue": "iam" },
+            "AccountId": { "stringValue": "111122223333" },
+            "PrincipalArn": { "stringValue": "arn:aws:iam::111122223333:role/Deploy" }
+        })
+    }
+
     fn register_record(message_id: &str, body: &Value) -> Value {
         json!({
             "messageId": message_id,
             "body": body.to_string(),
-            "messageAttributes": { "HttpMethod": { "stringValue": "POST" } }
+            "messageAttributes": iam_envelope("POST")
         })
     }
 
@@ -165,7 +182,7 @@ mod tests {
         let record = json!({
             "messageId": "msg-bad",
             "body": "not json {",
-            "messageAttributes": { "HttpMethod": { "stringValue": "POST" } }
+            "messageAttributes": iam_envelope("POST")
         });
         let result = handle(&clients, sqs_event(vec![record])).await.unwrap();
 
@@ -184,7 +201,7 @@ mod tests {
             json!({
                 "messageId": "msg-bad",
                 "body": "{}",
-                "messageAttributes": { "HttpMethod": { "stringValue": "DELETE" } }
+                "messageAttributes": iam_envelope("DELETE")
             }),
             register_record("msg-good", &valid_register_body()),
         ]);
@@ -194,5 +211,38 @@ mod tests {
             result["batchItemFailures"],
             json!([{ "itemIdentifier": "msg-bad" }])
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_register_is_denied_without_mutation() {
+        set_env();
+        // Only the EventBridge outcome is mocked; any DynamoDB put_item or Step
+        // Functions start_execution call would fail the mocked client, proving
+        // a denied OAuth command performs no mutation.
+        let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| PutEventsOutput::builder().build());
+        let clients = Clients {
+            ddb: mock_client!(aws_sdk_dynamodb, []),
+            eb: mock_client!(aws_sdk_eventbridge, [&eb_rule]),
+            sfn: mock_client!(aws_sdk_sfn, []),
+        };
+
+        let record = json!({
+            "messageId": "msg-oauth",
+            "body": valid_register_body().to_string(),
+            "messageAttributes": {
+                "HttpMethod": { "stringValue": "POST" },
+                "PrincipalVersion": { "stringValue": "1" },
+                "AuthMechanism": { "stringValue": "oauth" },
+                "PrincipalId": { "stringValue": "a1b2c3d4-1111" },
+                "Issuer": { "stringValue": "https://cognito-idp.example/pool" },
+                "ClientId": { "stringValue": "client123" },
+                "GlobalRoles": { "stringValue": "[\"platform-admin\"]" },
+                "TeamGroups": { "stringValue": "[\"team-payments\"]" }
+            }
+        });
+        let result = handle(&clients, sqs_event(vec![record])).await.unwrap();
+
+        assert_eq!(result["batchItemFailures"], json!([]));
     }
 }

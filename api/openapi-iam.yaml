@@ -52,7 +52,7 @@ paths:
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody=$util.urlEncode($input.body)&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody=$util.urlEncode($input.body)&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=iam&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=AccountId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.identity.accountId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=PrincipalArn&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.identity.userArn)&MessageAttribute.5.Value.DataType=String"
         responses:
           default:
             statusCode: "202"
@@ -200,7 +200,7 @@ paths:
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"domainName\":\"$util.urlEncode($input.params('domainName'))\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody={\"domainName\":\"$util.urlEncode($input.params('domainName'))\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=iam&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=AccountId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.identity.accountId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=PrincipalArn&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.identity.userArn)&MessageAttribute.5.Value.DataType=String"
         responses:
           default:
             statusCode: "202"
@@ -257,7 +257,7 @@ paths:
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"callerAccountId\":\"$context.identity.accountId\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody={\"callerAccountId\":\"$context.identity.accountId\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=iam&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=AccountId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.identity.accountId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=PrincipalArn&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.identity.userArn)&MessageAttribute.5.Value.DataType=String"
         responses:
           default:
             statusCode: "202"
@@ -414,7 +414,7 @@ paths:
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\",\"callerAccountId\":\"$context.identity.accountId\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\",\"callerAccountId\":\"$context.identity.accountId\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=iam&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=AccountId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.identity.accountId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=PrincipalArn&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.identity.userArn)&MessageAttribute.5.Value.DataType=String"
         responses:
           default:
             statusCode: "202"
@@ -468,7 +468,7 @@ paths:
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\",\"callerAccountId\":\"$context.identity.accountId\"}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\",\"callerAccountId\":\"$context.identity.accountId\"}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=iam&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=AccountId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.identity.accountId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=PrincipalArn&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.identity.userArn)&MessageAttribute.5.Value.DataType=String"
         responses:
           default:
             statusCode: "202"

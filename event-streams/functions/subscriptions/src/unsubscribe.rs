@@ -6,6 +6,7 @@ use std::env;
 use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
+use nexus_common::principal::{FoundationAuthorizer, ResourceAuthorizer, TrustedPrincipal};
 use nexus_common::streams::{StreamStatus, SubscriptionId};
 use nexus_common::streams_db;
 
@@ -16,7 +17,14 @@ pub struct UnsubscribeMessage {
     pub caller_account_id: String,
 }
 
-pub async fn handle(clients: &Clients, message: &UnsubscribeMessage) -> Result<()> {
+const OAUTH_MUTATIONS_DISABLED: &str =
+    "unauthorized: interactive OAuth mutations are not yet enabled";
+
+pub async fn handle(
+    clients: &Clients,
+    message: &UnsubscribeMessage,
+    principal: &TrustedPrincipal,
+) -> Result<()> {
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
     let streams_table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
     let state_machine_arn = env::var("REMOVE_SUBSCRIPTION_STATE_MACHINE_ARN")
@@ -34,6 +42,13 @@ pub async fn handle(clients: &Clients, message: &UnsubscribeMessage) -> Result<(
             }),
         )
     };
+
+    let decision = FoundationAuthorizer
+        .authorize(principal, "subscriptions:Unsubscribe", &message.subscription_id)
+        .await;
+    if !decision.is_allowed() {
+        return emit_failed(OAUTH_MUTATIONS_DISABLED.to_string()).await;
+    }
 
     let id = match SubscriptionId::parse(&message.subscription_id) {
         Ok(id) => id,

@@ -9,6 +9,7 @@ use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
 use nexus_common::dynamodb::s;
+use nexus_common::principal::{FoundationAuthorizer, ResourceAuthorizer, TrustedPrincipal};
 use nexus_common::streams::{EventStream, StreamStatus, SubscriptionId};
 use nexus_common::streams_db;
 
@@ -31,7 +32,14 @@ pub struct EnvDesiredState {
     pub enabled: bool,
 }
 
-pub async fn handle(clients: &Clients, message: &UpdateStateMessage) -> Result<()> {
+const OAUTH_MUTATIONS_DISABLED: &str =
+    "unauthorized: interactive OAuth mutations are not yet enabled";
+
+pub async fn handle(
+    clients: &Clients,
+    message: &UpdateStateMessage,
+    principal: &TrustedPrincipal,
+) -> Result<()> {
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
     let streams_table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
@@ -48,6 +56,13 @@ pub async fn handle(clients: &Clients, message: &UpdateStateMessage) -> Result<(
             }),
         )
     };
+
+    let decision = FoundationAuthorizer
+        .authorize(principal, "subscriptions:UpdateState", &message.subscription_id)
+        .await;
+    if !decision.is_allowed() {
+        return emit_failed(OAUTH_MUTATIONS_DISABLED.to_string()).await;
+    }
 
     let id = match SubscriptionId::parse(&message.subscription_id) {
         Ok(id) => id,

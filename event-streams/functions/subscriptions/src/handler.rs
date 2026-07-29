@@ -6,6 +6,8 @@ use crate::subscribe;
 use crate::unsubscribe;
 use crate::update_state;
 use nexus_common::error::ControlPlaneError;
+use nexus_common::principal::TrustedPrincipal;
+use nexus_common::principal_context::sqs_attribute_map;
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
@@ -60,21 +62,25 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
         .and_then(|b| b.as_str())
         .context("missing SQS record body")?;
 
+    let attributes = sqs_attribute_map(record);
+    let principal = TrustedPrincipal::from_sqs_attributes(&attributes)
+        .context("invalid trusted-principal envelope")?;
+
     match http_method {
         "POST" => {
             let message: subscribe::SubscribeMessage =
                 serde_json::from_str(body_str).context("invalid SubscribeMessage")?;
-            subscribe::handle(clients, &message, message_id).await
+            subscribe::handle(clients, &message, &principal, message_id).await
         }
         "PATCH" => {
             let message: update_state::UpdateStateMessage =
                 serde_json::from_str(body_str).context("invalid UpdateStateMessage")?;
-            update_state::handle(clients, &message).await
+            update_state::handle(clients, &message, &principal).await
         }
         "DELETE" => {
             let message: unsubscribe::UnsubscribeMessage =
                 serde_json::from_str(body_str).context("invalid UnsubscribeMessage")?;
-            unsubscribe::handle(clients, &message).await
+            unsubscribe::handle(clients, &message, &principal).await
         }
         other => Err(ControlPlaneError::ValidationException {
             message: format!("unrecognised HttpMethod: {other}"),
@@ -121,6 +127,15 @@ mod tests {
         }
     }
 
+    fn iam_envelope(method: &str) -> Value {
+        json!({
+            "HttpMethod": { "stringValue": method },
+            "PrincipalVersion": { "stringValue": "1" },
+            "AuthMechanism": { "stringValue": "iam" },
+            "AccountId": { "stringValue": "111122223333" }
+        })
+    }
+
     fn sqs_event(records: Vec<Value>) -> LambdaEvent<Value> {
         LambdaEvent::new(json!({ "Records": records }), LambdaContext::default())
     }
@@ -132,7 +147,7 @@ mod tests {
         let record = json!({
             "messageId": "msg-1",
             "body": "{}",
-            "messageAttributes": { "HttpMethod": { "stringValue": "OPTIONS" } }
+            "messageAttributes": iam_envelope("OPTIONS")
         });
 
         let result = handle(&clients, sqs_event(vec![record])).await.unwrap();
@@ -150,7 +165,7 @@ mod tests {
         let record = json!({
             "messageId": "msg-bad",
             "body": "not json {",
-            "messageAttributes": { "HttpMethod": { "stringValue": "POST" } }
+            "messageAttributes": iam_envelope("POST")
         });
 
         let result = handle(&clients, sqs_event(vec![record])).await.unwrap();
@@ -176,11 +191,41 @@ mod tests {
         let record = json!({
             "messageId": "msg-1",
             "body": body.to_string(),
-            "messageAttributes": { "HttpMethod": { "stringValue": "POST" } }
+            "messageAttributes": iam_envelope("POST")
         });
 
         let result = handle(&clients, sqs_event(vec![record])).await.unwrap();
 
+        assert_eq!(result["batchItemFailures"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn oauth_subscribe_is_denied_without_mutation() {
+        set_env();
+        let clients = outcome_only_clients();
+        let body = json!({
+            "callerAccountId": "",
+            "body": {
+                "consumerDomain": "checkout",
+                "producerDomain": "orders",
+                "schemaName": "acme-orders@OrderNotification"
+            }
+        });
+        let record = json!({
+            "messageId": "msg-oauth",
+            "body": body.to_string(),
+            "messageAttributes": {
+                "HttpMethod": { "stringValue": "POST" },
+                "PrincipalVersion": { "stringValue": "1" },
+                "AuthMechanism": { "stringValue": "oauth" },
+                "PrincipalId": { "stringValue": "a1b2c3d4-1111" },
+                "Issuer": { "stringValue": "https://cognito-idp.example/pool" },
+                "ClientId": { "stringValue": "client123" },
+                "GlobalRoles": { "stringValue": "[]" },
+                "TeamGroups": { "stringValue": "[]" }
+            }
+        });
+        let result = handle(&clients, sqs_event(vec![record])).await.unwrap();
         assert_eq!(result["batchItemFailures"], json!([]));
     }
 }

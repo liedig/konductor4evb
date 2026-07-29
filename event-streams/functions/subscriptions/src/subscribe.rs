@@ -8,6 +8,7 @@ use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
 use nexus_common::envelope::{rule_name, SchemaName};
+use nexus_common::principal::{FoundationAuthorizer, ResourceAuthorizer, TrustedPrincipal};
 use nexus_common::streams::{EnvStream, EventStream, StreamStatus};
 use nexus_common::streams_db;
 
@@ -33,7 +34,15 @@ pub struct EnvDesiredState {
     pub enabled: bool,
 }
 
-pub async fn handle(clients: &Clients, message: &SubscribeMessage, request_id: &str) -> Result<()> {
+const OAUTH_MUTATIONS_DISABLED: &str =
+    "unauthorized: interactive OAuth mutations are not yet enabled";
+
+pub async fn handle(
+    clients: &Clients,
+    message: &SubscribeMessage,
+    principal: &TrustedPrincipal,
+    request_id: &str,
+) -> Result<()> {
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
     let streams_table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
@@ -47,6 +56,13 @@ pub async fn handle(clients: &Clients, message: &SubscribeMessage, request_id: &
         body.producer_domain,
         schema_detail_type(&body.schema_name)
     );
+
+    let decision = FoundationAuthorizer
+        .authorize(principal, "subscriptions:Subscribe", &subscription_id)
+        .await;
+    if !decision.is_allowed() {
+        return outcome::emit(&clients.eb, &cp_bus, "SubscribeFailed", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "reason": OAUTH_MUTATIONS_DISABLED, "failedAt": chrono::Utc::now().to_rfc3339()})).await;
+    }
 
     let validated = match validate_request(clients, message, &organization).await? {
         Ok(validated) => validated,
@@ -62,25 +78,8 @@ pub async fn handle(clients: &Clients, message: &SubscribeMessage, request_id: &
         rule_name: derived_rule_name,
     } = validated;
 
-    if let Some(existing) = streams_db::get_stream(
-        &clients.ddb,
-        &streams_table,
-        &body.producer_domain,
-        &body.schema_name,
-        &body.consumer_domain,
-    )
-    .await?
-    {
-        if matches!(
-            existing.status,
-            StreamStatus::Active | StreamStatus::Pending
-        ) {
-            tracing::info!(
-                subscription_id,
-                "subscription already exists; idempotent no-op"
-            );
-            return outcome::emit(&clients.eb, &cp_bus, "SubscribeSucceeded", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "status": existing.status, "idempotent": true})).await;
-        }
+    if is_idempotent_noop(clients, &streams_table, body, &cp_bus, &subscription_id).await? {
+        return Ok(());
     }
 
     let stream = build_pending_stream(
@@ -101,6 +100,32 @@ pub async fn handle(clients: &Clients, message: &SubscribeMessage, request_id: &
     start_activation_workflow(clients, &state_machine_arn, &validated, body, request_id).await?;
 
     outcome::emit(&clients.eb, &cp_bus, "SubscribeSucceeded", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "status": StreamStatus::Pending, "requestId": request_id})).await
+}
+
+async fn is_idempotent_noop(
+    clients: &Clients,
+    table: &str,
+    body: &SubscribeBody,
+    cp_bus: &str,
+    subscription_id: &str,
+) -> Result<bool> {
+    if let Some(existing) =
+        streams_db::get_stream(&clients.ddb, table, &body.producer_domain, &body.schema_name, &body.consumer_domain)
+            .await?
+    {
+        if matches!(existing.status, StreamStatus::Active | StreamStatus::Pending) {
+            tracing::info!(subscription_id, "subscription already exists; idempotent no-op");
+            outcome::emit(
+                &clients.eb,
+                cp_bus,
+                "SubscribeSucceeded",
+                json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "status": existing.status, "idempotent": true}),
+            )
+            .await?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn build_pending_stream(

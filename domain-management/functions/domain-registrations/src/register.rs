@@ -8,12 +8,17 @@ use std::env;
 use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::{DomainStatus, RegisterDomainRequest};
+use nexus_common::principal::{FoundationAuthorizer, ResourceAuthorizer, TrustedPrincipal};
+
+const OAUTH_MUTATIONS_DISABLED: &str =
+    "unauthorized: interactive OAuth mutations are not yet enabled";
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
     eb: &aws_sdk_eventbridge::Client,
     sfn: &aws_sdk_sfn::Client,
     request: &RegisterDomainRequest,
+    principal: &TrustedPrincipal,
     request_id: &str,
 ) -> Result<()> {
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
@@ -28,6 +33,14 @@ pub async fn handle(
             field_list: None,
         }
     })?;
+
+    let decision = FoundationAuthorizer
+        .authorize(principal, "domains:Register", &request.domain_name)
+        .await;
+    if !decision.is_allowed() {
+        emit_failed(eb, &cp_bus, request, OAUTH_MUTATIONS_DISABLED).await?;
+        return Ok(());
+    }
 
     if let Err(e) = validate_domain_name(&request.domain_name) {
         emit_failed(eb, &cp_bus, request, &e.to_string()).await?;
@@ -438,7 +451,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -477,7 +490,7 @@ mod tests {
 
             let sfn = mock_client!(aws_sdk_sfn, &[]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -520,7 +533,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -547,7 +560,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(sfn_rule.num_calls(), 1);
@@ -575,7 +588,7 @@ mod tests {
                 tags: None,
             };
 
-            let result = handle(&ddb, &eb, &sfn, &request, "msg-1").await;
+            let result = handle(&ddb, &eb, &sfn, &request, &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(eb_rule.num_calls(), 1);
@@ -617,7 +630,7 @@ mod tests {
                 tags: None,
             };
 
-            let result = handle(&ddb, &eb, &sfn, &request, "msg-1").await;
+            let result = handle(&ddb, &eb, &sfn, &request, &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -658,7 +671,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -699,7 +712,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(eb_rule.num_calls(), 1);
@@ -730,7 +743,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-1").await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -765,7 +778,7 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-2").await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-2").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -802,7 +815,7 @@ mod tests {
 
             let sfn = mock_client!(aws_sdk_sfn, &[]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), "msg-2").await;
+            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-2").await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);

@@ -176,3 +176,76 @@ fn decide_function_is_oauth_post_only() {
     assert_eq!(text(at(event, "RestApiId")), "NexusOAuthApi");
     assert!(events.get("ApiGet").is_none(), "bearer GET decide must be removed");
 }
+
+
+/// One SQS write template extracted from an OpenAPI document: (path, method, template).
+fn write_templates(doc: &Value) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for (path, item) in mapping(at(doc, "paths")) {
+        let path = path.as_str().expect("path key").to_string();
+        for (method, op) in mapping(item) {
+            let method = method.as_str().expect("method key").to_string();
+            if !HTTP_METHODS.contains(&method.as_str()) {
+                continue;
+            }
+            let integration = op
+                .get("x-amazon-apigateway-integration")
+                .expect("integration");
+            if let Some(rt) = integration.get("requestTemplates") {
+                out.push((path.clone(), method, text(at(rt, "application/json")).to_string()));
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn write_templates_inject_trusted_principal_envelope_from_context() {
+    let oauth = write_templates(&oauth_contract());
+    let iam = write_templates(&iam_contract());
+    assert_eq!(oauth.len(), 5, "OAuth must expose 5 SQS write templates");
+    assert_eq!(iam.len(), 5, "IAM must expose 5 SQS write templates");
+
+    for (path, method, t) in &oauth {
+        assert!(
+            t.contains("Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1"),
+            "OAuth {method} {path} missing envelope version"
+        );
+        assert!(
+            t.contains("Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth"),
+            "OAuth {method} {path} missing mechanism"
+        );
+        for ctx in [
+            "$context.authorizer.principalId",
+            "$context.authorizer.issuer",
+            "$context.authorizer.clientId",
+            "$context.authorizer.globalRoles",
+            "$context.authorizer.teamGroups",
+        ] {
+            assert!(t.contains(ctx), "OAuth {method} {path} missing {ctx}");
+        }
+    }
+
+    for (path, method, t) in &iam {
+        assert!(
+            t.contains("Name=AuthMechanism&MessageAttribute.3.Value.StringValue=iam"),
+            "IAM {method} {path} missing mechanism"
+        );
+        for ctx in ["$context.identity.accountId", "$context.identity.userArn"] {
+            assert!(t.contains(ctx), "IAM {method} {path} missing {ctx}");
+        }
+    }
+}
+
+#[test]
+fn write_templates_never_source_identity_attributes_from_caller_body() {
+    for doc in [oauth_contract(), iam_contract()] {
+        for (path, method, t) in write_templates(&doc) {
+            assert!(
+                !t.contains("Value.StringValue=$input")
+                    && !t.contains("Value.StringValue=$util.urlEncode($input"),
+                "{method} {path} sources a trusted message attribute from the caller body"
+            );
+        }
+    }
+}
