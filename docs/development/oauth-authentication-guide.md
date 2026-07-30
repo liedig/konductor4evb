@@ -161,7 +161,7 @@ aws cognito-idp admin-initiate-auth \
   --user-pool-id <POOL_ID> \
   --client-id <CLIENT_ID> \
   --auth-flow ADMIN_USER_PASSWORD_AUTH \
-  --auth-parameters USERNAME=alice@example.com,PASSWORD='SecurePass123!'
+  --auth-parameters USERNAME=alice@example.com,PASSWORD='<YOUR_PASSWORD>'
 ```
 
 If the response contains `ChallengeName: NEW_PASSWORD_REQUIRED`, respond:
@@ -172,7 +172,7 @@ aws cognito-idp admin-respond-to-auth-challenge \
   --client-id <CLIENT_ID> \
   --challenge-name NEW_PASSWORD_REQUIRED \
   --session <SESSION_FROM_PREVIOUS_RESPONSE> \
-  --challenge-responses NEW_PASSWORD='NewSecurePass123!',USERNAME=alice@example.com
+  --challenge-responses NEW_PASSWORD='<YOUR_NEW_PASSWORD>',USERNAME=alice@example.com
 ```
 
 The `AuthenticationResult.AccessToken` field is the token you need.

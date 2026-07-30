@@ -113,7 +113,7 @@ The canonical envelope `detail` contains two sub-objects:
   "detail": {
     "metadata": {
       "schemaVersion": 4,
-      "idempotencyKey": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "idempotencyKey": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
       "publishedAt": "2026-07-30T10:30:00.123Z"
     },
     "data": {

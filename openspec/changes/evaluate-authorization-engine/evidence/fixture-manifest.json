@@ -68,7 +68,7 @@
       "notes": "Global role is resolved by the OAuth authorizer from a controlled Cognito group name; the grant table is not consulted for the platform role itself. Fixture proves the decision contract composes with authorizer-supplied roles."
     },
     {
-      "id": "S02-platform-auditor-read-allow-admin-deny",
+      "id": "S02-platform-auditor-read-and-deny",
       "scenario": "Global platform roles",
       "specReference": "Common authorization scenario suite / Global platform roles",
       "authorizationSubject": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "nexus-platform-auditors"},
