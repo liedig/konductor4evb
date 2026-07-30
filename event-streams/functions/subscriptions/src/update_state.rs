@@ -35,6 +35,11 @@ pub struct EnvDesiredState {
 const OAUTH_MUTATIONS_DISABLED: &str =
     "unauthorized: interactive OAuth mutations are not yet enabled";
 
+enum StreamLookup {
+    Ready(Box<EventStream>),
+    Failed(String),
+}
+
 pub async fn handle(
     clients: &Clients,
     message: &UpdateStateMessage,
@@ -69,71 +74,11 @@ pub async fn handle(
         return emit_failed(OAUTH_MUTATIONS_DISABLED.to_string()).await;
     }
 
-    let id = match SubscriptionId::parse(&message.subscription_id) {
-        Ok(id) => id,
-        Err(e) => return emit_failed(e.to_string()).await,
-    };
-
-    let consumer = match validate::lookup_active_domain(&clients.ddb, &id.consumer_domain).await? {
-        DomainLookup::Found(record) => record,
-        DomainLookup::NotFound => {
-            return emit_failed(format!(
-                "consumer domain '{}' not found",
-                id.consumer_domain
-            ))
-            .await
-        }
-        DomainLookup::NotActive(status) => {
-            return emit_failed(format!(
-                "consumer domain '{}' is {status}, not ACTIVE",
-                id.consumer_domain
-            ))
-            .await
-        }
-    };
-
-    if !validate::caller_owns_consumer(&message.caller_account_id, &consumer) {
-        return emit_failed(format!(
-            "caller account {} does not own consumer domain '{}'",
-            message.caller_account_id, id.consumer_domain
-        ))
-        .await;
-    }
-
-    let schema_name = format!("{organization}-{}@{}", id.producer_domain, id.detail_type);
-    let Some(stream) = streams_db::get_stream(
-        &clients.ddb,
-        &streams_table,
-        &id.producer_domain,
-        &schema_name,
-        &id.consumer_domain,
-    )
-    .await?
-    else {
-        return emit_failed(format!(
-            "subscription '{}' not found",
-            message.subscription_id
-        ))
-        .await;
-    };
-
-    if stream.status != StreamStatus::Active {
-        return emit_failed(format!(
-            "subscription '{}' is {}, not ACTIVE — only active streams can change state",
-            message.subscription_id, stream.status
-        ))
-        .await;
-    }
-
-    for env_name in message.body.environments.keys() {
-        if !stream.environments.contains_key(env_name) {
-            return emit_failed(format!(
-                "unknown environment '{env_name}' for subscription '{}'",
-                message.subscription_id
-            ))
-            .await;
-        }
-    }
+    let stream =
+        match load_validated_stream(clients, message, &streams_table, &organization).await? {
+            StreamLookup::Ready(stream) => stream,
+            StreamLookup::Failed(reason) => return emit_failed(reason).await,
+        };
 
     for (env_name, desired) in &message.body.environments {
         apply_rule_state(clients, &organization, env_name, &stream, desired.enabled).await?;
@@ -152,6 +97,75 @@ pub async fn handle(
         }),
     )
     .await
+}
+
+async fn load_validated_stream(
+    clients: &Clients,
+    message: &UpdateStateMessage,
+    streams_table: &str,
+    organization: &str,
+) -> Result<StreamLookup> {
+    let id = match SubscriptionId::parse(&message.subscription_id) {
+        Ok(id) => id,
+        Err(e) => return Ok(StreamLookup::Failed(e.to_string())),
+    };
+
+    let consumer = match validate::lookup_active_domain(&clients.ddb, &id.consumer_domain).await? {
+        DomainLookup::Found(record) => record,
+        DomainLookup::NotFound => {
+            return Ok(StreamLookup::Failed(format!(
+                "consumer domain '{}' not found",
+                id.consumer_domain
+            )))
+        }
+        DomainLookup::NotActive(status) => {
+            return Ok(StreamLookup::Failed(format!(
+                "consumer domain '{}' is {status}, not ACTIVE",
+                id.consumer_domain
+            )))
+        }
+    };
+
+    if !validate::caller_owns_consumer(&message.caller_account_id, &consumer) {
+        return Ok(StreamLookup::Failed(format!(
+            "caller account {} does not own consumer domain '{}'",
+            message.caller_account_id, id.consumer_domain
+        )));
+    }
+
+    let schema_name = format!("{organization}-{}@{}", id.producer_domain, id.detail_type);
+    let Some(stream) = streams_db::get_stream(
+        &clients.ddb,
+        streams_table,
+        &id.producer_domain,
+        &schema_name,
+        &id.consumer_domain,
+    )
+    .await?
+    else {
+        return Ok(StreamLookup::Failed(format!(
+            "subscription '{}' not found",
+            message.subscription_id
+        )));
+    };
+
+    if stream.status != StreamStatus::Active {
+        return Ok(StreamLookup::Failed(format!(
+            "subscription '{}' is {}, not ACTIVE — only active streams can change state",
+            message.subscription_id, stream.status
+        )));
+    }
+
+    for env_name in message.body.environments.keys() {
+        if !stream.environments.contains_key(env_name) {
+            return Ok(StreamLookup::Failed(format!(
+                "unknown environment '{env_name}' for subscription '{}'",
+                message.subscription_id
+            )));
+        }
+    }
+
+    Ok(StreamLookup::Ready(Box::new(stream)))
 }
 
 /// Enablement is materialized as native rule state — an atomic flip, no
