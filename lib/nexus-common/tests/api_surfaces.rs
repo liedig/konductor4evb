@@ -69,7 +69,10 @@ fn oauth_api_attaches_request_authorizer_with_caching_disabled() {
     let doc = core_template();
     let api = resource(&doc, "NexusOAuthApi");
     let auth = at(props(api), "Auth");
-    assert_eq!(text(at(auth, "DefaultAuthorizer")), "OAuthRequestAuthorizer");
+    assert_eq!(
+        text(at(auth, "DefaultAuthorizer")),
+        "OAuthRequestAuthorizer"
+    );
     let authorizer = at(at(auth, "Authorizers"), "OAuthRequestAuthorizer");
     assert_eq!(text(at(authorizer, "FunctionPayloadType")), "REQUEST");
     assert_eq!(
@@ -102,11 +105,16 @@ fn approval_route_is_exposed_only_on_the_oauth_surface() {
         .iter()
         .filter(|op| op.path == "/domains/registrations/decide")
         .collect();
-    assert_eq!(oauth_decide.len(), 1, "OAuth must expose exactly one decide op");
+    assert_eq!(
+        oauth_decide.len(),
+        1,
+        "OAuth must expose exactly one decide op"
+    );
     assert_eq!(oauth_decide[0].method, "post");
 
     assert!(
-        iam.iter().all(|op| op.path != "/domains/registrations/decide"),
+        iam.iter()
+            .all(|op| op.path != "/domains/registrations/decide"),
         "IAM surface must not expose the approval route"
     );
 }
@@ -117,28 +125,24 @@ fn api_contracts_have_no_unauthenticated_or_mixed_methods() {
         assert!(
             !op.explicitly_unauthenticated,
             "OAuth {} {} must not be unauthenticated",
-            op.method,
-            op.path
+            op.method, op.path
         );
         assert!(
             !op.uses_iam,
             "OAuth {} {} must not also accept AWS_IAM (mixed auth)",
-            op.method,
-            op.path
+            op.method, op.path
         );
     }
     for op in operations(&iam_contract()) {
         assert!(
             !op.explicitly_unauthenticated,
             "IAM {} {} must not be unauthenticated",
-            op.method,
-            op.path
+            op.method, op.path
         );
         assert!(
             op.uses_iam,
             "IAM {} {} must use AWS_IAM",
-            op.method,
-            op.path
+            op.method, op.path
         );
     }
 }
@@ -174,9 +178,11 @@ fn decide_function_is_oauth_post_only() {
     let event = at(events.get("ApiPost").expect("ApiPost event"), "Properties");
     assert_eq!(text(at(event, "Method")), "POST");
     assert_eq!(text(at(event, "RestApiId")), "NexusOAuthApi");
-    assert!(events.get("ApiGet").is_none(), "bearer GET decide must be removed");
+    assert!(
+        events.get("ApiGet").is_none(),
+        "bearer GET decide must be removed"
+    );
 }
-
 
 /// One SQS write template extracted from an OpenAPI document: (path, method, template).
 fn write_templates(doc: &Value) -> Vec<(String, String, String)> {
@@ -192,7 +198,11 @@ fn write_templates(doc: &Value) -> Vec<(String, String, String)> {
                 .get("x-amazon-apigateway-integration")
                 .expect("integration");
             if let Some(rt) = integration.get("requestTemplates") {
-                out.push((path.clone(), method, text(at(rt, "application/json")).to_string()));
+                out.push((
+                    path.clone(),
+                    method,
+                    text(at(rt, "application/json")).to_string(),
+                ));
             }
         }
     }

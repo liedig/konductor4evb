@@ -98,7 +98,10 @@ fn sqs_envelope_fails_closed_on_missing_version() {
     let mut env = oauth_envelope();
     env.remove(attr::VERSION);
     let err = TrustedPrincipal::from_sqs_attributes(&env).unwrap_err();
-    assert!(matches!(err, PrincipalContextError::MissingField(attr::VERSION)));
+    assert!(matches!(
+        err,
+        PrincipalContextError::MissingField(attr::VERSION)
+    ));
 }
 
 #[test]
@@ -130,7 +133,10 @@ fn sqs_envelope_fails_closed_on_missing_oauth_field() {
     let mut env = oauth_envelope();
     env.remove(attr::ISSUER);
     let err = TrustedPrincipal::from_sqs_attributes(&env).unwrap_err();
-    assert!(matches!(err, PrincipalContextError::MissingField(attr::ISSUER)));
+    assert!(matches!(
+        err,
+        PrincipalContextError::MissingField(attr::ISSUER)
+    ));
 }
 
 #[test]
@@ -185,11 +191,15 @@ async fn foundation_authorizer_retains_iam_and_denies_oauth() {
     let oauth = TrustedPrincipal::from_sqs_attributes(&oauth_envelope()).unwrap();
 
     assert_eq!(
-        authorizer.authorize(&iam, "domains:Register", "domain:x").await,
+        authorizer
+            .authorize(&iam, "domains:Register", "domain:x")
+            .await,
         AuthorizationDecision::Allow
     );
     assert_eq!(
-        authorizer.authorize(&oauth, "domains:Register", "domain:x").await,
+        authorizer
+            .authorize(&oauth, "domains:Register", "domain:x")
+            .await,
         AuthorizationDecision::Deny
     );
 }
@@ -203,7 +213,10 @@ fn log_principal_returns_iam_from_proxy_context() {
         }
     });
     let principal = log_principal(&ctx).unwrap();
-    assert_eq!(principal.authentication_mechanism(), AuthenticationMechanism::Iam);
+    assert_eq!(
+        principal.authentication_mechanism(),
+        AuthenticationMechanism::Iam
+    );
     assert_eq!(principal.principal_id(), "111122223333");
     assert_eq!(principal.iam_account_id(), Some("111122223333"));
 }
@@ -221,7 +234,10 @@ fn log_principal_returns_oauth_from_authorizer_context() {
         }
     });
     let principal = log_principal(&ctx).unwrap();
-    assert_eq!(principal.authentication_mechanism(), AuthenticationMechanism::Oauth);
+    assert_eq!(
+        principal.authentication_mechanism(),
+        AuthenticationMechanism::Oauth
+    );
     assert_eq!(principal.principal_id(), "user-abc-123");
     assert_eq!(principal.iam_account_id(), None);
     assert_eq!(principal.global_roles(), &[GlobalRole::PlatformAdmin]);

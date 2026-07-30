@@ -217,7 +217,11 @@ mod tests {
     #[test]
     fn approval_email_body_contains_domain_name() {
         let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", false, &envs(),
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
         );
         assert!(body.contains("billing"));
     }
@@ -225,7 +229,11 @@ mod tests {
     #[test]
     fn approval_email_body_contains_owner_account_id() {
         let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", false, &envs(),
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
         );
         assert!(body.contains("111122223333"));
     }
@@ -233,7 +241,11 @@ mod tests {
     #[test]
     fn approval_email_body_contains_owner_email() {
         let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", false, &envs(),
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
         );
         assert!(body.contains("owner@example.com"));
     }
@@ -241,7 +253,11 @@ mod tests {
     #[test]
     fn approval_email_body_contains_sign_in_message() {
         let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", false, &envs(),
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
         );
         assert!(body.contains("Sign in to EventBridge Nexus"));
     }
@@ -249,7 +265,11 @@ mod tests {
     #[test]
     fn approval_email_body_does_not_contain_task_token_links() {
         let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", false, &envs(),
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
         );
         assert!(!body.contains("decision=approve"));
         assert!(!body.contains("decision=reject"));
@@ -259,7 +279,11 @@ mod tests {
     #[test]
     fn approval_email_body_escapes_html_input() {
         let body = build_approval_email_body(
-            "<billing>", "111122223333", "owner@example.com", false, &["dev<script>".to_string()],
+            "<billing>",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &["dev<script>".to_string()],
         );
         assert!(body.contains("&lt;billing&gt;"));
         assert!(!body.contains("<billing>"));
@@ -269,7 +293,11 @@ mod tests {
     #[test]
     fn approval_email_body_contains_heading() {
         let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", false, &envs(),
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
         );
         assert!(body.contains("Approval Required"));
     }
@@ -277,7 +305,11 @@ mod tests {
     #[test]
     fn new_account_shows_trust_stack_notice() {
         let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", true, &envs(),
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            true,
+            &envs(),
         );
         assert!(body.contains("New Account Detected"));
         assert!(body.contains("trust-stack"));
@@ -286,7 +318,11 @@ mod tests {
     #[test]
     fn known_account_omits_trust_stack_notice() {
         let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", false, &envs(),
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
         );
         assert!(!body.contains("New Account Detected"));
     }
@@ -294,16 +330,19 @@ mod tests {
     #[test]
     fn approval_email_body_lists_environments() {
         let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", false, &envs(),
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
         );
         assert!(body.contains("dev, staging, prod"));
     }
 
     #[test]
     fn approval_email_body_handles_empty_environments() {
-        let body = build_approval_email_body(
-            "billing", "111122223333", "owner@example.com", false, &[],
-        );
+        let body =
+            build_approval_email_body("billing", "111122223333", "owner@example.com", false, &[]);
         assert!(body.contains("(none configured)"));
     }
 }

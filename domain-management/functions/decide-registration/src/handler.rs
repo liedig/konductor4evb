@@ -13,12 +13,16 @@ pub async fn handle(sfn: &aws_sdk_sfn::Client, event: LambdaEvent<Value>) -> Res
         Ok(p) => p,
         Err(e) => {
             tracing::warn!(error = %e, "approval attempted without trusted principal");
-            return Ok(access_denied("Approval requires an authenticated OAuth principal"));
+            return Ok(access_denied(
+                "Approval requires an authenticated OAuth principal",
+            ));
         }
     };
 
     if principal.iam_account_id().is_some() {
-        return Ok(access_denied("Approval requires an interactive OAuth principal, not IAM"));
+        return Ok(access_denied(
+            "Approval requires an interactive OAuth principal, not IAM",
+        ));
     }
 
     if !principal.is_platform_admin() {
@@ -48,42 +52,44 @@ pub async fn handle(sfn: &aws_sdk_sfn::Client, event: LambdaEvent<Value>) -> Res
 
     let justification = request.justification.unwrap_or_default();
 
-    Ok(match record_decision(
-        sfn,
-        &request.task_token,
-        &request.decision,
-        &decided_by,
-        &justification,
-    )
-    .await
-    {
-        DecisionOutcome::Recorded => {
-            api::success_response(200, &json!({"message": "Decision recorded"}))
-        }
-        DecisionOutcome::AlreadyProcessed => api::error_response(
-            409,
-            ApiError {
-                code: "ConflictException".to_string(),
-                message: "Decision already recorded or token expired".to_string(),
-                request_id: None,
-                reason: None,
-                field_list: None,
-            },
-        ),
-        DecisionOutcome::Failed(msg) => {
-            tracing::error!(error = %msg, "nexus-domain-approval decision call failed");
-            api::error_response(
-                500,
+    Ok(
+        match record_decision(
+            sfn,
+            &request.task_token,
+            &request.decision,
+            &decided_by,
+            &justification,
+        )
+        .await
+        {
+            DecisionOutcome::Recorded => {
+                api::success_response(200, &json!({"message": "Decision recorded"}))
+            }
+            DecisionOutcome::AlreadyProcessed => api::error_response(
+                409,
                 ApiError {
-                    code: "InternalServerException".to_string(),
-                    message: "Failed to record decision".to_string(),
+                    code: "ConflictException".to_string(),
+                    message: "Decision already recorded or token expired".to_string(),
                     request_id: None,
                     reason: None,
                     field_list: None,
                 },
-            )
-        }
-    })
+            ),
+            DecisionOutcome::Failed(msg) => {
+                tracing::error!(error = %msg, "nexus-domain-approval decision call failed");
+                api::error_response(
+                    500,
+                    ApiError {
+                        code: "InternalServerException".to_string(),
+                        message: "Failed to record decision".to_string(),
+                        request_id: None,
+                        reason: None,
+                        field_list: None,
+                    },
+                )
+            }
+        },
+    )
 }
 
 fn access_denied(message: &str) -> Value {
@@ -309,14 +315,18 @@ mod tests {
         let resp = handle(&sfn, event).await.unwrap();
         assert_eq!(resp["statusCode"], 400);
         let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
-        assert!(body["message"].as_str().unwrap().contains("Invalid request body"));
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("Invalid request body"));
     }
 
     #[tokio::test]
     async fn oauth_admin_accept_records_decision() {
         use aws_smithy_mocks::{mock, mock_client};
-        let success_mock = mock!(aws_sdk_sfn::Client::send_task_success)
-            .then_output(|| aws_sdk_sfn::operation::send_task_success::SendTaskSuccessOutput::builder().build());
+        let success_mock = mock!(aws_sdk_sfn::Client::send_task_success).then_output(|| {
+            aws_sdk_sfn::operation::send_task_success::SendTaskSuccessOutput::builder().build()
+        });
         let sfn = mock_client!(aws_sdk_sfn, [&success_mock]);
 
         let event = event_with_context(
@@ -331,8 +341,9 @@ mod tests {
     #[tokio::test]
     async fn oauth_admin_reject_records_decision() {
         use aws_smithy_mocks::{mock, mock_client};
-        let failure_mock = mock!(aws_sdk_sfn::Client::send_task_failure)
-            .then_output(|| aws_sdk_sfn::operation::send_task_failure::SendTaskFailureOutput::builder().build());
+        let failure_mock = mock!(aws_sdk_sfn::Client::send_task_failure).then_output(|| {
+            aws_sdk_sfn::operation::send_task_failure::SendTaskFailureOutput::builder().build()
+        });
         let sfn = mock_client!(aws_sdk_sfn, [&failure_mock]);
 
         let event = event_with_context(
@@ -347,12 +358,11 @@ mod tests {
     #[tokio::test]
     async fn expired_callback_returns_409() {
         use aws_smithy_mocks::{mock, mock_client};
-        let expired_mock = mock!(aws_sdk_sfn::Client::send_task_success)
-            .then_error(|| {
-                SendTaskSuccessError::TaskTimedOut(
-                    aws_sdk_sfn::types::error::TaskTimedOut::builder().build(),
-                )
-            });
+        let expired_mock = mock!(aws_sdk_sfn::Client::send_task_success).then_error(|| {
+            SendTaskSuccessError::TaskTimedOut(
+                aws_sdk_sfn::types::error::TaskTimedOut::builder().build(),
+            )
+        });
         let sfn = mock_client!(aws_sdk_sfn, [&expired_mock]);
 
         let event = event_with_context(

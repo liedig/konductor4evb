@@ -81,7 +81,10 @@ pub fn int(v: &Value) -> i64 {
 /// Loads any repository-root YAML file (OpenAPI contracts, SAM template) as a
 /// serde_yaml Value with CFN intrinsics as `Value::Tagged`.
 pub fn repo_yaml(relative_path: &str) -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../").join(relative_path);
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {relative_path}: {e}"));
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../")
+        .join(relative_path);
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {relative_path}: {e}"));
     serde_yaml::from_str(&text).unwrap_or_else(|e| panic!("parse {relative_path}: {e}"))
 }

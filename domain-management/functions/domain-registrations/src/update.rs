@@ -45,7 +45,11 @@ pub async fn handle(
         .authorize(principal, "domains:Update", domain_name)
         .await;
     if !decision.is_allowed() {
-        tracing::warn!(action = "domains:Update", domain = domain_name, "consumer authorization denied");
+        tracing::warn!(
+            action = "domains:Update",
+            domain = domain_name,
+            "consumer authorization denied"
+        );
         return emit_failed(eb, &cp_bus, domain_name, OAUTH_MUTATIONS_DISABLED).await;
     }
 
@@ -290,7 +294,13 @@ mod tests {
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
         let message = update_message("billing", Some("Updated billing domain"));
-        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &TrustedPrincipal::iam("111122223333", None),
+        )
+        .await;
 
         assert!(result.is_ok());
         assert_eq!(update_rule.num_calls(), 1);
@@ -319,7 +329,13 @@ mod tests {
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
         let message = update_message("billing", Some("Updated billing domain"));
-        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &TrustedPrincipal::iam("111122223333", None),
+        )
+        .await;
 
         assert!(result.is_ok());
         assert_eq!(update_rule.num_calls(), 1);
@@ -337,7 +353,13 @@ mod tests {
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
         let message = update_message("nonexistent", Some("desc"));
-        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &TrustedPrincipal::iam("111122223333", None),
+        )
+        .await;
 
         assert!(result.is_ok());
         assert_eq!(update_rule.num_calls(), 1);
@@ -359,7 +381,13 @@ mod tests {
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
         let message = update_message("billing", Some("Should not work"));
-        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &TrustedPrincipal::iam("111122223333", None),
+        )
+        .await;
 
         assert!(result.is_ok());
         assert_eq!(update_rule.num_calls(), 1);
@@ -384,7 +412,13 @@ mod tests {
                 secondary_owner_emails: Some(vec![]),
             },
         };
-        let result = handle(&ddb, &eb, &message, &TrustedPrincipal::iam("111122223333", None)).await;
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &TrustedPrincipal::iam("111122223333", None),
+        )
+        .await;
 
         assert!(result.is_ok());
         assert_eq!(eb_rule.num_calls(), 1);

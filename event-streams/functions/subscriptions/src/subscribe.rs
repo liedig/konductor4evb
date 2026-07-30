@@ -61,7 +61,11 @@ pub async fn handle(
         .authorize(principal, "subscriptions:Subscribe", &subscription_id)
         .await;
     if !decision.is_allowed() {
-        tracing::warn!(action = "subscriptions:Subscribe", subscription_id, "consumer authorization denied");
+        tracing::warn!(
+            action = "subscriptions:Subscribe",
+            subscription_id,
+            "consumer authorization denied"
+        );
         return outcome::emit(&clients.eb, &cp_bus, "SubscribeFailed", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "reason": OAUTH_MUTATIONS_DISABLED, "failedAt": chrono::Utc::now().to_rfc3339()})).await;
     }
 
@@ -110,12 +114,23 @@ async fn is_idempotent_noop(
     cp_bus: &str,
     subscription_id: &str,
 ) -> Result<bool> {
-    if let Some(existing) =
-        streams_db::get_stream(&clients.ddb, table, &body.producer_domain, &body.schema_name, &body.consumer_domain)
-            .await?
+    if let Some(existing) = streams_db::get_stream(
+        &clients.ddb,
+        table,
+        &body.producer_domain,
+        &body.schema_name,
+        &body.consumer_domain,
+    )
+    .await?
     {
-        if matches!(existing.status, StreamStatus::Active | StreamStatus::Pending) {
-            tracing::info!(subscription_id, "subscription already exists; idempotent no-op");
+        if matches!(
+            existing.status,
+            StreamStatus::Active | StreamStatus::Pending
+        ) {
+            tracing::info!(
+                subscription_id,
+                "subscription already exists; idempotent no-op"
+            );
             outcome::emit(
                 &clients.eb,
                 cp_bus,

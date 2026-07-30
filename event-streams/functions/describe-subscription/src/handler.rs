@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 use std::env;
 
 use nexus_common::api;
-use nexus_common::principal_context::log_principal;
 use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
+use nexus_common::principal_context::log_principal;
 use nexus_common::streams::SubscriptionId;
 use nexus_common::streams_db;
 
@@ -20,7 +20,10 @@ pub async fn handle(
     let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
     let principal = log_principal(request_context);
 
-    let Some(caller_account_id) = principal.ok().and_then(|p| p.iam_account_id().map(String::from)) else {
+    let Some(caller_account_id) = principal
+        .ok()
+        .and_then(|p| p.iam_account_id().map(String::from))
+    else {
         return Ok(api::from_control_plane_error(&api::validation_error(
             "missing caller identity",
         )));
@@ -210,7 +213,10 @@ mod tests {
         assert_eq!(response["statusCode"], 400);
         let body: Value = serde_json::from_str(response["body"].as_str().unwrap()).unwrap();
         assert_eq!(body["code"], "ValidationException");
-        assert!(body["message"].as_str().unwrap().contains("missing caller identity"));
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing caller identity"));
     }
 
     fn stream_between(consumer: &str, producer: &str) -> nexus_common::streams::EventStream {

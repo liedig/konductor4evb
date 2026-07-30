@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use std::env;
 
 use nexus_common::api;
-use nexus_common::principal_context::log_principal;
 use nexus_common::dynamodb::{get_s, get_string_list, s};
 use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
 use nexus_common::models::{ApiError, DomainStatus};
+use nexus_common::principal_context::log_principal;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,

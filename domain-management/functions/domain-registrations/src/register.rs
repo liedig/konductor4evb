@@ -452,7 +452,15 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -491,7 +499,15 @@ mod tests {
 
             let sfn = mock_client!(aws_sdk_sfn, &[]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -534,7 +550,15 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -561,7 +585,15 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(sfn_rule.num_calls(), 1);
@@ -589,7 +621,15 @@ mod tests {
                 tags: None,
             };
 
-            let result = handle(&ddb, &eb, &sfn, &request, &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &request,
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(eb_rule.num_calls(), 1);
@@ -631,7 +671,15 @@ mod tests {
                 tags: None,
             };
 
-            let result = handle(&ddb, &eb, &sfn, &request, &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &request,
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -672,7 +720,15 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -713,7 +769,15 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(eb_rule.num_calls(), 1);
@@ -744,7 +808,15 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-1").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -779,7 +851,15 @@ mod tests {
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-2").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-2",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);
@@ -816,7 +896,15 @@ mod tests {
 
             let sfn = mock_client!(aws_sdk_sfn, &[]);
 
-            let result = handle(&ddb, &eb, &sfn, &valid_request(), &TrustedPrincipal::iam("111122223333", None), "msg-2").await;
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-2",
+            )
+            .await;
 
             assert!(result.is_ok());
             assert_eq!(put_rule.num_calls(), 1);

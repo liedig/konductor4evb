@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::env;
 
 use nexus_common::api;
-use nexus_common::principal_context::log_principal;
 use nexus_common::dynamodb::{deserialize_pagination_token, serialize_pagination_token};
 use nexus_common::error::ControlPlaneError;
+use nexus_common::principal_context::log_principal;
 use nexus_common::streams::{EventStream, StreamStatus};
 use nexus_common::streams_db;
 
@@ -24,7 +24,10 @@ pub async fn handle(
     let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
     let principal = log_principal(request_context);
 
-    let Some(caller_account_id) = principal.ok().and_then(|p| p.iam_account_id().map(String::from)) else {
+    let Some(caller_account_id) = principal
+        .ok()
+        .and_then(|p| p.iam_account_id().map(String::from))
+    else {
         return Ok(api::from_control_plane_error(&api::validation_error(
             "missing caller identity",
         )));

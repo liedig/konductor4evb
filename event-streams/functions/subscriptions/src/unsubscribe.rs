@@ -44,7 +44,11 @@ pub async fn handle(
     };
 
     let decision = FoundationAuthorizer
-        .authorize(principal, "subscriptions:Unsubscribe", &message.subscription_id)
+        .authorize(
+            principal,
+            "subscriptions:Unsubscribe",
+            &message.subscription_id,
+        )
         .await;
     if !decision.is_allowed() {
         tracing::warn!(action = "subscriptions:Unsubscribe", subscription_id = %message.subscription_id, "consumer authorization denied");

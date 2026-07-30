@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use lambda_runtime::{Error, LambdaEvent};
 use nexus_common::api;
-use nexus_common::principal_context::log_principal;
 use nexus_common::dynamodb::{
     attr_to_resource_arns_map, attr_to_string_map, get_s, get_string_list, get_string_set, s,
 };
 use nexus_common::error::ControlPlaneError;
+use nexus_common::principal_context::log_principal;
 use serde_json::{json, Value};
 use std::env;
 

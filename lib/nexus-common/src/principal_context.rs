@@ -82,12 +82,12 @@ where
     match raw {
         None => Ok(Vec::new()),
         Some(s) if s.trim().is_empty() => Ok(Vec::new()),
-        Some(s) => serde_json::from_str::<Vec<T>>(s).map_err(|e| {
-            PrincipalContextError::MalformedField {
+        Some(s) => {
+            serde_json::from_str::<Vec<T>>(s).map_err(|e| PrincipalContextError::MalformedField {
                 field,
                 reason: e.to_string(),
-            }
-        }),
+            })
+        }
     }
 }
 
@@ -119,9 +119,7 @@ fn build_oauth(
 }
 
 fn build_iam(account_id: &str, principal_arn: Option<&str>) -> TrustedPrincipal {
-    let arn = principal_arn
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
+    let arn = principal_arn.filter(|s| !s.is_empty()).map(str::to_string);
     TrustedPrincipal::iam(account_id, arn)
 }
 
@@ -180,9 +178,13 @@ impl TrustedPrincipal {
             let mechanism = authorizer
                 .get("authenticationMechanism")
                 .and_then(Value::as_str)
-                .ok_or(PrincipalContextError::MissingField("authenticationMechanism"))?;
+                .ok_or(PrincipalContextError::MissingField(
+                    "authenticationMechanism",
+                ))?;
             if mechanism != "oauth" {
-                return Err(PrincipalContextError::UnknownMechanism(mechanism.to_string()));
+                return Err(PrincipalContextError::UnknownMechanism(
+                    mechanism.to_string(),
+                ));
             }
             let get = |k: &'static str| -> CtxResult<&str> {
                 authorizer
