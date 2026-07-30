@@ -19,7 +19,6 @@ members = [
     "event-streams/functions/list-schemas",
     "event-streams/functions/describe-schema",
     "control-plane/functions/oauth-authorizer",
-    "spike/evaluate-authorization-engine",
 ]
 
 [workspace.package]
