@@ -1,10 +1,21 @@
 name: CI
 
 on:
+  # Run on PRs, and on pushes to the long-lived branches only. A PR branch push
+  # would otherwise trigger two runs for the same commit (push + pull_request)
+  # in separate GitHub Actions cache scopes that can't share artifacts, so each
+  # keeps missing the cache the other just saved. Pushes to develop/main still
+  # populate a branch-scoped cache that PRs inherit as their base.
   push:
     branches: [develop, main]
   pull_request:
-    branches: [develop, main]
+
+# Key on the head commit SHA so the push and pull_request events for the same
+# commit share one group and collapse to a single run (github.ref differs
+# between the two events, so a ref-based group would not dedupe them).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -61,10 +72,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
         with:
           toolchain: stable
+          targets: aarch64-unknown-linux-gnu
 
+      # Separate cache from check/test: those compile natively for x86_64, while
+      # this job cross-compiles release artifacts for arm64 (provided.al2023).
+      # Sharing "ci" would never hit and would thrash the cache.
+      #
+      # prefix-key folds a hash of the root Cargo.toml into the cache key.
+      # rust-cache's default key parses only the [package] and [*dependencies]
+      # sections of *member* manifests — it never reads [profile.*], and the
+      # virtual-workspace root Cargo.toml (where [profile.release] lives) is not
+      # a member, so profile changes are invisible to the default key. Cargo's
+      # compilation fingerprint DOES include opt-level/codegen-units, so without
+      # this the cache reports "full match" yet forces a full recompile, and the
+      # stale cache stays pinned (rust-cache saves only on a key change).
+      # Note: `key` cannot be used here — rust-cache ignores it when shared-key
+      # is set (they are mutually exclusive in the action), whereas prefix-key
+      # always applies.
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: ci
+          prefix-key: v0-rust-${{ hashFiles('Cargo.toml') }}
+          shared-key: build-arm64
 
       - name: Install build tools
         run: pip install cargo-lambda aws-sam-cli
@@ -72,5 +100,8 @@ jobs:
       - name: Validate SAM template
         run: sam validate --config-file samconfig-core.toml --lint
 
-      - name: SAM build
-        run: sam build --config-file samconfig-core.toml -c
+      # Compile all 16 functions in one workspace build (deps compiled once, not
+      # per function), then SAM only packages the prebuilt binaries. See the
+      # `build` / `lambda-binaries` targets in the Makefile.
+      - name: Build
+        run: make build-ci

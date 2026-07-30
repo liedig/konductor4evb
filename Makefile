@@ -49,8 +49,26 @@ help: ## Show this help message
 	@printf "    $(DIM)SCHEMA_NAME$(RESET)                 optional for: list-subscriptions (filter by schema)\n"
 	@printf "    $(DIM)SUBSCRIPTION_STATUS$(RESET)         optional for: list-subscriptions (filter by status)\n\n"
 
-build: ## sam build (Rust cross-compilation for arm64, cached)
+
+build-ci: lambda-binaries-ci ## Build all Lambda binaries once, then package with SAM
 	sam build --config-file samconfig-core.toml -c
+
+lambda-binaries-ci: ## Cross-compile every function to arm64 in a single workspace build
+	cargo lambda build --release --arm64
+	@for dir in domain-management/functions/* event-streams/functions/* control-plane/functions/*; do \
+		pkg=$$(basename $$dir); \
+		cp target/lambda/$$pkg/bootstrap $$dir/bootstrap; \
+	done
+	
+build: lambda-binaries ## Build all Lambda binaries once, then package with SAM
+	sam build --config-file samconfig-core.toml -c
+
+lambda-binaries: ## Cross-compile every function to arm64 (per-package to avoid bootstrap name collisions)
+	@for dir in domain-management/functions/* event-streams/functions/* control-plane/functions/*; do \
+		pkg=$$(basename $$dir); \
+		cargo lambda build --release --arm64 --package $$pkg || exit 1; \
+		cp target/lambda/bootstrap/bootstrap $$dir/bootstrap; \
+	done
 
 test: ## cargo test --workspace
 	cargo test --workspace
