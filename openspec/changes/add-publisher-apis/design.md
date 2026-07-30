@@ -1,137 +1,206 @@
 ## Context
 
-Schema discovery is currently read-only through Nexus, while domain owners register schemas out-of-band. Event publication likewise has no control-plane API that can enforce canonical identity and version stamping. The access-foundation change introduces separate OAuth and IAM control-plane surfaces plus normalized trusted principals. The authorization-engine spike validates the selected DynamoDB-backed grant engine but explicitly does not implement it. This change therefore owns the production publisher-binding administration, persistence, and decision adapter for that engine.
+Schema discovery is currently read-only through Nexus, while domain owners register schemas out-of-band. Event publication has no control-plane API. The access-foundation change introduces separate OAuth and IAM control-plane surfaces plus normalized trusted principals. The authorization-engine spike validates the DynamoDB-backed grant engine design but explicitly does not implement it.
 
-The write path differs from existing asynchronous control-plane commands. Schema writes must return the registry result, and publication must resolve the latest schema version and observe the `PutEvents` entry outcome in the same request. These operations therefore require synchronous Lambda integrations.
+The PRFAQ promises simple `publish`, `subscribe`, and `unsubscribe` API operations. Subscribe and unsubscribe already exist as flat endpoints (`POST /subscriptions`, `DELETE /subscriptions/{id}`). This change adds the missing `publish` endpoint and publisher schema management, completing the PRFAQ vision.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Give Cognito team groups and AWS accounts with a domain `publisher` binding a synchronous, domain- and environment-scoped API for schema creation, append-only version registration, and event publication.
-- Expose equivalent publisher routes on the separate OAuth and IAM control-plane surfaces, normalize each principal, and enforce one resource-decision contract.
-- Give OAuth `platform-admin` callers production administration of persistent publisher-to-domain bindings through the DynamoDB-backed grant engine.
-- Keep canonical names, envelope fields, registry selection, bus selection, and latest-version selection platform-owned.
-- Preserve least privilege and make domain authorization occur before target resource access.
-- Return deterministic API errors for authorization, missing resources, conflicts, validation failures, and downstream AWS failures.
+- Give publishers a flat `POST /publish` endpoint where the domain is in the request body, not the URL path. The caller provides domain, event name, and business data; Nexus handles everything else.
+- Guarantee event durability through store-and-forward: API Gateway pushes to SQS (202 Accepted), a consumer Lambda resolves the schema, builds the envelope, and calls PutEvents. If PutEvents fails, SQS retries; the event is never lost once it reaches the queue.
+- Extend the canonical envelope `detail.metadata` with `idempotencyKey` and `publishedAt`, both immutable from queue time and surviving EventBridge replays.
+- Infer the target environment from the API stage (`dev`, `staging`, `prod`) rather than requiring the caller to specify it per event. The environment travels as an SQS message attribute alongside the trusted-principal envelope.
+- Give publishers simple schema management endpoints (`POST /schemas`, `POST /schemas/versions`) that mimic the EventBridge schema API.
+- Enforce publisher authorization through the production DynamoDB grant engine before any resource access.
+- Expose equivalent publisher routes on the separate OAuth and IAM control-plane surfaces with one resource-decision contract.
 
 **Non-Goals:**
 
-- Schema promotion between environments, including promotion policy, approval, or version selection.
-- Business-payload validation against JSON Schema or OpenAPI schema content.
-- Schema deletion, retirement, historical mutation, or registry administration.
-- Management of buses, policies, rules, subscriber grants, non-publisher roles, or authorization configuration beyond publisher-binding administration.
-- A general event-ingress Lambda or replacement for API Gateway-to-SQS ingestion when asynchronous durability and buffering are required.
+- Schema promotion between environments.
+- Business-payload validation against schema content.
+- Schema deletion, retirement, version deletion, or historical mutation.
+- Schema-change event hook workflows (e.g., notify subscribers of new versions).
 - Subscriber catalog or entitlement workflows.
+- A general event-ingress Lambda or replacement for API Gateway-to-SQS ingestion on other routes.
 
 ## Decisions
 
-### Use explicit domain/environment resource routes
+### Use flat verb endpoints with domain in the request body
 
-The APIs will be:
+The APIs are:
 
-- `POST /domains/{domain}/environments/{environment}/schemas`
-- `POST /domains/{domain}/environments/{environment}/schemas/{eventName}/versions`
-- `POST /domains/{domain}/environments/{environment}/events/{eventName}`
+- `POST /publish`
+- `POST /schemas`
+- `POST /schemas/versions`
 
-Each publisher route is exposed with the same contract on the separate OAuth and IAM control-plane surfaces. Schema creation accepts a schema document; version append accepts the next schema document; publish accepts only `data`. API Gateway request models reject unsupported identity, version, envelope, registry, and bus fields. Shared handlers consume the foundation's normalized principal contract, so route behavior after authentication is mechanism-neutral.
+The domain, environment-relevant context, and event details are in the request body. Nested per-domain resource paths (`/domains/{domain}/environments/{env}/events/{eventName}`) were considered and rejected: they create multiple API resources per domain, are operationally unmanageable, and contradict the PRFAQ's promise of simple publish/subscribe/unsubscribe operations.
 
-Putting domain and environment in the resource path makes the authorization resource and deployment target unambiguous. A query-based extension to the existing discovery API was considered, but it obscures the target resource and would mix discovery semantics with publisher-only mutation. A single route accepting either OAuth or IAM credentials was rejected because it would violate the access foundation's separate-surface contract.
+This matches the existing Nexus pattern: `POST /subscriptions` carries the domain pair in the body, not in the URL.
 
-### Deliver platform-admin publisher-binding administration
+### Infer environment from the API stage
 
-The OAuth platform-administration surface will expose:
+API Gateway stages are named after platform environments (`dev`, `staging`, `prod`) instead of a static `v1`. The stage IS the environment selector:
 
-- `POST /domains/{domain}/publisher-bindings`
-- `GET /domains/{domain}/publisher-bindings`
-- `DELETE /domains/{domain}/publisher-bindings/{bindingId}`
+```
+POST https://api.nexus.com/dev/publish    → targets dev environment
+POST https://api.nexus.com/staging/publish → targets staging environment
+POST https://api.nexus.com/prod/publish   → targets prod environment
+```
 
-Only a normalized OAuth principal with the global `platform-admin` role can invoke these operations. A create request selects exactly one typed principal: an issuer-qualified Cognito team group or a twelve-digit AWS account. One record binds that principal to role `publisher` on one domain; assigning one principal to several domains creates distinct bindings. The API does not expose a global publisher binding.
+One API Gateway deployment, one set of Lambda functions. The stage name is available as `$context.stage` in the VTL mapping template and is injected as an SQS message attribute. The publish consumer Lambda reads it from the message attributes to select the environment-specific registry and bus.
 
-The production DynamoDB authorization adapter validated by `evaluate-authorization-engine` durably persists binding identifier, role, domain, typed principal, creation metadata, and trusted actor. Creates are idempotent for the same typed principal, role, and domain; conflicting or malformed requests fail without partial state. List is platform-admin-only. Revoke removes the identified binding, invalidates any decision cache required by the selected design, and preserves access supplied by an overlapping binding. Every mutation writes a token-free audit record.
+Operations that are environment-agnostic (register, approve, list, describe) work identically on any stage. Operations that already carry environment in the body (subscribe) continue to use the body field. Only publish and schema write operations use the stage for environment inference.
 
-Treating Cognito groups as global role groups was rejected because the same team can publish for one domain and not another. Storing IAM principals only as exact role ARNs was also rejected for this slice because settled publisher administration requires AWS-account principals and retained IAM callers must share the same domain semantics.
+A separate data-plane API was considered and rejected: it adds an API Gateway deployment and splits the surface without adding capability. With no dependent workloads, changing the stage naming is safe.
 
-### Authorize normalized OAuth and IAM principals before AWS lookups
+### Store-and-forward publish via SQS
 
-OAuth handlers receive issuer-qualified subject and trusted Cognito team-group claims from the access-foundation authorizer context. IAM handlers receive the trusted AWS account and IAM principal identity from API Gateway normalization. Both submit the same closed action, resource type `domain`, and target domain to one production authorization interface.
+The publish flow uses the existing Nexus write pattern: API Gateway → SQS → consumer Lambda.
 
-The DynamoDB grant engine matches OAuth principals through issuer-qualified team-group bindings and IAM principals through AWS-account bindings. It preserves principal type and provenance so textual identifiers cannot cross-match. One binding covers the bound domain in all supported environments, but the environment remains explicit per request.
+```
+POST /prod/publish
+  │
+  ▼
+API Gateway (stage = prod)
+  VTL mapping template:
+    • injects Environment=prod as SQS message attribute
+    • injects trusted-principal envelope as SQS message attributes
+    • injects idempotencyKey (caller-supplied or $context.requestId)
+    • pushes message body to SQS
+  │
+  ▼
+SQS queue (durable, timestamped)
+  SQS assigns:
+    • MessageId
+    • SentTimestamp (epoch ms)
+  │
+  ▼
+Publish Consumer Lambda
+  reads message body: domain, eventName, data
+  reads attributes: Environment, SentTimestamp, principal envelope, idempotencyKey
+  │
+  ├── authorize: publisher binding for domain via grant engine
+  ├── derive:  schema name = {namespaceIdentity}@{eventName}
+  ├── resolve: {org}-{env}-{domain}-schema-registry → latest version
+  ├── target:  {org}-{env}-{domain}-bus
+  ├── build envelope:
+  │     source:      {namespaceIdentity}
+  │     detail-type: {eventName}
+  │     detail.metadata.schemaVersion:  resolved version
+  │     detail.metadata.idempotencyKey: from message attribute
+  │     detail.metadata.publishedAt:    ISO 8601 from SentTimestamp
+  │     detail.data:                    caller payload
+  │
+  └── PutEvents → domain event bus
+      ├── success → message deleted from queue
+      └── failure → SQS retry (same attributes, same key, same timestamp)
+```
 
-Handlers deny by default on missing context, no matching binding, or authorization-engine failure. They perform the authorization check before reading domain, registry, or schema data so unauthorized callers cannot probe target-domain state. A global Cognito `publisher` group or claim was considered and rejected because publisher is a Nexus resource role scoped by bindings, not an identity-system role.
+Caller receives `202 Accepted` with the SQS message ID as `requestId`. The caller does not learn whether PutEvents succeeded; they know the event is durably queued and will be delivered or retried.
 
-### Resolve all resource identity from active domain state
+A synchronous publish Lambda was considered and rejected: it sacrifices the store-and-forward guarantee. If PutEvents fails in a sync handler, the event is lost (the caller gets an error but may not retry). With SQS, the event survives PutEvents failures and is retried automatically with the same immutable metadata.
 
-After authorization, handlers read the domain record, require `ACTIVE`, validate that the requested environment is supported, and obtain the registered namespace identity. They derive:
+### Extend envelope metadata with idempotencyKey and publishedAt
 
-- schema name: `{namespaceIdentity}@{eventName}`
-- registry: `{org}-{environment}-{domain}-schema-registry`
-- event source: `{namespaceIdentity}`
-- detail type: `{eventName}`
-- target platform bus: the selected environment's domain bus
-
-Callers cannot supply any of these values. Central derivation avoids drift and prevents publishing to arbitrary platform resources. Accepting caller-supplied ARNs or canonical names was rejected because it would broaden both the attack surface and IAM scope.
-
-### Use focused synchronous Lambda handlers
-
-Schema creation, version append, and event publishing use focused Lambda proxy integrations shared by equivalent OAuth and IAM routes after principal normalization. The schema handlers call AWS Schemas `CreateSchema` and version-producing `UpdateSchema` operations and translate duplicate or missing targets into `409` or `404`. No delete or generic update operation is exposed.
-
-The publish handler is a dedicated synchronous Lambda. It calls AWS Schemas for the derived schema's latest version, builds and validates one canonical EventBridge entry, calls `PutEvents`, and inspects both request-level errors and per-entry errors. It returns `202 Accepted` only when EventBridge accepts the entry.
-
-Direct API Gateway service integrations were considered. They cannot perform the required authorization decision, domain lookup, latest-version resolution, envelope assembly, and per-entry outcome translation as one coherent operation. Routing publication through the existing command queue was also rejected because the caller would not receive immediate schema-resolution or EventBridge acceptance results.
-
-### Treat schema versions as immutable registry snapshots
-
-Creating a schema establishes version 1; appending content creates the next registry version atomically. The API never accepts a version number for write targeting and never calls delete or historical mutation operations. Concurrent append requests rely on AWS Schemas to allocate distinct versions, and each response returns the version created by its operation.
-
-The latest version used for a publish is the version observed during that request. A concurrent append after resolution does not invalidate an accepted event stamped with the prior version. Client-selected versions were considered and rejected because this capability intentionally defines publication against current selected-environment state.
-
-### Construct and validate the envelope without validating business data
-
-The publish handler constructs:
+The canonical envelope `detail` contains two sub-objects:
 
 ```json
 {
-  "source": "{namespaceIdentity}",
-  "detail-type": "{eventName}",
+  "source": "acme-orders",
+  "detail-type": "OrderNotification",
   "detail": {
     "metadata": {
-      "schemaVersion": 4
+      "schemaVersion": 4,
+      "idempotencyKey": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "publishedAt": "2026-07-30T10:30:00.123Z"
     },
-    "data": {}
+    "data": {
+      "orderId": 123,
+      "amount": 99.50
+    }
   }
 }
 ```
 
-Validation covers event-name constraints, required envelope structure, numeric positive schema version, JSON serialization, and EventBridge entry limits. The schema document is not fetched to validate `data`; only latest schema metadata is needed. Payload validation was considered but rejected for this change because it adds latency, schema-language concerns, and compatibility semantics not established by the current contract.
+**`metadata.idempotencyKey`** — A unique identifier for this event instance. The caller MAY supply it in the request body. If omitted, the VTL mapping template injects `$context.requestId` (API Gateway's unique request ID). The key is set at API Gateway time, before the message reaches SQS, and is immutable from that point. It survives SQS retries and EventBridge replays. EventBridge's native `id` field cannot be set by the producer; this field provides caller-controlled or platform-generated idempotency within the envelope.
 
-### Constrain infrastructure permissions to publisher operations
+**`metadata.publishedAt`** — The timestamp when the event was first accepted by the platform. It is a copy of the SQS `SentTimestamp` attribute (epoch milliseconds, converted to ISO 8601), read by the consumer Lambda from the SQS event record. It represents the moment the event entered the durable queue, not when the Lambda processed it. It is immutable from queue time and survives retries and replays.
 
-The publisher operation handler roles receive only domain-state read access, authorization-decision access, and the AWS operation set required by their route. Schema roles can create schemas or append versions in Nexus-managed domain registries but cannot manage registry lifecycle or policies. The publish role can describe schemas and publish only to Nexus domain-bus resource patterns; it cannot manage buses, rules, or policies. Separate binding-administration roles can call only the grant engine's binding create/list/revoke operations and audit sink, and their routes require OAuth `platform-admin`.
+**`metadata.schemaVersion`** — The latest numeric schema version resolved from the target environment's registry at publish time. Unchanged from existing convention.
 
-Provisioning and existing access policies will stop granting application teams direct registry administration or generic schema mutation. Platform administration retains registry lifecycle ownership. Application-level authorization remains mandatory because dynamic domain bindings are narrower than deploy-time IAM resource patterns.
+The existing `detail.metadata.schemaVersion` rule pattern in subscription matching continues to work. The new fields are additive.
+
+### Schema management mimics the EventBridge schema API
+
+Publishers manage schemas through two endpoints that mirror EventBridge's `CreateSchema` and `UpdateSchema` semantics:
+
+**`POST /schemas`** — Create a new schema (like EventBridge `CreateSchema`):
+```json
+{
+  "domain": "orders",
+  "eventName": "OrderNotification",
+  "schemaType": "JSONSchemaDraft4",
+  "content": "{ ... }"
+}
+```
+Nexus derives the canonical schema name `{namespaceIdentity}@{eventName}`, targets the stage-selected environment's registry, and creates version 1. Returns `201 Created` with the schema name and version. Returns `409 Conflict` if the schema already exists.
+
+**`POST /schemas/versions`** — Append a new version (like EventBridge `UpdateSchema`):
+```json
+{
+  "domain": "orders",
+  "eventName": "OrderNotification",
+  "content": "{ ... }"
+}
+```
+Nexus derives the canonical schema name, targets the stage-selected environment's registry, and creates the next version. Returns `201 Created` with the schema name and new version. Returns `404 Not Found` if the schema does not exist.
+
+Both are synchronous Lambda integrations (not SQS), because schema writes must return the created version to the caller. The environment is inferred from `$context.stage`.
+
+Schemas are append-only: no delete, retire, replace, or version deletion operations are exposed. Registry lifecycle and policy administration remain platform-admin operations.
+
+### Publisher authorization through the grant engine
+
+Every publish and schema write request requires a `publisher` resource-role binding for the target domain. The normalized principal (OAuth team group or IAM AWS account) is checked against the DynamoDB-backed grant engine before any resource access.
+
+The production grant engine implementation is a prerequisite for this change. It can be implemented either:
+- As a standalone change (recommended by the spike, cleaner separation), or
+- Folded into this change as an initial implementation phase
+
+The publisher-binding administration API (platform-admin creates, lists, revokes bindings) belongs with the grant engine, not with the publisher data-plane APIs. This change consumes the grant engine's decision interface; it does not own the engine's persistence or administration.
+
+### Constrain infrastructure permissions
+
+Publish consumer and schema handler roles receive only:
+- Domain-state read access (DynamoDB)
+- Authorization-decision access (grant engine)
+- AWS Schemas read/write scoped to Nexus-managed registry patterns
+- EventBridge `PutEvents` scoped to Nexus-managed bus patterns
+
+Publishers cannot manage registries, buses, policies, rules, subscriber grants, or authorization configuration. Application-level authorization is mandatory because dynamic domain bindings are narrower than deploy-time IAM resource patterns.
 
 ## Risks / Trade-offs
 
-- [The authorization-engine spike validates but does not implement the production engine] → Make its completed readiness decision an implementation prerequisite, then build and test the production publisher binding adapter, persistence, administration, and decision path in this change.
-- [Two publisher route surfaces can drift] → Generate or verify equivalent route contracts from shared schemas and run OAuth/IAM parity tests against the same handlers and decision fixtures.
-- [Binding revocation can be hidden by stale decision caches] → Use the grant engine's proven invalidation design, make successful revoke mean durable acceptance, and test subsequent current-state denial plus overlapping-binding behavior.
-- [AWS Schemas metadata can be briefly eventually consistent after a write] → Return the concrete created version from schema writes and document that publish resolves the latest version visible at request time; map transient AWS failures without falsely accepting an event.
+- [Store-and-forward means the caller does not learn PutEvents outcome] → The caller receives 202 with a durable queue guarantee. The trade-off is deliberate: durability over synchronous feedback. Callers who need delivery confirmation can subscribe to the domain bus and observe their own events.
+- [Environment-named stages change the API URL structure] → No dependent workloads exist; the change is safe. Existing `v1` stage can coexist during transition if needed.
+- [The production grant engine is not yet implemented] → Make it a prerequisite. The spike validates the design; a standalone change implements the engine before this change's authorization integration.
+- [SQS SentTimestamp is epoch ms, not ISO 8601] → The consumer Lambda converts it. The SQS attribute is the source of truth; the envelope carries the ISO 8601 representation.
+- [Caller-supplied idempotency keys may collide] → The key is scoped to the domain and event name. Two different events with the same key are distinct. Within the same domain and event, a duplicate key indicates a retry or duplicate publish; downstream consumers can use it for deduplication.
 - [Latest-version resolution adds latency to every publish] → Keep the first implementation uncached for correctness; emit latency metrics so a bounded, invalidatable cache can be evaluated separately.
-- [A synchronous publish response confirms EventBridge acceptance, not downstream delivery] → Use `202 Accepted` and avoid delivery-success language in the response contract.
-- [Lambda IAM patterns cover many dynamic domain resources] → Combine resource-pattern IAM with mandatory resource-role authorization and tests proving cross-domain denial occurs before AWS access.
-- [Removing direct registry writes can disrupt existing out-of-band workflows] → Deploy APIs and publisher bindings first, verify usage, then tighten direct access policies with rollback templates retained.
+- [Schema management is synchronous while publish is async] → Schema writes must return the created version; publish does not need to return PutEvents results. Different integration patterns match different durability/feedback requirements.
 
 ## Migration Plan
 
-1. Complete `evaluate-authorization-engine` and implement the DynamoDB grant engine's production publisher-binding persistence, adapter, audit path, and platform-admin administration routes.
-2. Add equivalent publisher route contracts to the OAuth and IAM surfaces, shared models and handlers, envelope/schema helpers, and least-privilege roles.
-3. Create initial Cognito team-group and AWS-account bindings through the platform-admin API and verify cross-surface decision parity and revocation.
-4. Deploy schema creation and append handlers, then the dedicated publish handler.
-5. Exercise domain isolation, schema append, latest-version stamping, EventBridge failure behavior, and OAuth/IAM parity in a non-production environment.
-6. Remove direct application-team registry administration and generic schema-write access from provisioning policies and update existing managed policies after API readiness is confirmed.
-7. Roll back publisher routes and operation permissions without deleting binding audit history. If the grant engine adapter must be disabled, fail publisher decisions closed; restore the prior direct schema-write policy only if operationally required. Schemas and versions created through the APIs remain valid and require no data rollback.
+1. Implement the production DynamoDB grant engine (standalone change or initial phase of this change).
+2. Change API stage naming from `v1` to environment-named stages on both OAuth and IAM surfaces.
+3. Add `POST /publish` route contracts, SQS mapping template with environment/idempotency-key injection, and publish consumer Lambda.
+4. Add `POST /schemas` and `POST /schemas/versions` route contracts and synchronous Lambda handlers.
+5. Create initial publisher bindings through the grant engine's platform-admin API.
+6. Exercise publish durability (SQS retry on PutEvents failure), schema creation/versioning, environment routing, and OAuth/IAM parity in a non-production environment.
+7. Remove direct application-team registry administration and generic schema-write access from provisioning policies.
 
 ## Open Questions
 
-None. Schema promotion remains intentionally deferred rather than unresolved within this change.
+None. Schema promotion and schema-change event hooks are intentionally deferred to separate changes.

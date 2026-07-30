@@ -1,20 +1,45 @@
 ## ADDED Requirements
 
-### Requirement: Domain-scoped synchronous publish API
+### Requirement: Flat store-and-forward publish API
 
-The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /domains/{domain}/environments/{environment}/events/{eventName}` for synchronous request processing where interactive and automation compatibility is required. Both route contracts SHALL accept the same business `data` request and use the same response semantics after normalizing their respective authenticated principals. The API SHALL invoke a dedicated synchronous publish Lambda that resolves schema and domain metadata, constructs the canonical envelope, calls EventBridge `PutEvents`, and returns the entry outcome before completing the HTTP request. This Lambda SHALL NOT act as a generic ingress processor or replace asynchronous API Gateway-to-SQS ingestion patterns.
+The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /publish` as a flat verb endpoint where the target domain is in the request body, not the URL path. The request SHALL accept `domain`, `eventName`, `data`, and an optional `idempotencyKey`. The API SHALL route through SQS for store-and-forward durability: API Gateway pushes the message to SQS and returns `202 Accepted` with the SQS message ID as `requestId`. A publish consumer Lambda SHALL read the message, resolve the schema, construct the canonical envelope, and call EventBridge `PutEvents`. If `PutEvents` fails, SQS SHALL retry with the same message attributes, preserving the idempotency key and published timestamp.
 
-#### Scenario: Event accepted by EventBridge
+#### Scenario: Event queued for durable delivery
 
-- **WHEN** an authorized publisher sends a valid event and EventBridge accepts its entry
-- **THEN** the API SHALL return `202 Accepted`
-- **AND THEN** the response SHALL identify the accepted EventBridge entry
+- **WHEN** an authorized publisher sends a valid publish request
+- **THEN** the API SHALL return `202 Accepted` with the SQS message ID as `requestId`
+- **AND THEN** the event SHALL be durably queued for delivery
 
-#### Scenario: EventBridge rejects the entry
+#### Scenario: PutEvents failure triggers SQS retry
 
-- **WHEN** EventBridge reports an error for the publish entry
-- **THEN** the API SHALL return a non-success response describing the publication failure
-- **AND THEN** the API SHALL NOT report the event as accepted
+- **WHEN** the publish consumer calls `PutEvents` and EventBridge rejects the entry
+- **THEN** the SQS message SHALL NOT be deleted
+- **AND THEN** SQS SHALL retry delivery with the same message attributes, idempotency key, and published timestamp
+
+#### Scenario: Event is never lost after queue acceptance
+
+- **WHEN** a publish request has been accepted by SQS
+- **THEN** the event SHALL survive downstream failures and be retried until delivery or DLQ exhaustion
+
+### Requirement: Environment inferred from API stage
+
+The publish and schema write APIs SHALL infer the target environment from the API Gateway stage name (`$context.stage`). Stages SHALL be named after platform environments (`dev`, `staging`, `prod`). The VTL mapping template SHALL inject the stage name as an SQS message attribute named `Environment`. The publish consumer Lambda SHALL read the `Environment` attribute to select the environment-specific schema registry and event bus. The caller SHALL NOT specify an environment field in the request body.
+
+#### Scenario: Stage determines target environment
+
+- **WHEN** a publisher sends `POST /publish` to the `prod` stage for domain `orders`
+- **THEN** the consumer SHALL resolve schemas from `{org}-prod-orders-schema-registry`
+- **AND THEN** the consumer SHALL publish to `{org}-prod-orders-bus`
+
+#### Scenario: Same operation on different stages targets different environments
+
+- **WHEN** a publisher sends `POST /publish` to the `dev` stage and then to the `prod` stage for the same domain and event
+- **THEN** each invocation SHALL target the respective environment's registry and bus independently
+
+#### Scenario: Environment-agnostic operations ignore the stage
+
+- **WHEN** a caller invokes register, approve, list, or describe operations on any stage
+- **THEN** the stage SHALL NOT affect the operation's behavior
 
 ### Requirement: Publisher resource authorization
 
@@ -30,38 +55,32 @@ Before accessing domain or schema metadata or publishing, Nexus SHALL submit the
 - **WHEN** an IAM caller's normalized AWS account has a `publisher` binding for domain `orders`
 - **THEN** the caller SHALL be authorized to publish events for `orders` through the IAM control-plane surface
 
-#### Scenario: OAuth and IAM decisions are equivalent
-
-- **WHEN** an OAuth team group and an AWS account have equivalent `publisher` bindings for domain `orders`
-- **THEN** the OAuth and IAM publish routes SHALL request the same action and resource decision
-- **AND THEN** both SHALL enforce the same allow or deny result
-
 #### Scenario: Binding is domain-isolated
 
 - **WHEN** the caller has a `publisher` binding for `orders` but requests publication for `payments`
-- **THEN** the API SHALL return `403 Forbidden`
-- **AND THEN** Nexus SHALL NOT resolve the schema or call EventBridge
+- **THEN** the consumer SHALL deny authorization
+- **AND THEN** the consumer SHALL NOT resolve the schema or call EventBridge
 
 #### Scenario: Global publisher claim does not confer access
 
 - **WHEN** a caller has a Cognito claim or group name containing `publisher` but no Nexus `publisher` binding for the target domain
-- **THEN** the API SHALL return `403 Forbidden`
+- **THEN** the consumer SHALL deny authorization
 
-### Requirement: Latest selected-environment schema resolution
+### Requirement: Latest stage-selected-environment schema resolution
 
-For every publish request, Nexus SHALL derive the canonical schema name from the active domain namespace and event name, query the selected environment's platform-managed registry, and resolve its latest numeric schema version. Nexus SHALL use that resolved version for envelope stamping. The caller SHALL NOT choose a schema name or schema version.
+For every publish request, the consumer Lambda SHALL derive the canonical schema name from the active domain namespace and event name, query the stage-selected environment's platform-managed registry, and resolve its latest numeric schema version. The consumer SHALL use that resolved version for envelope stamping. The caller SHALL NOT choose a schema name or schema version.
 
-#### Scenario: Selected environment controls version resolution
+#### Scenario: Stage-selected environment controls version resolution
 
-- **WHEN** event `OrderNotification` has latest version 5 in `dev` and version 3 in `prod`, and the caller publishes to `prod`
-- **THEN** Nexus SHALL resolve the schema from the prod registry
+- **WHEN** event `OrderNotification` has latest version 5 in `dev` and version 3 in `prod`, and the caller publishes to the `prod` stage
+- **THEN** the consumer SHALL resolve the schema from the prod registry
 - **AND THEN** the published envelope SHALL stamp numeric schema version `3`
 
-#### Scenario: Schema is absent from selected environment
+#### Scenario: Schema is absent from stage-selected environment
 
-- **WHEN** the derived schema does not exist in the selected environment's registry
-- **THEN** the API SHALL return `404 Not Found`
-- **AND THEN** Nexus SHALL NOT call EventBridge
+- **WHEN** the derived schema does not exist in the stage-selected environment's registry
+- **THEN** the consumer SHALL NOT call EventBridge
+- **AND THEN** the message SHALL be treated as a processing failure
 
 #### Scenario: Caller-supplied version is not accepted
 

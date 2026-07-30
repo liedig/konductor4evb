@@ -1,17 +1,18 @@
 ## Why
 
-Application teams need a supported, domain-scoped path to register event contracts and publish conforming events without managing EventBridge registries, buses, or envelope conventions directly. Publisher APIs make those operations self-service while preserving Nexus ownership of topology, identity derivation, and authorization.
+The PRFAQ promises simple `publish`, `subscribe`, and `unsubscribe` API operations that let teams produce and consume events without knowing EventBridge internals. Subscribe and unsubscribe already exist. This change adds the missing `publish` data-plane API and publisher schema management, using flat verb endpoints where the domain is in the request body rather than the URL path.
 
 ## What Changes
 
-- Add domain- and environment-scoped APIs for publishers to create schemas and append immutable schema versions in registries managed by the platform.
-- Add a synchronous event publish API that accepts an event name and business data, resolves the latest schema version, constructs the canonical Nexus envelope, and publishes to the selected domain bus.
-- Expose publisher operations on the separate OAuth and IAM control-plane surfaces where caller compatibility requires them; normalize each authenticated caller and apply identical resource-authorization decisions.
-- Add production platform-admin APIs and persistence for Nexus `publisher` resource-role bindings from Cognito team-group and AWS-account principals to one or more domains through the DynamoDB-backed grant engine.
-- Keep `publisher` resource-scoped rather than a global Cognito role, and keep registries, buses, policies, rules, subscriber grants, and authorization administration outside publisher control.
-- Keep schemas append-only: publishers cannot replace historical versions, delete schemas, or retire schemas.
-- Validate the generated event envelope but do not validate the business payload against its schema.
-- Defer schema promotion between environments to a separate change.
+- Add `POST /publish` flat verb endpoint with store-and-forward durability via SQS. The caller provides domain, event name, and business data; Nexus resolves the schema, constructs the canonical envelope, and publishes to the domain's event bus for the stage-selected environment.
+- Add schema management endpoints (`POST /schemas`, `POST /schemas/versions`) that mimic the EventBridge schema API. Publishers create schemas and append versions in platform-managed registries.
+- Use environment-named API stages (`dev`, `staging`, `prod`) instead of a static `v1` stage. Publish and schema operations infer the target environment from `$context.stage`; the publish consumer reads it from SQS message attributes.
+- Extend the canonical envelope `detail.metadata` with `idempotencyKey` (caller-optional, else generated at API Gateway time) and `publishedAt` (SQS `SentTimestamp`, immutable from queue time). Both survive EventBridge replays.
+- Carry the environment through the publish flow as an SQS message attribute alongside the trusted-principal envelope.
+- Require publisher authorization through the DynamoDB-backed grant engine (prerequisite: production grant engine implementation, either in this change or as a standalone change from the `evaluate-authorization-engine` spike).
+- Keep schemas append-only: publishers cannot replace, delete, or retire schemas or versions.
+- Validate the generated envelope but do not validate business data against schema content.
+- Defer schema promotion between environments and schema-change event hooks to separate changes.
 
 These changes add APIs without changing or removing existing API operations.
 
@@ -19,18 +20,19 @@ These changes add APIs without changing or removing existing API operations.
 
 ### New Capabilities
 
-- `event-publishing`: Domain-scoped synchronous publishing, publisher authorization, canonical envelope construction, latest-version resolution, and EventBridge delivery behavior.
+- `event-publishing`: Flat store-and-forward publish API, canonical envelope construction with immutable metadata, latest-version resolution, and publisher authorization.
 
 ### Modified Capabilities
 
-- `schema-management`: Add publisher-authorized schema creation and append-only version registration for a selected domain and environment.
-- `event-envelope`: Move event-name constraint enforcement to in-platform schema registration and require the publish API to derive and validate canonical envelope fields.
-- `control-plane-access`: Extend the Cognito/IAM foundation with dual-surface publisher routes, trusted team-group and AWS-account principal normalization, and platform-admin management of persistent domain publisher bindings.
+- `schema-management`: Add publisher-authorized schema creation and append-only version registration with environment inferred from the API stage.
+- `event-envelope`: Extend `detail.metadata` with `idempotencyKey` and `publishedAt` for publish-time immutability and replay resilience.
+- `control-plane-access`: Add publisher routes on both OAuth and IAM surfaces with environment-named stages.
 
 ## Impact
 
-- Adds matching authenticated route contracts to the separate OAuth and IAM control-plane surfaces for schema writes and synchronous event publishing, plus OAuth platform-admin binding administration.
-- Adds a dedicated synchronous publish Lambda with access to domain metadata, AWS Schemas, and domain EventBridge buses.
-- Adds production binding administration, persistence, decision evaluation, audit, and revocation integration through the DynamoDB-backed grant engine validated by the prerequisite spike.
-- Extends schema-management handlers and IAM permissions for publisher-authorized writes while retaining platform ownership of registries.
-- Depends on the Cognito access foundation for separate surfaces and trusted principal context, and on the authorization-engine spike for validated production readiness and SLOs; this change implements the publisher binding slice rather than assuming another change supplies it.
+- Adds `POST /publish` with SQS store-and-forward integration on both OAuth and IAM API surfaces.
+- Adds `POST /schemas` and `POST /schemas/versions` on both surfaces.
+- Adds a publish consumer Lambda that reads SQS, resolves schemas, builds envelopes, and calls EventBridge `PutEvents`.
+- Changes API stage naming from `v1` to environment-named stages (`dev`, `staging`, `prod`).
+- Extends SQS mapping templates to inject environment and idempotency-key attributes.
+- Depends on the Cognito access foundation for separate surfaces and trusted principal context, and on the production DynamoDB grant engine for publisher authorization.
