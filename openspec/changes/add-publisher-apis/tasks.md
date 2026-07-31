@@ -37,7 +37,7 @@
 
 ## 6. Authorization Integration
 
-- [ ] 6.1 Integrate publish consumer and schema handlers with the production grant engine decision interface (prerequisite: grant engine implementation)
+- [ ] 6.1 Integrate publish consumer and schema handlers with the `DynamoGrantEngine` decision interface delivered by `add-grant-engine` (prerequisite: `add-grant-engine` complete)
 - [ ] 6.2 Add authorization tests for OAuth team-group binding, IAM AWS-account binding, OAuth/IAM parity, cross-domain denial, missing binding denial, and fail-closed engine errors
 - [ ] 6.3 Verify publisher role cannot access registry, bus, policy, rule, subscriber-grant, or authorization-administration operations
 

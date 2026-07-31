@@ -1,6 +1,6 @@
 ## Context
 
-Schema discovery is currently read-only through Nexus, while domain owners register schemas out-of-band. Event publication has no control-plane API. The access-foundation change introduces separate OAuth and IAM control-plane surfaces plus normalized trusted principals. The authorization-engine spike validates the DynamoDB-backed grant engine design but explicitly does not implement it.
+Schema discovery is currently read-only through Nexus, while domain owners register schemas out-of-band. Event publication has no control-plane API. The access-foundation change introduces separate OAuth and IAM control-plane surfaces plus normalized trusted principals. The authorization-engine spike validated the DynamoDB-backed grant engine design without implementing it; the standalone `add-grant-engine` change delivers the production engine this change consumes.
 
 The PRFAQ promises simple `publish`, `subscribe`, and `unsubscribe` API operations. Subscribe and unsubscribe already exist as flat endpoints (`POST /subscriptions`, `DELETE /subscriptions/{id}`). This change adds the missing `publish` endpoint and publisher schema management, completing the PRFAQ vision.
 
@@ -165,11 +165,7 @@ Schemas are append-only: no delete, retire, replace, or version deletion operati
 
 Every publish and schema write request requires a `publisher` resource-role binding for the target domain. The normalized principal (OAuth team group or IAM AWS account) is checked against the DynamoDB-backed grant engine before any resource access.
 
-The production grant engine implementation is a prerequisite for this change. It can be implemented either:
-- As a standalone change (recommended by the spike, cleaner separation), or
-- Folded into this change as an initial implementation phase
-
-The publisher-binding administration API (platform-admin creates, lists, revokes bindings) belongs with the grant engine, not with the publisher data-plane APIs. This change consumes the grant engine's decision interface; it does not own the engine's persistence or administration.
+The production grant engine is implemented by the standalone `add-grant-engine` change, which is a prerequisite for this change. That change owns the bindings table, the `DynamoGrantEngine` and `InMemoryGrantEngine` implementations, and the binding administration API (platform-admin creates, lists, revokes bindings). This change consumes the engine's decision interface (`ResourceAuthorizer`); it does not own the engine's persistence or administration.
 
 ### Constrain infrastructure permissions
 
@@ -185,7 +181,7 @@ Publishers cannot manage registries, buses, policies, rules, subscriber grants, 
 
 - [Store-and-forward means the caller does not learn PutEvents outcome] → The caller receives 202 with a durable queue guarantee. The trade-off is deliberate: durability over synchronous feedback. Callers who need delivery confirmation can subscribe to the domain bus and observe their own events.
 - [Environment-named stages change the API URL structure] → No dependent workloads exist; the change is safe. Existing `v1` stage can coexist during transition if needed.
-- [The production grant engine is not yet implemented] → Make it a prerequisite. The spike validates the design; a standalone change implements the engine before this change's authorization integration.
+- [The production grant engine is implemented by `add-grant-engine`, which ships dark without a consumer] → Sequence `add-grant-engine` before this change's authorization integration; its spike-validated decision contract and in-region latency measurement gate this change's rollout.
 - [SQS SentTimestamp is epoch ms, not ISO 8601] → The consumer Lambda converts it. The SQS attribute is the source of truth; the envelope carries the ISO 8601 representation.
 - [Caller-supplied idempotency keys may collide] → The key is scoped to the domain and event name. Two different events with the same key are distinct. Within the same domain and event, a duplicate key indicates a retry or duplicate publish; downstream consumers can use it for deduplication.
 - [Latest-version resolution adds latency to every publish] → Keep the first implementation uncached for correctness; emit latency metrics so a bounded, invalidatable cache can be evaluated separately.
@@ -193,7 +189,7 @@ Publishers cannot manage registries, buses, policies, rules, subscriber grants, 
 
 ## Migration Plan
 
-1. Implement the production DynamoDB grant engine (standalone change or initial phase of this change).
+1. Complete `add-grant-engine` (bindings table, engine implementations, binding administration API, in-region latency validation).
 2. Change API stage naming from `v1` to environment-named stages on both OAuth and IAM surfaces.
 3. Add `POST /publish` route contracts, SQS mapping template with environment/idempotency-key injection, and publish consumer Lambda.
 4. Add `POST /schemas` and `POST /schemas/versions` route contracts and synchronous Lambda handlers.

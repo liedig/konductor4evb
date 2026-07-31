@@ -9,7 +9,7 @@ The PRFAQ promises simple `publish`, `subscribe`, and `unsubscribe` API operatio
 - Use environment-named API stages (`dev`, `staging`, `prod`) instead of a static `v1` stage. Publish and schema operations infer the target environment from `$context.stage`; the publish consumer reads it from SQS message attributes.
 - Extend the canonical envelope `detail.metadata` with `idempotencyKey` (caller-optional, else generated at API Gateway time) and `publishedAt` (SQS `SentTimestamp`, immutable from queue time). Both survive EventBridge replays.
 - Carry the environment through the publish flow as an SQS message attribute alongside the trusted-principal envelope.
-- Require publisher authorization through the DynamoDB-backed grant engine (prerequisite: production grant engine implementation, either in this change or as a standalone change from the `evaluate-authorization-engine` spike).
+- Require publisher authorization through the DynamoDB-backed grant engine (prerequisite: `add-grant-engine`, the standalone production grant engine change from the `evaluate-authorization-engine` spike).
 - Keep schemas append-only: publishers cannot replace, delete, or retire schemas or versions.
 - Validate the generated envelope but do not validate business data against schema content.
 - Defer schema promotion between environments and schema-change event hooks to separate changes.
