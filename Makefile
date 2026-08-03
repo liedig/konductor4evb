@@ -54,7 +54,7 @@ build-ci: lambda-binaries-ci ## Build all Lambda binaries once, then package wit
 	sam build --config-file samconfig-core.toml -c
 
 lambda-binaries-ci: ## Cross-compile every function to arm64 in a single workspace build
-	cargo lambda build --release --arm64
+	ulimit -Sn 10240 2>/dev/null || true; cargo lambda build --release --arm64
 	@for dir in domain-management/functions/* event-streams/functions/* control-plane/functions/*; do \
 		pkg=$$(basename $$dir); \
 		cp target/lambda/$$pkg/bootstrap $$dir/bootstrap; \
@@ -64,7 +64,8 @@ build: lambda-binaries ## Build all Lambda binaries once, then package with SAM
 	sam build --config-file samconfig-core.toml -c
 
 lambda-binaries: ## Cross-compile every function to arm64 (per-package to avoid bootstrap name collisions)
-	@for dir in domain-management/functions/* event-streams/functions/* control-plane/functions/*; do \
+	@ulimit -Sn 10240 2>/dev/null || true; \
+	for dir in domain-management/functions/* event-streams/functions/* control-plane/functions/*; do \
 		pkg=$$(basename $$dir); \
 		cargo lambda build --release --arm64 --package $$pkg || exit 1; \
 		cp target/lambda/bootstrap/bootstrap $$dir/bootstrap; \
