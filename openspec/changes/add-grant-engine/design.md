@@ -41,7 +41,13 @@ AuditRecord    PK = GRANT#{bindingId}#AUDIT
 
 GSI1 (admin):  PK = DOMAIN#{domain}, SK = ROLE#{role}#PRINCIPAL#{principal}
                enumeration by domain without scans
+
+GSI2 (admin):  PK = bindingId
+               point lookup for DELETE /bindings/{bindingId}, which carries
+               no domain or principal context
 ```
+
+Both GSIs are sparse: audit items carry no GSI attributes, so administration indexes contain bindings only. GSI2 was added during implementation — the revoke route identifies a binding by identifier alone, and the documented key schema has no access path from `bindingId` to the item's full key.
 
 Entitlements ship later in their own table with their own admin GSI. Two stores, one engine crate: `DynamoGrantEngine` reads table 1 now and grows entitlement reads with the subscriber change. The split matches the revocation semantics (bindings: nothing to reconcile; entitlements: subscription reconciliation worker) and lets IAM policies scope publish consumers to the bindings table only. DynamoDB transactions span tables, so a future mutation touching both stores can still be atomic.
 

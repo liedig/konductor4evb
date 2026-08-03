@@ -165,6 +165,55 @@ Resources:
         AttributeName: expiresAt
         Enabled: true
 
+  # ---- DynamoDB (authorization bindings) ----
+  # Single-table grant store: RoleBinding items keyed by principal, AuditRecord
+  # items keyed by binding. GSIs are sparse (bindings only) and serve
+  # administration paths; authorization decisions use strongly consistent
+  # point reads on the table keys.
+  AuthorizationBindingsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub "nexus-authorization-bindings"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: bindingId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: by-domain
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: by-binding-id
+          KeySchema:
+            - AttributeName: bindingId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
   # ---- Dead Letter Queue (read Lambda functions) ----
   LambdaFailureDlq:
     Type: AWS::SQS::Queue
@@ -1732,6 +1781,9 @@ Outputs:
   EventStreamsTableName:
     Description: Event streams DynamoDB table name
     Value: !Ref EventStreamsTable
+  AuthorizationBindingsTableName:
+    Description: Authorization bindings DynamoDB table name
+    Value: !Ref AuthorizationBindingsTable
   SubscriptionDeliveryRoleArn:
     Description: Role EventBridge assumes to deliver subscription events to app-side buses
     Value: !GetAtt SubscriptionDeliveryRole.Arn
