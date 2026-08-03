@@ -1,130 +1,167 @@
 ## ADDED Requirements
 
-### Requirement: Subscriber role binding
+### Requirement: Entitlement storage holds consumer-domain coverage grants
 
-The production domain role-binding model consumed by this change SHALL support both `subscriber` and `publisher` bindings from either a Cognito team group for OAuth callers or an AWS account for IAM callers. A caller SHALL have subscriber access only when one of the caller's current Cognito groups or the caller's trusted IAM AWS account has a current `subscriber` binding to the consumer domain. Publisher authorization for outbound subscription visibility SHALL use the same principal alternatives and account granularity. Access SHALL belong to the bound group or account rather than to an individual user, IAM role, session, or subscription creator.
+Nexus SHALL store entitlements in a dedicated entitlements table keyed by consumer domain with a stable entitlement identifier. An entitlement SHALL grant a consumer domain coverage of exactly one scope: `DOMAIN` (all schemas from a producer domain, including schemas created later) or `SCHEMA` (all versions of one named producer schema, including versions published later). Every entitlement SHALL carry consumer domain, producer domain, scope, creation metadata, and the trusted actor that created it. Entitlements SHALL be environment-agnostic. Revocation SHALL delete the entitlement row; revoked history SHALL exist only in audit records, so current coverage is always an existence check.
 
-#### Scenario: Group member receives subscriber access
+#### Scenario: Domain-wide entitlement covers future schemas
 
-- **WHEN** a caller's current Cognito group has a current `subscriber` binding to consumer domain `checkout`
-- **THEN** Nexus SHALL recognize the caller as a subscriber for `checkout`
+- **WHEN** a consumer domain holds a `DOMAIN` entitlement for producer domain `orders`
+- **AND WHEN** a publisher later creates a new schema in `orders`
+- **THEN** the new schema SHALL be covered without any entitlement change
 
-#### Scenario: Binding does not cross domain boundaries
+#### Scenario: Exact-schema entitlement covers future versions
 
-- **WHEN** a caller's group has a `subscriber` binding to `checkout` but not to `fulfilment`
-- **THEN** Nexus SHALL NOT grant that caller subscriber access to `fulfilment`
+- **WHEN** a consumer domain holds a `SCHEMA` entitlement for one producer schema
+- **AND WHEN** a publisher later appends a new version to that schema
+- **THEN** the new version SHALL be covered without any entitlement change
 
-#### Scenario: IAM account binding preserves automation compatibility
+#### Scenario: Revoked entitlement no longer covers
 
-- **WHEN** a trusted IAM principal from AWS account `123456789012` calls a subscriber operation
-- **AND WHEN** that AWS account has a current `subscriber` binding to consumer domain `checkout`
-- **THEN** Nexus SHALL recognize the caller as a subscriber for `checkout` regardless of the IAM role or session name within that account
+- **WHEN** an entitlement is revoked
+- **THEN** the entitlement row SHALL cease to exist
+- **AND THEN** subsequent coverage checks SHALL deny, with history available only in audit records
 
-#### Scenario: IAM publisher binding grants outbound visibility
+### Requirement: Entitlement administration is dual-authorized on the OAuth surface
 
-- **WHEN** a trusted IAM principal's AWS account has a current `publisher` binding to producer domain `orders`
-- **THEN** Nexus SHALL recognize the caller as a publisher for `orders` outbound subscription reads at AWS-account granularity
+Entitlement administration SHALL be exposed as flat-verb routes on the OAuth control-plane surface only: `POST /entitlements`, `GET /entitlements?consumerDomain=|producerDomain=`, and `DELETE /entitlements/{entitlementId}`. Create and revoke SHALL be authorized by the `platform-admin` global role or a `publisher` binding on the entitlement's producer domain. List SHALL additionally authorize a `subscriber` binding matching the queried consumer domain. The IAM surface SHALL NOT expose entitlement administration in this capability version.
 
-### Requirement: Consumer-domain producer entitlements
+#### Scenario: Producer self-service sharing
 
-Nexus SHALL store producer access as entitlements owned by a consumer domain, independently of users, Cognito groups, and AWS-account principals. Nexus SHALL support two additive grant types: a producer-domain grant covering every current and future schema in one producer domain, and an exact producer-schema grant covering one named schema in one producer domain. Grants SHALL apply logically across every environment in which the covered schema exists.
+- **WHEN** a caller with a `publisher` binding for producer domain `orders` creates an entitlement covering `orders` schemas for a consumer domain
+- **THEN** the API SHALL create the entitlement and commit its audit record with the mutation
 
-#### Scenario: Producer-domain grant covers current and future schemas
+#### Scenario: Producer cannot share another domain's schemas
 
-- **WHEN** consumer domain `checkout` has a current producer-domain grant for `orders`
-- **THEN** every current schema in `orders` SHALL be entitled for `checkout`
-- **AND WHEN** a new schema is later added to `orders`
-- **THEN** that schema SHALL be entitled without changing the grant
+- **WHEN** a caller with a `publisher` binding for `orders` attempts to create an entitlement covering producer domain `payments`
+- **THEN** the API SHALL return `403 Forbidden`
+- **AND THEN** no entitlement SHALL be created
 
-#### Scenario: Exact-schema grant has narrow scope
+#### Scenario: Platform-admin administers any entitlement
 
-- **WHEN** consumer domain `checkout` has an exact producer-schema grant for `orders` and `prezzee-orders@OrderNotification`
-- **THEN** that schema SHALL be entitled in every environment where it exists
-- **AND THEN** no other `orders` schema SHALL be entitled by that grant
-- **AND WHEN** a new schema is later added to `orders`
-- **THEN** that schema SHALL NOT be entitled by the exact-schema grant
+- **WHEN** an OAuth caller with the `platform-admin` global role creates, lists, or revokes entitlements for any domain pair
+- **THEN** the API SHALL perform the operation
 
-### Requirement: Additive entitlement authorization
+#### Scenario: Subscriber lists its own consumer entitlements
 
-An operation requiring a subscriber entitlement SHALL be authorized only when the caller has subscriber access to the consumer domain through a current Cognito-group or IAM AWS-account binding and that consumer domain has at least one current producer-domain or exact producer-schema grant covering the requested schema. OAuth and IAM handlers SHALL invoke the same authorization decision contract after normalizing their distinct trusted-principal contexts. Nexus SHALL evaluate the union of all current grants at decision time and SHALL NOT associate continuing authorization with the grant that originally enabled an operation.
+- **WHEN** a caller with a `subscriber` binding on consumer domain `checkout` lists entitlements filtered by `consumerDomain=checkout`
+- **THEN** the API SHALL return that consumer domain's current entitlements
 
-#### Scenario: Subscriber and covering grant authorize access
+#### Scenario: IAM surface has no entitlement administration
 
-- **WHEN** a caller has subscriber access to `checkout`
-- **AND WHEN** `checkout` has either a current producer-domain grant for `orders` or a current exact-schema grant for the requested `orders` schema
-- **THEN** Nexus SHALL authorize the subscriber-entitled operation
+- **WHEN** any caller requests entitlement administration on the IAM control-plane surface
+- **THEN** no such route SHALL exist
 
-#### Scenario: Role without entitlement is insufficient
+### Requirement: Entitlement mutations are conditional with atomic audit
 
-- **WHEN** a caller has subscriber access to `checkout` but `checkout` has no current grant covering the requested schema
-- **THEN** Nexus SHALL deny the subscriber-entitled operation
+Entitlement creates SHALL be idempotent for the same consumer domain, producer domain, and scope via a not-exists condition. Revokes SHALL be conditioned on the entitlement's current existence. Every mutation SHALL commit a token-free audit record (mutation type, trusted actor, timestamp, scope summary) in the same transaction as the mutation itself. A successful revoke SHALL enqueue exactly one revocation message carrying the full revoked scope to the revocation queue.
 
-#### Scenario: Alternative grant preserves authorization
+#### Scenario: Identical re-create is idempotent
 
-- **WHEN** one grant covering an existing subscription is revoked but another current grant still covers the same producer schema
-- **THEN** Nexus SHALL continue to authorize that subscription
+- **WHEN** an identical active entitlement already exists for a create request
+- **THEN** the operation SHALL succeed without creating a duplicate
+- **AND THEN** exactly one entitlement SHALL exist for that consumer, producer, and scope
 
-### Requirement: Platform administration and audit access
+#### Scenario: Mutation and audit commit atomically
 
-Only OAuth callers with the global `platform-admin` role SHALL create or revoke subscriber role bindings and producer entitlements. OAuth callers with the global `platform-admin` or `platform-auditor` role SHALL inspect role bindings, entitlements, subscriptions, and protected subscription topology across all domains. A platform administrator SHALL mutate subscriptions across domains subject to current entitlement rules. A `platform-auditor` SHALL NOT mutate role bindings, entitlements, or subscriptions. IAM callers SHALL receive no global platform-role bypass.
+- **WHEN** any entitlement mutation commits
+- **THEN** its audit record SHALL exist in the same committed transaction
+- **AND THEN** a failed mutation SHALL NOT leave an audit record, and a failed audit SHALL NOT leave a mutation
 
-#### Scenario: Platform administrator manages an entitlement
+#### Scenario: Revoke enqueues the revocation workflow
 
-- **WHEN** a caller with the global `platform-admin` role creates or revokes a producer entitlement
-- **THEN** Nexus SHALL accept the authorized administration operation
+- **WHEN** an entitlement revoke commits
+- **THEN** exactly one revocation message carrying the revoked consumer domain, producer domain, and scope SHALL be enqueued for asynchronous subscription re-evaluation
 
-#### Scenario: platform-auditor cannot mutate authorization state
+### Requirement: Subscribe authorization composes binding and coverage inside the grant engine
 
-- **WHEN** a caller whose only platform role is `platform-auditor` attempts to create or revoke a role binding or entitlement
-- **THEN** Nexus SHALL reject the mutation
+The grant engine SHALL evaluate subscribe-family actions against both authorization stores inside a single `authorize()` call, addressed through a composite resource of the form `{consumerDomain}/{producerDomain}/{eventName}` constructed by typed helpers. For `subscription:create` and `subscription:enable`, the engine SHALL allow only when the caller holds a `subscriber` binding on the consumer domain AND at least one current entitlement covers the producer schema; overlapping entitlements SHALL compose additively. For `subscription:disable` and `subscription:delete`, the engine SHALL require only the `subscriber` binding so subscribers retain lifecycle control after revocation. Self-subscription (consumer equals producer) SHALL be implicitly covered and require only the binding check. Malformed composite resources SHALL deny. Callers SHALL NOT compose binding and entitlement checks outside the engine.
 
-### Requirement: Separate OAuth and IAM resource surfaces
+#### Scenario: Covered subscribe is allowed
 
-Domain-scoped subscription and consumer catalog routes SHALL be exposed consistently on both the OAuth and IAM API surfaces. OAuth requests SHALL derive group bindings and global roles from trusted Cognito authorizer context. IAM requests SHALL derive account bindings from the trusted AWS account in IAM request context. Both surfaces SHALL normalize their principal context and invoke the same resource-authorization decisions. Global binding and entitlement administration and platform-wide inspection SHALL be OAuth-only because their authorization depends on `platform-admin` or `platform-auditor`.
+- **WHEN** a caller holds a `subscriber` binding on consumer domain `checkout` and `checkout` holds a covering entitlement for the target producer schema
+- **THEN** the engine SHALL allow `subscription:create`
 
-#### Scenario: Equivalent resource decision across surfaces
+#### Scenario: Missing entitlement denies despite binding
 
-- **WHEN** an OAuth group binding and an IAM AWS-account binding grant `subscriber` access to the same consumer domain
-- **THEN** equivalent domain-scoped subscription or catalog requests on their respective surfaces SHALL receive the same resource authorization decision
+- **WHEN** a caller holds a `subscriber` binding on `checkout` but no current entitlement covers the target producer schema
+- **THEN** the engine SHALL deny
+- **AND THEN** the API SHALL return `403 Forbidden`
 
-#### Scenario: IAM surface has no global administration route
+#### Scenario: Alternative covering grant preserves access
 
-- **WHEN** an IAM caller attempts to access global binding, entitlement administration, or platform-wide inspection
-- **THEN** that operation SHALL NOT be exposed on the IAM API surface
+- **WHEN** a consumer domain holds two overlapping entitlements covering a schema and one is revoked
+- **THEN** the engine SHALL continue to allow subscribe and enable actions for that schema through the remaining entitlement
 
-### Requirement: Immediate entitlement revocation
+#### Scenario: Post-revocation lifecycle control retained
 
-Revoking an entitlement SHALL make that grant unavailable to new authorization decisions and trigger re-evaluation of every active subscription owned by the affected consumer domain and covered by the revoked grant. Nexus SHALL disable each active subscription for which no other current grant covers its producer schema, stopping delivery in every environment while preserving the subscription record, pinned versions, and EventBridge rules. The revocation operation SHALL NOT complete until every affected subscription has either been disabled when no longer covered, confirmed as covered by another current grant, or recorded in a durable retry or failure state that identifies the unfinished disablement. The exact production completion bound SHALL follow the authorization-engine spike recommendation rather than a fixed bound defined by this change.
+- **WHEN** an entitlement covering an existing subscription has been revoked
+- **THEN** an authorized subscriber SHALL remain able to disable or delete the subscription
+- **AND THEN** enable SHALL be denied
 
-#### Scenario: Last covering grant is revoked
+#### Scenario: Self-subscription is implicitly covered
 
-- **WHEN** a platform administrator revokes the last current grant covering an active subscription
-- **THEN** Nexus SHALL disable that subscription in every environment
-- **AND THEN** retain its record, pinned versions, and EventBridge rules
+- **WHEN** a caller with a `subscriber` binding on a domain subscribes that domain to one of its own schemas
+- **THEN** the engine SHALL allow without any entitlement
 
-#### Scenario: Overlapping grant prevents disablement
+#### Scenario: Malformed composite resource denies
 
-- **WHEN** a platform administrator revokes a grant covering an active subscription and another current grant covers the same producer schema
-- **THEN** Nexus SHALL leave the subscription enabled
+- **WHEN** the engine receives a subscribe-family action with a resource that does not parse as `{consumerDomain}/{producerDomain}/{eventName}`
+- **THEN** the engine SHALL deny and log the internal reason without tokens, claims, or payloads
 
-#### Scenario: Partial disable failure is durably tracked
+### Requirement: Entitlement revocation disables uncovered subscriptions asynchronously
 
-- **WHEN** revocation disables some no-longer-covered subscriptions but one subscription cannot be disabled
-- **THEN** the revocation operation SHALL NOT report unqualified successful completion
-- **AND THEN** Nexus SHALL record a durable retry or failure state identifying the affected subscription and remaining work
+Revocation SHALL take effect for new decisions synchronously with the entitlement delete. A revocation worker SHALL then process the queued revocation message in bounded batches: query candidate active subscriptions through the producer reverse index, re-evaluate each candidate's producer schema against the consumer domain's remaining current grants through the engine, and where no grant covers, disable the Nexus-managed EventBridge rule and per-environment desired state in every environment. The worker SHALL retain subscription records, rule identities, and pinned versions. The worker SHALL persist per-subscription progress durably, SHALL treat disablement as idempotent, SHALL re-read current grants on every retry, and SHALL NOT report completion until every candidate is covered, disabled, or recorded in a durable failure state. Revocation SHALL NOT automatically re-enable subscriptions after a later grant.
 
-#### Scenario: Retried revocation completes remaining disablement
+#### Scenario: Uncovered subscription is disabled in every environment
 
-- **WHEN** a durable revocation retry resumes after a partial failure
-- **THEN** Nexus SHALL re-evaluate current additive coverage before retrying each unfinished disablement
-- **AND THEN** it SHALL idempotently disable every subscription that remains no longer covered
+- **WHEN** the last entitlement covering an active subscription is revoked and the worker processes the message
+- **THEN** the worker SHALL disable the Nexus-managed rule and desired state in every environment
+- **AND THEN** the subscription record, rule identities, and pinned versions SHALL be retained
 
-### Requirement: Conceal unauthorized resources
+#### Scenario: Alternative grant cancels disablement
 
-Subscriber-scoped detail operations SHALL return `404 Not Found` when the caller lacks subscriber access, the required entitlement is absent or revoked, or the requested resource does not exist. The response SHALL NOT reveal which authorization condition failed.
+- **WHEN** a candidate subscription remains covered by another current entitlement at evaluation time
+- **THEN** the worker SHALL leave it enabled and record it as covered
 
-#### Scenario: Revoked detail is concealed
+#### Scenario: Partial failure is durably recorded
 
-- **WHEN** a caller requests subscriber-scoped detail after the relevant role binding or last covering entitlement has been revoked
-- **THEN** Nexus SHALL return `404 Not Found`
-- **AND THEN** the response SHALL NOT disclose whether the resource exists
+- **WHEN** disabling fails for a subset of candidates
+- **THEN** the worker SHALL record per-subscription failure state for retry
+- **AND THEN** the revocation SHALL NOT be reported complete until every candidate resolves
+
+#### Scenario: Retry honors a newly added grant
+
+- **WHEN** a retry runs after a new covering entitlement was created for a previously uncovered candidate
+- **THEN** the retry SHALL evaluate the candidate as covered and skip disablement
+
+#### Scenario: No automatic re-enablement
+
+- **WHEN** a new entitlement is created after subscriptions were disabled for lack of coverage
+- **THEN** those subscriptions SHALL remain disabled until an authorized subscriber deliberately enables them
+
+### Requirement: Schema catalog visibility follows entitlement coverage
+
+The consumer schema catalog SHALL expose exactly the schemas covered by the queried consumer domain's current entitlements, expanded across environments against the per-environment registries with overlapping coverage deduplicated. A consumer domain with no current entitlements SHALL receive an empty catalog list. Every catalog page and detail request SHALL re-evaluate current entitlements; continuation tokens SHALL be cursors only and SHALL NOT snapshot authorization state. `platform-admin` and `platform-auditor` SHALL bypass the entitlement filter for platform-wide inspection, with `platform-auditor` read-only. No catalog table SHALL be introduced; registries remain the source of truth.
+
+#### Scenario: Catalog expands current entitlements
+
+- **WHEN** a caller with a `subscriber` binding on `checkout` requests the catalog for `checkout`
+- **THEN** the response SHALL contain exactly the schemas covered by `checkout`'s current domain-wide and exact-schema entitlements, deduplicated, with latest version per environment
+
+#### Scenario: Zero entitlements yields an empty catalog
+
+- **WHEN** a caller queries the catalog for a consumer domain with no current entitlements
+- **THEN** the response SHALL be an empty list
+- **AND THEN** the response SHALL NOT indicate which producer domains or schemas exist
+
+#### Scenario: Revocation takes effect on the next catalog request
+
+- **WHEN** an entitlement is revoked between two catalog requests
+- **THEN** the second request SHALL exclude the previously covered schemas
+
+#### Scenario: Platform roles inspect the full catalog
+
+- **WHEN** a `platform-admin` or `platform-auditor` caller requests the catalog without a consumer domain
+- **THEN** the response SHALL span all discoverable schemas unfiltered by entitlements
+- **AND THEN** `platform-auditor` SHALL NOT be able to perform any mutation

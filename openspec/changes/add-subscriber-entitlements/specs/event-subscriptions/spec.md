@@ -1,173 +1,89 @@
-## ADDED Requirements
-
-### Requirement: Consumer-domain subscription ownership
-
-A subscription SHALL be owned by its consumer domain, not by the user, Cognito group, or principal that created it. Any caller with current subscriber access to the consumer domain, or a global `platform-admin`, SHALL operate its subscriptions subject to entitlement requirements. Nexus SHALL manage only the bus-to-bus EventBridge rules that deliver from the producer's platform-side domain bus to the consumer's app-side domain bus; rules downstream of that app-side bus SHALL remain outside Nexus ownership.
-
-#### Scenario: Another subscriber operates a domain-owned subscription
-
-- **WHEN** a caller has current subscriber access to a consumer domain but did not create one of its subscriptions
-- **THEN** the caller SHALL be permitted to perform an otherwise authorized operation on that subscription
-
-#### Scenario: Downstream rules remain application-owned
-
-- **WHEN** Nexus creates, disables, enables, or removes a subscription
-- **THEN** Nexus SHALL NOT create, update, or delete rules downstream of the consumer's app-side domain bus
-
-### Requirement: Subscription API terminology
-
-The public API SHALL use the term `subscriptions` for subscription resources and response fields and SHALL NOT expose them as `event-streams`.
-
-#### Scenario: Public subscription response
-
-- **WHEN** a caller lists or describes subscription resources
-- **THEN** the API SHALL identify those resources as `subscriptions`
-- **AND THEN** the response SHALL NOT use `event-streams` as their public resource name
-
 ## MODIFIED Requirements
-
-### Requirement: Schema-first subscription
-
-Consumers SHALL subscribe a registered consumer domain to another registered domain's event schema by sending `POST /domains/{consumerDomain}/subscriptions` with `producerDomain` and `schemaName`. The consumer domain SHALL come only from the path and SHALL NOT be accepted in the request body. The subscription SHALL bind to the **latest** version of the schema in each environment's registry, resolved and pinned at subscribe time. The API SHALL NOT allow subscribing to a historical schema version and SHALL NOT accept a caller-supplied event pattern. Creation SHALL require the caller to have subscriber access to the consumer domain and the consumer domain to have a current entitlement covering the producer schema.
-
-#### Scenario: Subscribe to an entitled schema
-
-- **WHEN** an authorized subscriber sends `POST /domains/checkout/subscriptions` with `producerDomain: orders` and `schemaName: prezzee-orders@OrderNotification`
-- **THEN** the control plane SHALL resolve the latest version of `prezzee-orders@OrderNotification` in each of the producer's per-environment schema registries
-- **AND THEN** pin the resolved version per environment in the subscription's EventBridge rules and subscription record
-
-#### Scenario: Consumer domain cannot be supplied in the body
-
-- **WHEN** a caller includes `consumerDomain` in a create or update request body
-- **THEN** the request SHALL be rejected by structural validation
-
-#### Scenario: Historical version cannot be subscribed
-
-- **WHEN** a caller attempts to specify a schema version in a subscribe request
-- **THEN** the request SHALL be rejected by structural validation because the subscribe operation accepts no version parameter
-
-#### Scenario: Per-environment version skew is recorded faithfully
-
-- **WHEN** the latest version of the schema differs across environments
-- **THEN** each environment's rule SHALL pin that environment's latest version
-- **AND THEN** the subscription record SHALL show the pinned version per environment
-
-### Requirement: Subscription identity and idempotency
-
-A subscription SHALL be identified by the triple (consumerDomain, producerDomain, detailType), exposed as `{consumerDomain}.{producerDomain}.{detailType}`. Domain names cannot contain dots, so the identifier SHALL be parsed by splitting on the first two dots; the event name portion may itself contain dots. There SHALL be at most one subscription per triple. A create request for an existing active subscription SHALL be idempotent. On a given producer bus, the rule name `{consumerDomain}-{detailType}` is bijective with the subscription identity, and rule creation SHALL be an upsert (`PutRule`) so retried workflow steps are safe.
-
-#### Scenario: Duplicate create is idempotent
-
-- **WHEN** a caller creates a subscription and an `ACTIVE` subscription already exists for the same consumer, producer, and detail type
-- **THEN** the operation SHALL succeed without creating duplicate resources
-- **AND THEN** the outcome SHALL reference the existing subscription
-
-#### Scenario: Re-create after removal creates a fresh contract
-
-- **WHEN** a caller creates a subscription and a `REMOVED` record exists for the same triple
-- **THEN** a new subscription SHALL be created, re-resolving the latest schema versions at that time
-
-### Requirement: Per-environment enable and disable
-
-A subscription SHALL carry per-environment desired state (`enabled: true|false`) mapped to the native EventBridge rule state (`ENABLED|DISABLED`). Initial per-environment state SHALL be settable in the create request, defaulting to enabled in every environment. State SHALL be updatable through `PATCH /domains/{consumerDomain}/subscriptions/{subscriptionId}` without accepting `consumerDomain` in the body. A caller with subscriber access to the consumer domain, or a global `platform-admin`, SHALL always be allowed to disable the subscription. Enabling SHALL additionally require the consumer domain to have a current entitlement covering the subscription's producer schema. Disabling SHALL NOT remove the rule, unpin the version, or void the contract.
-
-#### Scenario: Create with production paused
-
-- **WHEN** an authorized subscriber creates a subscription with `environments: {prod: {enabled: false}}`
-- **THEN** the prod rule SHALL be created with state `DISABLED` while the other environment rules are `ENABLED`
-
-#### Scenario: Disable after entitlement revocation
-
-- **WHEN** an authorized subscriber patches a subscription to disable one or more environments after its last covering entitlement was revoked
-- **THEN** Nexus SHALL accept the disable operation
-- **AND THEN** stop delivery in the selected environments without removing rules or pinned versions
-
-#### Scenario: Enable requires a current entitlement
-
-- **WHEN** an authorized subscriber patches a disabled subscription to enable an environment
-- **THEN** Nexus SHALL enable it only if the consumer domain has a current entitlement covering the producer schema
-
-### Requirement: Unsubscribe
-
-Deleting a subscription through `DELETE /domains/{consumerDomain}/subscriptions/{subscriptionId}` SHALL remove its rules, targets first and then rules, from the producer's platform bus in every environment. Removal SHALL be idempotent, treating already-deleted resources as no-ops. A caller with subscriber access to the consumer domain, or a global `platform-admin`, SHALL be allowed to delete the subscription even after its entitlement has been revoked. The subscription record SHALL be marked `REMOVED` with a `removedAt` timestamp and retained for 90 days through DynamoDB TTL. The control plane SHALL NOT touch the consumer's app-side bus.
-
-#### Scenario: Clean deletion
-
-- **WHEN** an authorized subscriber deletes a subscription under its consumer domain
-- **THEN** all per-environment rules for the subscription SHALL be removed from the producer's platform buses
-- **AND THEN** the subscription record SHALL have status `REMOVED` and an expiry 90 days after removal
-
-#### Scenario: Delete remains available after revocation
-
-- **WHEN** an authorized subscriber deletes a subscription after the last entitlement covering it has been revoked
-- **THEN** Nexus SHALL accept and process the deletion
-
-#### Scenario: Orphaned consumer rules are the application team's responsibility
-
-- **WHEN** a subscription is removed and the consumer's app-side bus still carries integration rules for the removed delivery
-- **THEN** the control plane SHALL NOT modify or delete those rules
 
 ### Requirement: Subscription validation and authorization
 
-Before activating a subscription, the control plane SHALL validate that both consumer and producer domains exist and are `ACTIVE`, the caller has subscriber access to the consumer domain or the OAuth global `platform-admin` role, the consumer domain has a current producer-domain or exact-schema entitlement covering the producer schema, and the derived rule name satisfies EventBridge constraints. Self-subscription SHALL be permitted when these authorization conditions hold. Subscriber access through a Cognito team-group or IAM AWS-account binding SHALL govern inbound reads and mutations within a consumer domain. A caller with publisher access through either principal type to a producer domain SHALL have full read-only visibility of that domain's outbound subscriptions. OAuth global `platform-admin` and `platform-auditor` roles SHALL inspect all subscriptions; a platform administrator SHALL mutate subscriptions across domains subject to current entitlement rules, while a `platform-auditor` SHALL NOT mutate them. Unauthorized subscription detail requests SHALL return `404 Not Found`.
+Before activating a subscription, the control plane SHALL validate that: both the consumer and producer domains exist and are `ACTIVE`; the derived rule name satisfies EventBridge constraints (charset `[A-Za-z0-9._-]`, length ≤ 64 characters); and the grant engine allows the subscribe action for the normalized trusted principal against the composite resource `{consumerDomain}/{producerDomain}/{eventName}`. Account-ownership matching against the consumer domain's `ownerAccountId` SHALL be removed. Create and enable SHALL require a `subscriber` binding on the consumer domain plus a current covering entitlement; disable and delete SHALL require only the binding. Self-subscription (consumer equals producer) SHALL be permitted and implicitly covered — it is how a domain consumes its own events on its app-side bus. `platform-admin` MAY operate subscriptions without a subscriber binding while still requiring current covering entitlement for create and enable. Unauthorized attempts SHALL fail with `403 Forbidden` and a deterministic `*Failed` outcome event; deny-as-unknown concealment SHALL NOT be applied.
 
-#### Scenario: Subscriber and entitlement are required to create
+#### Scenario: Covered subscriber creates a subscription
 
-- **WHEN** a caller lacks subscriber access to the consumer domain or the domain lacks a current covering entitlement
-- **THEN** the create command SHALL fail authorization
+- **WHEN** a caller holds a `subscriber` binding on the consumer domain and the consumer domain holds a current covering entitlement for the target producer schema
+- **THEN** the subscribe command SHALL pass authorization and proceed to validation and activation
 
-#### Scenario: Publisher can inspect but not mutate outbound subscriptions
+#### Scenario: Missing binding or entitlement denied
 
-- **WHEN** a caller has publisher access to a producer domain
-- **THEN** the caller SHALL be able to read every outbound subscription for that producer domain
-- **AND THEN** the caller SHALL NOT gain mutation rights to those subscriptions
+- **WHEN** a caller lacks a `subscriber` binding on the consumer domain, or no current entitlement covers the target producer schema
+- **THEN** the command SHALL fail with `403 Forbidden`
+- **AND THEN** a `SubscribeFailed` outcome event SHALL carry the authorization failure without tokens, claims, or payload detail
+
+#### Scenario: Account ownership no longer authorizes
+
+- **WHEN** a caller whose AWS account matches the consumer domain's `ownerAccountId` but who holds no `subscriber` binding attempts to subscribe
+- **THEN** the command SHALL fail authorization with `403 Forbidden`
+
+#### Scenario: Post-revocation lifecycle control retained
+
+- **WHEN** the entitlement covering an existing subscription has been revoked
+- **THEN** an authorized subscriber SHALL remain able to disable or delete the subscription
+- **AND THEN** create or enable SHALL be denied
 
 #### Scenario: Inactive domain rejected
 
-- **WHEN** either domain in a create request is not in `ACTIVE` status
+- **WHEN** either domain in a subscribe request is not in `ACTIVE` status
 - **THEN** the command SHALL fail validation identifying the offending domain and its current status
 
 #### Scenario: Rule name budget exceeded
 
 - **WHEN** `{consumerDomain}-{detailType}` exceeds 64 characters or contains characters outside `[A-Za-z0-9._-]`
-- **THEN** the create command SHALL fail validation with an error explaining the constraint
+- **THEN** the subscribe command SHALL fail validation with an error explaining the constraint
 
 #### Scenario: Self-subscription permitted
 
-- **WHEN** an authorized consumer domain subscribes to one of its own entitled schemas
-- **THEN** the subscription SHALL be created normally
-
-#### Scenario: Unauthorized detail is concealed
-
-- **WHEN** a caller requests `GET /subscriptions/{subscriptionId}` without subscriber, publisher, or global platform visibility for that subscription
-- **THEN** the API SHALL return `404 Not Found`
+- **WHEN** a caller with a `subscriber` binding on a domain subscribes that domain to one of its own schemas
+- **THEN** the subscription SHALL be created normally without any entitlement, delivering the domain's events to its own app-side bus
 
 ### Requirement: Subscription read operations
 
-The control plane SHALL provide `GET /domains/{domain}/subscriptions?direction=inbound|outbound` and canonical `GET /subscriptions/{subscriptionId}` operations on both OAuth and IAM API surfaces, served synchronously from the subscriptions registry through shared handlers and decisions. `direction` SHALL be required. The inbound view SHALL return subscriptions owned by the consumer domain and require subscriber access to that domain through a Cognito team-group or IAM AWS-account binding. The outbound view SHALL return full subscription visibility for the producer domain and require publisher access through either binding principal type. OAuth global `platform-admin` and `platform-auditor` callers SHALL inspect either view and canonical detail across all domains. List operations SHALL support filters for schema name, pinned version, and status. Detail SHALL include consumer, producer, schema, per-environment pinned versions, rule ARNs, enabled flags, and materialization status.
+The control plane SHALL provide `GET /subscriptions?domain={domain}&direction=inbound|outbound` and canonical `GET /subscriptions/{subscriptionId}`. The `direction` parameter SHALL be required; the global list route SHALL NOT exist. Inbound SHALL list subscriptions where the queried domain consumes, authorized by a `subscriber` binding on that domain. Outbound SHALL list subscriptions consuming the queried producer domain's schemas, authorized by a `publisher` binding on that domain, and SHALL return full consumer topology because producer teams need it for notifications and future version migration. Both SHALL support schema, pinned-version, and status filters and SHALL be served synchronously from the event-streams store. Canonical detail SHALL authorize against the visible consumer side, the visible producer side, or a platform role (`platform-admin`, `platform-auditor`), returning full stream detail including per-environment pinned versions, rule ARNs, enabled flags, and materialization status. Unauthorized detail or list requests SHALL return `403 Forbidden`; a missing subscription SHALL return `404 Not Found`.
 
 #### Scenario: Subscriber lists inbound subscriptions
 
-- **WHEN** a caller with subscriber access to `checkout` requests `GET /domains/checkout/subscriptions?direction=inbound`
-- **THEN** the response SHALL list subscriptions whose consumer domain is `checkout`
+- **WHEN** a caller with a `subscriber` binding on `checkout` requests `GET /subscriptions?domain=checkout&direction=inbound`
+- **THEN** the response SHALL list `checkout`'s subscriptions with the requested filters applied
 
-#### Scenario: Publisher lists complete outbound subscriptions
+#### Scenario: Publisher lists outbound consumers
 
-- **WHEN** a caller with publisher access to `orders` requests `GET /domains/orders/subscriptions?direction=outbound`
-- **THEN** the response SHALL list every subscription whose producer domain is `orders`, including consumer domain and per-environment state
-
-#### Scenario: IAM account principal lists subscriptions
-
-- **WHEN** an IAM caller's trusted AWS account has the required subscriber or publisher binding for the requested domain
-- **THEN** the corresponding inbound or outbound request on the IAM surface SHALL return the same domain-scoped view as an equivalently authorized OAuth caller
+- **WHEN** a caller with a `publisher` binding on `orders` requests `GET /subscriptions?domain=orders&direction=outbound`
+- **THEN** the response SHALL list all subscriptions consuming `orders` schemas, including consumer domains and pinned versions
 
 #### Scenario: Direction is required
 
-- **WHEN** a caller requests the domain-scoped subscription collection without `direction`
-- **THEN** the API SHALL reject the request with `400 Bad Request`
+- **WHEN** a caller requests `GET /subscriptions?domain=checkout` without `direction`
+- **THEN** the API SHALL reject the request identifying the required parameter
 
-#### Scenario: Describe a visible subscription
+#### Scenario: Describe a subscription from an authorized side
 
-- **WHEN** an authorized caller requests `GET /subscriptions/checkout.orders.OrderNotification`
-- **THEN** the response SHALL include the consumer, producer, schema, full per-environment map, overall status, and timestamps
+- **WHEN** a caller authorized through the consumer side, the producer side, or a platform role requests `GET /subscriptions/checkout.orders.OrderNotification`
+- **THEN** the response SHALL include the full per-environment map (pinned version, rule ARN, enabled, status), overall status, and timestamps
 
+#### Scenario: Unauthorized detail returns 403
+
+- **WHEN** a caller with no authorization on either side requests an existing subscription's detail
+- **THEN** the API SHALL return `403 Forbidden`
+- **AND THEN** a request for a subscription that does not exist SHALL return `404 Not Found`
+
+## ADDED Requirements
+
+### Requirement: Final entitlement check before enablement
+
+Immediately before any workflow transitions a Nexus-managed EventBridge rule to `ENABLED`, including initial activation and per-environment enable operations, the control plane SHALL perform a final current-entitlement check through the grant engine for the subscription's consumer domain and producer schema. If no current entitlement covers the schema at that moment, the workflow SHALL NOT enable the rule and SHALL record the denial.
+
+#### Scenario: Revocation during activation blocks enablement
+
+- **WHEN** the covering entitlement is revoked after a subscribe command was accepted but before its activation workflow enables a rule
+- **THEN** the workflow SHALL NOT transition any rule to `ENABLED`
+- **AND THEN** the workflow SHALL record the entitlement denial as the outcome
+
+#### Scenario: Enablement proceeds while covered
+
+- **WHEN** a current covering entitlement exists at the moment of the final check
+- **THEN** the workflow SHALL enable the rule as designed

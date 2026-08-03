@@ -2,32 +2,24 @@
 
 ### Requirement: Subscription command queue and handler
 
-Subscription write operations (`POST /domains/{consumerDomain}/subscriptions`, `PATCH /domains/{consumerDomain}/subscriptions/{subscriptionId}`, and `DELETE /domains/{consumerDomain}/subscriptions/{subscriptionId}`) SHALL be placed on both OAuth and IAM API surfaces and SHALL use the established asynchronous write path. API Gateway SHALL enqueue each structurally valid request directly onto the dedicated subscriptions command queue through an AWS service integration, without an intervening Lambda. The queue SHALL have its own DLQ. The message SHALL carry an `HttpMethod` attribute, path parameters injected into the body, and the common trusted-principal envelope: OAuth commands SHALL preserve the Cognito subject, current team groups, and `platform-admin` or `platform-auditor` roles, while IAM commands SHALL preserve the AWS account and IAM principal identity. API Gateway SHALL return `202 Accepted` with the SQS message id as `requestId` without waiting for authorization or business processing.
+Subscription write operations SHALL follow the established asynchronous write path with flat-verb routes: `POST /subscriptions` (create), `POST /subscriptions/state` (per-environment enable/disable), and `DELETE /subscriptions/{subscriptionId}` (unsubscribe). API Gateway SHALL enqueue the request onto the dedicated subscriptions command queue (with its own DLQ) carrying an `HttpMethod` message attribute, returning `202 Accepted` with the SQS message id as `requestId`. `consumerDomain` SHALL travel in the request body alongside the producer schema identity and per-environment directives; path-scoped domain routes SHALL NOT exist. The dedicated subscription command handler Lambda SHALL consume the queue, dispatch by route, and authorize through the grant engine BEFORE starting any workflow, using the normalized trusted principal propagated in the message envelope: the OAuth surface envelope SHALL carry the Cognito subject, team groups, and controlled global roles; the IAM surface envelope SHALL carry the authenticated AWS account and MAY carry the IAM principal ARN only as audit provenance. Structural validation SHALL occur before enqueueing, but the current binding-and-entitlement authorization decision SHALL occur only in the command handler, because a queued command may execute after revocation.
 
-A dedicated subscription command handler Lambda SHALL consume the queue, dispatch by `HttpMethod` and route context (`POST` to create, `PATCH` to update per-environment state, and `DELETE` to delete), perform business and authorization validation against current role bindings and entitlements through the common decision contract, and start the appropriate workflow. OAuth decisions SHALL use Cognito team-group bindings and IAM decisions SHALL use AWS-account bindings at account granularity. The handler SHALL derive the consumer domain from the trusted path parameter and SHALL NOT accept it from a mutable request body.
+#### Scenario: Subscribe command enqueued and dispatched
 
-#### Scenario: Create command directly enqueued and dispatched
+- **WHEN** an authenticated caller sends `POST /subscriptions` passing structural validation
+- **THEN** API Gateway SHALL enqueue the message on the subscriptions command queue and return `202 Accepted`
+- **AND THEN** the subscription command handler SHALL authorize through the grant engine before dispatching it as a subscribe operation
 
-- **WHEN** an authenticated caller sends a structurally valid `POST /domains/checkout/subscriptions`
-- **THEN** API Gateway SHALL enqueue the command directly on the subscriptions command queue and return `202 Accepted`
-- **AND THEN** the subscription command handler SHALL dispatch it as a create operation for consumer domain `checkout` with trusted caller authorization context
+#### Scenario: Authorization is current at execution time
 
-#### Scenario: Update and delete paths supply ownership scope
+- **WHEN** an entitlement is revoked after a command was enqueued but before the handler processes it
+- **THEN** the handler's engine decision SHALL deny the command
+- **AND THEN** no workflow SHALL start
 
-- **WHEN** API Gateway enqueues a structurally valid subscription `PATCH` or `DELETE`
-- **THEN** it SHALL inject both `consumerDomain` and `subscriptionId` path parameters into the command envelope
-- **AND THEN** the handler SHALL verify that the subscription is owned by that consumer domain
+#### Scenario: Read operations remain synchronous
 
-#### Scenario: IAM command preserves account-granularity authorization
-
-- **WHEN** an AWS_IAM-authenticated caller sends a structurally valid subscription command on the IAM surface
-- **THEN** API Gateway SHALL enqueue the trusted AWS account and IAM principal identity
-- **AND THEN** the command handler SHALL authorize the domain role from the AWS-account binding rather than the individual IAM role or session name
-
-#### Scenario: Subscription and catalog reads remain synchronous
-
-- **WHEN** a caller sends `GET /domains/{domain}/subscriptions`, `GET /subscriptions/{subscriptionId}`, or a consumer-domain catalog request on either resource API surface
-- **THEN** API Gateway SHALL route directly to the appropriate read Lambda through `aws_proxy` integration with no queue involved
+- **WHEN** a caller sends `GET /subscriptions`, `GET /subscriptions/{subscriptionId}`, or a schema catalog request
+- **THEN** API Gateway SHALL route directly to the dedicated read Lambda via `aws_proxy` integration with no queue involved
 
 #### Scenario: Failed subscription commands captured in DLQ
 
@@ -36,21 +28,10 @@ A dedicated subscription command handler Lambda SHALL consume the queue, dispatc
 
 ### Requirement: Subscription command outcome events
 
-The subscription command handler and workflows SHALL emit outcome events on the control-plane bus following the established `{Operation}Succeeded|Failed` convention: `SubscribeSucceeded|SubscribeFailed`, `UpdateSubscriptionSucceeded|UpdateSubscriptionFailed`, and `UnsubscribeSucceeded|UnsubscribeFailed`. Deterministic validation failures, including unknown or inactive domains, missing subscriber access, missing entitlement when required, path ownership mismatch, and rule-name constraint violations, SHALL emit the corresponding `Failed` outcome with the error reason and SHALL acknowledge rather than retry the SQS message.
+The subscription command handler and workflows SHALL emit outcome events on the control-plane bus following the established `{Operation}Succeeded|Failed` convention: `SubscribeSucceeded|SubscribeFailed`, `UpdateSubscriptionSucceeded|UpdateSubscriptionFailed`, and `UnsubscribeSucceeded|UnsubscribeFailed`. Validation and authorization failures (unknown or inactive domain, missing subscriber binding, missing covering entitlement, rule-name constraint violations) SHALL emit the `Failed` outcome with the error reason rather than dead-lettering the message. Failure reasons SHALL NOT include tokens, claims material, or schema payload content.
 
 #### Scenario: Authorization failure emits outcome event
 
-- **WHEN** a create command fails because the caller lacks subscriber access or the consumer domain lacks a current covering entitlement
-- **THEN** the handler SHALL emit `SubscribeFailed` with the authorization error
-- **AND THEN** the message SHALL be acknowledged rather than retried
-
-#### Scenario: Disable remains processable after entitlement revocation
-
-- **WHEN** an update command disables a subscription whose last covering entitlement was revoked
-- **THEN** the handler SHALL process the command rather than reject it for missing entitlement
-
-#### Scenario: Enable without entitlement fails deterministically
-
-- **WHEN** an update command enables a subscription whose consumer domain lacks a current covering entitlement
-- **THEN** the handler SHALL emit `UpdateSubscriptionFailed`
-- **AND THEN** the message SHALL be acknowledged rather than retried
+- **WHEN** a subscribe command is denied because the caller lacks a subscriber binding or no current entitlement covers the target producer schema
+- **THEN** the handler SHALL emit `SubscribeFailed` with the authorization reason
+- **AND THEN** the message SHALL be acknowledged (not retried) since the failure is deterministic
