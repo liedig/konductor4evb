@@ -9,7 +9,7 @@ use std::env;
 use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::DomainStatus;
-use nexus_common::principal::{FoundationAuthorizer, ResourceAuthorizer, TrustedPrincipal};
+use nexus_common::principal::{IamOnlyAuthorizer, ResourceAuthorizer, TrustedPrincipal};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -41,7 +41,7 @@ pub async fn handle(
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
     let domain_name = &message.domain_name;
 
-    let decision = FoundationAuthorizer
+    let decision = IamOnlyAuthorizer
         .authorize(principal, "domains:Update", domain_name)
         .await;
     if !decision.is_allowed() {

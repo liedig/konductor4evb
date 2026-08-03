@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use nexus_common::principal::{
-    AuthenticationMechanism, AuthorizationDecision, FoundationAuthorizer, GlobalRole,
+    AuthenticationMechanism, AuthorizationDecision, IamOnlyAuthorizer, GlobalRole,
     ResourceAuthorizer, TrustedPrincipal,
 };
 use nexus_common::principal_context::{attr, log_principal, PrincipalContextError};
@@ -186,7 +186,7 @@ fn proxy_missing_context_fails_closed() {
 
 #[tokio::test]
 async fn foundation_authorizer_retains_iam_and_denies_oauth() {
-    let authorizer = FoundationAuthorizer;
+    let authorizer = IamOnlyAuthorizer;
     let iam = TrustedPrincipal::iam("123456789012", None);
     let oauth = TrustedPrincipal::from_sqs_attributes(&oauth_envelope()).unwrap();
 

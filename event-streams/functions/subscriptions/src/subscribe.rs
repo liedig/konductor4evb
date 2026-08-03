@@ -8,7 +8,7 @@ use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
 use nexus_common::envelope::{rule_name, SchemaName};
-use nexus_common::principal::{FoundationAuthorizer, ResourceAuthorizer, TrustedPrincipal};
+use nexus_common::principal::{IamOnlyAuthorizer, ResourceAuthorizer, TrustedPrincipal};
 use nexus_common::streams::{EnvStream, EventStream, StreamStatus};
 use nexus_common::streams_db;
 
@@ -57,7 +57,7 @@ pub async fn handle(
         schema_detail_type(&body.schema_name)
     );
 
-    let decision = FoundationAuthorizer
+    let decision = IamOnlyAuthorizer
         .authorize(principal, "subscriptions:Subscribe", &subscription_id)
         .await;
     if !decision.is_allowed() {

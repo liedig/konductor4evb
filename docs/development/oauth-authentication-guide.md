@@ -349,7 +349,7 @@ Key things to verify:
 | `403` on decide endpoint | Principal is IAM (not OAuth), or missing `platform-admin` role | The decide endpoint is OAuth-only; use an access token from a `platform-admin` user |
 | `400` with `decidedBy` error | Request body contains a `decidedBy` field | Remove `decidedBy` from the body; it is derived from the token's `sub` claim |
 | `400 ValidationException` on decide | Missing `taskToken` in the body, or missing `justification` on a REJECT | Include `taskToken` (from the approval email) and `justification` when rejecting |
-| Token works but writes return `SubscribeFailed` / `RegistrationFailed` | OAuth mutations are not yet enabled (`FoundationAuthorizer` denies OAuth writes) | This is expected until the production authorization engine is deployed. IAM-authenticated callers (AWS CLI with SigV4) can still write. |
+| Token works but writes return `SubscribeFailed` / `RegistrationFailed` | OAuth mutations are not yet enabled on these paths (`IamOnlyAuthorizer` bridge denies OAuth writes) | This is expected until those paths migrate to the grant engine. IAM-authenticated callers (AWS CLI with SigV4) can still write. |
 
 ---
 

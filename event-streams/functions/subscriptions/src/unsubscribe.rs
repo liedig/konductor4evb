@@ -6,7 +6,7 @@ use std::env;
 use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
-use nexus_common::principal::{FoundationAuthorizer, ResourceAuthorizer, TrustedPrincipal};
+use nexus_common::principal::{IamOnlyAuthorizer, ResourceAuthorizer, TrustedPrincipal};
 use nexus_common::streams::{StreamStatus, SubscriptionId};
 use nexus_common::streams_db;
 
@@ -43,7 +43,7 @@ pub async fn handle(
         )
     };
 
-    let decision = FoundationAuthorizer
+    let decision = IamOnlyAuthorizer
         .authorize(
             principal,
             "subscriptions:Unsubscribe",

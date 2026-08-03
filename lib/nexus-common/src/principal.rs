@@ -206,12 +206,12 @@ pub trait ResourceAuthorizer {
 
 /// A [`ResourceAuthorizer`] that denies every request.
 ///
-/// This is the wired default until the authorization-engine change supplies the
-/// resource-policy evaluator, keeping OAuth resource mutations fail closed.
+/// Useful as the wired default on paths that must stay closed until a
+/// production engine is explicitly wired in.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct FailClosedAuthorizer;
+pub struct DenyAllAuthorizer;
 
-impl ResourceAuthorizer for FailClosedAuthorizer {
+impl ResourceAuthorizer for DenyAllAuthorizer {
     async fn authorize(
         &self,
         _principal: &TrustedPrincipal,
@@ -222,18 +222,18 @@ impl ResourceAuthorizer for FailClosedAuthorizer {
     }
 }
 
-/// The [`ResourceAuthorizer`] wired at the consumer boundary before the
-/// authorization-engine change integrates the resource-policy evaluator.
+/// A bridge [`ResourceAuthorizer`] that retains the pre-grant-engine
+/// behavior: IAM mutations allow (AWS-native, account-granular), OAuth
+/// mutations deny.
 ///
-/// It retains the existing AWS-native, account-granular IAM behavior (allow)
-/// so current automation is unaffected, and keeps OAuth resource mutations
-/// fail closed (deny) because team-group-to-resource binding is not yet
-/// defined. When the DynamoDB-backed engine lands it replaces this type and
-/// evaluates grants for both mechanisms.
+/// This type exists only to keep current automation unaffected while
+/// consumers migrate to `DynamoGrantEngine` (see `grant_engine`). It is
+/// deleted once the subscribe paths move onto the engine in
+/// `add-subscriber-entitlements`; do not wire it into new consumers.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct FoundationAuthorizer;
+pub struct IamOnlyAuthorizer;
 
-impl ResourceAuthorizer for FoundationAuthorizer {
+impl ResourceAuthorizer for IamOnlyAuthorizer {
     async fn authorize(
         &self,
         principal: &TrustedPrincipal,
@@ -424,7 +424,7 @@ mod tests {
 
     #[tokio::test]
     async fn fail_closed_authorizer_denies_oauth_and_iam() {
-        let authorizer = FailClosedAuthorizer;
+        let authorizer = DenyAllAuthorizer;
         let oauth = oauth_principal();
         let iam = TrustedPrincipal::iam("123456789012", None);
         assert_eq!(

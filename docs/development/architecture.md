@@ -140,7 +140,7 @@ Nexus exposes two separate API Gateway surfaces at the static `v1` stage, each w
 
 - **IAM surface** (`api/openapi-iam.yaml`): AWS-native automation callers authenticate with SigV4. The caller's AWS account ID serves as the principal identifier. Read endpoints (list, describe) and publisher/subscription management are available on this surface. Approval is OAuth-only and not exposed on the IAM surface.
 
-Both surfaces inject a versioned **trusted-principal envelope** into SQS message attributes via VTL mapping templates, sourcing every identity field from API Gateway authorization context (`$context.authorizer.*` for OAuth, `$context.identity.*` for IAM), never from the request body. Consumer Lambda handlers reconstruct the `TrustedPrincipal` from this envelope and invoke the resource-authorization interface before any state change. Until the DynamoDB grant-engine change lands, `FoundationAuthorizer` allows IAM mutations and denies OAuth mutations (fail-closed).
+Both surfaces inject a versioned **trusted-principal envelope** into SQS message attributes via VTL mapping templates, sourcing every identity field from API Gateway authorization context (`$context.authorizer.*` for OAuth, `$context.identity.*` for IAM), never from the request body. Consumer Lambda handlers reconstruct the `TrustedPrincipal` from this envelope and invoke the resource-authorization interface before any state change. The grant engine (`DynamoGrantEngine`, backed by the `nexus-authorization-bindings` table) is the production authorizer; the bridging `IamOnlyAuthorizer` still guards the domain-management and subscription mutation paths, allowing IAM mutations and denying OAuth mutations, until those paths migrate onto the engine.
 
 ```mermaid
 sequenceDiagram
@@ -178,7 +178,7 @@ The OAuth authorizer maps exact `cognito:groups` values to global roles (`platfo
 
 Approval decisions derive `decidedBy` from the trusted OAuth principal context, not from caller-supplied input. The `decidedBy` field is removed from the `DecideRequest` schema and rejected by `deny_unknown_fields`. The email-link bearer GET approval path has been removed; approval notification emails direct operators to sign in to Nexus rather than providing unauthenticated decision URLs. Task tokens remain the Step Functions callback mechanism, supplied in the authenticated POST body.
 
-The resource-authorization interface (`ResourceAuthorizer` trait) accepts `TrustedPrincipal` and returns `Allow` or `Deny`. The current `FoundationAuthorizer` implementation allows IAM and denies OAuth mutations. A separate OpenSpec change will implement the production DynamoDB grant engine; until then, OAuth mutations fail closed with a deterministic failure outcome (EventBridge `*Failed` event + SQS ack, no retry).
+The resource-authorization interface (`ResourceAuthorizer` trait) accepts `TrustedPrincipal` and returns `Allow` or `Deny`. The production implementation is `DynamoGrantEngine`, which evaluates additive role bindings from the `nexus-authorization-bindings` table with strongly consistent reads and fails closed on errors; `InMemoryGrantEngine` is its fixture-fed twin for tests and local development. The bridging `IamOnlyAuthorizer` (allows IAM, denies OAuth) remains wired only on paths not yet migrated to the engine, where OAuth mutations fail closed with a deterministic failure outcome (EventBridge `*Failed` event + SQS ack, no retry).
 
 ### Endpoints
 

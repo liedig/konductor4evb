@@ -8,7 +8,7 @@ use std::env;
 use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::{DomainStatus, RegisterDomainRequest};
-use nexus_common::principal::{FoundationAuthorizer, ResourceAuthorizer, TrustedPrincipal};
+use nexus_common::principal::{IamOnlyAuthorizer, ResourceAuthorizer, TrustedPrincipal};
 
 const OAUTH_MUTATIONS_DISABLED: &str =
     "unauthorized: interactive OAuth mutations are not yet enabled";
@@ -34,7 +34,7 @@ pub async fn handle(
         }
     })?;
 
-    let decision = FoundationAuthorizer
+    let decision = IamOnlyAuthorizer
         .authorize(principal, "domains:Register", &request.domain_name)
         .await;
     if !decision.is_allowed() {

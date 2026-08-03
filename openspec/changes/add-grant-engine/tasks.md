@@ -13,8 +13,8 @@
 
 ## 3. Authorizer Renames
 
-- [ ] 3.1 Rename `FailClosedAuthorizer` → `DenyAllAuthorizer` and `FoundationAuthorizer` → `IamOnlyAuthorizer` in `nexus-common` and all consumers; behavior and trait signatures unchanged
-- [ ] 3.2 Update doc comments to describe behavior and the bridge nature of `IamOnlyAuthorizer` (deleted when subscribe paths move to the engine)
+- [x] 3.1 Rename `FailClosedAuthorizer` → `DenyAllAuthorizer` and `FoundationAuthorizer` → `IamOnlyAuthorizer` in `nexus-common` and all consumers; behavior and trait signatures unchanged
+- [x] 3.2 Update doc comments to describe behavior and the bridge nature of `IamOnlyAuthorizer` (deleted when subscribe paths move to the engine)
 
 ## 4. Binding Administration API
 
