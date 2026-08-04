@@ -214,6 +214,23 @@ Resources:
           Projection:
             ProjectionType: ALL
 
+  # Reserved for the publisher consumers that add-publisher-apis wires:
+  # decision reads are strongly consistent point gets on the table keys, so
+  # GetItem on the table is the entire permission set. Deliberately attached
+  # to no role in this change.
+  BindingsTableReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "nexus-bindings-table-read"
+      Description: Read-only bindings-table access for grant-engine decision consumers
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+            Resource: !GetAtt AuthorizationBindingsTable.Arn
+
   # ---- Dead Letter Queue (read Lambda functions) ----
   LambdaFailureDlq:
     Type: AWS::SQS::Queue
@@ -1839,6 +1856,9 @@ Outputs:
   AuthorizationBindingsTableName:
     Description: Authorization bindings DynamoDB table name
     Value: !Ref AuthorizationBindingsTable
+  BindingsTableReadPolicyArn:
+    Description: Reserved read-only bindings-table managed policy (attach to future publisher consumers)
+    Value: !Ref BindingsTableReadPolicy
   SubscriptionDeliveryRoleArn:
     Description: Role EventBridge assumes to deliver subscription events to app-side buses
     Value: !GetAtt SubscriptionDeliveryRole.Arn

@@ -5,7 +5,7 @@
 mod support;
 
 use serde_yaml::Value;
-use support::{at, core_template, int, mapping, props, repo_yaml, resource, seq, text};
+use support::{at, boolean, core_template, int, mapping, props, repo_yaml, resource, seq, text};
 
 fn oauth_contract() -> Value {
     repo_yaml("api/openapi-oauth.yaml")
@@ -241,6 +241,86 @@ fn binding_administration_uses_lambda_proxy_not_sqs_templates() {
             .all(|(path, _, _)| !path.starts_with("/bindings")),
         "binding administration must be synchronous Lambda proxy, not an SQS command"
     );
+}
+
+#[test]
+fn bindings_table_matches_documented_schema() {
+    let doc = core_template();
+    let table = resource(&doc, "AuthorizationBindingsTable");
+    let p = props(table);
+
+    let key_schema = seq(at(p, "KeySchema"));
+    assert_eq!(key_schema.len(), 2);
+    assert_eq!(text(at(p, "BillingMode")), "PAY_PER_REQUEST");
+
+    let gsis = seq(at(p, "GlobalSecondaryIndexes"));
+    assert_eq!(gsis.len(), 2, "by-domain and by-binding-id GSIs");
+    for name in ["by-domain", "by-binding-id"] {
+        let gsi = gsis
+            .iter()
+            .find(|g| text(at(g, "IndexName")) == name)
+            .unwrap_or_else(|| panic!("missing GSI {name}"));
+        assert_eq!(
+            text(at(at(gsi, "Projection"), "ProjectionType")),
+            "ALL",
+            "GSI {name} must project all attributes"
+        );
+    }
+
+    let sse = at(p, "SSESpecification");
+    assert_eq!(text(at(sse, "SSEType")), "KMS");
+    assert!(boolean(at(
+        at(p, "PointInTimeRecoverySpecification"),
+        "PointInTimeRecoveryEnabled"
+    )));
+}
+
+#[test]
+fn binding_admin_function_has_least_privilege_table_access() {
+    let doc = core_template();
+    let func = resource(&doc, "BindingAdminFunction");
+    let policies = seq(at(props(func), "Policies"));
+    assert_eq!(policies.len(), 1, "exactly one scoped policy statement set");
+    let statements = seq(at(&policies[0], "Statement"));
+    let actions: Vec<&str> = seq(at(&statements[0], "Action"))
+        .iter()
+        .map(text)
+        .collect();
+    for required in ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:TransactWriteItems"] {
+        assert!(actions.contains(&required), "missing {required}");
+    }
+    for forbidden in [
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:Scan",
+    ] {
+        assert!(
+            !actions.contains(&forbidden),
+            "mutations must go through TransactWriteItems, not {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn bindings_table_read_policy_is_reserved_and_unattached() {
+    let doc = core_template();
+    let policy = resource(&doc, "BindingsTableReadPolicy");
+    let p = props(policy);
+    let statements = seq(at(at(p, "PolicyDocument"), "Statement"));
+    assert_eq!(statements.len(), 1);
+    let actions: Vec<&str> = seq(at(&statements[0], "Action")).iter().map(text).collect();
+    assert_eq!(
+        actions,
+        ["dynamodb:GetItem"],
+        "decision reads are point gets only"
+    );
+    for attachment in ["Roles", "Users", "Groups"] {
+        assert!(
+            mapping(p).get(attachment).is_none(),
+            "reserved policy must not attach to any {attachment} in this change"
+        );
+    }
 }
 
 /// One SQS write template extracted from an OpenAPI document: (path, method, template).

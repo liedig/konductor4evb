@@ -35,9 +35,9 @@
 
 ## 7. Infrastructure and Least Privilege
 
-- [ ] 7.1 Grant the binding administration Lambda only conditional put/delete, GSI query, and transactional write on the bindings table
-- [ ] 7.2 Reserve read-only bindings-table permissions for future publisher consumers (no consumer wiring in this change)
-- [ ] 7.3 Add infrastructure assertions for table schema, GSI projection, route authorizer configuration, and absence of IAM-surface binding routes
+- [x] 7.1 Grant the binding administration Lambda only conditional put/delete, GSI query, and transactional write on the bindings table
+- [x] 7.2 Reserve read-only bindings-table permissions for future publisher consumers (no consumer wiring in this change)
+- [x] 7.3 Add infrastructure assertions for table schema, GSI projection, route authorizer configuration, and absence of IAM-surface binding routes
 
 ## 8. Verification and Documentation
 
