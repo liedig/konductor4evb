@@ -74,6 +74,9 @@ lambda-binaries: ## Cross-compile every function to arm64 (per-package to avoid 
 test: ## cargo test --workspace
 	cargo test --workspace
 
+seed-bindings: ## Seed developer role bindings via the admin API (requires TOKEN and BINDINGS; API_URL optional)
+	@./scripts/seed-bindings.sh
+
 check: ## cargo fmt, check, clippy (CI-equivalent local gate)
 	cargo fmt --check
 	cargo check --workspace

@@ -25,8 +25,8 @@
 
 ## 5. Development Ergonomics
 
-- [ ] 5.1 Add a seed helper (script or `make seed-bindings`) that creates developer bindings for configured test Cognito groups and AWS accounts through the admin API or direct table writes
-- [ ] 5.2 Document the bootstrap path in `docs/development/oauth-authentication-guide.md`: platform-admin resolves outside the grant table, so first bindings can always be created
+- [x] 5.1 Add a seed helper (script or `make seed-bindings`) that creates developer bindings for configured test Cognito groups and AWS accounts through the admin API or direct table writes
+- [x] 5.2 Document the bootstrap path in `docs/development/oauth-authentication-guide.md`: platform-admin resolves outside the grant table, so first bindings can always be created
 
 ## 6. Latency Validation
 

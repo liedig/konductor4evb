@@ -211,6 +211,9 @@ After login, the browser redirects to `http://localhost?code=XXXX`. Copy the cod
 | DELETE | `/subscriptions/{subscriptionId}` | admin | Unsubscribe (async, 202) |
 | GET | `/schemas` | admin or auditor | List schemas for a domain |
 | GET | `/schemas/{schemaName}` | admin or auditor | Describe a schema (latest versions per env) |
+| POST | `/bindings` | admin | Create a role binding (idempotent) |
+| GET | `/bindings?domain=…` | admin | List role bindings for a domain |
+| DELETE | `/bindings/{bindingId}` | admin | Revoke a role binding (durable) |
 
 ### Using curl
 
@@ -307,6 +310,34 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
    - Click "Get New Access Token" to open the browser, log in, and exchange the code automatically.
 
 ---
+
+## Bootstrapping Role Bindings
+
+Resource authorization decisions are answered by the grant engine from the `nexus-authorization-bindings` table: a principal (a Cognito team group, issuer-qualified, or an AWS account) holds a role (`publisher` or `subscriber`) on a domain. Until a binding exists, every resource-scoped action by that principal is denied.
+
+Binding administration cannot deadlock against an empty table: the `platform-admin` global role resolves from the controlled Cognito group (`platform-admin`), never from the grant table. Any platform-admin access token can always create the first bindings.
+
+### Seeding developer bindings
+
+Use the seed helper instead of hand-writing curl calls. It goes through the real admin API (same validation, conditional writes, and audit records as production) and is safe to re-run — identical creates are idempotent:
+
+```bash
+TOKEN="<platform-admin access token>" \
+BINDINGS='[
+  {"domain":"orders","role":"publisher","principal":{"type":"aws-account","accountId":"111122223333"}},
+  {"domain":"orders","role":"publisher","principal":{"type":"cognito-group","issuer":"https://cognito-idp.<region>.amazonaws.com/<pool-id>","group":"orders-publishers"}}
+]' \
+make seed-bindings
+```
+
+`API_URL` defaults to the stack's `OAuthApiEndpoint` output (set `AWS_REGION`); override with `API_URL=...` when targeting a non-default endpoint.
+
+Notes:
+
+- The Cognito group value must be qualified with the exact issuer URL of the user pool (see the `CognitoUserPoolIssuer` stack output). A binding for `orders-publishers` on a different issuer never matches tokens from this pool.
+- AWS-account bindings apply to every principal in the account (IAM role, user, or session); there is no per-ARN granularity.
+- Server-assigned fields (`bindingId`, `state`, `createdAt`, `createdBy`) are rejected if supplied in a create body.
+- Revocation is a durable delete that takes effect on the next authorization decision; list bindings with `GET /bindings?domain=<domain>` to find the `bindingId` to revoke.
 
 ## Decoding and Inspecting a Token
 
