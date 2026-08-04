@@ -583,8 +583,230 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
 
+  /bindings:
+    post:
+      operationId: CreateBinding
+      summary: Create a role binding (platform-admin only)
+      description: Binds a typed principal (issuer-qualified Cognito team group or twelve-digit AWS account) to a role on a domain. Identical re-creates are idempotent. Server-assigned fields (bindingId, state, createdAt, createdBy) are rejected if supplied.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBindingRequest"
+      responses:
+        "200":
+          description: An identical binding already existed (idempotent re-create)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Binding"
+        "201":
+          description: Binding created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Binding"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (caller is not a platform-admin OAuth principal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: The binding changed concurrently; retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BindingAdminFunction.Arn}/invocations"
+    get:
+      operationId: ListBindings
+      summary: List role bindings for a domain (platform-admin only)
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Bindings for the domain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListBindingsResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (caller is not a platform-admin OAuth principal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BindingAdminFunction.Arn}/invocations"
+
+  /bindings/{bindingId}:
+    delete:
+      operationId: RevokeBinding
+      summary: Revoke a role binding (platform-admin only)
+      description: Durable delete; the binding stops authorizing on the next decision. Revocation and its audit record commit in one transaction.
+      parameters:
+        - name: bindingId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Binding revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bindingId:
+                    type: string
+                  state:
+                    type: string
+                    enum: [revoked]
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (caller is not a platform-admin OAuth principal)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Binding not found (unknown or already revoked)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BindingAdminFunction.Arn}/invocations"
+
 components:
   schemas:
+    BindingPrincipal:
+      description: A principal that can hold a role binding. The `type` discriminator selects the shape.
+      oneOf:
+        - type: object
+          required: [type, issuer, group]
+          properties:
+            type:
+              type: string
+              enum: [cognito-group]
+            issuer:
+              type: string
+              pattern: "^https://"
+              description: Cognito user-pool issuer URL qualifying the group
+            group:
+              type: string
+              minLength: 1
+        - type: object
+          required: [type, accountId]
+          properties:
+            type:
+              type: string
+              enum: [aws-account]
+            accountId:
+              type: string
+              pattern: "^[0-9]{12}$"
+
+    CreateBindingRequest:
+      type: object
+      required: [domain, role, principal]
+      additionalProperties: false
+      properties:
+        domain:
+          type: string
+          minLength: 1
+          description: Domain the binding scopes to; global bindings are not representable
+        role:
+          type: string
+          enum: [publisher, subscriber]
+        principal:
+          $ref: "#/components/schemas/BindingPrincipal"
+      example:
+        domain: orders
+        role: publisher
+        principal:
+          type: aws-account
+          accountId: "111122223333"
+
+    Binding:
+      type: object
+      properties:
+        bindingId:
+          type: string
+        domain:
+          type: string
+        role:
+          type: string
+          enum: [publisher, subscriber]
+        principal:
+          $ref: "#/components/schemas/BindingPrincipal"
+        createdAt:
+          type: string
+          format: date-time
+        createdBy:
+          type: string
+          description: Trusted principal identifier of the administrator who created the binding
+
+    ListBindingsResponse:
+      type: object
+      properties:
+        bindings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Binding"
+
     CommandAccepted:
       type: object
       properties:

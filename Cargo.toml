@@ -19,6 +19,7 @@ members = [
     "event-streams/functions/list-schemas",
     "event-streams/functions/describe-schema",
     "control-plane/functions/oauth-authorizer",
+    "control-plane/functions/binding-admin",
 ]
 
 [workspace.package]

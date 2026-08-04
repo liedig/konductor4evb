@@ -38,6 +38,12 @@ pub enum ControlPlaneError {
     #[error("registration request not found: {request_id}")]
     RequestNotFound { request_id: String },
 
+    #[error("binding not found: {binding_id}")]
+    BindingNotFound { binding_id: String },
+
+    #[error("binding conflict: {reason}")]
+    BindingConflict { reason: String },
+
     #[error("invalid state transition from {current} to {target}")]
     InvalidStateTransition { current: String, target: String },
 

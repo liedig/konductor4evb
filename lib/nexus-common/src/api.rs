@@ -27,19 +27,20 @@ pub fn error_response(status_code: u16, mut error: ApiError) -> Value {
 
 pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
     match err {
-        ControlPlaneError::DomainNotFound { .. } | ControlPlaneError::RequestNotFound { .. } => {
-            error_response(
-                404,
-                ApiError {
-                    code: "ResourceNotFoundException".to_string(),
-                    message: err.to_string(),
-                    request_id: None,
-                    reason: None,
-                    field_list: None,
-                },
-            )
-        }
-        ControlPlaneError::DomainAlreadyExists { .. } => error_response(
+        ControlPlaneError::DomainNotFound { .. }
+        | ControlPlaneError::RequestNotFound { .. }
+        | ControlPlaneError::BindingNotFound { .. } => error_response(
+            404,
+            ApiError {
+                code: "ResourceNotFoundException".to_string(),
+                message: err.to_string(),
+                request_id: None,
+                reason: None,
+                field_list: None,
+            },
+        ),
+        ControlPlaneError::DomainAlreadyExists { .. }
+        | ControlPlaneError::BindingConflict { .. } => error_response(
             409,
             ApiError {
                 code: "ConflictException".to_string(),

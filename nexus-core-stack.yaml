@@ -963,6 +963,61 @@ Resources:
             Path: /domains/registrations/decide
             Method: POST
 
+  # ---- Binding Administration (grant engine) ----
+  BindingAdminFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-binding-admin"
+      RetentionInDays: 30
+
+  BindingAdminFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: BindingAdminFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-binding-admin"
+      CodeUri: ./control-plane/functions/binding-admin
+      Handler: bootstrap
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:TransactWriteItems
+              Resource:
+                - !GetAtt AuthorizationBindingsTable.Arn
+                - !Sub "${AuthorizationBindingsTable.Arn}/index/*"
+      Events:
+        CreateBinding:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusOAuthApi
+            Path: /bindings
+            Method: POST
+        ListBindings:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusOAuthApi
+            Path: /bindings
+            Method: GET
+        RevokeBinding:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusOAuthApi
+            Path: /bindings/{bindingId}
+            Method: DELETE
+
   # ---- Approval Notification Functions ----
   SendApprovalRequestNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup

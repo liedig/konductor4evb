@@ -31,8 +31,10 @@ pub enum GrantModelError {
 /// group for OAuth callers, or a twelve-digit AWS account for IAM callers.
 ///
 /// The serde shape matches the spike's frozen fixture manifest so fixture
-/// principals deserialize directly into this type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// principals deserialize directly into this type. Deserialization runs the
+/// validating constructors, so a malformed principal is unrepresentable
+/// whether it arrives through code, fixtures, or an API request body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum BindingPrincipal {
     /// An issuer-qualified Cognito team group.
@@ -42,6 +44,27 @@ pub enum BindingPrincipal {
     /// account never select a different binding.
     #[serde(rename = "aws-account", rename_all = "camelCase")]
     AwsAccount { account_id: String },
+}
+
+impl<'de> Deserialize<'de> for BindingPrincipal {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", rename_all = "kebab-case")]
+        enum Shadow {
+            #[serde(rename = "cognito-group")]
+            CognitoGroup { issuer: String, group: String },
+            #[serde(rename = "aws-account", rename_all = "camelCase")]
+            AwsAccount { account_id: String },
+        }
+        match Shadow::deserialize(deserializer)? {
+            Shadow::CognitoGroup { issuer, group } => Self::cognito_group(issuer, group),
+            Shadow::AwsAccount { account_id } => Self::aws_account(account_id),
+        }
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 impl BindingPrincipal {
@@ -236,6 +259,72 @@ impl AuditRecord {
     }
 }
 
+/// The `POST /bindings` request body.
+///
+/// Strict: `deny_unknown_fields` means callers cannot supply server-assigned
+/// fields (`bindingId`, `state`, `createdAt`, `createdBy`), and construction
+/// through [`CreateBindingRequest::into_binding`] keeps global (domain-less)
+/// bindings unrepresentable.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateBindingRequest {
+    pub domain: String,
+    pub role: ResourceRole,
+    pub principal: BindingPrincipal,
+}
+
+impl CreateBindingRequest {
+    /// Builds the binding, assigning server-side identity and audit metadata.
+    /// Rejects global scope and unkeyable segments via the model.
+    pub fn into_binding(
+        self,
+        binding_id: impl Into<String>,
+        created_at: DateTime<Utc>,
+        created_by: impl Into<String>,
+    ) -> Result<RoleBinding, GrantModelError> {
+        RoleBinding::new(
+            binding_id,
+            self.principal,
+            self.role,
+            self.domain,
+            created_at,
+            created_by,
+        )
+    }
+}
+
+/// The API view of a stored binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BindingView {
+    pub binding_id: String,
+    pub domain: String,
+    pub role: ResourceRole,
+    pub principal: BindingPrincipal,
+    pub created_at: String,
+    pub created_by: String,
+}
+
+impl From<&RoleBinding> for BindingView {
+    fn from(binding: &RoleBinding) -> Self {
+        Self {
+            binding_id: binding.binding_id.clone(),
+            domain: binding.domain.clone(),
+            role: binding.role,
+            principal: binding.principal.clone(),
+            created_at: binding.created_at.to_rfc3339(),
+            created_by: binding.created_by.clone(),
+        }
+    }
+}
+
+/// The `GET /bindings` response body.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListBindingsResponse {
+    pub bindings: Vec<BindingView>,
+}
+
 fn reject_unsafe_segment(segment: &str) -> Result<(), GrantModelError> {
     if segment.contains('#') {
         return Err(GrantModelError::UnsafeKeySegment(segment.to_string()));
@@ -391,6 +480,83 @@ mod tests {
                 account_id: "111122223333".to_string()
             }
         );
+    }
+
+    #[test]
+    fn create_request_parses_documented_shapes() {
+        let group: CreateBindingRequest = serde_json::from_value(serde_json::json!({
+            "domain": "orders",
+            "role": "publisher",
+            "principal": {"type": "cognito-group", "issuer": ISSUER, "group": "team-orders"}
+        }))
+        .unwrap();
+        assert_eq!(group.domain, "orders");
+        assert_eq!(group.role, ResourceRole::Publisher);
+
+        let account: CreateBindingRequest = serde_json::from_value(serde_json::json!({
+            "domain": "analytics",
+            "role": "subscriber",
+            "principal": {"type": "aws-account", "accountId": "111122223333"}
+        }))
+        .unwrap();
+        assert_eq!(account.role, ResourceRole::Subscriber);
+    }
+
+    #[test]
+    fn create_request_rejects_server_assigned_fields() {
+        for field in ["bindingId", "state", "createdAt", "createdBy"] {
+            let body = serde_json::json!({
+                "domain": "orders",
+                "role": "publisher",
+                "principal": {"type": "aws-account", "accountId": "111122223333"},
+                field: "caller-supplied"
+            });
+            assert!(
+                serde_json::from_value::<CreateBindingRequest>(body).is_err(),
+                "callers must not supply {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_request_cannot_build_global_binding() {
+        let request = CreateBindingRequest {
+            domain: String::new(),
+            role: ResourceRole::Publisher,
+            principal: account_principal(),
+        };
+        assert!(matches!(
+            request.into_binding("rb-x", Utc::now(), "actor"),
+            Err(GrantModelError::EmptyDomain)
+        ));
+    }
+
+    #[test]
+    fn binding_view_serializes_camel_case() {
+        let view = BindingView::from(&binding(account_principal()));
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["bindingId"], "rb-001");
+        assert_eq!(json["domain"], "orders");
+        assert_eq!(json["role"], "publisher");
+        assert_eq!(json["principal"]["type"], "aws-account");
+        assert_eq!(json["createdAt"], "2026-08-01T00:00:00+00:00");
+        assert_eq!(json["createdBy"], "platform-admin-sub");
+    }
+
+    #[test]
+    fn deserialization_rejects_invalid_principals() {
+        for body in [
+            serde_json::json!({"type": "aws-account", "accountId": "not-digits!"}),
+            serde_json::json!({"type": "aws-account", "accountId": "123"}),
+            serde_json::json!({"type": "cognito-group", "issuer": "http://issuer", "group": "team"}),
+            serde_json::json!({"type": "cognito-group", "issuer": ISSUER, "group": "team#forged"}),
+            serde_json::json!({"type": "cognito-group", "issuer": ISSUER, "group": ""}),
+        ] {
+            assert!(
+                serde_json::from_value::<BindingPrincipal>(body.clone()).is_err(),
+                "must reject {body}"
+            );
+        }
     }
 
     #[test]

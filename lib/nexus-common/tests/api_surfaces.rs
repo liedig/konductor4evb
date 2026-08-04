@@ -184,6 +184,65 @@ fn decide_function_is_oauth_post_only() {
     );
 }
 
+#[test]
+fn binding_administration_routes_are_oauth_only() {
+    let oauth = operations(&oauth_contract());
+    let iam = operations(&iam_contract());
+
+    let mut oauth_ops: Vec<(&str, &str)> = oauth
+        .iter()
+        .filter(|op| op.path.starts_with("/bindings"))
+        .map(|op| (op.method.as_str(), op.path.as_str()))
+        .collect();
+    oauth_ops.sort();
+    assert_eq!(
+        oauth_ops,
+        [
+            ("delete", "/bindings/{bindingId}"),
+            ("get", "/bindings"),
+            ("post", "/bindings"),
+        ],
+        "OAuth surface must expose exactly the three binding administration operations"
+    );
+
+    assert!(
+        iam.iter().all(|op| !op.path.starts_with("/bindings")),
+        "IAM surface must not expose binding administration"
+    );
+}
+
+#[test]
+fn binding_admin_function_is_wired_to_the_oauth_surface_only() {
+    let doc = core_template();
+    let func = resource(&doc, "BindingAdminFunction");
+    let events = mapping(at(props(func), "Events"));
+    assert_eq!(
+        events.len(),
+        3,
+        "binding admin must have exactly the three route events"
+    );
+    for (name, event) in events {
+        let event_props = at(event, "Properties");
+        assert_eq!(
+            text(at(event_props, "RestApiId")),
+            "NexusOAuthApi",
+            "event {:?} must target the OAuth API",
+            name
+        );
+    }
+}
+
+#[test]
+fn binding_administration_uses_lambda_proxy_not_sqs_templates() {
+    let templates = write_templates(&oauth_contract());
+    assert!(
+        templates
+            .iter()
+            .all(|(path, _, _)| !path.starts_with("/bindings")),
+        "binding administration must be synchronous Lambda proxy, not an SQS command"
+    );
+}
+
 /// One SQS write template extracted from an OpenAPI document: (path, method, template).
 fn write_templates(doc: &Value) -> Vec<(String, String, String)> {
     let mut out = Vec::new();

@@ -18,10 +18,10 @@
 
 ## 4. Binding Administration API
 
-- [ ] 4.1 Add strict request/response models for create (`domain`, `role`, typed `principal`), list (by domain), and revoke (by bindingId); tests prove callers cannot supply audit fields, binding identifiers, or global bindings
-- [ ] 4.2 Add `POST /bindings`, `GET /bindings?domain=…`, and `DELETE /bindings/{bindingId}` routes to the OAuth OpenAPI contract only, wired to the REQUEST authorizer; add contract tests proving the routes reject IAM credentials and non-admin OAuth callers with 403
-- [ ] 4.3 Implement the binding administration Lambda: platform-admin gate, idempotent create via conditional put (`attribute_not_exists`), durable revoke via conditional delete, 404/409 error mapping, and one `TransactWriteItems` commit per mutation carrying its token-free AuditRecord
-- [ ] 4.4 Add handler tests for create/list/revoke, idempotent re-create, cross-surface rejection, non-admin denial, concurrent-mutation conflict mapping, and audit record contents
+- [x] 4.1 Add strict request/response models for create (`domain`, `role`, typed `principal`), list (by domain), and revoke (by bindingId); tests prove callers cannot supply audit fields, binding identifiers, or global bindings
+- [x] 4.2 Add `POST /bindings`, `GET /bindings?domain=…`, and `DELETE /bindings/{bindingId}` routes to the OAuth OpenAPI contract only, wired to the REQUEST authorizer; add contract tests proving the routes reject IAM credentials and non-admin OAuth callers with 403
+- [x] 4.3 Implement the binding administration Lambda: platform-admin gate, idempotent create via conditional put (`attribute_not_exists`), durable revoke via conditional delete, 404/409 error mapping, and one `TransactWriteItems` commit per mutation carrying its token-free AuditRecord
+- [x] 4.4 Add handler tests for create/list/revoke, idempotent re-create, cross-surface rejection, non-admin denial, concurrent-mutation conflict mapping, and audit record contents
 
 ## 5. Development Ergonomics
 
