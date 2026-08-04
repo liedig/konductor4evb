@@ -396,3 +396,26 @@ async fn empty_team_groups_deny() {
     )
     .await;
 }
+
+/// Dynamo-only: the in-memory engine has no failure mode, so fail-closed
+/// error mapping is proven against a failing store directly.
+#[tokio::test]
+async fn dynamo_store_error_fails_closed() {
+    let rule = mock!(aws_sdk_dynamodb::Client::get_item).then_error(|| {
+        aws_sdk_dynamodb::operation::get_item::GetItemError::generic(
+            aws_sdk_dynamodb::error::ErrorMetadata::builder()
+                .message("simulated store outage")
+                .build(),
+        )
+    });
+    let client = mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, [&rule]);
+    let engine = DynamoGrantEngine::new(BindingStore::new(client, "fixture-table"));
+    let principal = oauth(&["orders-publishers"], vec![]);
+    assert_eq!(
+        engine
+            .authorize(&principal, "schema:publish", "orders-prod")
+            .await,
+        AuthorizationDecision::Deny,
+        "a store error must deny, never allow"
+    );
+}
