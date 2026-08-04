@@ -27,12 +27,18 @@ async fn dispatch(store: &BindingStore, payload: &Value) -> Result<Value, Error>
     let request_context = payload.get("requestContext").unwrap_or(&Value::Null);
     let principal = match log_principal(request_context) {
         Ok(p) => p,
-        Err(_) => return Ok(api::from_control_plane_error(&ControlPlaneError::AccessDenied)),
+        Err(_) => {
+            return Ok(api::from_control_plane_error(
+                &ControlPlaneError::AccessDenied,
+            ))
+        }
     };
     if principal.authentication_mechanism() != AuthenticationMechanism::Oauth
         || !principal.is_platform_admin()
     {
-        return Ok(api::from_control_plane_error(&ControlPlaneError::AccessDenied));
+        return Ok(api::from_control_plane_error(
+            &ControlPlaneError::AccessDenied,
+        ));
     }
 
     let method = payload
@@ -48,9 +54,11 @@ async fn dispatch(store: &BindingStore, payload: &Value) -> Result<Value, Error>
         ("POST", "/bindings") => create_binding(store, payload, &principal).await,
         ("GET", "/bindings") => list_bindings(store, payload).await,
         ("DELETE", "/bindings/{bindingId}") => revoke_binding(store, payload, &principal).await,
-        _ => Ok(api::from_control_plane_error(&ControlPlaneError::BindingNotFound {
-            binding_id: format!("{method} {resource}"),
-        })),
+        _ => Ok(api::from_control_plane_error(
+            &ControlPlaneError::BindingNotFound {
+                binding_id: format!("{method} {resource}"),
+            },
+        )),
     }
 }
 
@@ -69,7 +77,11 @@ async fn create_binding(
         principal.principal_id(),
     ) {
         Ok(b) => b,
-        Err(e) => return Ok(api::from_control_plane_error(&api::validation_error(e.to_string()))),
+        Err(e) => {
+            return Ok(api::from_control_plane_error(&api::validation_error(
+                e.to_string(),
+            )))
+        }
     };
     let audit = audit_record(&binding, AuditMutation::Create, principal);
 
@@ -272,7 +284,8 @@ mod tests {
             "domain": "orders",
             "role": "publisher",
             "principal": {"type": "aws-account", "accountId": "111122223333"}
-        }).to_string());
+        })
+        .to_string());
 
         let resp = invoke(&store, payload).await;
         assert_eq!(status(&resp), 201);
@@ -301,7 +314,8 @@ mod tests {
             "domain": "orders",
             "role": "publisher",
             "principal": {"type": "cognito-group", "issuer": ISSUER, "group": "team-orders"}
-        }).to_string());
+        })
+        .to_string());
         assert_eq!(status(&invoke(&store, payload).await), 201);
 
         let calls = captured.lock().unwrap();
@@ -310,7 +324,10 @@ mod tests {
         assert_eq!(items.len(), 2);
 
         let put = items[0].put().expect("first item is the binding put");
-        assert_eq!(put.condition_expression().unwrap(), "attribute_not_exists(PK)");
+        assert_eq!(
+            put.condition_expression().unwrap(),
+            "attribute_not_exists(PK)"
+        );
         let put_item = put.item();
         assert_eq!(get_s(put_item, "itemType").unwrap(), "RoleBinding");
         assert_eq!(get_s(put_item, "domain").unwrap(), "orders");
@@ -350,7 +367,8 @@ mod tests {
             "domain": "orders",
             "role": "publisher",
             "principal": {"type": "aws-account", "accountId": "111122223333"}
-        }).to_string());
+        })
+        .to_string());
 
         let resp = invoke(&store, payload).await;
         assert_eq!(status(&resp), 200);
@@ -359,8 +377,9 @@ mod tests {
 
     #[tokio::test]
     async fn create_conflict_without_stored_binding_maps_to_409() {
-        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item)
-            .then_output(|| aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder().build());
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder().build()
+        });
         let store = store_with(vec![transact_conditional_failure(), get_rule]);
 
         let mut payload = event("POST", "/bindings", admin_context());
@@ -368,7 +387,8 @@ mod tests {
             "domain": "orders",
             "role": "publisher",
             "principal": {"type": "aws-account", "accountId": "111122223333"}
-        }).to_string());
+        })
+        .to_string());
 
         let resp = invoke(&store, payload).await;
         assert_eq!(status(&resp), 409);
@@ -438,12 +458,11 @@ mod tests {
     async fn revoke_racing_another_revoke_returns_404() {
         let existing = existing_binding();
         let item = binding_to_item(&existing);
-        let query_rule = mock!(aws_sdk_dynamodb::Client::query)
-            .then_output(move || {
-                aws_sdk_dynamodb::operation::query::QueryOutput::builder()
-                    .items(item.clone())
-                    .build()
-            });
+        let query_rule = mock!(aws_sdk_dynamodb::Client::query).then_output(move || {
+            aws_sdk_dynamodb::operation::query::QueryOutput::builder()
+                .items(item.clone())
+                .build()
+        });
         let store = store_with(vec![query_rule, transact_conditional_failure()]);
 
         let mut payload = event("DELETE", "/bindings/{bindingId}", admin_context());
@@ -471,7 +490,11 @@ mod tests {
             ("DELETE", "/bindings/{bindingId}"),
         ] {
             let resp = invoke(&store, event(method, resource, ctx.clone())).await;
-            assert_eq!(status(&resp), 403, "{method} {resource} must deny non-admin");
+            assert_eq!(
+                status(&resp),
+                403,
+                "{method} {resource} must deny non-admin"
+            );
             assert_eq!(body(&resp)["code"], "AccessDeniedException");
         }
     }
@@ -488,7 +511,11 @@ mod tests {
             ("DELETE", "/bindings/{bindingId}"),
         ] {
             let resp = invoke(&store, event(method, resource, ctx.clone())).await;
-            assert_eq!(status(&resp), 403, "{method} {resource} must deny IAM callers");
+            assert_eq!(
+                status(&resp),
+                403,
+                "{method} {resource} must deny IAM callers"
+            );
         }
     }
 
