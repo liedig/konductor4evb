@@ -73,13 +73,31 @@ async fn evaluate(
     resource: &str,
 ) -> AuthorizationDecision {
     let Some(role) = role_for_action(action) else {
-        warn!(action, resource, "grant decision: deny (unrecognized action)");
+        warn!(
+            action,
+            resource, "grant decision: deny (unrecognized action)"
+        );
         return AuthorizationDecision::Deny;
     };
     if resource.is_empty() || resource.contains('/') || resource.contains('#') {
-        warn!(action, resource, "grant decision: deny (malformed domain resource)");
+        warn!(
+            action,
+            resource, "grant decision: deny (malformed domain resource)"
+        );
         return AuthorizationDecision::Deny;
     }
+    first_applicable_binding(lookup, principal, role, action, resource).await
+}
+
+/// The additive union: the first applicable binding allows; a store error or
+/// an exhausted candidate list denies.
+async fn first_applicable_binding(
+    lookup: &impl BindingLookup,
+    principal: &TrustedPrincipal,
+    role: ResourceRole,
+    action: &str,
+    resource: &str,
+) -> AuthorizationDecision {
     for candidate in candidate_principals(principal) {
         match lookup.has_binding(&candidate, role, resource).await {
             Ok(true) => return AuthorizationDecision::Allow,
@@ -216,13 +234,21 @@ mod tests {
         let engine = InMemoryGrantEngine::new(vec![orders_publisher_binding()]);
         assert_eq!(
             engine
-                .authorize(&oauth(&["orders-publishers"]), actions::SCHEMA_PUBLISH, "orders")
+                .authorize(
+                    &oauth(&["orders-publishers"]),
+                    actions::SCHEMA_PUBLISH,
+                    "orders"
+                )
                 .await,
             AuthorizationDecision::Allow
         );
         assert_eq!(
             engine
-                .authorize(&oauth(&["orders-publishers"]), actions::SCHEMA_PUBLISH, "payments")
+                .authorize(
+                    &oauth(&["orders-publishers"]),
+                    actions::SCHEMA_PUBLISH,
+                    "payments"
+                )
                 .await,
             AuthorizationDecision::Deny
         );
@@ -239,7 +265,9 @@ mod tests {
         let engine = InMemoryGrantEngine::new(vec![orders_publisher_binding()]);
         let principal = oauth(&["orders-publishers"]);
         assert_eq!(
-            engine.authorize(&principal, "schema:delete", "orders").await,
+            engine
+                .authorize(&principal, "schema:delete", "orders")
+                .await,
             AuthorizationDecision::Deny
         );
         assert_eq!(

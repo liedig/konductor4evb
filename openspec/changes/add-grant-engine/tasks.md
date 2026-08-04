@@ -41,8 +41,8 @@
 
 ## 8. Verification and Documentation
 
-- [ ] 8.1 Run focused crate tests during each red/green/refactor cycle, then `make check` and `make test` for the workspace
-- [ ] 8.2 Validate the SAM template and OAuth API contract, including the three binding routes and all specified error responses
-- [ ] 8.3 Update `docs/development/decisions.md` with the two-store split, stringly-typed trait retention, dropped deny-as-unknown, no revocation worker rationale, conditional-write/atomic-audit design, and authorizer renames
-- [ ] 8.4 Update `docs/development/architecture.md` with the bindings table, engine implementations, binding administration flow, and the dark-ship wiring model
-- [ ] 8.5 Update `add-publisher-apis` tasks to consume `DynamoGrantEngine`, removing its production authorization-adapter prerequisite sections
+- [x] 8.1 Run focused crate tests during each red/green/refactor cycle, then `make check` and `make test` for the workspace
+- [x] 8.2 Validate the SAM template and OAuth API contract, including the three binding routes and all specified error responses
+- [x] 8.3 Update `docs/development/decisions.md` with the two-store split, stringly-typed trait retention, dropped deny-as-unknown, no revocation worker rationale, conditional-write/atomic-audit design, and authorizer renames
+- [x] 8.4 Update `docs/development/architecture.md` with the bindings table, engine implementations, binding administration flow, and the dark-ship wiring model
+- [x] 8.5 Update `add-publisher-apis` tasks to consume `DynamoGrantEngine`, removing its production authorization-adapter prerequisite sections

@@ -282,11 +282,12 @@ fn binding_admin_function_has_least_privilege_table_access() {
     let policies = seq(at(props(func), "Policies"));
     assert_eq!(policies.len(), 1, "exactly one scoped policy statement set");
     let statements = seq(at(&policies[0], "Statement"));
-    let actions: Vec<&str> = seq(at(&statements[0], "Action"))
-        .iter()
-        .map(text)
-        .collect();
-    for required in ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:TransactWriteItems"] {
+    let actions: Vec<&str> = seq(at(&statements[0], "Action")).iter().map(text).collect();
+    for required in [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:TransactWriteItems",
+    ] {
         assert!(actions.contains(&required), "missing {required}");
     }
     for forbidden in [

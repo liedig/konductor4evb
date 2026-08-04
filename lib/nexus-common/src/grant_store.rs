@@ -65,9 +65,7 @@ impl BindingStore {
             .send()
             .await
             .map_err(sdk_error)?;
-        out.item()
-            .map(item_to_binding)
-            .transpose()
+        out.item().map(item_to_binding).transpose()
     }
 
     /// Locates a binding by its stable identifier through the sparse
@@ -108,10 +106,7 @@ impl BindingStore {
             .send()
             .await
             .map_err(sdk_error)?;
-        out.items()
-            .iter()
-            .map(item_to_binding)
-            .collect()
+        out.items().iter().map(item_to_binding).collect()
     }
 
     /// Idempotent create: the binding put is conditioned on the full key not
@@ -195,18 +190,21 @@ pub fn item_to_binding(
         t if t == "aws-account" => BindingPrincipal::AwsAccount {
             account_id: get_s(item, "accountId").ok_or(corrupt("accountId"))?,
         },
-        other => return Err(GrantStoreError::CorruptItem(format!("principalType={other}"))),
+        other => {
+            return Err(GrantStoreError::CorruptItem(format!(
+                "principalType={other}"
+            )))
+        }
     };
     let role = match get_s(item, "role").ok_or(corrupt("role"))?.as_str() {
         "publisher" => ResourceRole::Publisher,
         "subscriber" => ResourceRole::Subscriber,
         other => return Err(GrantStoreError::CorruptItem(format!("role={other}"))),
     };
-    let created_at = DateTime::parse_from_rfc3339(
-        &get_s(item, "createdAt").ok_or(corrupt("createdAt"))?,
-    )
-    .map_err(|e| GrantStoreError::CorruptItem(format!("createdAt: {e}")))?
-    .to_utc();
+    let created_at =
+        DateTime::parse_from_rfc3339(&get_s(item, "createdAt").ok_or(corrupt("createdAt"))?)
+            .map_err(|e| GrantStoreError::CorruptItem(format!("createdAt: {e}")))?
+            .to_utc();
     Ok(RoleBinding {
         binding_id: get_s(item, "bindingId").ok_or(corrupt("bindingId"))?,
         principal,
@@ -290,12 +288,10 @@ fn map_transact_error(
     >,
     on_condition_failure: GrantStoreError,
 ) -> GrantStoreError {
-    use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsError;
     use aws_sdk_dynamodb::error::SdkError;
+    use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsError;
     if let SdkError::ServiceError(service) = &error {
-        if let TransactWriteItemsError::TransactionCanceledException(cancelled) =
-            service.err()
-        {
+        if let TransactWriteItemsError::TransactionCanceledException(cancelled) = service.err() {
             if cancelled
                 .cancellation_reasons()
                 .iter()

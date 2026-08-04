@@ -180,6 +180,21 @@ Approval decisions derive `decidedBy` from the trusted OAuth principal context, 
 
 The resource-authorization interface (`ResourceAuthorizer` trait) accepts `TrustedPrincipal` and returns `Allow` or `Deny`. The production implementation is `DynamoGrantEngine`, which evaluates additive role bindings from the `nexus-authorization-bindings` table with strongly consistent reads and fails closed on errors; `InMemoryGrantEngine` is its fixture-fed twin for tests and local development. The bridging `IamOnlyAuthorizer` (allows IAM, denies OAuth) remains wired only on paths not yet migrated to the engine, where OAuth mutations fail closed with a deterministic failure outcome (EventBridge `*Failed` event + SQS ack, no retry).
 
+### Grant Engine
+
+The grant engine answers "may this principal perform this action on this resource?" from **role bindings**: a typed principal (an issuer-qualified Cognito team group for OAuth callers, or a twelve-digit AWS account for IAM callers) holds a role (`publisher` or `subscriber`) on a domain. Bindings are additive — any one applicable binding allows — and global (domain-less) bindings are unrepresentable.
+
+The `nexus-authorization-bindings` table stores two item types:
+
+- **RoleBinding** — `PK = PRINCIPAL#{type}#{id}`, `SK = ROLE#{role}#DOMAIN#{domain}`. Decisions are strongly consistent point reads on these keys (one per candidate principal: each team group, or the account). Two sparse GSIs serve administration only and never feed an allow decision: `by-domain` (enumeration) and `by-binding-id` (revoke lookup).
+- **AuditRecord** — `PK = GRANT#{bindingId}#AUDIT`, `SK = TS#{rfc3339}`. Every mutation commits with its audit record in one `TransactWriteItems`, so the audit trail cannot diverge from grant state. Audit items carry mutation type, trusted actor, timestamp, and before/after summary — never tokens, claims material, or principal ARNs.
+
+Creates are conditioned on `attribute_not_exists` (identical re-creates are idempotent and answer the stored binding; a concurrent-revoke race answers 409). Revokes are durable deletes conditioned on existence and active state (unknown or raced revokes answer 404). Revocation takes effect on the next decision; there is no reconciliation worker because publisher bindings gate nothing materialized.
+
+**Binding administration** is flat-verb, OAuth-only, and platform-admin-only: `POST /bindings`, `GET /bindings?domain=…`, `DELETE /bindings/{bindingId}`, served by the `binding-admin` Lambda. The `platform-admin` global role resolves from the controlled Cognito group, never from the grant table, so administration cannot deadlock against an empty table. The IAM surface has no binding routes — IAM callers are *governed by* bindings, they do not govern them.
+
+**Dark-ship wiring**: the engines ship behind the existing stringly-typed `ResourceAuthorizer` seam with no consumer rewired in this change. `add-publisher-apis` wires the publish and schema handlers to `DynamoGrantEngine` as its first consumer (attaching the reserved `nexus-bindings-table-read` managed policy); `add-subscriber-entitlements` migrates the subscribe paths and deletes `IamOnlyAuthorizer`. A manifest-seeded parity suite (from the `evaluate-authorization-engine` spike's frozen fixtures) proves `InMemoryGrantEngine` and `DynamoGrantEngine` decide identically.
+
 ### Endpoints
 
 | Method | Path | Type | Handler |
@@ -196,6 +211,9 @@ The resource-authorization interface (`ResourceAuthorizer` trait) accepts `Trust
 | `DELETE` | `/subscriptions/{subscriptionId}` | Async (SQS) | `subscriptions` (unsubscribe) |
 | `GET` | `/schemas` | Sync (Lambda proxy) | `list-schemas` |
 | `GET` | `/schemas/{schemaName}` | Sync (Lambda proxy) | `describe-schema` |
+| `POST` | `/bindings` | Sync (Lambda proxy, OAuth only) | `binding-admin` (create) |
+| `GET` | `/bindings` | Sync (Lambda proxy, OAuth only) | `binding-admin` (list by domain) |
+| `DELETE` | `/bindings/{bindingId}` | Sync (Lambda proxy, OAuth only) | `binding-admin` (revoke) |
 
 Each command handler Lambda receives SQS messages with a `HttpMethod` message attribute and dispatches accordingly (`domain-registrations`: register/update; `subscriptions`: subscribe/update-state/unsubscribe). Subscription write integrations also inject the caller's AWS account id (`$context.identity.accountId`) into the message body for ownership validation.
 

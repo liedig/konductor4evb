@@ -84,9 +84,7 @@ fn dynamo_engine(bindings: &[RoleBinding]) -> DynamoGrantEngine {
                 .match_requests(move |req: &GetItemInput| {
                     let key = req.key();
                     let has_key = |name: &str, want: &String| {
-                        key.and_then(|k| k.get(name))
-                            .and_then(|v| v.as_s().ok())
-                            == Some(want)
+                        key.and_then(|k| k.get(name)).and_then(|v| v.as_s().ok()) == Some(want)
                     };
                     req.consistent_read() == Some(true) && has_key("PK", &pk) && has_key("SK", &sk)
                 })
@@ -98,8 +96,9 @@ fn dynamo_engine(bindings: &[RoleBinding]) -> DynamoGrantEngine {
         })
         .collect();
     rules.push(
-        mock!(aws_sdk_dynamodb::Client::get_item)
-            .then_output(|| aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder().build()),
+        mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder().build()
+        }),
     );
     let client = mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, &rules);
     DynamoGrantEngine::new(BindingStore::new(client, "fixture-table"))
@@ -141,7 +140,10 @@ async fn assert_parity(
         via_memory, via_dynamo,
         "engines diverged on {action} {resource}"
     );
-    assert_eq!(via_memory, expected, "unexpected decision for {action} {resource}");
+    assert_eq!(
+        via_memory, expected,
+        "unexpected decision for {action} {resource}"
+    );
 }
 
 fn oauth(groups: &[&str], global_roles: Vec<GlobalRole>) -> TrustedPrincipal {
@@ -171,7 +173,10 @@ async fn s01_platform_admin_allowed_by_global_role_composition() {
 #[tokio::test]
 async fn s02_platform_auditor_reads_but_cannot_administer() {
     let bindings = manifest_bindings();
-    let auditor = oauth(&["nexus-platform-auditors"], vec![GlobalRole::PlatformAuditor]);
+    let auditor = oauth(
+        &["nexus-platform-auditors"],
+        vec![GlobalRole::PlatformAuditor],
+    );
     assert_parity(
         &bindings,
         &auditor,

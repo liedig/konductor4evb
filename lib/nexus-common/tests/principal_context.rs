@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use nexus_common::principal::{
-    AuthenticationMechanism, AuthorizationDecision, IamOnlyAuthorizer, GlobalRole,
+    AuthenticationMechanism, AuthorizationDecision, GlobalRole, IamOnlyAuthorizer,
     ResourceAuthorizer, TrustedPrincipal,
 };
 use nexus_common::principal_context::{attr, log_principal, PrincipalContextError};
