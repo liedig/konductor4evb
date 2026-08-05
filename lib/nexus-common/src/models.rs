@@ -147,6 +147,36 @@ pub struct PublishRequest {
     pub idempotency_key: Option<String>,
 }
 
+/// Flat schema creation request, mirroring EventBridge `CreateSchema`
+/// semantics: Nexus derives the canonical schema name and the stage-selected
+/// environment's registry; the caller never supplies either.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateSchemaRequest {
+    pub domain: String,
+    pub event_name: String,
+    pub schema_type: String,
+    pub content: String,
+}
+
+/// Flat append-only schema version request, mirroring EventBridge
+/// `UpdateSchema` semantics: existing versions stay immutable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AppendSchemaVersionRequest {
+    pub domain: String,
+    pub event_name: String,
+    pub content: String,
+}
+
+/// The 201 response body for both schema mutations.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SchemaMutationResponse {
+    pub schema_name: String,
+    pub schema_version: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiResponse<T: Serialize> {
@@ -414,5 +444,69 @@ mod tests {
             let parsed: Result<PublishRequest, _> = serde_json::from_value(body);
             assert!(parsed.is_err(), "missing '{missing}' must be rejected");
         }
+    }
+
+    #[test]
+    fn create_schema_request_accepts_the_flat_shape() {
+        let parsed: CreateSchemaRequest = serde_json::from_value(serde_json::json!({
+            "domain": "orders",
+            "eventName": "OrderNotification",
+            "schemaType": "JSONSchemaDraft4",
+            "content": "{\"$schema\": \"http://json-schema.org/draft-04/schema#\"}"
+        }))
+        .unwrap();
+        assert_eq!(parsed.schema_type, "JSONSchemaDraft4");
+    }
+
+    #[test]
+    fn create_schema_request_rejects_caller_supplied_naming_fields() {
+        for (field, value) in [
+            ("schemaName", serde_json::json!("acme-orders@OrderNotification")),
+            ("registry", serde_json::json!("acme-prod-orders-schema-registry")),
+            ("registryName", serde_json::json!("acme-prod-orders-schema-registry")),
+            ("schemaVersion", serde_json::json!(1)),
+            ("environment", serde_json::json!("prod")),
+        ] {
+            let mut body = serde_json::json!({
+                "domain": "orders",
+                "eventName": "OrderNotification",
+                "schemaType": "JSONSchemaDraft4",
+                "content": "{}"
+            });
+            body[field] = value;
+            let parsed: Result<CreateSchemaRequest, _> = serde_json::from_value(body);
+            assert!(parsed.is_err(), "field '{field}' must be rejected");
+        }
+    }
+
+    #[test]
+    fn append_schema_version_request_has_no_schema_type() {
+        let parsed: AppendSchemaVersionRequest = serde_json::from_value(serde_json::json!({
+            "domain": "orders",
+            "eventName": "OrderNotification",
+            "content": "{}"
+        }))
+        .unwrap();
+        assert_eq!(parsed.event_name, "OrderNotification");
+
+        let with_type = serde_json::json!({
+            "domain": "orders",
+            "eventName": "OrderNotification",
+            "schemaType": "JSONSchemaDraft4",
+            "content": "{}"
+        });
+        let parsed: Result<AppendSchemaVersionRequest, _> = serde_json::from_value(with_type);
+        assert!(parsed.is_err(), "schemaType is not part of the append shape");
+    }
+
+    #[test]
+    fn schema_mutation_response_serializes_camel_case() {
+        let response = SchemaMutationResponse {
+            schema_name: "acme-orders@OrderNotification".to_string(),
+            schema_version: 3,
+        };
+        let value = serde_json::to_value(&response).unwrap();
+        assert_eq!(value["schemaName"], "acme-orders@OrderNotification");
+        assert_eq!(value["schemaVersion"], 3);
     }
 }

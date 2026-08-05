@@ -500,3 +500,89 @@ fn publish_request_schema_rejects_platform_owned_fields() {
         assert_eq!(required, ["data", "domain", "eventName"]);
     }
 }
+
+#[test]
+fn schema_write_routes_are_proxy_integrations_on_both_surfaces() {
+    for doc in [oauth_contract(), iam_contract()] {
+        for (path, operation) in [
+            ("/schemas", "CreateSchema"),
+            ("/schemas/versions", "AppendSchemaVersion"),
+        ] {
+            let op = at(at(at(&doc, "paths"), path), "post");
+            assert_eq!(text(at(op, "operationId")), operation);
+            assert_eq!(
+                text(at(op, "x-amazon-apigateway-request-validator")),
+                "validate-body"
+            );
+            let integration = at(op, "x-amazon-apigateway-integration");
+            assert_eq!(text(at(integration, "type")), "aws_proxy");
+            assert!(
+                text(at(at(integration, "uri"), "Fn::Sub"))
+                    .contains("${SchemaAdminFunction.Arn}"),
+                "{operation} must integrate with the schema admin function"
+            );
+        }
+    }
+}
+
+#[test]
+fn schema_write_credentials_are_not_interchangeable() {
+    let iam_doc = iam_contract();
+    for path in ["/schemas", "/schemas/versions"] {
+        let op = at(at(at(&iam_doc, "paths"), path), "post");
+        assert_eq!(
+            text(at(at(op, "x-amazon-apigateway-auth"), "type")),
+            "AWS_IAM"
+        );
+    }
+    let oauth_doc = oauth_contract();
+    for path in ["/schemas", "/schemas/versions"] {
+        let op = at(at(at(&oauth_doc, "paths"), path), "post");
+        assert!(
+            op.get("x-amazon-apigateway-auth").is_none(),
+            "OAuth schema writes rely on the default REQUEST authorizer"
+        );
+    }
+}
+
+#[test]
+fn schema_management_is_append_only() {
+    for doc in [oauth_contract(), iam_contract()] {
+        for (path, item) in mapping(at(&doc, "paths")) {
+            let path = path.as_str().expect("path key");
+            if !path.starts_with("/schemas") {
+                continue;
+            }
+            for (method, _) in mapping(item) {
+                let method = method.as_str().expect("method key");
+                if !HTTP_METHODS.contains(&method) {
+                    continue;
+                }
+                assert!(
+                    ["get", "post"].contains(&method),
+                    "{method} {path} violates append-only schema management"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn schema_request_schemas_reject_platform_owned_fields() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let schemas = at(at(&doc, "components"), "schemas");
+        let create = at(schemas, "CreateSchemaRequest");
+        assert!(!boolean(at(create, "additionalProperties")));
+        let mut create_required: Vec<&str> =
+            seq(at(create, "required")).iter().map(|v| text(v)).collect();
+        create_required.sort_unstable();
+        assert_eq!(create_required, ["content", "domain", "eventName", "schemaType"]);
+
+        let append = at(schemas, "AppendSchemaVersionRequest");
+        assert!(!boolean(at(append, "additionalProperties")));
+        let mut append_required: Vec<&str> =
+            seq(at(append, "required")).iter().map(|v| text(v)).collect();
+        append_required.sort_unstable();
+        assert_eq!(append_required, ["content", "domain", "eventName"]);
+    }
+}

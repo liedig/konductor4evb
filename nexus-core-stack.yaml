@@ -1087,6 +1087,67 @@ Resources:
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
+  # ---- Publisher Schema Administration (append-only) ----
+  SchemaAdminLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-schema-admin"
+      RetentionInDays: 30
+  SchemaAdminFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SchemaAdminLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-schema-admin"
+      CodeUri: ./event-streams/functions/schema-admin
+      Handler: bootstrap
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - !Ref BindingsTableReadPolicy
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [schemas:CreateSchema, schemas:UpdateSchema]
+              Resource:
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+      Events:
+        OAuthCreateSchema:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusOAuthApi
+            Path: /schemas
+            Method: POST
+        IamCreateSchema:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusIamApi
+            Path: /schemas
+            Method: POST
+        OAuthAppendSchemaVersion:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusOAuthApi
+            Path: /schemas/versions
+            Method: POST
+        IamAppendSchemaVersion:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusIamApi
+            Path: /schemas/versions
+            Method: POST
+
   # ---- Decide Registration Function ----
   DecideFunctionLogGroup:
     Type: AWS::Logs::LogGroup

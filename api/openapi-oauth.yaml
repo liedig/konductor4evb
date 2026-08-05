@@ -608,6 +608,103 @@ paths:
         httpMethod: POST
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListSchemasFunction.Arn}/invocations"
+    post:
+      operationId: CreateSchema
+      summary: Create an event schema (publisher)
+      description: >
+        Flat schema creation mirroring EventBridge CreateSchema. Nexus derives
+        the canonical schema name {namespaceIdentity}@{eventName}, targets the
+        stage-selected environment's registry, and creates version 1. Requires
+        a publisher binding for the domain. Schemas are append-only.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSchemaRequest"
+      responses:
+        "201":
+          description: Schema created as version 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaMutationResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller lacks a publisher binding for the domain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain not found or not active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Schema already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SchemaAdminFunction.Arn}/invocations"
+
+  /schemas/versions:
+    post:
+      operationId: AppendSchemaVersion
+      summary: Append a new version to an existing schema (publisher)
+      description: >
+        Flat append-only version registration mirroring EventBridge
+        UpdateSchema. Existing versions remain immutable. Requires a publisher
+        binding for the domain.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppendSchemaVersionRequest"
+      responses:
+        "201":
+          description: Version appended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaMutationResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller lacks a publisher binding for the domain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain or schema not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SchemaAdminFunction.Arn}/invocations"
 
   /schemas/{schemaName}:
     get:
@@ -1095,6 +1192,61 @@ components:
         data:
           orderId: 123
           amount: 99.50
+
+    CreateSchemaRequest:
+      type: object
+      required: [domain, eventName, schemaType, content]
+      additionalProperties: false
+      properties:
+        domain:
+          type: string
+          minLength: 1
+        eventName:
+          type: string
+          minLength: 1
+          description: Event name (detail-type); must be feasible in an EventBridge rule name.
+        schemaType:
+          type: string
+          enum: [JSONSchemaDraft4]
+        content:
+          type: string
+          minLength: 1
+          description: The JSON Schema document as a string.
+      example:
+        domain: orders
+        eventName: OrderNotification
+        schemaType: JSONSchemaDraft4
+        content: "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\"}"
+
+    AppendSchemaVersionRequest:
+      type: object
+      required: [domain, eventName, content]
+      additionalProperties: false
+      properties:
+        domain:
+          type: string
+          minLength: 1
+        eventName:
+          type: string
+          minLength: 1
+        content:
+          type: string
+          minLength: 1
+          description: The JSON Schema document as a string.
+      example:
+        domain: orders
+        eventName: OrderNotification
+        content: "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\"}"
+
+    SchemaMutationResponse:
+      type: object
+      properties:
+        schemaName:
+          type: string
+          example: "acme-orders@OrderNotification"
+        schemaVersion:
+          type: integer
+          example: 1
 
     SubscribeRequest:
       type: object

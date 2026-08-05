@@ -29,7 +29,8 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
     match err {
         ControlPlaneError::DomainNotFound { .. }
         | ControlPlaneError::RequestNotFound { .. }
-        | ControlPlaneError::BindingNotFound { .. } => error_response(
+        | ControlPlaneError::BindingNotFound { .. }
+        | ControlPlaneError::SchemaNotFound { .. } => error_response(
             404,
             ApiError {
                 code: "ResourceNotFoundException".to_string(),
@@ -40,7 +41,8 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
             },
         ),
         ControlPlaneError::DomainAlreadyExists { .. }
-        | ControlPlaneError::BindingConflict { .. } => error_response(
+        | ControlPlaneError::BindingConflict { .. }
+        | ControlPlaneError::SchemaAlreadyExists { .. } => error_response(
             409,
             ApiError {
                 code: "ConflictException".to_string(),
@@ -234,6 +236,28 @@ mod tests {
         };
         let resp = from_control_plane_error(&err);
         assert_eq!(resp["statusCode"], 409);
+    }
+
+    #[test]
+    fn error_mapping_schema_not_found_returns_404() {
+        let err = ControlPlaneError::SchemaNotFound {
+            schema_name: "acme-orders@OrderNotification".to_string(),
+        };
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 404);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["code"], "ResourceNotFoundException");
+    }
+
+    #[test]
+    fn error_mapping_schema_already_exists_returns_409() {
+        let err = ControlPlaneError::SchemaAlreadyExists {
+            schema_name: "acme-orders@OrderNotification".to_string(),
+        };
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 409);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["code"], "ConflictException");
     }
 
     #[test]

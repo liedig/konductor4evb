@@ -22,12 +22,12 @@
 
 ## 4. Schema Management API
 
-- [ ] 4.1 Add `CreateSchemaRequest` and `AppendSchemaVersionRequest` models with validation, tests rejecting caller-supplied schema name, version, registry, or envelope fields
-- [ ] 4.2 Add `POST /schemas` route to both OpenAPI contracts with synchronous Lambda integration; handler tests for authorization, canonical name derivation, version 1 creation, duplicate conflict (409), and inactive domain (404)
-- [ ] 4.3 Implement the schema creation Lambda with environment from `$context.stage`, AWS Schemas client, and structured metrics
-- [ ] 4.4 Add `POST /schemas/versions` route to both OpenAPI contracts with synchronous Lambda integration; handler tests for authorization, canonical name derivation, next-version creation, missing schema (404), and immutable prior versions
-- [ ] 4.5 Implement the schema version append Lambda using AWS Schemas version-producing operation without exposing replacement, deletion, or retirement
-- [ ] 4.6 Add event-name validation at schema creation: character constraints (`[A-Za-z0-9._-]`) and rule-name length feasibility within EventBridge's 64-character limit
+- [x] 4.1 Add `CreateSchemaRequest` and `AppendSchemaVersionRequest` models with validation, tests rejecting caller-supplied schema name, version, registry, or envelope fields
+- [x] 4.2 Add `POST /schemas` route to both OpenAPI contracts with synchronous Lambda integration; handler tests for authorization, canonical name derivation, version 1 creation, duplicate conflict (409), and inactive domain (404)
+- [x] 4.3 Implement the schema creation Lambda with environment from `$context.stage`, AWS Schemas client, and structured metrics
+- [x] 4.4 Add `POST /schemas/versions` route to both OpenAPI contracts with synchronous Lambda integration; handler tests for authorization, canonical name derivation, next-version creation, missing schema (404), and immutable prior versions
+- [x] 4.5 Implement the schema version append Lambda using AWS Schemas version-producing operation without exposing replacement, deletion, or retirement
+- [x] 4.6 Add event-name validation at schema creation: character constraints (`[A-Za-z0-9._-]`) and rule-name length feasibility within EventBridge's 64-character limit
 
 ## 5. Envelope Model Extension
 

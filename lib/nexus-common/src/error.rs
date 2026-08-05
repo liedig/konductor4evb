@@ -44,6 +44,12 @@ pub enum ControlPlaneError {
     #[error("binding conflict: {reason}")]
     BindingConflict { reason: String },
 
+    #[error("schema not found: {schema_name}")]
+    SchemaNotFound { schema_name: String },
+
+    #[error("schema already exists: {schema_name}")]
+    SchemaAlreadyExists { schema_name: String },
+
     #[error("invalid state transition from {current} to {target}")]
     InvalidStateTransition { current: String, target: String },
 
@@ -55,4 +61,7 @@ pub enum ControlPlaneError {
 
     #[error("Step Functions error: {0}")]
     StepFunctions(String),
+
+    #[error("Schemas error: {0}")]
+    Schemas(String),
 }
