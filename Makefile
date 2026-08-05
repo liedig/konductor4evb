@@ -53,11 +53,12 @@ help: ## Show this help message
 build-ci: lambda-binaries-ci ## Build all Lambda binaries once, then package with SAM
 	sam build --config-file samconfig-core.toml -c
 
-lambda-binaries-ci: ## Cross-compile every function to arm64 in a single workspace build
-	ulimit -Sn 10240 2>/dev/null || true; cargo lambda build --release --arm64
-	@for dir in domain-management/functions/* event-streams/functions/* control-plane/functions/*; do \
+lambda-binaries-ci: ## Cross-compile every function to arm64 (per-package; a single workspace build collapses same-named bootstrap binaries into one output dir)
+	@ulimit -Sn 10240 2>/dev/null || true; \
+	for dir in domain-management/functions/* event-streams/functions/* control-plane/functions/*; do \
 		pkg=$$(basename $$dir); \
-		cp target/lambda/$$pkg/bootstrap $$dir/bootstrap; \
+		cargo lambda build --release --arm64 --package $$pkg || exit 1; \
+		cp target/lambda/bootstrap/bootstrap $$dir/bootstrap; \
 	done
 	
 build: lambda-binaries ## Build all Lambda binaries once, then package with SAM
