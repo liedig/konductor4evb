@@ -8,7 +8,7 @@ If you are a platform team member responsible for approving registrations or man
 
 ## Overview
 
-EventBridge Nexus provisions and manages the cross-account EventBridge infrastructure your domain needs: event buses, schema registries, DLQs, and CloudWatch dashboards across all configured environments. You interact with Nexus through a REST API with IAM authentication.
+EventBridge Nexus provisions and manages the cross-account EventBridge infrastructure your domain needs: event buses, schema registries, DLQs, and CloudWatch dashboards across all configured environments. You interact with Nexus through a REST API offered on two surfaces — IAM (SigV4-signed, for automation) and OAuth (Cognito token, for interactive users) — with identical semantics. This guide's examples use the IAM surface via `awscurl`.
 
 Your domain name is your domain's identity. It is the sole identifier used in API paths, DynamoDB records, event payloads, and resource names. Choose carefully — domain names are globally unique and cannot be renamed.
 
@@ -447,7 +447,9 @@ Nexus removes the platform-side delivery rules in every environment; the subscri
 
 ### Producer obligations: the event envelope
 
-Until the Publish API ships, producers put events onto their platform-side bus directly and **must stamp the canonical envelope** — subscription filtering depends on it:
+Producers publish through the **Publish API** (`POST /publish`), which derives the canonical identity, resolves the latest schema version, and stamps the envelope for you — see [Publishing Events](publishing-events.md). Schema registration is likewise in-platform via `POST /schemas` and `POST /schemas/versions`.
+
+Direct publishing to your platform-side bus remains possible (the provisioning-created PutEvents policy permits your owner account), but then **you** must stamp the canonical envelope — subscription filtering depends on it:
 
 ```json
 {
@@ -463,8 +465,6 @@ Until the Publish API ships, producers put events onto their platform-side bus d
 - `Source` is your domain's namespace identity (`{org}-{domain}`) — the same value in every environment.
 - `DetailType` is the event name, matching the schema name's suffix after `@`.
 - `detail.metadata.schemaVersion` must be **numeric** and match a registered schema version. Events with a missing or string-typed version match no subscriptions — they silently deliver to no one.
-
-Register your event schemas in your per-environment schema registries (named `{source}@{event-name}`) via the AWS Schemas API; the registry access policies created at provisioning permit your owner account to write.
 
 ---
 
@@ -517,11 +517,11 @@ If you try to register a domain name that already exists in a status other than 
 
 ### API returns 403
 
-The Nexus API uses IAM authentication. Ensure your AWS credentials have permission to invoke the API Gateway. If you are using `awscurl`, verify that your `--region` matches the region where Nexus is deployed.
+On the IAM surface, ensure your AWS credentials have permission to invoke the API Gateway, and verify that your `awscurl --region` matches the region where Nexus is deployed. On the OAuth surface, check that your access token is unexpired and carries the role the route requires (e.g., `platform-admin` for approval and binding administration). For publish and schema writes specifically, a `403` means your principal lacks a `publisher` binding for the domain — see [Publishing Events](publishing-events.md#before-you-can-publish-publisher-bindings).
 
 ### Subscription active but no events arriving
 
-1. Confirm the producer is publishing with the canonical envelope — especially a **numeric** `detail.metadata.schemaVersion`. A string-typed version matches no rules.
+1. Confirm the producer's events carry the canonical envelope — especially a **numeric** `detail.metadata.schemaVersion`. Events published through the Publish API are stamped correctly by construction; this check matters for producers publishing directly to their bus, where a string-typed version matches no rules.
 2. Compare the version the producer stamps with your pinned version: `GET /subscriptions/{subscriptionId}` shows `pinnedVersion` per environment. If the producer moved to a newer version after you subscribed, your rule no longer matches — this is contract enforcement, not a bug. Coordinate with the producer team.
 3. Check the environment is enabled (`enabled: true` in the per-env map).
 4. Check the per-subscription zero-events alarm and the producer's subscription DLQ for delivery failures.

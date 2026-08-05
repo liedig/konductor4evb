@@ -758,9 +758,11 @@ evb-nexus/
 | [decisions.md](decisions.md) | Why things are built this way — architectural decision log |
 | [testing.md](testing.md) | Testing strategy, smithy-mocks patterns, TDD workflow |
 | [domain-management.md](../domain-management.md) | Domain owner guide — registering, approving, and operating domains |
+| [publishing-events.md](../publishing-events.md) | Producer guide — publisher bindings, schema management, and the publish API |
+| [oauth-authentication-guide.md](oauth-authentication-guide.md) | User setup, access tokens, and bootstrapping role bindings |
 | [installation.md](../installation.md) | End-to-end installation guide (prerequisites, deploy, smoke test, uninstall) |
 | [trust-stack-deployment.md](../trust-stack-deployment.md) | Step-by-step guide for onboarding domain accounts |
-| [api/openapi.yaml](../../api/openapi.yaml) | Full API contract with request/response schemas |
+| [api/openapi-oauth.yaml](../../api/openapi-oauth.yaml), [api/openapi-iam.yaml](../../api/openapi-iam.yaml) | API contracts for the OAuth and IAM surfaces |
 | [nexus-core-stack.yaml](../../nexus-core-stack.yaml) | SAM template — core platform resources (notification resources conditional) |
 | [notifications-stack.yaml](../../notifications-stack.yaml) | Optional SES identity stack |
 | [trust-stack.yaml](../../trust-stack.yaml) | Trust role CloudFormation template |
