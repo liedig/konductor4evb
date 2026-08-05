@@ -22,10 +22,10 @@ use nexus_common::principal::{
     AuthorizationDecision, GlobalRole, ResourceAuthorizer, TrustedPrincipal,
 };
 
-const MANIFEST_JSON: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../openspec/changes/evaluate-authorization-engine/evidence/fixture-manifest.json"
-));
+// Frozen copy of the authorization-engine spike's fixture manifest (archived
+// at openspec/changes/archive/2026-08-05-evaluate-authorization-engine). The
+// parity suite owns this copy so archived-change moves cannot break the build.
+const MANIFEST_JSON: &str = include_str!("fixtures/grant-parity-manifest.json");
 
 const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";
 

@@ -31,9 +31,9 @@
 
 ## 5. Envelope Model Extension
 
-- [ ] 5.1 Add `idempotencyKey` and `publishedAt` fields to the envelope `metadata` model in nexus-common with serde and validation
-- [ ] 5.2 Add envelope construction tests proving `metadata` contains exactly `schemaVersion`, `idempotencyKey`, `publishedAt` and `data` contains the caller payload
-- [ ] 5.3 Add envelope validation tests for numeric positive schema version, non-empty idempotency key, valid ISO 8601 timestamp, JSON serialization, and EventBridge entry limits
+- [x] 5.1 Add `idempotencyKey` and `publishedAt` fields to the envelope `metadata` model in nexus-common with serde and validation
+- [x] 5.2 Add envelope construction tests proving `metadata` contains exactly `schemaVersion`, `idempotencyKey`, `publishedAt` and `data` contains the caller payload
+- [x] 5.3 Add envelope validation tests for numeric positive schema version, non-empty idempotency key, valid ISO 8601 timestamp, JSON serialization, and EventBridge entry limits
 
 ## 6. Authorization Integration
 
