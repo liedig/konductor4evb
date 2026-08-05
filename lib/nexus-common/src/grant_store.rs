@@ -278,8 +278,8 @@ fn summary_to_attr(summary: &BindingSummary) -> AttributeValue {
     AttributeValue::M(map)
 }
 
-fn sdk_error(e: impl std::fmt::Display) -> GrantStoreError {
-    GrantStoreError::Dynamo(e.to_string())
+fn sdk_error(e: impl std::fmt::Debug) -> GrantStoreError {
+    GrantStoreError::Dynamo(format!("{e:?}"))
 }
 
 fn map_transact_error(
@@ -301,7 +301,9 @@ fn map_transact_error(
             }
         }
     }
-    GrantStoreError::Dynamo(error.to_string())
+    // Debug format: SdkError's Display is terse ("service error") and hides
+    // the underlying service error kind needed to diagnose live failures.
+    GrantStoreError::Dynamo(format!("{error:?}"))
 }
 
 #[cfg(test)]

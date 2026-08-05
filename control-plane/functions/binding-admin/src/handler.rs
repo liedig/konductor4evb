@@ -188,7 +188,9 @@ fn audit_record(
 }
 
 fn store_failure(operation: &str, error: GrantStoreError) -> Value {
-    tracing::error!(operation, error = %error, "bindings store operation failed");
+    // Debug format: SdkError's Display is terse ("service error") and hides
+    // the underlying service error kind needed to diagnose live failures.
+    tracing::error!(operation, error = ?error, "bindings store operation failed");
     api::from_control_plane_error(&ControlPlaneError::DynamoDb(error.to_string()))
 }
 

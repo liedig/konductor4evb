@@ -1212,6 +1212,10 @@ Resources:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
       Policies:
+        # TransactWriteItems additionally requires the permissions of every
+        # action inside the transaction (PutItem for create+audit, DeleteItem
+        # for revoke) — DynamoDB evaluates both the transact action and the
+        # underlying item actions.
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
@@ -1219,6 +1223,8 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:Query
                 - dynamodb:TransactWriteItems
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
               Resource:
                 - !GetAtt AuthorizationBindingsTable.Arn
                 - !Sub "${AuthorizationBindingsTable.Arn}/index/*"

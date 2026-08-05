@@ -299,22 +299,22 @@ fn binding_admin_function_has_least_privilege_table_access() {
     assert_eq!(policies.len(), 1, "exactly one scoped policy statement set");
     let statements = seq(at(&policies[0], "Statement"));
     let actions: Vec<&str> = seq(at(&statements[0], "Action")).iter().map(text).collect();
+    // DynamoDB transactions require both TransactWriteItems and the
+    // underlying item actions (PutItem for create+audit, DeleteItem for
+    // revoke) — the service evaluates each action in the transaction.
     for required in [
         "dynamodb:GetItem",
         "dynamodb:Query",
         "dynamodb:TransactWriteItems",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
     ] {
         assert!(actions.contains(&required), "missing {required}");
     }
-    for forbidden in [
-        "dynamodb:PutItem",
-        "dynamodb:DeleteItem",
-        "dynamodb:UpdateItem",
-        "dynamodb:Scan",
-    ] {
+    for forbidden in ["dynamodb:UpdateItem", "dynamodb:Scan"] {
         assert!(
             !actions.contains(&forbidden),
-            "mutations must go through TransactWriteItems, not {forbidden}"
+            "bindings are created and deleted, never updated or scanned ({forbidden})"
         );
     }
 }
