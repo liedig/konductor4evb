@@ -673,6 +673,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn grant_engine_store_error_fails_closed_and_is_acknowledged() {
+        set_env();
+        let store_error = mock!(aws_sdk_dynamodb::Client::get_item).then_error(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemError::generic(
+                aws_sdk_dynamodb::error::ErrorMetadata::builder()
+                    .message("simulated bindings store outage")
+                    .build(),
+            )
+        });
+        let store_client = mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, [&store_error]);
+        let authorizer = nexus_common::grant_engine::DynamoGrantEngine::new(
+            nexus_common::grant_store::BindingStore::new(store_client, "bindings-test"),
+        );
+        // Zero rules: the fail-closed denial must precede any resource access.
+        let clients = clients(vec![], vec![], vec![]);
+
+        let response = handle(
+            &clients,
+            &authorizer,
+            sqs_event(vec![record(oauth_attributes())]),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty(), "fail-closed denial is acknowledged");
+    }
+
+    #[tokio::test]
     async fn missing_environment_attribute_is_reported_for_retry() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![]);

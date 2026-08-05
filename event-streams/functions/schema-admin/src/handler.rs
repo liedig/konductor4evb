@@ -618,6 +618,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn grant_engine_store_error_fails_closed_with_403() {
+        set_env();
+        let store_error = mock!(aws_sdk_dynamodb::Client::get_item).then_error(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemError::generic(
+                aws_sdk_dynamodb::error::ErrorMetadata::builder()
+                    .message("simulated bindings store outage")
+                    .build(),
+            )
+        });
+        let store_client = mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, [&store_error]);
+        let authorizer = nexus_common::grant_engine::DynamoGrantEngine::new(
+            nexus_common::grant_store::BindingStore::new(store_client, "bindings-test"),
+        );
+        let clients = clients(vec![], vec![]);
+
+        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", create_body())))
+            .await
+            .unwrap();
+
+        assert_eq!(status(&resp), 403);
+    }
+
+    #[tokio::test]
     async fn stage_selects_the_environment_registry() {
         set_env();
         std::env::set_var("ORGANIZATION", "acme");

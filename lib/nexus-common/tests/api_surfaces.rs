@@ -319,6 +319,96 @@ fn binding_admin_function_has_least_privilege_table_access() {
     }
 }
 
+/// (inline actions, managed policy refs) for a SAM function's Policies list.
+fn function_policy_shape(doc: &Value, logical_id: &str) -> (Vec<String>, Vec<String>) {
+    let func = resource(doc, logical_id);
+    let mut actions = Vec::new();
+    let mut managed = Vec::new();
+    for policy in seq(at(props(func), "Policies")) {
+        match policy.get("Statement") {
+            Some(statements) => {
+                for statement in seq(statements) {
+                    for action in seq(at(statement, "Action")) {
+                        actions.push(text(action).to_string());
+                    }
+                }
+            }
+            None => managed.push(text(policy).to_string()),
+        }
+    }
+    (actions, managed)
+}
+
+#[test]
+fn publish_consumer_has_least_privilege_permissions() {
+    let doc = core_template();
+    let (mut actions, managed) = function_policy_shape(&doc, "PublishEventsFunction");
+    assert_eq!(
+        managed,
+        ["BindingsTableReadPolicy"],
+        "authorization decisions read bindings only through the reserved policy"
+    );
+    actions.sort();
+    assert_eq!(
+        actions,
+        [
+            "dynamodb:GetItem",
+            "events:PutEvents",
+            "schemas:DescribeSchema",
+            "sqs:DeleteMessage",
+            "sqs:GetQueueAttributes",
+            "sqs:ReceiveMessage",
+        ],
+        "publish consumer: domain-state read, schema read, org-scoped PutEvents, queue access"
+    );
+}
+
+#[test]
+fn schema_admin_has_least_privilege_permissions() {
+    let doc = core_template();
+    let (mut actions, managed) = function_policy_shape(&doc, "SchemaAdminFunction");
+    assert_eq!(
+        managed,
+        ["BindingsTableReadPolicy"],
+        "authorization decisions read bindings only through the reserved policy"
+    );
+    actions.sort();
+    assert_eq!(
+        actions,
+        ["dynamodb:GetItem", "schemas:CreateSchema", "schemas:UpdateSchema"],
+        "schema handlers: domain-state read and append-only schema writes"
+    );
+}
+
+#[test]
+fn publisher_functions_have_no_administration_permissions() {
+    let doc = core_template();
+    let forbidden = [
+        "schemas:CreateRegistry",
+        "schemas:DeleteRegistry",
+        "schemas:UpdateRegistry",
+        "schemas:PutResourcePolicy",
+        "schemas:DeleteSchema",
+        "schemas:DeleteSchemaVersion",
+        "events:PutRule",
+        "events:DeleteRule",
+        "events:PutPermission",
+        "events:RemovePermission",
+        "dynamodb:PutItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:UpdateItem",
+    ];
+    for logical_id in ["PublishEventsFunction", "SchemaAdminFunction"] {
+        let (actions, _) = function_policy_shape(&doc, logical_id);
+        for action in &forbidden {
+            assert!(
+                !actions.iter().any(|a| a == action),
+                "{logical_id} must not hold {action}"
+            );
+        }
+    }
+}
+
 #[test]
 fn bindings_table_read_policy_is_reserved_and_unattached() {
     let doc = core_template();

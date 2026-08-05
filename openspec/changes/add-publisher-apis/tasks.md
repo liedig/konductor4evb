@@ -37,16 +37,16 @@
 
 ## 6. Authorization Integration
 
-- [ ] 6.1 Integrate publish consumer and schema handlers with the `DynamoGrantEngine` decision interface delivered by `add-grant-engine` (prerequisite: `add-grant-engine` complete)
-- [ ] 6.2 Add authorization tests for OAuth team-group binding, IAM AWS-account binding, OAuth/IAM parity, cross-domain denial, missing binding denial, and fail-closed engine errors
-- [ ] 6.3 Verify publisher role cannot access registry, bus, policy, rule, subscriber-grant, or authorization-administration operations
+- [x] 6.1 Integrate publish consumer and schema handlers with the `DynamoGrantEngine` decision interface delivered by `add-grant-engine` (prerequisite: `add-grant-engine` complete)
+- [x] 6.2 Add authorization tests for OAuth team-group binding, IAM AWS-account binding, OAuth/IAM parity, cross-domain denial, missing binding denial, and fail-closed engine errors
+- [x] 6.3 Verify publisher role cannot access registry, bus, policy, rule, subscriber-grant, or authorization-administration operations
 
 ## 7. Infrastructure and Least Privilege
 
-- [ ] 7.1 Register the publish consumer Lambda crate in the Rust workspace and add SAM resources (Lambda, SQS event source, API Gateway integrations, IAM role)
-- [ ] 7.2 Grant publish consumer only domain-state read, authorization-decision (attach the reserved `nexus-bindings-table-read` managed policy from `add-grant-engine`), Schemas read, and EventBridge `PutEvents` scoped to Nexus-managed resource patterns
-- [ ] 7.3 Grant schema handlers only domain-state read, authorization-decision (the reserved `nexus-bindings-table-read` managed policy), and Schemas write scoped to Nexus-managed registry patterns
-- [ ] 7.4 Add infrastructure assertions for OAuth/IAM route parity, distinct authorizers, stage naming, SQS integration, and absence of publisher administration permissions
+- [x] 7.1 Register the publish consumer Lambda crate in the Rust workspace and add SAM resources (Lambda, SQS event source, API Gateway integrations, IAM role)
+- [x] 7.2 Grant publish consumer only domain-state read, authorization-decision (attach the reserved `nexus-bindings-table-read` managed policy from `add-grant-engine`), Schemas read, and EventBridge `PutEvents` scoped to Nexus-managed resource patterns
+- [x] 7.3 Grant schema handlers only domain-state read, authorization-decision (the reserved `nexus-bindings-table-read` managed policy), and Schemas write scoped to Nexus-managed registry patterns
+- [x] 7.4 Add infrastructure assertions for OAuth/IAM route parity, distinct authorizers, stage naming, SQS integration, and absence of publisher administration permissions
 
 ## 8. Verification and Documentation
 
