@@ -469,7 +469,8 @@ Resources:
             FunctionArn: !GetAtt OAuthAuthorizerFunction.Arn
             AuthorizerResultTtlInSeconds: 0
             Identity:
-              Header: Authorization
+              Headers:
+                - Authorization
       DefinitionBody:
         Fn::Transform:
           Name: AWS::Include

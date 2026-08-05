@@ -81,7 +81,12 @@ fn oauth_api_attaches_request_authorizer_with_caching_disabled() {
         "authorizer result caching must be disabled by default"
     );
     let identity = at(authorizer, "Identity");
-    assert_eq!(text(at(identity, "Header")), "Authorization");
+    let headers: Vec<&str> = seq(at(identity, "Headers")).iter().map(text).collect();
+    assert_eq!(
+        headers,
+        ["Authorization"],
+        "REQUEST authorizer identity must use the Headers list (the singular Header key is rejected by the SAM transform)"
+    );
     assert_eq!(
         text(at(authorizer, "FunctionArn")),
         "OAuthAuthorizerFunction.Arn"
