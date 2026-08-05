@@ -13,6 +13,7 @@ members = [
     "domain-management/functions/send-registration-delayed-notification",
     "domain-management/functions/send-registration-failed-notification",
     "domain-management/functions/send-rejection-outcome-notification",
+    "event-streams/functions/publish-events",
     "event-streams/functions/subscriptions",
     "event-streams/functions/list-subscriptions",
     "event-streams/functions/describe-subscription",
@@ -35,7 +36,7 @@ aws-sdk-sesv2 = { version = "1", features = ["test-util"] }
 aws-sdk-sfn = { version = "1", features = ["test-util"] }
 aws-sdk-sqs = "1"
 aws-sdk-sts = "1"
-aws-sdk-schemas = "1"
+aws-sdk-schemas = { version = "1", features = ["test-util"] }
 aws-sdk-cloudwatch = "1"
 jsonwebtoken = "9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

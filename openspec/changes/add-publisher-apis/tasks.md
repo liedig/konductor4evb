@@ -13,12 +13,12 @@
 
 ## 3. Publish Consumer Lambda
 
-- [ ] 3.1 Add consumer handler tests for principal parsing from SQS attributes, publisher authorization before resource access, missing/malformed principal rejection, and cross-domain denial
-- [ ] 3.2 Add consumer handler tests for canonical envelope construction: schema name derivation, latest-version resolution, `detail.metadata` with `schemaVersion`, `idempotencyKey`, `publishedAt`, and `detail.data` pass-through
-- [ ] 3.3 Add consumer handler tests for `publishedAt` as ISO 8601 conversion of SQS `SentTimestamp`, immutability across retries, and `idempotencyKey` from message attribute
-- [ ] 3.4 Add consumer handler tests for PutEvents success (delete from queue), PutEvents failure (SQS retry with same attributes), absent schema (404 equivalent), and inactive domain rejection
-- [ ] 3.5 Implement the publish consumer Lambda with dependency-injected domain-state, authorization, Schemas, and EventBridge clients; read environment from SQS message attributes to select registry and bus
-- [ ] 3.6 Add structured publish metrics and logs for auth mechanism, authorization denial, schema-resolution latency/failure, EventBridge acceptance/failure, and end-to-end latency without logging business payloads or sensitive claims
+- [x] 3.1 Add consumer handler tests for principal parsing from SQS attributes, publisher authorization before resource access, missing/malformed principal rejection, and cross-domain denial
+- [x] 3.2 Add consumer handler tests for canonical envelope construction: schema name derivation, latest-version resolution, `detail.metadata` with `schemaVersion`, `idempotencyKey`, `publishedAt`, and `detail.data` pass-through
+- [x] 3.3 Add consumer handler tests for `publishedAt` as ISO 8601 conversion of SQS `SentTimestamp`, immutability across retries, and `idempotencyKey` from message attribute
+- [x] 3.4 Add consumer handler tests for PutEvents success (delete from queue), PutEvents failure (SQS retry with same attributes), absent schema (404 equivalent), and inactive domain rejection
+- [x] 3.5 Implement the publish consumer Lambda with dependency-injected domain-state, authorization, Schemas, and EventBridge clients; read environment from SQS message attributes to select registry and bus
+- [x] 3.6 Add structured publish metrics and logs for auth mechanism, authorization denial, schema-resolution latency/failure, EventBridge acceptance/failure, and end-to-end latency without logging business payloads or sensitive claims
 
 ## 4. Schema Management API
 

@@ -1040,6 +1040,53 @@ Resources:
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
+  # ---- Publish Consumer (store-and-forward) ----
+  PublishEventsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-publish-events"
+      RetentionInDays: 30
+  PublishEventsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: PublishEventsLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-publish-events"
+      CodeUri: ./event-streams/functions/publish-events
+      Handler: bootstrap
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+      Policies:
+        - !Ref BindingsTableReadPolicy
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [schemas:DescribeSchema]
+              Resource:
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+            - Effect: Allow
+              Action: [events:PutEvents]
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
+            - Effect: Allow
+              Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+              Resource: !GetAtt PublishQueue.Arn
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt PublishQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
   # ---- Decide Registration Function ----
   DecideFunctionLogGroup:
     Type: AWS::Logs::LogGroup
