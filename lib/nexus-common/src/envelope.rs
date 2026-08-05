@@ -76,7 +76,10 @@ impl EventEnvelope {
     /// Business data is never validated against schema content.
     pub fn validate(&self) -> Result<(), ControlPlaneError> {
         if self.source.is_empty() {
-            return Err(validation_error("source", "source must not be empty".to_string()));
+            return Err(validation_error(
+                "source",
+                "source must not be empty".to_string(),
+            ));
         }
         if self.detail_type.is_empty() {
             return Err(validation_error(
@@ -151,7 +154,9 @@ mod iso8601_millis {
 
 /// Converts an SQS `SentTimestamp` attribute (epoch milliseconds, as a string)
 /// into the envelope's `publishedAt` timestamp.
-pub fn published_at_from_sent_timestamp(sent_timestamp: &str) -> Result<DateTime<Utc>, ControlPlaneError> {
+pub fn published_at_from_sent_timestamp(
+    sent_timestamp: &str,
+) -> Result<DateTime<Utc>, ControlPlaneError> {
     let millis: i64 = sent_timestamp.parse().map_err(|_| {
         validation_error(
             "publishedAt",
@@ -373,10 +378,7 @@ mod tests {
         assert_eq!(keys, ["idempotencyKey", "publishedAt", "schemaVersion"]);
         assert_eq!(metadata["schemaVersion"], json!(4));
         assert_eq!(metadata["idempotencyKey"], json!("key-123"));
-        assert_eq!(
-            metadata["publishedAt"],
-            json!("2026-07-30T10:30:00.123Z")
-        );
+        assert_eq!(metadata["publishedAt"], json!("2026-07-30T10:30:00.123Z"));
         assert_eq!(detail["data"], json!({"orderId": 123, "amount": 99.50}));
     }
 

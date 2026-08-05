@@ -413,10 +413,19 @@ mod tests {
         for (field, value) in [
             ("source", serde_json::json!("acme-orders")),
             ("detailType", serde_json::json!("OrderNotification")),
-            ("schemaName", serde_json::json!("acme-orders@OrderNotification")),
+            (
+                "schemaName",
+                serde_json::json!("acme-orders@OrderNotification"),
+            ),
             ("schemaVersion", serde_json::json!(3)),
-            ("registry", serde_json::json!("acme-prod-orders-schema-registry")),
-            ("eventBusName", serde_json::json!("acme-prod-orders-event-bus")),
+            (
+                "registry",
+                serde_json::json!("acme-prod-orders-schema-registry"),
+            ),
+            (
+                "eventBusName",
+                serde_json::json!("acme-prod-orders-event-bus"),
+            ),
             ("metadata", serde_json::json!({"schemaVersion": 3})),
             ("environment", serde_json::json!("prod")),
             ("principalId", serde_json::json!("111122223333")),
@@ -461,9 +470,18 @@ mod tests {
     #[test]
     fn create_schema_request_rejects_caller_supplied_naming_fields() {
         for (field, value) in [
-            ("schemaName", serde_json::json!("acme-orders@OrderNotification")),
-            ("registry", serde_json::json!("acme-prod-orders-schema-registry")),
-            ("registryName", serde_json::json!("acme-prod-orders-schema-registry")),
+            (
+                "schemaName",
+                serde_json::json!("acme-orders@OrderNotification"),
+            ),
+            (
+                "registry",
+                serde_json::json!("acme-prod-orders-schema-registry"),
+            ),
+            (
+                "registryName",
+                serde_json::json!("acme-prod-orders-schema-registry"),
+            ),
             ("schemaVersion", serde_json::json!(1)),
             ("environment", serde_json::json!("prod")),
         ] {
@@ -496,7 +514,10 @@ mod tests {
             "content": "{}"
         });
         let parsed: Result<AppendSchemaVersionRequest, _> = serde_json::from_value(with_type);
-        assert!(parsed.is_err(), "schemaType is not part of the append shape");
+        assert!(
+            parsed.is_err(),
+            "schemaType is not part of the append shape"
+        );
     }
 
     #[test]

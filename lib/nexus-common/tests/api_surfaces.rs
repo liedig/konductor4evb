@@ -375,7 +375,11 @@ fn schema_admin_has_least_privilege_permissions() {
     actions.sort();
     assert_eq!(
         actions,
-        ["dynamodb:GetItem", "schemas:CreateSchema", "schemas:UpdateSchema"],
+        [
+            "dynamodb:GetItem",
+            "schemas:CreateSchema",
+            "schemas:UpdateSchema"
+        ],
         "schema handlers: domain-state read and append-only schema writes"
     );
 }
@@ -509,11 +513,7 @@ fn write_templates_never_source_identity_attributes_from_caller_body() {
 fn publish_vtl(doc: &Value) -> String {
     let op = at(at(at(doc, "paths"), "/publish"), "post");
     let integration = at(op, "x-amazon-apigateway-integration");
-    text(at(
-        at(integration, "requestTemplates"),
-        "application/json",
-    ))
-    .to_string()
+    text(at(at(integration, "requestTemplates"), "application/json")).to_string()
 }
 
 #[test]
@@ -531,7 +531,10 @@ fn publish_routes_use_sqs_store_and_forward_with_stage_environment() {
             "publish must integrate with the publish queue"
         );
         assert_eq!(
-            text(at(at(at(integration, "responses"), "default"), "statusCode")),
+            text(at(
+                at(at(integration, "responses"), "default"),
+                "statusCode"
+            )),
             "202"
         );
 
@@ -607,8 +610,7 @@ fn schema_write_routes_are_proxy_integrations_on_both_surfaces() {
             let integration = at(op, "x-amazon-apigateway-integration");
             assert_eq!(text(at(integration, "type")), "aws_proxy");
             assert!(
-                text(at(at(integration, "uri"), "Fn::Sub"))
-                    .contains("${SchemaAdminFunction.Arn}"),
+                text(at(at(integration, "uri"), "Fn::Sub")).contains("${SchemaAdminFunction.Arn}"),
                 "{operation} must integrate with the schema admin function"
             );
         }
@@ -663,15 +665,22 @@ fn schema_request_schemas_reject_platform_owned_fields() {
         let schemas = at(at(&doc, "components"), "schemas");
         let create = at(schemas, "CreateSchemaRequest");
         assert!(!boolean(at(create, "additionalProperties")));
-        let mut create_required: Vec<&str> =
-            seq(at(create, "required")).iter().map(|v| text(v)).collect();
+        let mut create_required: Vec<&str> = seq(at(create, "required"))
+            .iter()
+            .map(|v| text(v))
+            .collect();
         create_required.sort_unstable();
-        assert_eq!(create_required, ["content", "domain", "eventName", "schemaType"]);
+        assert_eq!(
+            create_required,
+            ["content", "domain", "eventName", "schemaType"]
+        );
 
         let append = at(schemas, "AppendSchemaVersionRequest");
         assert!(!boolean(at(append, "additionalProperties")));
-        let mut append_required: Vec<&str> =
-            seq(at(append, "required")).iter().map(|v| text(v)).collect();
+        let mut append_required: Vec<&str> = seq(at(append, "required"))
+            .iter()
+            .map(|v| text(v))
+            .collect();
         append_required.sort_unstable();
         assert_eq!(append_required, ["content", "domain", "eventName"]);
     }

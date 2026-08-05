@@ -99,7 +99,17 @@ async fn create_schema<A: ResourceAuthorizer>(
             format!("schemaType must be {SUPPORTED_SCHEMA_TYPE}"),
         )));
     }
-    let target = match prepare(clients, authorizer, payload, principal, &request.domain, &request.event_name, actions::SCHEMA_CREATE).await {
+    let target = match prepare(
+        clients,
+        authorizer,
+        payload,
+        principal,
+        &request.domain,
+        &request.event_name,
+        actions::SCHEMA_CREATE,
+    )
+    .await
+    {
         Ok(t) => t,
         Err(e) => return Ok(api::from_control_plane_error(&e)),
     };
@@ -161,7 +171,17 @@ async fn append_schema_version<A: ResourceAuthorizer>(
         Ok(r) => r,
         Err(e) => return Ok(api::from_control_plane_error(&e)),
     };
-    let target = match prepare(clients, authorizer, payload, principal, &request.domain, &request.event_name, actions::SCHEMA_VERSION_APPEND).await {
+    let target = match prepare(
+        clients,
+        authorizer,
+        payload,
+        principal,
+        &request.domain,
+        &request.event_name,
+        actions::SCHEMA_VERSION_APPEND,
+    )
+    .await
+    {
         Ok(t) => t,
         Err(e) => return Ok(api::from_control_plane_error(&e)),
     };
@@ -232,7 +252,8 @@ async fn prepare<A: ResourceAuthorizer>(
         .ok_or_else(|| api::validation_error("request context is missing the API stage"))?;
 
     let resolver = NamespaceResolver::default_pattern();
-    let schema_name = SchemaName::for_domain(&resolver.namespace(&organization, domain), event_name);
+    let schema_name =
+        SchemaName::for_domain(&resolver.namespace(&organization, domain), event_name);
     let registry = resolver.schema_registry_name(stage, &organization, domain);
     Ok(SchemaTarget {
         schema_name,
@@ -296,7 +317,8 @@ mod tests {
     use serde_json::json;
 
     const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TestPool";
-    const CONTENT: &str = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\"}";
+    const CONTENT: &str =
+        "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\"}";
 
     fn set_env() {
         std::env::set_var("ORGANIZATION", "acme");
@@ -444,9 +466,13 @@ mod tests {
             vec![create_schema_rule("acme-prod-orders-schema-registry", "1")],
         );
 
-        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", create_body())))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas", create_body())),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 201);
         let body = body(&resp);
@@ -467,9 +493,13 @@ mod tests {
         });
         let clients = clients(vec![active_domain_rule()], vec![conflict]);
 
-        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", create_body())))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas", create_body())),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 409);
         assert_eq!(body(&resp)["code"], "ConflictException");
@@ -481,9 +511,13 @@ mod tests {
         let authorizer = InMemoryGrantEngine::new(vec![]);
         let clients = clients(vec![], vec![]);
 
-        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", create_body())))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas", create_body())),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 403);
     }
@@ -500,9 +534,13 @@ mod tests {
         });
         let clients = clients(vec![inactive], vec![]);
 
-        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", create_body())))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas", create_body())),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 404);
     }
@@ -609,9 +647,13 @@ mod tests {
             vec![create_schema_rule("acme-prod-orders-schema-registry", "1")],
         );
 
-        let resp = handle(&clients, &authorizer, event(iam_event("/schemas", create_body())))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(iam_event("/schemas", create_body())),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 201);
         assert_eq!(body(&resp)["schemaName"], "acme-orders@OrderNotification");
@@ -633,9 +675,13 @@ mod tests {
         );
         let clients = clients(vec![], vec![]);
 
-        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", create_body())))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas", create_body())),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 403);
     }
@@ -647,7 +693,10 @@ mod tests {
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
         let clients = clients(
             vec![active_domain_rule()],
-            vec![update_schema_rule("acme-staging-orders-schema-registry", "2")],
+            vec![update_schema_rule(
+                "acme-staging-orders-schema-registry",
+                "2",
+            )],
         );
         let mut payload = oauth_event("/schemas/versions", append_body());
         payload["requestContext"]["stage"] = json!("staging");
@@ -657,5 +706,3 @@ mod tests {
         assert_eq!(status(&resp), 201);
     }
 }
-
-
