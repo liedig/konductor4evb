@@ -449,7 +449,10 @@ Resources:
     UpdateReplacePolicy: Delete
     Properties:
       Name: !Sub "nexus-NexusOAuthApi"
-      StageName: v1
+      # Stages are environment selectors: SAM manages `dev`; `staging` and
+      # `prod` are explicit AWS::ApiGateway::Stage resources below sharing the
+      # same deployment.
+      StageName: dev
       TracingEnabled: true
       EndpointConfiguration:
         Type: REGIONAL
@@ -483,7 +486,7 @@ Resources:
     UpdateReplacePolicy: Delete
     Properties:
       Name: !Sub "nexus-NexusIamApi"
-      StageName: v1
+      StageName: dev
       TracingEnabled: true
       EndpointConfiguration:
         Type: REGIONAL
@@ -502,6 +505,81 @@ Resources:
           Name: AWS::Include
           Parameters:
             Location: ./api/openapi-iam.yaml
+
+  # Environment-named stages sharing each API's SAM-managed deployment
+  # (!Ref <Api>.Deployment is SAM's referenceable property for the generated
+  # AWS::ApiGateway::Deployment). Settings mirror the SAM-managed dev stage.
+  NexusOAuthApiStagingStage:
+    Type: AWS::ApiGateway::Stage
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      RestApiId: !Ref NexusOAuthApi
+      DeploymentId: !Ref NexusOAuthApi.Deployment
+      StageName: staging
+      TracingEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+
+  NexusOAuthApiProdStage:
+    Type: AWS::ApiGateway::Stage
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      RestApiId: !Ref NexusOAuthApi
+      DeploymentId: !Ref NexusOAuthApi.Deployment
+      StageName: prod
+      TracingEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+
+  NexusIamApiStagingStage:
+    Type: AWS::ApiGateway::Stage
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      RestApiId: !Ref NexusIamApi
+      DeploymentId: !Ref NexusIamApi.Deployment
+      StageName: staging
+      TracingEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt IamApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+
+  NexusIamApiProdStage:
+    Type: AWS::ApiGateway::Stage
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      RestApiId: !Ref NexusIamApi
+      DeploymentId: !Ref NexusIamApi.Deployment
+      StageName: prod
+      TracingEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt IamApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
 
   # ---- Cognito Identity (interactive OAuth foundation) ----
   NexusUserPool:
@@ -1831,11 +1909,11 @@ Resources:
 
 Outputs:
   OAuthApiEndpoint:
-    Description: Interactive OAuth control-plane API endpoint
-    Value: !Sub "https://${NexusOAuthApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+    Description: Interactive OAuth control-plane API endpoint (dev stage; swap for staging or prod to target another environment)
+    Value: !Sub "https://${NexusOAuthApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
   IamApiEndpoint:
-    Description: AWS_IAM control-plane API endpoint for automation
-    Value: !Sub "https://${NexusIamApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+    Description: AWS_IAM control-plane API endpoint for automation (dev stage; swap for staging or prod to target another environment)
+    Value: !Sub "https://${NexusIamApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
   NexusEventBusArn:
     Description: EventBridge Nexus event bus ARN
     Value: !GetAtt NexusEventBus.Arn

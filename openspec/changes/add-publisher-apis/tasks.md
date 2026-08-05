@@ -1,8 +1,8 @@
 ## 1. API Stage Migration
 
-- [ ] 1.1 Update SAM template to change API Gateway stage naming from `v1` to environment-named stages (`dev`, `staging`, `prod`) on both OAuth and IAM API surfaces
-- [ ] 1.2 Verify existing control-plane operations (register, approve, subscribe, list, describe) work identically across all environment stages
-- [ ] 1.3 Update OpenAPI specs (`openapi-oauth.yaml`, `openapi-iam.yaml`) to reflect the stage-based URL structure
+- [x] 1.1 Update SAM template to change API Gateway stage naming from `v1` to environment-named stages (`dev`, `staging`, `prod`) on both OAuth and IAM API surfaces
+- [x] 1.2 Verify existing control-plane operations (register, approve, subscribe, list, describe) work identically across all environment stages
+- [x] 1.3 Update OpenAPI specs (`openapi-oauth.yaml`, `openapi-iam.yaml`) to reflect the stage-based URL structure
 
 ## 2. Publish API Contract and SQS Integration
 

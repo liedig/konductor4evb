@@ -4,6 +4,16 @@ info:
   version: "1.0.0"
   description: EventBridge Nexus — central integration platform for managing AWS EventBridge domains, subscriptions, and cross-account event routing.
 
+# The stage is the environment selector: publish and schema write operations
+# infer the target environment from $context.stage. Environment-agnostic
+# operations (register, approve, list, describe) behave identically on any stage.
+servers:
+  - url: "/{environment}"
+    variables:
+      environment:
+        enum: [dev, staging, prod]
+        default: dev
+
 x-amazon-apigateway-request-validators:
   validate-body:
     validateRequestBody: true

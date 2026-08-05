@@ -50,7 +50,7 @@ fn operations(doc: &Value) -> Vec<Op> {
 }
 
 #[test]
-fn two_apis_exist_at_the_static_v1_stage() {
+fn two_apis_serve_environment_named_stages() {
     let doc = core_template();
     for (logical_id, location) in [
         ("NexusOAuthApi", "./api/openapi-oauth.yaml"),
@@ -58,9 +58,20 @@ fn two_apis_exist_at_the_static_v1_stage() {
     ] {
         let api = resource(&doc, logical_id);
         assert_eq!(text(at(api, "Type")), "AWS::Serverless::Api");
-        assert_eq!(text(at(props(api), "StageName")), "v1");
+        assert_eq!(text(at(props(api), "StageName")), "dev");
         let include = at(at(props(api), "DefinitionBody"), "Fn::Transform");
         assert_eq!(text(at(at(include, "Parameters"), "Location")), location);
+
+        for (env, suffix) in [("staging", "Staging"), ("prod", "Prod")] {
+            let stage = resource(&doc, &format!("{logical_id}{suffix}Stage"));
+            assert_eq!(text(at(stage, "Type")), "AWS::ApiGateway::Stage");
+            assert_eq!(text(at(props(stage), "StageName")), env);
+            assert_eq!(text(at(props(stage), "RestApiId")), logical_id);
+            assert_eq!(
+                text(at(props(stage), "DeploymentId")),
+                format!("{logical_id}.Deployment")
+            );
+        }
     }
 }
 

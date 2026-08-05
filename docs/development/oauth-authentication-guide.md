@@ -26,7 +26,7 @@ CognitoUserPoolIssuer    – https://cognito-idp.<region>.amazonaws.com/<pool-id
 CognitoUserPoolClientId  – e.g. 1a2b3c4d5e6f7g8h9i0j
 CognitoJwksUri           – https://cognito-idp.<region>.amazonaws.com/<pool-id>/.well-known/jwks.json
 CognitoOAuthDomain       – https://<domain>.auth.<region>.amazoncognito.com
-OAuthApiEndpoint          – https://<api-id>.execute-api.<region>.amazonaws.com/v1
+OAuthApiEndpoint          – https://<api-id>.execute-api.<region>.amazonaws.com/dev
 ```
 
 Retrieve them with:
@@ -218,7 +218,7 @@ After login, the browser redirects to `http://localhost?code=XXXX`. Copy the cod
 ### Using curl
 
 ```bash
-API_URL="https://<API_ID>.execute-api.<REGION>.amazonaws.com/v1"
+API_URL="https://<API_ID>.execute-api.<REGION>.amazonaws.com/dev"
 TOKEN="<ACCESS_TOKEN>"
 
 # List domains
@@ -251,7 +251,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 
    ```json
    {
-     "apiUrl": "https://<API_ID>.execute-api.<REGION>.amazonaws.com/v1",
+     "apiUrl": "https://<API_ID>.execute-api.<REGION>.amazonaws.com/dev",
      "accessToken": "PASTE_YOUR_ACCESS_TOKEN_HERE"
    }
    ```
@@ -389,7 +389,7 @@ Key things to verify:
 For AWS-native automation (CI/CD, scripts using AWS credentials), use the IAM API surface instead. No Cognito token is needed; requests are signed with SigV4.
 
 ```bash
-IAM_API_URL="https://<IAM_API_ID>.execute-api.<REGION>.amazonaws.com/v1"
+IAM_API_URL="https://<IAM_API_ID>.execute-api.<REGION>.amazonaws.com/dev"
 
 # List domains (IAM-signed automatically by the AWS CLI)
 aws apigateway test-invoke-method \

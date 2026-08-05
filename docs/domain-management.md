@@ -490,7 +490,7 @@ Recovery is operator-driven:
 Platform operators can find these domains with:
 
 ```bash
-awscurl --service execute-api "https://{api-id}.execute-api.{region}.amazonaws.com/v1/domains?status=APPROVAL_NOTIFICATION_FAILED"
+awscurl --service execute-api "https://{api-id}.execute-api.{region}.amazonaws.com/prod/domains?status=APPROVAL_NOTIFICATION_FAILED"
 ```
 
 Operators should also sweep for records left in `PROVISIONING` by workflow crashes predating the failure-path hardening (2026-07): `?status=PROVISIONING` with no running `nexus-provision-domain` execution means a stuck record — delete it and re-register.
