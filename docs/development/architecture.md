@@ -134,7 +134,7 @@ stateDiagram-v2
 
 ## API Layer
 
-Nexus exposes two separate API Gateway surfaces at the static `v1` stage, each with its own OpenAPI contract and authorization model:
+Nexus exposes two separate API Gateway surfaces, each with its own OpenAPI contract and authorization model. Both serve **environment-named stages** (`dev`, `staging`, `prod`): the stage is the environment selector for every environment-scoped operation — publishers and schema managers never name an environment, registry, or bus in a request.
 
 - **OAuth surface** (`api/openapi-oauth.yaml`): interactive users authenticate via a Cognito user pool with controlled groups (`platform-admin`, `platform-auditor`). A REQUEST-type Lambda authorizer validates the Cognito access token (signature, issuer, expiration, `token_use`, client/audience), maps `cognito:groups` to global roles, preserves other groups as opaque team-group identifiers, and emits route-scoped allow/deny policies. Authorizer context is never cached by default (token-specific cache keys if enabled). Write operations are asynchronous (API Gateway validates the body and pushes to SQS); the decide endpoint is a direct Lambda proxy.
 
@@ -193,7 +193,7 @@ Creates are conditioned on `attribute_not_exists` (identical re-creates are idem
 
 **Binding administration** is flat-verb, OAuth-only, and platform-admin-only: `POST /bindings`, `GET /bindings?domain=…`, `DELETE /bindings/{bindingId}`, served by the `binding-admin` Lambda. The `platform-admin` global role resolves from the controlled Cognito group, never from the grant table, so administration cannot deadlock against an empty table. The IAM surface has no binding routes — IAM callers are *governed by* bindings, they do not govern them.
 
-**Dark-ship wiring**: the engines ship behind the existing stringly-typed `ResourceAuthorizer` seam with no consumer rewired in this change. `add-publisher-apis` wires the publish and schema handlers to `DynamoGrantEngine` as its first consumer (attaching the reserved `nexus-bindings-table-read` managed policy); `add-subscriber-entitlements` migrates the subscribe paths and deletes `IamOnlyAuthorizer`. A manifest-seeded parity suite (from the `evaluate-authorization-engine` spike's frozen fixtures) proves `InMemoryGrantEngine` and `DynamoGrantEngine` decide identically.
+**Consumer wiring**: the publish consumer and schema-admin handlers authorize through `DynamoGrantEngine` (reading bindings via the reserved `nexus-bindings-table-read` managed policy) — the engine's first production consumers. The domain-management and subscription mutation paths still run behind the bridging `IamOnlyAuthorizer` (allows IAM, denies OAuth) until `add-subscriber-entitlements` migrates them and deletes the bridge. A manifest-seeded parity suite (from the `evaluate-authorization-engine` spike's frozen fixtures) proves `InMemoryGrantEngine` and `DynamoGrantEngine` decide identically.
 
 ### Endpoints
 
@@ -211,6 +211,9 @@ Creates are conditioned on `attribute_not_exists` (identical re-creates are idem
 | `DELETE` | `/subscriptions/{subscriptionId}` | Async (SQS) | `subscriptions` (unsubscribe) |
 | `GET` | `/schemas` | Sync (Lambda proxy) | `list-schemas` |
 | `GET` | `/schemas/{schemaName}` | Sync (Lambda proxy) | `describe-schema` |
+| `POST` | `/publish` | Async (SQS) | `publish-events` (store-and-forward publish) |
+| `POST` | `/schemas` | Sync (Lambda proxy) | `schema-admin` (create schema, version 1) |
+| `POST` | `/schemas/versions` | Sync (Lambda proxy) | `schema-admin` (append schema version) |
 | `POST` | `/bindings` | Sync (Lambda proxy, OAuth only) | `binding-admin` (create) |
 | `GET` | `/bindings` | Sync (Lambda proxy, OAuth only) | `binding-admin` (list by domain) |
 | `DELETE` | `/bindings/{bindingId}` | Sync (Lambda proxy, OAuth only) | `binding-admin` (revoke) |
@@ -535,6 +538,8 @@ Every event flowing through Nexus domain buses carries a canonical identity, and
 - `detail-type` — the event name
 - Schema name — `{source}@{detail-type}` (the native EventBridge discovery convention; round-trips to `aws schemas describe-schema`)
 - Schema version — **numeric**, stamped at `detail.metadata.schemaVersion` (`detail` splits into `metadata`/`data`)
+- Idempotency key — `detail.metadata.idempotencyKey`, caller-supplied or the API Gateway request ID
+- Publish time — `detail.metadata.publishedAt` (ISO-8601 milliseconds), derived from the SQS `SentTimestamp` so retries never move it
 
 An event a producer publishes — every field here is a scalar, exactly as `PutEvents` expects:
 
@@ -542,7 +547,7 @@ An event a producer publishes — every field here is a scalar, exactly as `PutE
 {
   "Source": "acme-orders",
   "DetailType": "OrderNotification",
-  "Detail": "{\"metadata\":{\"schemaVersion\":3},\"data\":{\"orderId\":\"o-123\"}}"
+  "Detail": "{\"metadata\":{\"schemaVersion\":3,\"idempotencyKey\":\"key-123\",\"publishedAt\":\"2026-07-30T10:30:00.123Z\"},\"data\":{\"orderId\":\"o-123\"}}"
 }
 ```
 
@@ -556,7 +561,27 @@ The subscription rule Nexus materializes to match it — EventBridge event patte
 }
 ```
 
-Until the Publish API exists, producers must stamp the event envelope themselves; mis-stamped events fail closed (no rule matches — non-delivery, never misdelivery).
+Producers publish through `POST /publish`; Nexus stamps the entire envelope. Direct `PutEvents` to a domain bus remains possible for domain-internal events, but mis-stamped events fail closed (no rule matches — non-delivery, never misdelivery).
+
+### Event Publishing (Store-and-Forward)
+
+`POST /publish` accepts a flat request — `{domain, eventName, data, idempotencyKey?}` — and Nexus owns everything else: identity, schema resolution, envelope construction, and bus selection. Caller-supplied identity, version, registry, bus, or envelope fields are rejected at both the OpenAPI schema and the serde model.
+
+```mermaid
+graph LR
+    api["API Gateway<br/>POST /publish"] -->|"validate body, inject principal envelope<br/>+ Environment (stage) + IdempotencyKey"| q["Publish Queue<br/>(DLQ after 3 receives)"]
+    q --> consumer["publish-events Lambda<br/>(batch 10, partial batch responses)"]
+    consumer -->|"schema:publish decision"| bindings[("nexus-authorization-bindings")]
+    consumer -->|"ACTIVE check"| domains[("domains")]
+    consumer -->|"latest version"| registry["{org}-{env}-{domain}<br/>schema registry"]
+    consumer -->|"canonical envelope"| bus["{org}-{env}-{domain}<br/>event bus"]
+```
+
+The flow is **store-and-forward**: API Gateway durably queues the request (202 carries the queue message ID), and the consumer retries transient failures with the same immutable message attributes — `publishedAt` derives from the SQS `SentTimestamp`, so a retried publish keeps its original publish time and idempotency key. Authorization denials are deterministic and acknowledged without retry; malformed envelopes, missing or inactive domains, absent schemas, and `PutEvents` failures are reported for retry. The consumer validates the generated envelope (positive version, non-empty identity, serializable, within the 256KB entry limit) before delivery — an invalid generated envelope is a processing failure, never a partial delivery.
+
+### Schema Management (Append-Only)
+
+Publishers manage schemas through two synchronous endpoints mirroring the EventBridge Schemas API: `POST /schemas` (like `CreateSchema` — creates `{namespaceIdentity}@{eventName}` in the stage-selected environment's registry as version 1, 409 on duplicates) and `POST /schemas/versions` (like `UpdateSchema` — appends the next version, existing versions immutable, 404 when the schema does not exist). Both require a `publisher` binding for the domain (`schema:create` / `schema:version-append` actions), require an `ACTIVE` domain, and infer the environment from the API stage. Schemas are append-only: no delete, retire, replace, or version-deletion operations exist, and publisher permissions cover only `CreateSchema`/`UpdateSchema` inside org-namespaced registries — registry lifecycle and policy administration remain platform-admin operations.
 
 ### Subscription Materialization
 
@@ -593,7 +618,7 @@ PENDING ──activation succeeds──> ACTIVE ──unsubscribe──> REMOVED
 
 ### Schema Discovery
 
-`GET /schemas?domain={producer}` merges the producer's per-env registries keyed by schema name, reporting the latest version per environment — version skew is visible before subscribing. Read-only; schema registration stays out-of-band (domain owners write to their registries via the AWS Schemas API) until the schema-management thread lands.
+`GET /schemas?domain={producer}` merges the producer's per-env registries keyed by schema name, reporting the latest version per environment — version skew is visible before subscribing. Read-only; schema writes go through the publisher schema-management endpoints above.
 
 ---
 

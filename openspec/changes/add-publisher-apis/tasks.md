@@ -50,8 +50,8 @@
 
 ## 8. Verification and Documentation
 
-- [ ] 8.1 Run focused crate tests during each red/green/refactor cycle, then run `make check` and `make test` for the complete workspace
-- [ ] 8.2 Validate the SAM template and both control-plane API contracts, including publish, schema creation, version append, and all specified error responses
+- [x] 8.1 Run focused crate tests during each red/green/refactor cycle, then run `make check` and `make test` for the complete workspace
+- [x] 8.2 Validate the SAM template and both control-plane API contracts, including publish, schema creation, version append, and all specified error responses
 - [ ] 8.3 Exercise publish durability end-to-end: verify SQS retry on PutEvents failure preserves same idempotency key and published timestamp
-- [ ] 8.4 Update `docs/development/decisions.md` with flat verb endpoints, store-and-forward rationale, environment stage inference, envelope metadata immutability, and auth engine separation
-- [ ] 8.5 Update `docs/development/architecture.md` with publish data-plane flow, schema management paths, environment stage routing, envelope metadata fields, and resource ownership boundaries
+- [x] 8.4 Update `docs/development/decisions.md` with flat verb endpoints, store-and-forward rationale, environment stage inference, envelope metadata immutability, and auth engine separation
+- [x] 8.5 Update `docs/development/architecture.md` with publish data-plane flow, schema management paths, environment stage routing, envelope metadata fields, and resource ownership boundaries

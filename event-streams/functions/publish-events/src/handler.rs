@@ -89,11 +89,85 @@ async fn process_record<A: ResourceAuthorizer>(
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let resolver = NamespaceResolver::default_pattern();
 
+    let parsed = parse_record(record)?;
+    let mechanism = parsed.principal.authentication_mechanism();
+    let request = &parsed.request;
+
+    tracing::info!(
+        metric = "PublishReceived",
+        mechanism = ?mechanism,
+        domain = request.domain,
+        environment = parsed.environment,
+        "publish command received"
+    );
+
+    if !publish_authorized(authorizer, &parsed).await {
+        return Ok(());
+    }
+
+    require_active_domain(clients, &domains_table, &request.domain).await?;
+
+    let (schema_name, schema_version) =
+        resolve_schema(clients, &resolver, &organization, &parsed).await?;
+
+    let envelope = EventEnvelope::new(
+        schema_name.source.clone(),
+        schema_name.detail_type.clone(),
+        resolver.event_bus_name(&parsed.environment, &organization, &request.domain),
+        schema_version,
+        parsed.idempotency_key.clone(),
+        parsed.published_at,
+        request.data.clone(),
+    )?;
+
+    put_event(clients, &envelope).await?;
+
+    tracing::info!(
+        metric = "PublishDelivered",
+        domain = request.domain,
+        environment = parsed.environment,
+        latency_ms = started.elapsed().as_secs_f64() * 1000.0,
+        queue_latency_ms = (chrono::Utc::now() - parsed.published_at).num_milliseconds(),
+        "event published to domain bus"
+    );
+    Ok(())
+}
+
+/// The authorization gate: denials (including fail-closed engine errors) are
+/// deterministic, so they are logged and acknowledged rather than retried.
+async fn publish_authorized<A: ResourceAuthorizer>(authorizer: &A, parsed: &ParsedRecord) -> bool {
+    let decision = authorizer
+        .authorize(
+            &parsed.principal,
+            actions::SCHEMA_PUBLISH,
+            &parsed.request.domain,
+        )
+        .await;
+    if decision == AuthorizationDecision::Allow {
+        return true;
+    }
+    tracing::warn!(
+        metric = "PublishDenied",
+        mechanism = ?parsed.principal.authentication_mechanism(),
+        domain = parsed.request.domain,
+        action = actions::SCHEMA_PUBLISH,
+        "publisher authorization denied"
+    );
+    false
+}
+
+struct ParsedRecord {
+    principal: TrustedPrincipal,
+    environment: String,
+    idempotency_key: String,
+    published_at: chrono::DateTime<chrono::Utc>,
+    request: PublishRequest,
+}
+
+fn parse_record(record: &Value) -> Result<ParsedRecord> {
     let attributes = sqs_attribute_map(record);
     let principal = TrustedPrincipal::from_sqs_attributes(&attributes)
         .context("invalid trusted-principal envelope")?;
-    let mechanism = principal.authentication_mechanism();
-
     let environment = required_attribute(&attributes, "Environment")?;
     let idempotency_key = required_attribute(&attributes, "IdempotencyKey")?;
     let sent_timestamp = record
@@ -109,37 +183,29 @@ async fn process_record<A: ResourceAuthorizer>(
         .context("missing SQS record body")?;
     let message: PublishMessage =
         serde_json::from_str(body_str).context("invalid PublishMessage")?;
-    let request = &message.body;
 
-    tracing::info!(
-        metric = "PublishReceived",
-        mechanism = ?mechanism,
-        domain = request.domain,
+    Ok(ParsedRecord {
+        principal,
         environment,
-        "publish command received"
-    );
+        idempotency_key,
+        published_at,
+        request: message.body,
+    })
+}
 
-    let decision = authorizer
-        .authorize(&principal, actions::SCHEMA_PUBLISH, &request.domain)
-        .await;
-    if decision != AuthorizationDecision::Allow {
-        tracing::warn!(
-            metric = "PublishDenied",
-            mechanism = ?mechanism,
-            domain = request.domain,
-            action = actions::SCHEMA_PUBLISH,
-            "publisher authorization denied"
-        );
-        return Ok(());
-    }
-
-    require_active_domain(clients, &domains_table, &request.domain).await?;
-
+async fn resolve_schema(
+    clients: &Clients,
+    resolver: &NamespaceResolver,
+    organization: &str,
+    parsed: &ParsedRecord,
+) -> Result<(SchemaName, i64)> {
+    let request = &parsed.request;
     let schema_name = SchemaName::for_domain(
-        &resolver.namespace(&organization, &request.domain),
+        &resolver.namespace(organization, &request.domain),
         &request.event_name,
     );
-    let registry = resolver.schema_registry_name(&environment, &organization, &request.domain);
+    let registry =
+        resolver.schema_registry_name(&parsed.environment, organization, &request.domain);
     let resolve_started = Instant::now();
     let schema_version = latest_schema_version(clients, &registry, &schema_name.to_string())
         .await?
@@ -149,33 +215,12 @@ async fn process_record<A: ResourceAuthorizer>(
     tracing::info!(
         metric = "SchemaResolved",
         domain = request.domain,
-        environment,
+        environment = parsed.environment,
         schema_version,
         latency_ms = resolve_started.elapsed().as_secs_f64() * 1000.0,
         "latest schema version resolved"
     );
-
-    let envelope = EventEnvelope::new(
-        schema_name.source.clone(),
-        schema_name.detail_type.clone(),
-        resolver.event_bus_name(&environment, &organization, &request.domain),
-        schema_version,
-        idempotency_key,
-        published_at,
-        request.data.clone(),
-    )?;
-
-    put_event(clients, &envelope).await?;
-
-    tracing::info!(
-        metric = "PublishDelivered",
-        domain = request.domain,
-        environment,
-        latency_ms = started.elapsed().as_secs_f64() * 1000.0,
-        queue_latency_ms = (chrono::Utc::now() - published_at).num_milliseconds(),
-        "event published to domain bus"
-    );
-    Ok(())
+    Ok((schema_name, schema_version))
 }
 
 fn required_attribute(
@@ -189,11 +234,7 @@ fn required_attribute(
         .with_context(|| format!("missing message attribute {name}"))
 }
 
-async fn require_active_domain(
-    clients: &Clients,
-    table: &str,
-    domain_name: &str,
-) -> Result<()> {
+async fn require_active_domain(clients: &Clients, table: &str, domain_name: &str) -> Result<()> {
     let output = clients
         .ddb
         .get_item()
@@ -657,8 +698,9 @@ mod tests {
     async fn missing_domain_is_reported_for_retry() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
-        let absent = mock!(aws_sdk_dynamodb::Client::get_item)
-            .then_output(|| aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder().build());
+        let absent = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder().build()
+        });
         let clients = clients(vec![absent], vec![], vec![]);
 
         let response = handle(
@@ -697,7 +739,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(failures(&response).is_empty(), "fail-closed denial is acknowledged");
+        assert!(
+            failures(&response).is_empty(),
+            "fail-closed denial is acknowledged"
+        );
     }
 
     #[tokio::test]
