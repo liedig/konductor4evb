@@ -8,38 +8,52 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 ### Requirement: API layer
 
-The control plane SHALL expose a REST API through Amazon API Gateway (REST API type) with IAM authentication. The API contract SHALL be defined using OpenAPI specification. Read operations (GET) and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Write operations (POST on `/domains`, PUT on `/domains/{domainName}`) SHALL use `aws` service integrations to route commands through SQS queues for durable, asynchronous processing. The decide-registration endpoint (`POST /domains/registrations/decide`) SHALL use `aws_proxy` Lambda integration for synchronous processing. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI spec. The API SHALL be served from a static stage named `v1`. Domain-specific endpoints (`GET /domains/{domainName}`, `PUT /domains/{domainName}`) SHALL use the domain name as the path parameter.
+The control plane SHALL expose separate Amazon API Gateway REST API surfaces for AWS_IAM-authenticated callers and Cognito OAuth-authenticated interactive users. The OAuth surface SHALL use the Nexus REQUEST Lambda authorizer and SHALL NOT use an API Gateway native Cognito user-pool authorizer. The API contracts SHALL be defined using OpenAPI specifications. Routes SHALL be assigned to the surface appropriate to their caller and SHALL NOT combine OAuth and IAM as interchangeable authorization mechanisms.
 
-#### Scenario: Read operations served synchronously via Lambda
+Read operations and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Asynchronous write operations SHALL preserve `aws` service integrations that route commands directly through SQS queues. API Gateway mapping templates SHALL derive trusted principal context from the authenticated request context and inject it into queued commands. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI contract. The APIs SHALL be served from a static stage named `v1`. Domain-specific endpoints (`GET /domains/{domainName}`, `PUT /domains/{domainName}`) SHALL use the domain name as the path parameter.
 
-- **WHEN** an authenticated client sends a GET request to any control plane read endpoint
-- **THEN** API Gateway SHALL route the request directly to the dedicated Lambda function for that operation via `aws_proxy` integration
-- **AND THEN** the Lambda function SHALL process the request and return a response conforming to the OpenAPI schema synchronously
+The registration decision endpoint (`POST /domains/registrations/decide`) SHALL exist only on the OAuth surface, require `platform-admin`, and use `aws_proxy` Lambda integration for synchronous processing. AWS-native publishing, cross-account provisioning, and EventBridge delivery SHALL remain IAM based and outside the OAuth control-plane identity mechanism.
 
-#### Scenario: Write operations enqueued via SQS service integration
+#### Scenario: OAuth read operation served synchronously via Lambda
 
-- **WHEN** an authenticated client sends a POST or PUT request to an SQS-backed write endpoint
-- **THEN** API Gateway SHALL validate the request body against the JSON schema model
-- **AND THEN** on validation success, deliver the message to the domains SQS command queue via `aws` service integration
-- **AND THEN** return `202 Accepted` with `{"requestId":"<SQS-MessageId>","message":"..."}` without waiting for command processing
+- **WHEN** an OAuth-authenticated interactive client sends a GET request to an OAuth control-plane read endpoint
+- **THEN** the REQUEST authorizer SHALL validate the Cognito access token and route access
+- **AND THEN** API Gateway SHALL route the request to the dedicated Lambda function via `aws_proxy` integration with trusted principal context
 
-#### Scenario: Synchronous action endpoint served via Lambda
+#### Scenario: IAM read operation preserves AWS identity
 
-- **WHEN** an authenticated client sends a POST request to `/domains/registrations/decide`
-- **THEN** API Gateway SHALL validate the request body against the JSON schema model
-- **AND THEN** route the request to the decide Lambda function via `aws_proxy` integration
-- **AND THEN** the Lambda SHALL process the request and return a synchronous response
+- **WHEN** an AWS_IAM-authenticated client sends a GET request to an IAM control-plane read endpoint
+- **THEN** API Gateway SHALL route the request to the dedicated Lambda function via `aws_proxy` integration
+- **AND THEN** the trusted principal context SHALL use the caller's AWS account as `principalId` and resource-binding identity
+- **AND THEN** an IAM principal ARN MAY be retained only as audit provenance
 
-#### Scenario: API contract defined in OpenAPI
+#### Scenario: Write operation enqueued through direct SQS integration
 
-- **WHEN** a new API operation is added to the control plane
-- **THEN** the operation SHALL be defined in the OpenAPI specification before implementation
-- **AND THEN** API Gateway request validation SHALL enforce the schema for incoming requests
+- **WHEN** an authenticated client sends a POST, PUT, PATCH, or DELETE request to an SQS-backed write endpoint
+- **THEN** API Gateway SHALL validate the request body where applicable
+- **AND THEN** on validation success, deliver the message directly to the appropriate SQS command queue via `aws` service integration
+- **AND THEN** the mapping template SHALL inject compact trusted principal context derived from the API Gateway authentication context, including OAuth team-group identifiers or the IAM account identity as applicable
+- **AND THEN** the trusted principal context SHALL NOT include resource entitlements
+- **AND THEN** API Gateway SHALL return `202 Accepted` without waiting for command processing or resource authorization
 
-#### Scenario: API served from the v1 stage
+#### Scenario: Approval action is OAuth-only
 
-- **WHEN** the control plane is deployed
-- **THEN** the API Gateway stage SHALL be named `v1`
+- **WHEN** a client sends a POST request to `/domains/registrations/decide`
+- **THEN** the route SHALL require an OAuth principal with `platform-admin`
+- **AND THEN** API Gateway SHALL validate the request body against the JSON schema model
+- **AND THEN** route the request to the decide Lambda via `aws_proxy` integration with trusted principal context
+- **AND THEN** no equivalent unauthenticated or IAM approval route SHALL authorize a decision
+
+#### Scenario: API contracts defined in OpenAPI
+
+- **WHEN** a new API operation is added to either control-plane surface
+- **THEN** the operation SHALL be defined in that surface's OpenAPI specification before implementation
+- **AND THEN** API Gateway request validation SHALL enforce the schema for incoming requests where a body is present
+
+#### Scenario: APIs served from the v1 stage
+
+- **WHEN** the control-plane APIs are deployed
+- **THEN** each API Gateway stage SHALL be named `v1`
 - **AND THEN** the stage name SHALL NOT vary across deployments
 
 ### Requirement: Lambda runtime and tooling
