@@ -1,5 +1,9 @@
 # Capability: Domain Management
 
+## Purpose
+
+How event domains are registered, approved, and managed through their lifecycle: the domains table as the single system of record, the register/list/describe/update/decide control-plane operations, the domain status model, lifecycle events emitted on the control-plane bus, and the ownership and account-per-domain design principles every other capability builds on.
+
 ## Requirements
 
 ### Requirement: Domain and request persistence
