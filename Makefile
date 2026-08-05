@@ -77,6 +77,25 @@ test: ## cargo test --workspace
 seed-bindings: ## Seed developer role bindings via the admin API (requires TOKEN and BINDINGS; API_URL optional)
 	@./scripts/seed-bindings.sh
 
+SAMPLES ?= 200
+
+benchmark-grants: ## Deploy and run the in-region grant-engine latency benchmark (add-grant-engine 6.1/6.2)
+	@ulimit -Sn 10240 2>/dev/null || true; cargo lambda build --release --arm64 --package grant-benchmark
+	sam build --config-file samconfig-benchmark.toml -c
+	sam deploy --config-file samconfig-benchmark.toml
+	@echo "Invoking nexus-grant-benchmark ($(SAMPLES) samples/probe; allow ~2 min)..."
+	@aws lambda invoke --function-name nexus-grant-benchmark --log-type Tail \
+		--payload '{"samples": $(SAMPLES)}' --cli-binary-format raw-in-base64-out \
+		--output json \
+		/tmp/grant-benchmark-report.json > /tmp/grant-benchmark-invoke-meta.json
+	@echo "Cold start (first invoke after deploy only):"; \
+	(grep '^LogResult:' /tmp/grant-benchmark-invoke-meta.json | cut -d' ' -f2 | base64 -d 2>/dev/null || jq -r '.LogResult // empty' /tmp/grant-benchmark-invoke-meta.json | base64 -d 2>/dev/null) | grep -oE "Init Duration: [0-9.]+ ms" || echo "  warm invocation — no init segment"; \
+	echo ""; \
+	jq . /tmp/grant-benchmark-report.json
+
+teardown-benchmark: ## Delete the grant benchmark stack (fixtures are removed by each run)
+	sam delete --config-file samconfig-benchmark.toml --no-prompts
+
 check: ## cargo fmt, check, clippy (CI-equivalent local gate)
 	cargo fmt --check
 	cargo check --workspace

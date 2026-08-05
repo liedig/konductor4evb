@@ -30,8 +30,8 @@
 
 ## 6. Latency Validation
 
-- [ ] 6.1 Add an in-region benchmark harness (Lambda or EC2 in the production Region) reusing the spike's declared measurement procedure
-- [ ] 6.2 Measure decision p50/p99 against the spike's recommended SLOs (`schema:publish`-class p50 ≤ 5 ms / p99 ≤ 20 ms) and record results as change evidence; if missed, record which remediation-ladder step applies
+- [x] 6.1 Add an in-region benchmark harness (Lambda or EC2 in the production Region) reusing the spike's declared measurement procedure
+- [x] 6.2 Measure decision p50/p99 against the spike's recommended SLOs (`schema:publish`-class p50 ≤ 5 ms / p99 ≤ 20 ms) and record results as change evidence; if missed, record which remediation-ladder step applies
 
 ## 7. Infrastructure and Least Privilege
 
