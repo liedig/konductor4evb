@@ -10,7 +10,7 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 The control plane SHALL expose separate Amazon API Gateway REST API surfaces for AWS_IAM-authenticated callers and Cognito OAuth-authenticated interactive users. The OAuth surface SHALL use the Nexus REQUEST Lambda authorizer and SHALL NOT use an API Gateway native Cognito user-pool authorizer. The API contracts SHALL be defined using OpenAPI specifications. Routes SHALL be assigned to the surface appropriate to their caller and SHALL NOT combine OAuth and IAM as interchangeable authorization mechanisms.
 
-Read operations and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Asynchronous write operations SHALL preserve `aws` service integrations that route commands directly through SQS queues. API Gateway mapping templates SHALL derive trusted principal context from the authenticated request context and inject it into queued commands. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI contract. The APIs SHALL be served from a static stage named `v1`. Domain-specific endpoints (`GET /domains/{domainName}`, `PUT /domains/{domainName}`) SHALL use the domain name as the path parameter.
+Read operations and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Asynchronous write operations SHALL preserve `aws` service integrations that route commands directly through SQS queues. API Gateway mapping templates SHALL derive trusted principal context from the authenticated request context and inject it into queued commands. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI contract. Each API SHALL be served from environment-named stages (`dev`, `staging`, `prod`) sharing one deployment; the stage name SHALL be the environment selector for publish and schema write operations, and environment-agnostic operations SHALL behave identically on every stage. Domain-specific endpoints (`GET /domains/{domainName}`, `PUT /domains/{domainName}`) SHALL use the domain name as the path parameter.
 
 The registration decision endpoint (`POST /domains/registrations/decide`) SHALL exist only on the OAuth surface, require `platform-admin`, and use `aws_proxy` Lambda integration for synchronous processing. AWS-native publishing, cross-account provisioning, and EventBridge delivery SHALL remain IAM based and outside the OAuth control-plane identity mechanism.
 
@@ -50,11 +50,12 @@ The registration decision endpoint (`POST /domains/registrations/decide`) SHALL 
 - **THEN** the operation SHALL be defined in that surface's OpenAPI specification before implementation
 - **AND THEN** API Gateway request validation SHALL enforce the schema for incoming requests where a body is present
 
-#### Scenario: APIs served from the v1 stage
+#### Scenario: APIs served from environment-named stages
 
 - **WHEN** the control-plane APIs are deployed
-- **THEN** each API Gateway stage SHALL be named `v1`
-- **AND THEN** the stage name SHALL NOT vary across deployments
+- **THEN** each API SHALL serve stages named `dev`, `staging`, and `prod` from one deployment
+- **AND THEN** publish and schema write operations SHALL infer the target environment from the stage name
+- **AND THEN** environment-agnostic operations SHALL behave identically on every stage
 
 ### Requirement: Lambda runtime and tooling
 

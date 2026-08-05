@@ -26,6 +26,8 @@ Nexus SHALL provision a dedicated Amazon Cognito user pool and OAuth/OIDC applic
 
 Nexus SHALL expose separate REST API surfaces for OAuth-authenticated interactive users and AWS_IAM-authenticated callers. The IAM surface SHALL use the authenticated AWS account as its resource-authorization identity and MAY retain the IAM principal ARN only as audit provenance. A route exposed on both surfaces SHALL enforce the same operation contract and authorization semantics after trusted-principal normalization. AWS-native direct EventBridge publishing, cross-account provisioning, and EventBridge delivery SHALL remain IAM-based and outside the OAuth control-plane identity mechanism.
 
+API Gateway stages SHALL be named after platform environments (`dev`, `staging`, `prod`) instead of a static version stage. The stage name SHALL be available as `$context.stage` in mapping templates and request contexts. Publish and schema write operations SHALL use the stage to infer the target environment. Environment-agnostic operations (register, approve, list, describe) SHALL behave identically on any stage.
+
 Binding administration SHALL be exposed on the OAuth surface only, because it is an interactive platform-administration function. The OAuth authorizer's resolution of the `platform-admin` global role from controlled Cognito groups SHALL remain independent of the grant engine's binding storage so that binding administration remains available when the bindings table is empty.
 
 #### Scenario: Interactive caller uses the OAuth surface
@@ -40,6 +42,18 @@ Binding administration SHALL be exposed on the OAuth surface only, because it is
 - **THEN** API Gateway SHALL authenticate the request with AWS_IAM
 - **AND THEN** the trusted principal SHALL use the caller's AWS account for resource authorization
 - **AND THEN** the IAM principal ARN MAY be retained only as audit provenance
+
+#### Scenario: Equivalent publisher routes use one resource decision
+
+- **WHEN** equivalent OAuth and IAM principals invoke the same publisher operation for the same domain
+- **THEN** both surfaces SHALL normalize their authenticated principal
+- **AND THEN** both SHALL request the same action and domain resource decision from the DynamoDB-backed grant engine
+
+#### Scenario: Environment stage selects target for publish and schema operations
+
+- **WHEN** a publisher invokes `POST /publish` or schema write operations on the `prod` stage
+- **THEN** the target environment SHALL be `prod`
+- **AND THEN** the consumer or handler SHALL resolve environment-specific registries and buses for `prod`
 
 #### Scenario: Binding administration requires OAuth platform-admin
 
