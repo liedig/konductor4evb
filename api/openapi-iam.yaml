@@ -221,6 +221,65 @@ paths:
                 {"requestId":"$messageId","message":"Request accepted"}
         passthroughBehavior: never
 
+  /publish:
+    post:
+      operationId: PublishEvent
+      summary: Publish an event to a domain (store-and-forward)
+      description: >
+        Flat publish: the caller provides the domain, event name, and business
+        data; Nexus resolves the latest schema version, builds the canonical
+        envelope, and publishes to the domain's event bus for the
+        stage-selected environment. The request is durably queued before
+        processing; the 202 response carries the queue message ID.
+      x-amazon-apigateway-request-validator: validate-body
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishRequest"
+      responses:
+        "202":
+          description: Event durably queued for delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAccepted"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: POST
+        credentials:
+          Fn::GetAtt: [NexusApiSqsRole, Arn]
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${PublishQueue.QueueName}"
+        requestParameters:
+          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+        requestTemplates:
+          application/json: "Action=SendMessage&MessageBody={\"callerAccountId\":\"$context.identity.accountId\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=iam&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=AccountId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.identity.accountId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=PrincipalArn&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.identity.userArn)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=Environment&MessageAttribute.6.Value.StringValue=$context.stage&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=IdempotencyKey&MessageAttribute.7.Value.StringValue=#if($input.path('$.idempotencyKey') && $input.path('$.idempotencyKey') != '')$util.urlEncode($input.path('$.idempotencyKey'))#else$util.urlEncode($context.requestId)#end&MessageAttribute.7.Value.DataType=String"
+        responses:
+          default:
+            statusCode: "202"
+            responseTemplates:
+              application/json: |
+                #set($body = $input.path('$'))
+                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
+                {"requestId":"$messageId","message":"Request accepted"}
+        passthroughBehavior: never
+
   /subscriptions:
     post:
       operationId: Subscribe
@@ -776,6 +835,33 @@ components:
         message:
           type: string
           example: "Decision recorded"
+
+    PublishRequest:
+      type: object
+      required: [domain, eventName, data]
+      additionalProperties: false
+      properties:
+        domain:
+          type: string
+          minLength: 1
+          description: Target domain name; the environment comes from the API stage.
+        eventName:
+          type: string
+          minLength: 1
+          description: Event name (detail-type); must match a schema registered for the domain.
+        data:
+          description: Business event payload, passed through unvalidated.
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Optional caller idempotency key; defaults to the API Gateway request ID.
+      example:
+        domain: orders
+        eventName: OrderNotification
+        data:
+          orderId: 123
+          amount: 99.50
 
     SubscribeRequest:
       type: object

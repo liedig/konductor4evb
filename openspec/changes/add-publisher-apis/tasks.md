@@ -6,10 +6,10 @@
 
 ## 2. Publish API Contract and SQS Integration
 
-- [ ] 2.1 Add `PublishRequest` model (`domain`, `eventName`, `data`, optional `idempotencyKey`) to nexus-common with validation and tests rejecting caller-supplied identity, version, registry, bus, or envelope fields
-- [ ] 2.2 Add `POST /publish` route to both OAuth and IAM OpenAPI contracts with SQS integration and `202 Accepted` response returning `requestId`
-- [ ] 2.3 Write VTL mapping template for publish: inject `Environment` from `$context.stage`, inject `IdempotencyKey` (caller-supplied or `$context.requestId`), inject trusted-principal envelope attributes, push caller body to SQS
-- [ ] 2.4 Add contract tests proving OAuth and IAM publish routes have identical request/response semantics and that credentials are not interchangeable
+- [x] 2.1 Add `PublishRequest` model (`domain`, `eventName`, `data`, optional `idempotencyKey`) to nexus-common with validation and tests rejecting caller-supplied identity, version, registry, bus, or envelope fields
+- [x] 2.2 Add `POST /publish` route to both OAuth and IAM OpenAPI contracts with SQS integration and `202 Accepted` response returning `requestId`
+- [x] 2.3 Write VTL mapping template for publish: inject `Environment` from `$context.stage`, inject `IdempotencyKey` (caller-supplied or `$context.requestId`), inject trusted-principal envelope attributes, push caller body to SQS
+- [x] 2.4 Add contract tests proving OAuth and IAM publish routes have identical request/response semantics and that credentials are not interchangeable
 
 ## 3. Publish Consumer Lambda
 

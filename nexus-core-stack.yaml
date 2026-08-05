@@ -305,6 +305,25 @@ Resources:
         deadLetterTargetArn: !GetAtt SubscriptionsDlq.Arn
         maxReceiveCount: 3
 
+  PublishDlq:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub "nexus-publish-dlq"
+      MessageRetentionPeriod: 1209600
+
+  PublishQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub "nexus-publish-queue"
+      VisibilityTimeout: 30
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt PublishDlq.Arn
+        maxReceiveCount: 3
+
   SubscriptionsDlqDepthAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -405,6 +424,7 @@ Resources:
             Resource:
               - !GetAtt DomainRegistrationsQueue.Arn
               - !GetAtt SubscriptionsQueue.Arn
+              - !GetAtt PublishQueue.Arn
 
   # Assumed by EventBridge to deliver matched events onto consumer app-side
   # buses cross-account, under the provision-time resource policy on those buses.

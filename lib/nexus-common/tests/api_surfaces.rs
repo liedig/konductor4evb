@@ -369,8 +369,8 @@ fn write_templates(doc: &Value) -> Vec<(String, String, String)> {
 fn write_templates_inject_trusted_principal_envelope_from_context() {
     let oauth = write_templates(&oauth_contract());
     let iam = write_templates(&iam_contract());
-    assert_eq!(oauth.len(), 5, "OAuth must expose 5 SQS write templates");
-    assert_eq!(iam.len(), 5, "IAM must expose 5 SQS write templates");
+    assert_eq!(oauth.len(), 6, "OAuth must expose 6 SQS write templates");
+    assert_eq!(iam.len(), 6, "IAM must expose 6 SQS write templates");
 
     for (path, method, t) in &oauth {
         assert!(
@@ -413,5 +413,90 @@ fn write_templates_never_source_identity_attributes_from_caller_body() {
                 "{method} {path} sources a trusted message attribute from the caller body"
             );
         }
+    }
+}
+
+fn publish_vtl(doc: &Value) -> String {
+    let op = at(at(at(doc, "paths"), "/publish"), "post");
+    let integration = at(op, "x-amazon-apigateway-integration");
+    text(at(
+        at(integration, "requestTemplates"),
+        "application/json",
+    ))
+    .to_string()
+}
+
+#[test]
+fn publish_routes_use_sqs_store_and_forward_with_stage_environment() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let op = at(at(at(&doc, "paths"), "/publish"), "post");
+        assert_eq!(
+            text(at(op, "x-amazon-apigateway-request-validator")),
+            "validate-body"
+        );
+        let integration = at(op, "x-amazon-apigateway-integration");
+        assert_eq!(text(at(integration, "type")), "aws");
+        assert!(
+            text(at(at(integration, "uri"), "Fn::Sub")).contains("${PublishQueue.QueueName}"),
+            "publish must integrate with the publish queue"
+        );
+        assert_eq!(
+            text(at(at(at(integration, "responses"), "default"), "statusCode")),
+            "202"
+        );
+
+        let vtl = publish_vtl(&doc);
+        assert!(
+            vtl.contains("Name=Environment&") && vtl.contains("Value.StringValue=$context.stage"),
+            "publish must inject the stage as the Environment attribute"
+        );
+        assert!(
+            vtl.contains("Name=IdempotencyKey&")
+                && vtl.contains("$.idempotencyKey")
+                && vtl.contains("$context.requestId"),
+            "publish must inject the caller key or fall back to the request ID"
+        );
+    }
+}
+
+#[test]
+fn publish_credentials_are_not_interchangeable() {
+    let iam_doc = iam_contract();
+    let iam_op = at(at(at(&iam_doc, "paths"), "/publish"), "post");
+    assert_eq!(
+        text(at(at(iam_op, "x-amazon-apigateway-auth"), "type")),
+        "AWS_IAM"
+    );
+    let iam_vtl = publish_vtl(&iam_doc);
+    assert!(iam_vtl.contains("Value.StringValue=iam&"));
+    assert!(iam_vtl.contains("$context.identity.accountId"));
+    assert!(!iam_vtl.contains("$context.authorizer."));
+
+    let oauth_doc = oauth_contract();
+    let oauth_op = at(at(at(&oauth_doc, "paths"), "/publish"), "post");
+    assert!(
+        oauth_op.get("x-amazon-apigateway-auth").is_none(),
+        "OAuth publish relies on the default REQUEST authorizer, not IAM"
+    );
+    let oauth_vtl = publish_vtl(&oauth_doc);
+    assert!(oauth_vtl.contains("Value.StringValue=oauth&"));
+    assert!(oauth_vtl.contains("$context.authorizer.principalId"));
+    assert!(!oauth_vtl.contains("$context.identity.userArn"));
+}
+
+#[test]
+fn publish_request_schema_rejects_platform_owned_fields() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let schema = at(at(at(&doc, "components"), "schemas"), "PublishRequest");
+        assert!(
+            !boolean(at(schema, "additionalProperties")),
+            "PublishRequest must reject unknown (platform-owned) fields"
+        );
+        let mut required: Vec<&str> = seq(at(schema, "required"))
+            .iter()
+            .map(|v| text(v))
+            .collect();
+        required.sort_unstable();
+        assert_eq!(required, ["data", "domain", "eventName"]);
     }
 }

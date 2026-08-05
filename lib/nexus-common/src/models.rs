@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 use crate::error::{ValidationExceptionField, ValidationExceptionReason};
 
@@ -130,6 +131,20 @@ pub struct DecideRequest {
     pub task_token: String,
     pub decision: Decision,
     pub justification: Option<String>,
+}
+
+/// Flat publish request: the caller supplies the domain, event name, and
+/// business data — Nexus owns identity, schema resolution, envelope
+/// construction, and bus selection. `deny_unknown_fields` rejects
+/// caller-supplied identity, version, registry, bus, or envelope fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublishRequest {
+    pub domain: String,
+    pub event_name: String,
+    pub data: Value,
+    #[serde(default)]
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,5 +351,68 @@ mod tests {
         });
         let parsed: Result<DecideRequest, _> = serde_json::from_value(value);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn publish_request_accepts_the_flat_shape() {
+        let parsed: PublishRequest = serde_json::from_value(serde_json::json!({
+            "domain": "orders",
+            "eventName": "OrderNotification",
+            "data": {"orderId": 123},
+            "idempotencyKey": "caller-key-1"
+        }))
+        .unwrap();
+        assert_eq!(parsed.domain, "orders");
+        assert_eq!(parsed.event_name, "OrderNotification");
+        assert_eq!(parsed.idempotency_key.as_deref(), Some("caller-key-1"));
+    }
+
+    #[test]
+    fn publish_request_allows_omitted_idempotency_key() {
+        let parsed: PublishRequest = serde_json::from_value(serde_json::json!({
+            "domain": "orders",
+            "eventName": "OrderNotification",
+            "data": {"orderId": 123}
+        }))
+        .unwrap();
+        assert_eq!(parsed.idempotency_key, None);
+    }
+
+    #[test]
+    fn publish_request_rejects_caller_supplied_platform_fields() {
+        for (field, value) in [
+            ("source", serde_json::json!("acme-orders")),
+            ("detailType", serde_json::json!("OrderNotification")),
+            ("schemaName", serde_json::json!("acme-orders@OrderNotification")),
+            ("schemaVersion", serde_json::json!(3)),
+            ("registry", serde_json::json!("acme-prod-orders-schema-registry")),
+            ("eventBusName", serde_json::json!("acme-prod-orders-event-bus")),
+            ("metadata", serde_json::json!({"schemaVersion": 3})),
+            ("environment", serde_json::json!("prod")),
+            ("principalId", serde_json::json!("111122223333")),
+        ] {
+            let mut body = serde_json::json!({
+                "domain": "orders",
+                "eventName": "OrderNotification",
+                "data": {}
+            });
+            body[field] = value;
+            let parsed: Result<PublishRequest, _> = serde_json::from_value(body);
+            assert!(parsed.is_err(), "field '{field}' must be rejected");
+        }
+    }
+
+    #[test]
+    fn publish_request_requires_domain_event_name_and_data() {
+        for missing in ["domain", "eventName", "data"] {
+            let mut body = serde_json::json!({
+                "domain": "orders",
+                "eventName": "OrderNotification",
+                "data": {}
+            });
+            body.as_object_mut().unwrap().remove(missing);
+            let parsed: Result<PublishRequest, _> = serde_json::from_value(body);
+            assert!(parsed.is_err(), "missing '{missing}' must be rejected");
+        }
     }
 }
