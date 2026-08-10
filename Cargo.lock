@@ -1201,6 +1201,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "entitlement-coverage-sweep"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-sdk-eventbridge",
+ "aws-smithy-mocks",
+ "chrono",
+ "entitlement-revocation-worker",
+ "lambda_runtime",
+ "nexus-common",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "entitlement-revocation-worker"
 version = "0.1.0"
 dependencies = [

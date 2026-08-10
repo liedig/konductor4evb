@@ -1529,6 +1529,49 @@ Resources:
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
+  # ---- Entitlement Coverage Sweep (hourly reconciliation backstop) ----
+  EntitlementCoverageSweepLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-entitlement-coverage-sweep"
+      RetentionInDays: 30
+
+  EntitlementCoverageSweepFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: EntitlementCoverageSweepLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-entitlement-coverage-sweep"
+      CodeUri: ./control-plane/functions/entitlement-coverage-sweep
+      Handler: bootstrap
+      Timeout: 300
+      Environment:
+        Variables:
+          ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+      Policies:
+        - !Ref EntitlementsTableReadPolicy
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+                - dynamodb:UpdateItem
+              Resource: !GetAtt EventStreamsTable.Arn
+            - Effect: Allow
+              Action:
+                - events:DisableRule
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${Organization}-*"
+      Events:
+        HourlySweep:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 hour)
+            Name: !Sub "nexus-entitlement-coverage-sweep"
+            Description: Reconciliation backstop — disables subscriptions whose entitlement coverage lapsed
+
   # ---- Approval Notification Functions ----
   SendApprovalRequestNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup

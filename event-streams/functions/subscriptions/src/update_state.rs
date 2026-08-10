@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use aws_sdk_dynamodb::types::AttributeValue;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -8,7 +7,6 @@ use std::env;
 use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
-use nexus_common::dynamodb::s;
 use nexus_common::entitlement_store::EntitlementStore;
 use nexus_common::grant_engine::{actions, covers};
 use nexus_common::principal::{ResourceAuthorizer, TrustedPrincipal};

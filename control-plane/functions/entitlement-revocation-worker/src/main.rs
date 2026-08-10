@@ -2,8 +2,7 @@ use aws_config::BehaviorVersion;
 use lambda_runtime::{service_fn, Error};
 use tracing_subscriber::EnvFilter;
 
-mod handler;
-mod revoke;
+use entitlement_revocation_worker::handler;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
