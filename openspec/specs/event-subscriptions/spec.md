@@ -102,7 +102,7 @@ All event streams SHALL be registered in a dedicated `nexus-event-streams` Dynam
 
 ### Requirement: Per-environment enable and disable
 
-A subscription SHALL carry per-environment desired state (`enabled: true|false`) mapped to the native EventBridge rule state (`ENABLED|DISABLED`). Initial per-environment state SHALL be settable in the subscribe request, defaulting to enabled in every environment. State SHALL be updatable via `PATCH /subscriptions/{subscriptionId}`. Disabling SHALL NOT remove the rule, unpin the version, or void the contract.
+A subscription SHALL carry per-environment desired state (`enabled: true|false`) mapped to the native EventBridge rule state (`ENABLED|DISABLED`). Initial per-environment state SHALL be settable in the subscribe request, defaulting to enabled in every environment. State SHALL be updatable via `POST /subscriptions/state`. Disabling SHALL NOT remove the rule, unpin the version, or void the contract.
 
 #### Scenario: Subscribe with production paused
 
@@ -113,7 +113,7 @@ A subscription SHALL carry per-environment desired state (`enabled: true|false`)
 #### Scenario: Disable as an operational kill switch
 
 - **WHEN** a subscription is flooding the consumer or must be halted during an incident
-- **THEN** a `PATCH` setting `enabled: false` for the affected environments SHALL stop delivery via an atomic rule-state change
+- **THEN** a `POST /subscriptions/state` setting `enabled: false` for the affected environments SHALL stop delivery via an atomic rule-state change
 - **AND THEN** re-enabling SHALL restore delivery without re-subscribing or losing the pinned version
 
 ### Requirement: Unsubscribe
@@ -133,14 +133,31 @@ Unsubscribing SHALL remove the subscription's rules (targets, then rule) from th
 - **THEN** the control plane SHALL NOT modify or delete those rules
 - **AND THEN** the application team SHALL manage their own bus's rule hygiene
 
-### Requirement: Subscription validation and authorization
+### Requirement: Subscription validation and grant authorization
 
-Before activating a subscription, the control plane SHALL validate that: both the consumer and producer domains exist and are `ACTIVE`; the caller's AWS account matches the consumer domain's `ownerAccountId`; and the derived rule name satisfies EventBridge constraints (charset `[A-Za-z0-9._-]`, length ≤ 64 characters). Self-subscription (consumer equals producer) SHALL be permitted — it is how a domain consumes its own events on its app-side bus.
+Before activating a subscription, the control plane SHALL validate that: both the consumer and producer domains exist and are `ACTIVE`; the derived rule name satisfies EventBridge constraints (charset `[A-Za-z0-9._-]`, length ≤ 64 characters); and the grant engine allows the subscribe action for the normalized trusted principal against the composite resource `{consumerDomain}/{producerDomain}/{eventName}`. Authorization SHALL NOT use account-ownership matching against the consumer domain's `ownerAccountId`. Create and enable SHALL require a `subscriber` binding on the consumer domain plus a current covering entitlement; disable and delete SHALL require only the binding. Self-subscription (consumer equals producer) SHALL be permitted and implicitly covered — it is how a domain consumes its own events on its app-side bus. `platform-admin` MAY operate subscriptions without a subscriber binding while still requiring current covering entitlement for create and enable. Unauthorized attempts SHALL fail with `403 Forbidden` and a deterministic `*Failed` outcome event; deny-as-unknown concealment SHALL NOT be applied.
 
-#### Scenario: Caller must own the consumer domain
+#### Scenario: Covered subscriber creates a subscription
 
-- **WHEN** a caller whose AWS account is not the consumer domain's `ownerAccountId` attempts to subscribe or unsubscribe on that domain's behalf
-- **THEN** the command SHALL fail validation with an authorization error in the outcome event
+- **WHEN** a caller holds a `subscriber` binding on the consumer domain and the consumer domain holds a current covering entitlement for the target producer schema
+- **THEN** the subscribe command SHALL pass authorization and proceed to validation and activation
+
+#### Scenario: Missing binding or entitlement denied
+
+- **WHEN** a caller lacks a `subscriber` binding on the consumer domain, or no current entitlement covers the target producer schema
+- **THEN** the command SHALL fail with `403 Forbidden`
+- **AND THEN** a `SubscribeFailed` outcome event SHALL carry the authorization failure without tokens, claims, or payload detail
+
+#### Scenario: Account ownership no longer authorizes
+
+- **WHEN** a caller whose AWS account matches the consumer domain's `ownerAccountId` but who holds no `subscriber` binding attempts to subscribe
+- **THEN** the command SHALL fail authorization with `403 Forbidden`
+
+#### Scenario: Post-revocation lifecycle control retained
+
+- **WHEN** the entitlement covering an existing subscription has been revoked
+- **THEN** an authorized subscriber SHALL remain able to disable or delete the subscription
+- **AND THEN** create or enable SHALL be denied
 
 #### Scenario: Inactive domain rejected
 
@@ -154,22 +171,58 @@ Before activating a subscription, the control plane SHALL validate that: both th
 
 #### Scenario: Self-subscription permitted
 
-- **WHEN** a domain subscribes to one of its own schemas
-- **THEN** the subscription SHALL be created normally, delivering the domain's events to its own app-side bus
+- **WHEN** a caller with a `subscriber` binding on a domain subscribes that domain to one of its own schemas
+- **THEN** the subscription SHALL be created normally without any entitlement, delivering the domain's events to its own app-side bus
+
+### Requirement: Final entitlement check before enablement
+
+Immediately before any workflow transitions a Nexus-managed EventBridge rule to `ENABLED`, including initial activation and per-environment enable operations, the control plane SHALL perform a final current-entitlement check through the grant engine for the subscription's consumer domain and producer schema. If no current entitlement covers the schema at that moment, the workflow SHALL NOT enable the rule and SHALL record the denial.
+
+#### Scenario: Revocation during activation blocks enablement
+
+- **WHEN** the covering entitlement is revoked after a subscribe command was accepted but before its activation workflow enables a rule
+- **THEN** the workflow SHALL NOT transition any rule to `ENABLED`
+- **AND THEN** the workflow SHALL record the entitlement denial as the outcome
+
+#### Scenario: Enablement proceeds while covered
+
+- **WHEN** a current covering entitlement exists at the moment of the final check
+- **THEN** the workflow SHALL enable the rule as designed
 
 ### Requirement: Subscription read operations
 
-The control plane SHALL provide `GET /subscriptions` returning subscriptions filtered by consumer domain, producer domain, schema name, pinned version, and status, and `GET /subscriptions/{subscriptionId}` returning full stream detail including per-environment pinned versions, rule ARNs, enabled flags, and materialization status. Reads SHALL be served synchronously from the event streams table.
+The control plane SHALL provide `GET /subscriptions?domain={domain}&direction=inbound|outbound` and canonical `GET /subscriptions/{subscriptionId}`. The `direction` parameter SHALL be required; the global list route SHALL NOT exist. Inbound SHALL list subscriptions where the queried domain consumes, authorized by a `subscriber` binding on that domain. Outbound SHALL list subscriptions consuming the queried producer domain's schemas, authorized by a `publisher` binding on that domain, and SHALL return full consumer topology because producer teams need it for notifications and future version migration. Both SHALL support schema, pinned-version, and status filters and SHALL be served synchronously from the event-streams store. Canonical detail SHALL authorize against the visible consumer side, the visible producer side, or a platform role (`platform-admin`, `platform-auditor`), returning full stream detail including per-environment pinned versions, rule ARNs, enabled flags, and materialization status. Unauthorized detail or list requests SHALL return `403 Forbidden`; a missing subscription SHALL return `404 Not Found`.
+
+#### Scenario: Subscriber lists inbound subscriptions
+
+- **WHEN** a caller with a `subscriber` binding on `checkout` requests `GET /subscriptions?domain=checkout&direction=inbound`
+- **THEN** the response SHALL list `checkout`'s subscriptions with the requested filters applied
+
+#### Scenario: Publisher lists outbound consumers
+
+- **WHEN** a caller with a `publisher` binding on `orders` requests `GET /subscriptions?domain=orders&direction=outbound`
+- **THEN** the response SHALL list all subscriptions consuming `orders` schemas, including consumer domains and pinned versions
 
 #### Scenario: List subscriptions by producer and version
 
-- **WHEN** a caller requests `GET /subscriptions?producer=orders&schema=prezzee-orders@OrderNotification&version=3`
+- **WHEN** a caller with a `publisher` binding on `orders` requests `GET /subscriptions?domain=orders&direction=outbound&schema=prezzee-orders@OrderNotification&version=3`
 - **THEN** the response SHALL list subscriptions pinned to version 3 of that schema in at least one environment, indicating which environments
+
+#### Scenario: Direction is required
+
+- **WHEN** a caller requests `GET /subscriptions?domain=checkout` without `direction`
+- **THEN** the API SHALL reject the request identifying the required parameter
 
 #### Scenario: Describe a subscription
 
-- **WHEN** a caller requests `GET /subscriptions/checkout.orders.OrderNotification`
+- **WHEN** a caller authorized through the consumer side, the producer side, or a platform role requests `GET /subscriptions/checkout.orders.OrderNotification`
 - **THEN** the response SHALL include the full per-environment map (pinned version, rule ARN, enabled, status), overall status, and timestamps
+
+#### Scenario: Unauthorized detail returns 403
+
+- **WHEN** a caller with no authorization on either side requests an existing subscription's detail
+- **THEN** the API SHALL return `403 Forbidden`
+- **AND THEN** a request for a subscription that does not exist SHALL return `404 Not Found`
 
 ### Requirement: Subscription lifecycle status and events
 

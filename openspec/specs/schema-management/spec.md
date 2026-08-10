@@ -8,22 +8,74 @@ How event schemas are discovered and managed: read-only discovery across each do
 
 ### Requirement: Schema discovery
 
-The control plane SHALL provide read-only schema discovery so consumers can find event contracts to subscribe to. `GET /schemas?domain={producerDomain}` SHALL list the schemas in the producer's registries, merged across environments and keyed by schema name, reporting the latest version per environment. `GET /schemas/{schemaName}?domain={producerDomain}` SHALL return schema detail including per-environment latest versions and the schema content for the latest version. Discovery SHALL read from the per-environment schema registries directly (source of truth for contracts) — no separate schema table SHALL be introduced.
+The control plane SHALL provide read-only schema discovery as an entitlement-filtered consumer catalog. `GET /schemas?consumerDomain={consumerDomain}` SHALL list exactly the schemas covered by the consumer domain's current entitlements, expanded across environments from the per-environment registries (source of truth), deduplicating overlapping pattern coverage, and reporting the latest version per environment. Producer-domain and environment filters MAY narrow the expansion, and pagination SHALL use an opaque continuation token carrying cursors only, never authorization state. `GET /schemas/{schemaName}?consumerDomain={consumerDomain}&domain={producerDomain}` SHALL return schema detail including per-environment latest versions and the latest content under the same coverage check. Both routes SHALL require the caller to hold a `subscriber` binding on the queried consumer domain. `platform-admin` and `platform-auditor` callers MAY omit `consumerDomain` and receive the platform-wide catalog unfiltered by entitlements. No separate schema or catalog table SHALL be introduced.
 
-#### Scenario: List a domain's schemas
+#### Scenario: Catalog expands current entitlements
 
-- **WHEN** a caller requests `GET /schemas?domain=orders`
-- **THEN** the response SHALL list each schema in the `orders` registries (e.g., `prezzee-orders@OrderNotification`) with the latest version per environment
+- **WHEN** a caller with a `subscriber` binding on `checkout` requests `GET /schemas?consumerDomain=checkout`
+- **THEN** the response SHALL list exactly the schemas covered by `checkout`'s current entitlements, keyed by schema name, with the latest version per environment
 
 #### Scenario: Version skew visible before subscribing
 
-- **WHEN** a schema's latest version differs across environments (e.g., dev: 5, staging: 3, prod: 3)
-- **THEN** the discovery response SHALL report each environment's latest version distinctly, so consumers see skew before signing the contract
+- **WHEN** a covered schema's latest version differs across environments (e.g., dev: 5, staging: 3, prod: 3)
+- **THEN** the catalog response SHALL report each environment's latest version distinctly, so consumers see skew before signing the contract
+
+#### Scenario: List a domain's schemas
+
+- **WHEN** a caller with a `subscriber` binding on `checkout` requests `GET /schemas?consumerDomain=checkout&domain=orders`
+- **THEN** the response SHALL list each `orders` schema covered by `checkout`'s current entitlements, keyed by schema name, with the latest version per environment
 
 #### Scenario: Missing schema or domain
 
-- **WHEN** a caller requests schemas for a domain that does not exist or is not `ACTIVE`, or a schema name absent from every environment
-- **THEN** the API SHALL return `404 Not Found` with an error message identifying the missing entity
+- **WHEN** a caller requests catalog detail for a schema name absent from every environment
+- **THEN** the API SHALL return `404 Not Found` identifying the missing schema
+- **AND THEN** a catalog list narrowed to a producer domain that does not exist or is not `ACTIVE` SHALL return an empty list rather than `404 Not Found`
+
+#### Scenario: Zero entitlements yields an empty catalog
+
+- **WHEN** a caller with a `subscriber` binding requests the catalog for a consumer domain with no current entitlements
+- **THEN** the response SHALL be an empty list
+
+#### Scenario: Uncovered detail returns 403
+
+- **WHEN** a caller requests catalog detail for a schema not covered by the queried consumer domain's current entitlements
+- **THEN** the API SHALL return `403 Forbidden`
+- **AND THEN** a request for a schema absent from every environment SHALL return `404 Not Found`
+
+#### Scenario: Missing consumer domain binding denied
+
+- **WHEN** a caller without a `subscriber` binding on the queried consumer domain requests the catalog
+- **THEN** the API SHALL return `403 Forbidden`
+
+#### Scenario: Platform roles inspect the full catalog
+
+- **WHEN** a `platform-admin` or `platform-auditor` caller requests `GET /schemas` without `consumerDomain`
+- **THEN** the response SHALL span all discoverable schemas unfiltered by entitlements
+- **AND THEN** `platform-auditor` SHALL NOT be able to perform any mutation
+
+#### Scenario: Pages follow a stable ordering without duplicates
+
+- **WHEN** a caller pages through the catalog with a continuation token
+- **THEN** entries SHALL be ordered by producer domain and schema name
+- **AND THEN** no schema SHALL appear twice within the page sequence
+
+#### Scenario: Revoked coverage never appears in later pages
+
+- **WHEN** a caller has retrieved a catalog page
+- **AND WHEN** an entitlement covering a previously listed schema is revoked
+- **THEN** the next page request with the continuation token SHALL NOT contain that schema
+
+#### Scenario: Mid-sequence grants do not appear behind the watermark
+
+- **WHEN** a caller is paging through the catalog
+- **AND WHEN** a new entitlement is granted covering schemas that sort at or before the current position
+- **THEN** those schemas SHALL NOT appear in the remaining pages of the sequence
+- **AND THEN** a fresh catalog request SHALL include them
+
+#### Scenario: Cursor rejected when filters change
+
+- **WHEN** a caller presents a continuation token with different producer-domain or environment filters than the request that issued it
+- **THEN** the API SHALL return `400 Bad Request`
 
 ### Requirement: Flat publisher schema creation API
 
@@ -95,17 +147,17 @@ Publisher authorization SHALL permit only schema creation and version appending 
 - **WHEN** an IAM caller's normalized AWS account has a `publisher` binding for domain `orders`
 - **THEN** the IAM surface SHALL authorize the same schema operations and enforce the same domain constraints as the OAuth surface
 
-### Requirement: Discovery is read-only in this capability version
+### Requirement: Schema discovery is read-only
 
-The schema-management capability SHALL provide schema creation and append-only version registration only through the publisher-authorized operations defined in this capability. It SHALL NOT provide publisher operations for schema replacement, retirement, version deletion, schema deletion, registry lifecycle, or registry policy administration. This change SHALL NOT alter the existing behavior in which any authenticated platform caller may discover any active domain's schemas. That discovery behavior is an interim baseline subject to the later `add-subscriber-entitlements` change and SHALL NOT be interpreted as the final combined visibility policy.
+The schema-management capability SHALL provide schema creation and append-only version registration only through the publisher-authorized operations defined by `add-publisher-apis`. It SHALL NOT provide publisher operations for schema replacement, retirement, version deletion, schema deletion, registry lifecycle, or registry policy administration. Discovery SHALL be filtered by the caller-visible consumer domain's current entitlements; the interim baseline in which any authenticated platform caller could discover any active domain's schemas SHALL NOT remain available.
 
 #### Scenario: Only append-only write operations exposed
 
 - **WHEN** a publisher uses the Nexus schema API
 - **THEN** the only schema write operations exposed SHALL be schema creation and appending a new schema version
 
-#### Scenario: Discovery behavior is unchanged by publisher APIs
+#### Scenario: Global visibility baseline is retired
 
-- **WHEN** any authenticated caller requests schema discovery for an active domain
-- **THEN** this change SHALL preserve the pre-existing discovery response regardless of the caller's relationship to the domain
-- **AND THEN** this interim requirement SHALL NOT constrain the final visibility behavior specified by the later `add-subscriber-entitlements` change
+- **WHEN** any caller requests schema discovery without an entitlement-covered consumer domain or a platform role
+- **THEN** the response SHALL contain no schemas
+- **AND THEN** the pre-existing behavior of serving all active domains' schemas to any authenticated caller SHALL NOT remain available
