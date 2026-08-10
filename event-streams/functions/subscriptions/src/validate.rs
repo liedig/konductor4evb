@@ -4,6 +4,7 @@ use std::env;
 use nexus_common::dynamodb::{get_s, s};
 use nexus_common::models::DomainStatus;
 
+#[derive(Debug)]
 pub struct DomainRecord {
     pub owner_account_id: String,
     pub environments: Vec<String>,
@@ -44,38 +45,4 @@ pub async fn lookup_active_domain(
         owner_account_id: get_s(&item, "ownerAccountId").unwrap_or_default(),
         environments,
     }))
-}
-
-/// The caller's AWS account must own the consumer domain — subscribing and
-/// unsubscribing are consumer-side actions.
-pub fn caller_owns_consumer(caller_account_id: &str, consumer: &DomainRecord) -> bool {
-    caller_account_id == consumer.owner_account_id
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn record(owner: &str) -> DomainRecord {
-        DomainRecord {
-            owner_account_id: owner.to_string(),
-            environments: vec!["dev".to_string()],
-        }
-    }
-
-    #[test]
-    fn caller_matching_owner_passes() {
-        assert!(caller_owns_consumer(
-            "111122223333",
-            &record("111122223333")
-        ));
-    }
-
-    #[test]
-    fn caller_mismatch_fails() {
-        assert!(!caller_owns_consumer(
-            "999988887777",
-            &record("111122223333")
-        ));
-    }
 }

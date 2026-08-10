@@ -685,3 +685,223 @@ fn schema_request_schemas_reject_platform_owned_fields() {
         assert_eq!(append_required, ["content", "domain", "eventName"]);
     }
 }
+
+#[test]
+fn entitlement_administration_routes_are_oauth_only() {
+    let oauth = operations(&oauth_contract());
+    let iam = operations(&iam_contract());
+
+    let mut oauth_ops: Vec<(&str, &str)> = oauth
+        .iter()
+        .filter(|op| op.path.starts_with("/entitlements"))
+        .map(|op| (op.method.as_str(), op.path.as_str()))
+        .collect();
+    oauth_ops.sort();
+    assert_eq!(
+        oauth_ops,
+        [
+            ("delete", "/entitlements/{entitlementId}"),
+            ("get", "/entitlements"),
+            ("post", "/entitlements"),
+        ],
+        "OAuth surface must expose exactly the three entitlement administration operations"
+    );
+
+    assert!(
+        iam.iter().all(|op| !op.path.starts_with("/entitlements")),
+        "IAM surface must not expose entitlement administration"
+    );
+}
+
+#[test]
+fn entitlement_admin_function_is_wired_to_the_oauth_surface_only() {
+    let doc = core_template();
+    let func = resource(&doc, "EntitlementAdminFunction");
+    let events = mapping(at(props(func), "Events"));
+    assert_eq!(
+        events.len(),
+        3,
+        "entitlement admin must have exactly the three route events"
+    );
+    for (name, event) in events {
+        let event_props = at(event, "Properties");
+        assert_eq!(
+            text(at(event_props, "RestApiId")),
+            "NexusOAuthApi",
+            "event {:?} must target the OAuth API",
+            name
+        );
+    }
+}
+
+#[test]
+fn entitlements_table_matches_documented_schema() {
+    let doc = core_template();
+    let table = resource(&doc, "AuthorizationEntitlementsTable");
+    let p = props(table);
+
+    let key_schema = seq(at(p, "KeySchema"));
+    assert_eq!(key_schema.len(), 2);
+    assert_eq!(text(at(p, "BillingMode")), "PAY_PER_REQUEST");
+
+    let gsis = seq(at(p, "GlobalSecondaryIndexes"));
+    assert_eq!(gsis.len(), 2, "by-producer and by-entitlement-id GSIs");
+    for name in ["by-producer", "by-entitlement-id"] {
+        let gsi = gsis
+            .iter()
+            .find(|g| text(at(g, "IndexName")) == name)
+            .unwrap_or_else(|| panic!("missing GSI {name}"));
+        assert_eq!(
+            text(at(at(gsi, "Projection"), "ProjectionType")),
+            "ALL",
+            "GSI {name} must project all attributes"
+        );
+    }
+
+    let sse = at(p, "SSESpecification");
+    assert_eq!(text(at(sse, "SSEType")), "KMS");
+    assert!(boolean(at(
+        at(p, "PointInTimeRecoverySpecification"),
+        "PointInTimeRecoveryEnabled"
+    )));
+    assert_eq!(
+        text(at(at(p, "StreamSpecification"), "StreamViewType")),
+        "OLD_IMAGE",
+        "the revocation worker consumes each removed entitlement's prior image"
+    );
+}
+
+#[test]
+fn entitlements_table_read_policy_is_query_only() {
+    let doc = core_template();
+    let policy = resource(&doc, "EntitlementsTableReadPolicy");
+    let p = props(policy);
+    let statements = seq(at(at(p, "PolicyDocument"), "Statement"));
+    assert_eq!(statements.len(), 1);
+    let actions: Vec<&str> = seq(at(&statements[0], "Action")).iter().map(text).collect();
+    assert_eq!(
+        actions,
+        ["dynamodb:Query"],
+        "coverage decision reads are consumer-partition queries only"
+    );
+    for attachment in ["Roles", "Users", "Groups"] {
+        assert!(
+            mapping(p).get(attachment).is_none(),
+            "policy attaches through consumers (function Policies, role ManagedPolicyArns), never on the policy resource"
+        );
+    }
+}
+
+#[test]
+fn subscription_commands_use_flat_verbs_on_both_surfaces() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let ops = operations(&doc);
+        let has =
+            |method: &str, path: &str| ops.iter().any(|op| op.method == method && op.path == path);
+        assert!(has("post", "/subscriptions"), "subscribe is a flat verb");
+        assert!(
+            has("post", "/subscriptions/state"),
+            "state change is a flat verb with the id in the body"
+        );
+        assert!(
+            has("delete", "/subscriptions/{subscriptionId}"),
+            "unsubscribe is a flat verb"
+        );
+        assert!(
+            !has("patch", "/subscriptions/{subscriptionId}"),
+            "PATCH /subscriptions/{{subscriptionId}} is replaced by POST /subscriptions/state"
+        );
+    }
+}
+
+#[test]
+fn subscription_write_templates_carry_route_and_no_caller_account_id() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let templates = write_templates(&doc);
+        let mut subscription_templates: Vec<&(String, String, String)> = templates
+            .iter()
+            .filter(|(path, _, _)| path.starts_with("/subscriptions"))
+            .collect();
+        subscription_templates.sort();
+        assert_eq!(
+            subscription_templates.len(),
+            3,
+            "subscribe, update-state, unsubscribe"
+        );
+        for (path, method, t) in subscription_templates {
+            assert!(
+                t.contains("Name=Resource&")
+                    && t.contains("Value.StringValue=$context.resourcePath"),
+                "{method} {path} must inject the route as the Resource message attribute"
+            );
+            assert!(
+                !t.contains("callerAccountId"),
+                "{method} {path} must not carry callerAccountId — authorization is engine-based, not account-ownership"
+            );
+        }
+    }
+}
+
+#[test]
+fn update_subscription_state_request_schema_is_closed() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let schemas = at(at(&doc, "components"), "schemas");
+        let request = at(schemas, "UpdateSubscriptionStateRequest");
+        assert!(!boolean(at(request, "additionalProperties")));
+        let mut required: Vec<&str> = seq(at(request, "required")).iter().map(text).collect();
+        required.sort_unstable();
+        assert_eq!(
+            required,
+            ["consumerDomain", "environments", "subscriptionId"]
+        );
+        assert!(
+            mapping(at(&doc, "components")).contains_key("schemas"),
+            "schemas map must exist"
+        );
+        assert!(
+            mapping(schemas).get("UpdateSubscriptionRequest").is_none(),
+            "the old path-parameter PATCH body schema is gone"
+        );
+    }
+}
+
+#[test]
+fn subscriptions_function_reads_bindings_and_entitlements() {
+    let doc = core_template();
+    let func = resource(&doc, "SubscriptionsFunction");
+    let env = mapping(at(at(props(func), "Environment"), "Variables"));
+    for var in ["BINDINGS_TABLE", "ENTITLEMENTS_TABLE"] {
+        assert!(
+            env.contains_key(var),
+            "subscriptions consumer needs {var} for the grant engine"
+        );
+    }
+    let (_, managed) = function_policy_shape(&doc, "SubscriptionsFunction");
+    for policy in ["BindingsTableReadPolicy", "EntitlementsTableReadPolicy"] {
+        assert!(
+            managed.contains(&policy.to_string()),
+            "subscriptions consumer must attach {policy}"
+        );
+    }
+}
+
+#[test]
+fn activation_workflow_queries_entitlements_before_enabling() {
+    let doc = core_template();
+    let workflow = resource(&doc, "ActivateSubscriptionWorkflow");
+    let substitutions = mapping(at(props(workflow), "DefinitionSubstitutions"));
+    assert!(
+        substitutions.contains_key("EntitlementsTable"),
+        "the activation workflow needs the entitlements table for its final coverage check"
+    );
+
+    let role = resource(&doc, "SubscriptionWorkflowRole");
+    let managed: Vec<&str> = seq(at(props(role), "ManagedPolicyArns"))
+        .iter()
+        .map(text)
+        .collect();
+    assert!(
+        managed.contains(&"EntitlementsTableReadPolicy"),
+        "the workflow role must be able to query the entitlements table"
+    );
+}

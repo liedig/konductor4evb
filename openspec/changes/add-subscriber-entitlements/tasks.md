@@ -16,7 +16,7 @@
 - [x] 3.1 Extend `DynamoGrantEngine` to evaluate subscribe-family actions against both stores: binding check plus entitlement coverage for create/enable, binding-only for disable/delete and self-subscription, fail-closed on malformed composite resources, with structured token-free deny logging
 - [x] 3.2 Extend `InMemoryGrantEngine` with fixture-fed entitlements mirroring the same evaluation rules
 - [x] 3.3 Extend the shared decision-parity fixture suite with two-table cases (covering `*` grant, covering exact-name grant, covering prefix grant, overlapping grants, revoked grant, wrong consumer domain, self-subscription) and prove identical decisions on both implementations
-- [ ] 3.4 Move the subscription command handlers off `IamOnlyAuthorizer` onto the engine (lands with 5.x); retain `IamOnlyAuthorizer` as the standing IAM-only guard for platform-operated control-plane paths (domain registration/update) and update its `nexus-common` doc comments to say so
+- [x] 3.4 Move the subscription command handlers off `IamOnlyAuthorizer` onto the engine (lands with 5.x); retain `IamOnlyAuthorizer` as the standing IAM-only guard for platform-operated control-plane paths (domain registration/update) and update its `nexus-common` doc comments to say so
 
 ## 4. Entitlement Administration API
 
@@ -27,11 +27,11 @@
 
 ## 5. Subscription Commands
 
-- [ ] 5.1 Reshape both surfaces' write contracts to flat verbs: `POST /subscriptions`, `POST /subscriptions/state`, `DELETE /subscriptions/{subscriptionId}` with `consumerDomain` in request bodies; update direct API Gateway-to-SQS mappings to inject the trusted-principal envelope (OAuth groups or IAM account) while preserving structural validation and `202 Accepted`
-- [ ] 5.2 Change the subscription command handler to authorize through the engine before any workflow starts: create/enable require subscriber binding plus current covering entitlement; disable/delete require only the binding; domain `ACTIVE` checks, rule-name constraints, and self-subscription semantics are preserved
-- [ ] 5.3 Perform a final current-entitlement check in the activation path immediately before any EventBridge rule transitions to `ENABLED`
-- [ ] 5.4 Allow `platform-admin` to operate subscriptions without a subscriber binding while still requiring a current covering entitlement for create/enable
-- [ ] 5.5 Add command behavior tests on OAuth and IAM paths for authorized create, missing binding, missing entitlement, alternative covering grants, post-revocation disable/delete, denied enable, platform-admin mutation, self-subscription, deterministic failure events, and idempotent retries
+- [x] 5.1 Reshape both surfaces' write contracts to flat verbs: `POST /subscriptions`, `POST /subscriptions/state`, `DELETE /subscriptions/{subscriptionId}` with `consumerDomain` in request bodies; update direct API Gateway-to-SQS mappings to inject the trusted-principal envelope (OAuth groups or IAM account) while preserving structural validation and `202 Accepted`
+- [x] 5.2 Change the subscription command handler to authorize through the engine before any workflow starts: create/enable require subscriber binding plus current covering entitlement; disable/delete require only the binding; domain `ACTIVE` checks, rule-name constraints, and self-subscription semantics are preserved
+- [x] 5.3 Perform a final current-entitlement check in the activation path immediately before any EventBridge rule transitions to `ENABLED`
+- [x] 5.4 Allow `platform-admin` to operate subscriptions without a subscriber binding while still requiring a current covering entitlement for create/enable
+- [x] 5.5 Add command behavior tests on OAuth and IAM paths for authorized create, missing binding, missing entitlement, alternative covering grants, post-revocation disable/delete, denied enable, platform-admin mutation, self-subscription, deterministic failure events, and idempotent retries
 
 ## 6. Entitlement Revocation Worker
 
@@ -61,7 +61,7 @@
 
 ## 10. Documentation and Validation
 
-- [ ] 10.1 Update `docs/development/decisions.md` with the two-store model, the scope-pattern grammar (including the prefix naming-hygiene caveat), entitlements as control-plane intent with EventBridge rules as compiled enforcement, composite resource grammar, dual-path entitlement administration, stream-driven side-effect transport (change records versus business events), reconciliation-bounded revocation completion, 403-over-404 denial, and `IamOnlyAuthorizer` deletion
+- [ ] 10.1 Update `docs/development/decisions.md` with the two-store model, the scope-pattern grammar (including the prefix naming-hygiene caveat), entitlements as control-plane intent with EventBridge rules as compiled enforcement, composite resource grammar, dual-path entitlement administration, stream-driven side-effect transport (change records versus business events), reconciliation-bounded revocation completion, 403-over-404 denial, and `IamOnlyAuthorizer` retention for platform-operated paths
 - [ ] 10.2 Update `docs/development/architecture.md` with the entitlements table, engine composition, revocation worker flow, flat-verb subscription views, and catalog expansion
 - [ ] 10.3 Update API and operational documentation with breaking route, request-body, authorization, and visibility migrations
 - [ ] 10.4 Run focused crate tests during each red/green/refactor cycle, then `make check` and `make test` for the workspace

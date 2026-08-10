@@ -222,14 +222,14 @@ impl ResourceAuthorizer for DenyAllAuthorizer {
     }
 }
 
-/// A bridge [`ResourceAuthorizer`] that retains the pre-grant-engine
-/// behavior: IAM mutations allow (AWS-native, account-granular), OAuth
-/// mutations deny.
+/// The standing guard for platform-operated control-plane paths: IAM callers
+/// allow (platform teams authenticate with IAM and drive approvals and
+/// provisioning), OAuth callers deny.
 ///
-/// This type exists only to keep current automation unaffected while
-/// consumers migrate to `DynamoGrantEngine` (see `grant_engine`). It is
-/// deleted once the subscribe paths move onto the engine in
-/// `add-subscriber-entitlements`; do not wire it into new consumers.
+/// Wired into domain registration and lifecycle (`domain-registrations`),
+/// which platform teams operate. Publisher and subscriber paths used by
+/// application teams authorize through `DynamoGrantEngine` (see
+/// `grant_engine`) instead; do not wire this authorizer into those paths.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct IamOnlyAuthorizer;
 

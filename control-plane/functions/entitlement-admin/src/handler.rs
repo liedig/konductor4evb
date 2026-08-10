@@ -26,7 +26,8 @@ pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
-    let entitlements_table = std::env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
+    let entitlements_table =
+        std::env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
     let bindings_table = std::env::var("BINDINGS_TABLE").context("BINDINGS_TABLE not set")?;
     let entitlements = EntitlementStore::new(ddb.clone(), entitlements_table);
     let bindings = BindingStore::new(ddb.clone(), bindings_table);
@@ -93,11 +94,11 @@ async fn create(
     payload: &Value,
     principal: &TrustedPrincipal,
 ) -> Result<Value, Error> {
-    let request: nexus_common::entitlement::CreateEntitlementRequest = match api::parse_body(payload)
-    {
-        Ok(r) => r,
-        Err(e) => return Ok(api::from_control_plane_error(&e)),
-    };
+    let request: nexus_common::entitlement::CreateEntitlementRequest =
+        match api::parse_body(payload) {
+            Ok(r) => r,
+            Err(e) => return Ok(api::from_control_plane_error(&e)),
+        };
     let entitlement = match request.into_entitlement(Utc::now(), principal.principal_id()) {
         Ok(e) => e,
         Err(e) => {
@@ -112,8 +113,13 @@ async fn create(
     let audit = audit_record(&entitlement, AuditMutation::Create, principal);
 
     match entitlements.create_entitlement(&entitlement, &audit).await {
-        Ok(()) => Ok(api::success_response(201, &EntitlementView::from(&entitlement))),
-        Err(EntitlementStoreError::Conflict) => idempotent_recreate(entitlements, &entitlement).await,
+        Ok(()) => Ok(api::success_response(
+            201,
+            &EntitlementView::from(&entitlement),
+        )),
+        Err(EntitlementStoreError::Conflict) => {
+            idempotent_recreate(entitlements, &entitlement).await
+        }
         Err(e) => Ok(store_failure("create entitlement", e)),
     }
 }
@@ -130,7 +136,10 @@ async fn idempotent_recreate(
         .find_entitlement_by_id(&entitlement.entitlement_id)
         .await
     {
-        Ok(Some(existing)) => Ok(api::success_response(200, &EntitlementView::from(&existing))),
+        Ok(Some(existing)) => Ok(api::success_response(
+            200,
+            &EntitlementView::from(&existing),
+        )),
         Ok(None) => Ok(api::from_control_plane_error(
             &ControlPlaneError::EntitlementConflict {
                 reason: "entitlement changed concurrently; retry".to_string(),
@@ -566,7 +575,11 @@ mod tests {
                     .build()
             });
         let subscriber = role_binding("checkout-subscribers", ResourceRole::Subscriber, "checkout");
-        let stores = stores_with(vec![consumer_query, binding_rule(&subscriber), empty_get_rule()]);
+        let stores = stores_with(vec![
+            consumer_query,
+            binding_rule(&subscriber),
+            empty_get_rule(),
+        ]);
 
         let mut admin_list = event("GET", "/entitlements", admin_context());
         admin_list["queryStringParameters"] = json!({"consumerDomain": "checkout"});
@@ -597,16 +610,17 @@ mod tests {
                     .build()
             });
         let publisher = role_binding("orders-publishers", ResourceRole::Publisher, "orders");
-        let stores = stores_with(vec![producer_query, binding_rule(&publisher), empty_get_rule()]);
+        let stores = stores_with(vec![
+            producer_query,
+            binding_rule(&publisher),
+            empty_get_rule(),
+        ]);
 
         let mut publisher_list = event("GET", "/entitlements", publisher_context());
         publisher_list["queryStringParameters"] = json!({"producerDomain": "orders"});
         let resp = invoke(&stores, publisher_list).await;
         assert_eq!(status(&resp), 200);
-        assert_eq!(
-            body(&resp)["entitlements"].as_array().unwrap().len(),
-            1
-        );
+        assert_eq!(body(&resp)["entitlements"].as_array().unwrap().len(), 1);
 
         let mut outsider_list = event("GET", "/entitlements", subscriber_context());
         outsider_list["queryStringParameters"] = json!({"producerDomain": "orders"});

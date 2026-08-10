@@ -349,7 +349,7 @@ paths:
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"callerAccountId\":\"$context.identity.accountId\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody={\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String&MessageAttribute.9.Name=Resource&MessageAttribute.9.Value.StringValue=$context.resourcePath&MessageAttribute.9.Value.DataType=String"
         responses:
           default:
             statusCode: "202"
@@ -455,61 +455,6 @@ paths:
         httpMethod: POST
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSubscriptionFunction.Arn}/invocations"
-    patch:
-      operationId: UpdateSubscription
-      summary: Update per-environment desired state (enable/disable)
-      x-amazon-apigateway-request-validator: validate-body
-      parameters:
-        - name: subscriptionId
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateSubscriptionRequest"
-      responses:
-        "202":
-          description: Command accepted
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CommandAccepted"
-        "400":
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "403":
-          description: Access denied
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-      x-amazon-apigateway-integration:
-        type: aws
-        httpMethod: POST
-        credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
-        uri:
-          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
-        requestParameters:
-          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
-        requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\",\"callerAccountId\":\"$context.identity.accountId\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String"
-        responses:
-          default:
-            statusCode: "202"
-            responseTemplates:
-              application/json: |
-                #set($body = $input.path('$'))
-                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
-                {"requestId":"$messageId","message":"Request accepted"}
-        passthroughBehavior: never
     delete:
       operationId: Unsubscribe
       summary: Remove a subscription (event stream)
@@ -552,7 +497,59 @@ paths:
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\",\"callerAccountId\":\"$context.identity.accountId\"}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody={\"body\":{\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\"}}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String&MessageAttribute.9.Name=Resource&MessageAttribute.9.Value.StringValue=$context.resourcePath&MessageAttribute.9.Value.DataType=String"
+        responses:
+          default:
+            statusCode: "202"
+            responseTemplates:
+              application/json: |
+                #set($body = $input.path('$'))
+                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
+                {"requestId":"$messageId","message":"Request accepted"}
+        passthroughBehavior: never
+
+  /subscriptions/state:
+    post:
+      operationId: UpdateSubscriptionState
+      summary: Update per-environment desired state (enable/disable)
+      description: Flat-verb state change; the subscription id travels in the body alongside the consumer domain, which must match the id's consumer segment.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSubscriptionStateRequest"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAccepted"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: POST
+        credentials:
+          Fn::GetAtt: [NexusApiSqsRole, Arn]
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
+        requestParameters:
+          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+        requestTemplates:
+          application/json: "Action=SendMessage&MessageBody={\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String&MessageAttribute.9.Name=Resource&MessageAttribute.9.Value.StringValue=$context.resourcePath&MessageAttribute.9.Value.DataType=String"
         responses:
           default:
             statusCode: "202"
@@ -1480,17 +1477,26 @@ components:
         enabled:
           type: boolean
 
-    UpdateSubscriptionRequest:
+    UpdateSubscriptionStateRequest:
       type: object
-      required: [environments]
+      required: [subscriptionId, consumerDomain, environments]
       additionalProperties: false
       properties:
+        subscriptionId:
+          type: string
+          description: "Format: {consumerDomain}.{producerDomain}.{detailType}; its consumer segment must equal consumerDomain"
+        consumerDomain:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$"
+          maxLength: 64
         environments:
           type: object
           minProperties: 1
           additionalProperties:
             $ref: "#/components/schemas/EnvDesiredState"
       example:
+        subscriptionId: checkout.orders.OrderNotification
+        consumerDomain: checkout
         environments:
           prod:
             enabled: true

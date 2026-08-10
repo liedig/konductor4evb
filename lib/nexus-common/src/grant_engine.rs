@@ -120,7 +120,8 @@ trait EntitlementLookup {
 
 /// The additive coverage rule: any current entitlement granted to the
 /// consumer whose producer matches and whose pattern matches the schema.
-fn covers(entitlements: &[Entitlement], producer_domain: &str, schema_name: &str) -> bool {
+/// Shared by the engines and the activation-path final check.
+pub fn covers(entitlements: &[Entitlement], producer_domain: &str, schema_name: &str) -> bool {
     entitlements
         .iter()
         .any(|e| e.producer_domain == producer_domain && e.scope.matches(schema_name))
@@ -199,12 +200,26 @@ async fn evaluate_subscription(
         parsed.consumer_domain(),
     )
     .await;
-    if bound != AuthorizationDecision::Allow {
+    // platform-admin operates subscriptions without a subscriber binding;
+    // the covering-entitlement requirement below is unaffected.
+    if bound != AuthorizationDecision::Allow && !principal.is_platform_admin() {
         return bound;
     }
     if !coverage_required || parsed.consumer_domain() == parsed.producer_domain() {
         return AuthorizationDecision::Allow;
     }
+    coverage_decision(entitlements, principal, action, resource, &parsed).await
+}
+
+/// The entitlement half of a create/enable decision; every failure mode is a
+/// denial (fail closed).
+async fn coverage_decision(
+    entitlements: &impl EntitlementLookup,
+    principal: &TrustedPrincipal,
+    action: &str,
+    resource: &str,
+    parsed: &SubscriptionResource,
+) -> AuthorizationDecision {
     match entitlements
         .has_covering_entitlement(
             parsed.consumer_domain(),

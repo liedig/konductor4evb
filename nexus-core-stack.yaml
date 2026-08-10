@@ -283,10 +283,9 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # Reserved for the subscription consumers that add-subscriber-entitlements
-  # wires: decision reads are strongly consistent queries on the consumer
-  # partition, so Query on the table is the entire permission set.
-  # Deliberately attached to no role in this change.
+  # Decision reads are strongly consistent queries on the consumer partition,
+  # so Query on the table is the entire permission set. Attached to the
+  # subscription command consumer and the activation workflow role.
   EntitlementsTableReadPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -1075,7 +1074,11 @@ Resources:
         Variables:
           ACTIVATE_SUBSCRIPTION_STATE_MACHINE_ARN: !Ref ActivateSubscriptionWorkflow
           REMOVE_SUBSCRIPTION_STATE_MACHINE_ARN: !Ref RemoveSubscriptionWorkflow
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+          ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
       Policies:
+        - !Ref BindingsTableReadPolicy
+        - !Ref EntitlementsTableReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
@@ -2088,6 +2091,8 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: !Sub "nexus-subscription-workflow-role"
+      ManagedPolicyArns:
+        - !Ref EntitlementsTableReadPolicy
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -2160,6 +2165,7 @@ Resources:
       DefinitionUri: ./event-streams/state-machines/activate-subscription.asl.yaml
       DefinitionSubstitutions:
         EventStreamsTable: !Ref EventStreamsTable
+        EntitlementsTable: !Ref AuthorizationEntitlementsTable
         NexusEventBus: !GetAtt NexusEventBus.Arn
         Organization: !Ref Organization
         SubscriptionDeliveryRoleArn: !GetAtt SubscriptionDeliveryRole.Arn
