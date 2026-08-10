@@ -13,6 +13,7 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use nexus_common::entitlement_store::EntitlementStore;
 use nexus_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
 use nexus_common::grant_engine::{actions, DynamoGrantEngine};
 use nexus_common::grant_store::{binding_to_item, BindingStore};
@@ -56,7 +57,12 @@ pub async fn handle(
         .and_then(Value::as_u64)
         .unwrap_or(20) as usize;
 
-    let engine = DynamoGrantEngine::new(BindingStore::new(ddb.clone(), table.clone()));
+    let entitlements_table =
+        std::env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
+    let engine = DynamoGrantEngine::new(
+        BindingStore::new(ddb.clone(), table.clone()),
+        EntitlementStore::new(ddb.clone(), entitlements_table),
+    );
 
     let fixtures = fixture_bindings();
     seed_fixtures(ddb, &table, &fixtures).await?;

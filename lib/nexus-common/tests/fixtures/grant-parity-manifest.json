@@ -44,9 +44,9 @@
     {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "analytics-subscribers"}, "role": "subscriber", "domain": "analytics-cons", "state": "active", "grantId": "rb-anasub-001"},
     {"itemType": "RoleBinding", "principal": {"type": "cognito-group", "issuer": "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh", "group": "risk-subscribers"}, "role": "subscriber", "domain": "risk-cons", "state": "active", "grantId": "rb-riksub-001"},
     {"itemType": "RoleBinding", "principal": {"type": "aws-account", "accountId": "444455556666"}, "role": "subscriber", "domain": "risk-cons", "state": "active", "grantId": "rb-riksub-002"},
-    {"itemType": "Entitlement", "consumer": "analytics-cons", "producerDomain": "payments-prod", "scope": "producer-domain", "state": "active", "grantId": "ent-ana-pay-full-001"},
-    {"itemType": "Entitlement", "consumer": "risk-cons", "producerDomain": "payments-prod", "schema": "payment-captured", "scope": "exact-schema", "state": "active", "grantId": "ent-rik-pay-cap-001"},
-    {"itemType": "Entitlement", "consumer": "analytics-cons", "producerDomain": "payments-prod", "schema": "payment-captured", "scope": "exact-schema", "state": "active", "grantId": "ent-ana-pay-cap-001"}
+    {"itemType": "Entitlement", "consumer": "analytics-cons", "producerDomain": "payments-prod", "scopePattern": "*", "state": "active", "grantId": "ent-ana-pay-full-001"},
+    {"itemType": "Entitlement", "consumer": "risk-cons", "producerDomain": "payments-prod", "scopePattern": "payment-captured", "state": "active", "grantId": "ent-rik-pay-cap-001"},
+    {"itemType": "Entitlement", "consumer": "analytics-cons", "producerDomain": "payments-prod", "scopePattern": "payment-captured", "state": "active", "grantId": "ent-ana-pay-cap-001"}
   ],
   "baselineSubscriptionSeeds": [
     {"subscriptionId": "sub-001", "consumer": "analytics-cons", "producerDomain": "payments-prod", "schema": "payment-captured", "state": "active", "coveringGrants": ["ent-ana-pay-full-001"]},

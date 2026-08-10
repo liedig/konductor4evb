@@ -726,7 +726,8 @@ mod tests {
         });
         let store_client = mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, [&store_error]);
         let authorizer = nexus_common::grant_engine::DynamoGrantEngine::new(
-            nexus_common::grant_store::BindingStore::new(store_client, "bindings-test"),
+            nexus_common::grant_store::BindingStore::new(store_client.clone(), "bindings-test"),
+            nexus_common::entitlement_store::EntitlementStore::new(store_client, "bindings-test"),
         );
         // Zero rules: the fail-closed denial must precede any resource access.
         let clients = clients(vec![], vec![], vec![]);

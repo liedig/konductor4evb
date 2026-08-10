@@ -13,10 +13,10 @@
 
 ## 3. Grant Engine Extension
 
-- [ ] 3.1 Extend `DynamoGrantEngine` to evaluate subscribe-family actions against both stores: binding check plus entitlement coverage for create/enable, binding-only for disable/delete and self-subscription, fail-closed on malformed composite resources, with structured token-free deny logging
-- [ ] 3.2 Extend `InMemoryGrantEngine` with fixture-fed entitlements mirroring the same evaluation rules
-- [ ] 3.3 Extend the shared decision-parity fixture suite with two-table cases (covering `*` grant, covering exact-name grant, covering prefix grant, overlapping grants, revoked grant, wrong consumer domain, self-subscription) and prove identical decisions on both implementations
-- [ ] 3.4 Delete `IamOnlyAuthorizer` and rewire remaining consumers to the engine; update `nexus-common` doc comments
+- [x] 3.1 Extend `DynamoGrantEngine` to evaluate subscribe-family actions against both stores: binding check plus entitlement coverage for create/enable, binding-only for disable/delete and self-subscription, fail-closed on malformed composite resources, with structured token-free deny logging
+- [x] 3.2 Extend `InMemoryGrantEngine` with fixture-fed entitlements mirroring the same evaluation rules
+- [x] 3.3 Extend the shared decision-parity fixture suite with two-table cases (covering `*` grant, covering exact-name grant, covering prefix grant, overlapping grants, revoked grant, wrong consumer domain, self-subscription) and prove identical decisions on both implementations
+- [ ] 3.4 Move the subscription command handlers off `IamOnlyAuthorizer` onto the engine (lands with 5.x); retain `IamOnlyAuthorizer` as the standing IAM-only guard for platform-operated control-plane paths (domain registration/update) and update its `nexus-common` doc comments to say so
 
 ## 4. Entitlement Administration API
 

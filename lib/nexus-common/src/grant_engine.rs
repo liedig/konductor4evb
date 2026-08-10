@@ -10,15 +10,15 @@ use std::collections::HashSet;
 
 use tracing::warn;
 
+use crate::entitlement::Entitlement;
+use crate::entitlement_store::{EntitlementStore, EntitlementStoreError};
 use crate::grant::{BindingPrincipal, ResourceRole, RoleBinding};
 use crate::grant_store::BindingStore;
 use crate::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
+use crate::subscription_resource::SubscriptionResource;
 
 /// The action strings the engine recognizes, centralized so call-site typos
 /// surface in tests rather than as silent production denials.
-///
-/// Subscribe-family actions arrive with `add-subscriber-entitlements`, which
-/// extends the engine with composite resources and entitlement composition.
 pub mod actions {
     /// Publish an event to a producer domain (store-and-forward publish API).
     pub const SCHEMA_PUBLISH: &str = "schema:publish";
@@ -76,7 +76,45 @@ trait BindingLookup {
     ) -> impl std::future::Future<Output = Result<bool, crate::grant_store::GrantStoreError>> + Send;
 }
 
+/// The entitlement-lookup seam both engines share, so the subscribe-family
+/// composition (binding check, self-subscription shortcut, coverage check,
+/// fail-closed errors) exists exactly once.
+trait EntitlementLookup {
+    fn has_covering_entitlement(
+        &self,
+        consumer_domain: &str,
+        producer_domain: &str,
+        schema_name: &str,
+    ) -> impl std::future::Future<Output = Result<bool, EntitlementStoreError>> + Send;
+}
+
+/// The additive coverage rule: any current entitlement granted to the
+/// consumer whose producer matches and whose pattern matches the schema.
+fn covers(entitlements: &[Entitlement], producer_domain: &str, schema_name: &str) -> bool {
+    entitlements
+        .iter()
+        .any(|e| e.producer_domain == producer_domain && e.scope.matches(schema_name))
+}
+
 async fn evaluate(
+    lookup: &impl BindingLookup,
+    entitlements: &impl EntitlementLookup,
+    principal: &TrustedPrincipal,
+    action: &str,
+    resource: &str,
+) -> AuthorizationDecision {
+    match action {
+        actions::SUBSCRIPTION_CREATE | actions::SUBSCRIPTION_ENABLE => {
+            evaluate_subscription(lookup, entitlements, principal, action, resource, true).await
+        }
+        actions::SUBSCRIPTION_DISABLE | actions::SUBSCRIPTION_DELETE => {
+            evaluate_subscription(lookup, entitlements, principal, action, resource, false).await
+        }
+        _ => evaluate_binding_action(lookup, principal, action, resource).await,
+    }
+}
+
+async fn evaluate_binding_action(
     lookup: &impl BindingLookup,
     principal: &TrustedPrincipal,
     action: &str,
@@ -97,6 +135,75 @@ async fn evaluate(
         return AuthorizationDecision::Deny;
     }
     first_applicable_binding(lookup, principal, role, action, resource).await
+}
+
+/// Subscribe-family composition: a `subscriber` binding on the consumer
+/// domain, plus — for create and enable — a covering entitlement, unless the
+/// consumer subscribes to its own domain. Disable and delete consult the
+/// binding only, so subscribers retain lifecycle control after revocation.
+async fn evaluate_subscription(
+    lookup: &impl BindingLookup,
+    entitlements: &impl EntitlementLookup,
+    principal: &TrustedPrincipal,
+    action: &str,
+    resource: &str,
+    coverage_required: bool,
+) -> AuthorizationDecision {
+    let parsed = match SubscriptionResource::parse(resource) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            warn!(
+                action,
+                resource,
+                error = %error,
+                "grant decision: deny (malformed subscription resource)"
+            );
+            return AuthorizationDecision::Deny;
+        }
+    };
+    let bound = first_applicable_binding(
+        lookup,
+        principal,
+        ResourceRole::Subscriber,
+        action,
+        parsed.consumer_domain(),
+    )
+    .await;
+    if bound != AuthorizationDecision::Allow {
+        return bound;
+    }
+    if !coverage_required || parsed.consumer_domain() == parsed.producer_domain() {
+        return AuthorizationDecision::Allow;
+    }
+    match entitlements
+        .has_covering_entitlement(
+            parsed.consumer_domain(),
+            parsed.producer_domain(),
+            parsed.event_name(),
+        )
+        .await
+    {
+        Ok(true) => AuthorizationDecision::Allow,
+        Ok(false) => {
+            warn!(
+                action,
+                resource,
+                mechanism = ?principal.authentication_mechanism(),
+                principal_id = %principal.principal_id(),
+                "grant decision: deny (no covering entitlement)"
+            );
+            AuthorizationDecision::Deny
+        }
+        Err(error) => {
+            warn!(
+                action,
+                resource,
+                error = %error,
+                "grant decision: deny (entitlement store error, fail closed)"
+            );
+            AuthorizationDecision::Deny
+        }
+    }
 }
 
 /// The additive union: the first applicable binding allows; a store error or
@@ -133,16 +240,21 @@ async fn first_applicable_binding(
     AuthorizationDecision::Deny
 }
 
-/// The DynamoDB-backed production engine. Every decision is a strongly
-/// consistent point read per candidate principal; the administration GSIs
-/// never feed an allow decision.
+/// The DynamoDB-backed production engine. Binding decisions are strongly
+/// consistent point reads per candidate principal, and coverage decisions a
+/// strongly consistent query on the consumer partition; the administration
+/// GSIs never feed an allow decision.
 pub struct DynamoGrantEngine {
     store: BindingStore,
+    entitlement_store: EntitlementStore,
 }
 
 impl DynamoGrantEngine {
-    pub fn new(store: BindingStore) -> Self {
-        Self { store }
+    pub fn new(store: BindingStore, entitlement_store: EntitlementStore) -> Self {
+        Self {
+            store,
+            entitlement_store,
+        }
     }
 }
 
@@ -159,6 +271,21 @@ impl BindingLookup for DynamoGrantEngine {
     }
 }
 
+impl EntitlementLookup for DynamoGrantEngine {
+    async fn has_covering_entitlement(
+        &self,
+        consumer_domain: &str,
+        producer_domain: &str,
+        schema_name: &str,
+    ) -> Result<bool, EntitlementStoreError> {
+        let current = self
+            .entitlement_store
+            .entitlements_for_consumer(consumer_domain)
+            .await?;
+        Ok(covers(&current, producer_domain, schema_name))
+    }
+}
+
 impl ResourceAuthorizer for DynamoGrantEngine {
     async fn authorize(
         &self,
@@ -166,7 +293,7 @@ impl ResourceAuthorizer for DynamoGrantEngine {
         action: &str,
         resource: &str,
     ) -> AuthorizationDecision {
-        evaluate(self, principal, action, resource).await
+        evaluate(self, self, principal, action, resource).await
     }
 }
 
@@ -174,14 +301,23 @@ impl ResourceAuthorizer for DynamoGrantEngine {
 /// require no AWS credentials or network access.
 pub struct InMemoryGrantEngine {
     binding_keys: HashSet<(String, String)>,
+    entitlements: Vec<Entitlement>,
 }
 
 impl InMemoryGrantEngine {
     /// Builds an engine from active bindings, keyed exactly as the DynamoDB
     /// store keys them so parity fixtures exercise identical key construction.
+    /// The engine holds no entitlements; subscribe-family create and enable
+    /// actions deny outside self-subscription.
     pub fn new(bindings: Vec<RoleBinding>) -> Self {
+        Self::with_entitlements(bindings, Vec::new())
+    }
+
+    /// Builds an engine from active bindings and current entitlements.
+    pub fn with_entitlements(bindings: Vec<RoleBinding>, entitlements: Vec<Entitlement>) -> Self {
         Self {
             binding_keys: bindings.iter().map(|b| (b.pk(), b.sk())).collect(),
+            entitlements,
         }
     }
 }
@@ -199,6 +335,23 @@ impl BindingLookup for InMemoryGrantEngine {
     }
 }
 
+impl EntitlementLookup for InMemoryGrantEngine {
+    async fn has_covering_entitlement(
+        &self,
+        consumer_domain: &str,
+        producer_domain: &str,
+        schema_name: &str,
+    ) -> Result<bool, EntitlementStoreError> {
+        let current: Vec<Entitlement> = self
+            .entitlements
+            .iter()
+            .filter(|e| e.consumer_domain == consumer_domain)
+            .cloned()
+            .collect();
+        Ok(covers(&current, producer_domain, schema_name))
+    }
+}
+
 impl ResourceAuthorizer for InMemoryGrantEngine {
     async fn authorize(
         &self,
@@ -206,7 +359,7 @@ impl ResourceAuthorizer for InMemoryGrantEngine {
         action: &str,
         resource: &str,
     ) -> AuthorizationDecision {
-        evaluate(self, principal, action, resource).await
+        evaluate(self, self, principal, action, resource).await
     }
 }
 

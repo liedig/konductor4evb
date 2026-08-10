@@ -124,7 +124,7 @@ Write routes (both surfaces, direct API Gateway-to-SQS, `202 Accepted`): `POST /
 
 Read routes: `GET /subscriptions?domain={domain}&direction=inbound|outbound` and canonical `GET /subscriptions/{subscriptionId}`. Inbound lists a consumer domain's subscriptions under a `subscriber` binding; outbound lists subscriptions consuming a producer domain's schemas under a `publisher` binding, with full visibility because producer teams need consumer topology for notifications and future version migration. Detail authorizes against either visible side or a platform role.
 
-Unauthorized calls return `403 Forbidden`; deny-as-unknown concealment is dropped, accepting that 403 versus 404 reveals existence at the dev stage. List filtering still returns only entries the caller's side is authorized for. The `IamOnlyAuthorizer` bridge is deleted once command paths move to the engine.
+Unauthorized calls return `403 Forbidden`; deny-as-unknown concealment is dropped, accepting that 403 versus 404 reveals existence at the dev stage. List filtering still returns only entries the caller's side is authorized for. Subscription command paths move off `IamOnlyAuthorizer` onto the engine. The authorizer itself is not deleted: it is the standing IAM-only guard for platform-operated control-plane paths (domain registration/update, approval and provisioning workflows) — platform teams authenticate and then drive those resources with IAM, while the grant engine models publisher/subscriber resource grants for non-platform owners.
 
 ## Risks / Trade-offs
 
