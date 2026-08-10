@@ -1,5 +1,6 @@
 pub mod api;
 pub mod dynamodb;
+pub mod entitlement;
 pub mod envelope;
 pub mod error;
 pub mod grant;
@@ -13,3 +14,4 @@ pub mod principal_context;
 pub mod ses;
 pub mod streams;
 pub mod streams_db;
+pub mod subscription_resource;

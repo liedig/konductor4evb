@@ -26,6 +26,16 @@ pub mod actions {
     pub const SCHEMA_CREATE: &str = "schema:create";
     /// Append a version to an existing producer schema.
     pub const SCHEMA_VERSION_APPEND: &str = "schema:version-append";
+    /// Create a subscription against a composite resource
+    /// (`{consumer}/{producer}/{event}`, see `subscription_resource`).
+    pub const SUBSCRIPTION_CREATE: &str = "subscription:create";
+    /// Enable a subscription's rules (initial activation or per-environment).
+    pub const SUBSCRIPTION_ENABLE: &str = "subscription:enable";
+    /// Disable a subscription's rules; binding-only so subscribers retain
+    /// lifecycle control after revocation.
+    pub const SUBSCRIPTION_DISABLE: &str = "subscription:disable";
+    /// Delete a subscription; binding-only like disable.
+    pub const SUBSCRIPTION_DELETE: &str = "subscription:delete";
 }
 
 fn role_for_action(action: &str) -> Option<ResourceRole> {

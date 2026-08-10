@@ -1,13 +1,13 @@
 ## 1. Prerequisites and Authorization Composition
 
-- [ ] 1.1 Confirm `add-grant-engine` and `add-publisher-apis` are complete; wire this change to their bindings table, `DynamoGrantEngine`/`InMemoryGrantEngine`, action constants, trusted-principal contract, publisher bindings, and flat-verb schema operations
-- [ ] 1.2 Add composite resource grammar helpers in `nexus-common` next to the action constants: typed constructors for subscription resources (`{consumer}/{producer}/{event}`), the parser used by the engine, and the new action constants (`subscription:create`, `subscription:enable`, `subscription:disable`, `subscription:delete`); unit tests cover construction, round-trip parsing, and malformed input
-- [ ] 1.3 Add typed entitlement models in `nexus-common`: consumer domain, producer domain, scope (domain-wide or exact-schema), schema name (exact-schema only), creation metadata, trusted actor; reject malformed scopes at the model level
-- [ ] 1.4 Add behavior tests for OAuth-group and AWS-account domain isolation, IAM account-granularity across roles/sessions, equivalent OAuth/IAM decisions, exact versus domain-wide coverage, future-schema and future-version coverage, overlapping additive grants, self-subscription implicit coverage, and fail-closed malformed resources
+- [x] 1.1 Confirm `add-grant-engine` and `add-publisher-apis` are complete; wire this change to their bindings table, `DynamoGrantEngine`/`InMemoryGrantEngine`, action constants, trusted-principal contract, publisher bindings, and flat-verb schema operations
+- [x] 1.2 Add composite resource grammar helpers in `nexus-common` next to the action constants: typed constructors for subscription resources (`{consumer}/{producer}/{event}`), the parser used by the engine, and the new action constants (`subscription:create`, `subscription:enable`, `subscription:disable`, `subscription:delete`); unit tests cover construction, round-trip parsing, and malformed input
+- [x] 1.3 Add typed entitlement models in `nexus-common`: consumer domain, producer domain, scope pattern (schema-name charset with an optional single trailing `*`, validated at construction), creation metadata, trusted actor; reject malformed patterns at the model level
+- [ ] 1.4 Add behavior tests for OAuth-group and AWS-account domain isolation, IAM account-granularity across roles/sessions, equivalent OAuth/IAM decisions, exact-name, domain-wide `*`, and prefix coverage, future-schema and future-version coverage (including prefix families), overlapping additive grants, self-subscription implicit coverage, and fail-closed malformed resources
 
 ## 2. Entitlement Storage
 
-- [ ] 2.1 Add the `nexus-authorization-entitlements` DynamoDB table to the core stack: consumer-domain partition key, entitlement-id sort key, producer reverse GSI (`PRODUCER#{producerDomain}`), audit record item type, and retention policy matching the bindings table
+- [ ] 2.1 Add the `nexus-authorization-entitlements` DynamoDB table to the core stack: consumer-domain partition key, entitlement-id sort key, producer reverse GSI (`PRODUCER#{producerDomain}`), audit record item type, an `OLD_IMAGE` stream, and retention policy matching the bindings table
 - [ ] 2.2 Add entitlement access helpers in `nexus-common` (key construction, get/put/conditional delete, consumer-domain query, producer GSI query, transactional write with audit) with unit tests against the documented key patterns
 - [ ] 2.3 Add a producer reverse index GSI on the event-streams table (`PRODUCER#{producerDomain}`, sort key carrying schema name) serving revocation candidate queries and outbound subscription views, with backfill or projection coverage for existing records
 
@@ -15,15 +15,15 @@
 
 - [ ] 3.1 Extend `DynamoGrantEngine` to evaluate subscribe-family actions against both stores: binding check plus entitlement coverage for create/enable, binding-only for disable/delete and self-subscription, fail-closed on malformed composite resources, with structured token-free deny logging
 - [ ] 3.2 Extend `InMemoryGrantEngine` with fixture-fed entitlements mirroring the same evaluation rules
-- [ ] 3.3 Extend the shared decision-parity fixture suite with two-table cases (covering domain-wide grant, covering exact grant, overlapping grants, revoked grant, wrong consumer domain, self-subscription) and prove identical decisions on both implementations
+- [ ] 3.3 Extend the shared decision-parity fixture suite with two-table cases (covering `*` grant, covering exact-name grant, covering prefix grant, overlapping grants, revoked grant, wrong consumer domain, self-subscription) and prove identical decisions on both implementations
 - [ ] 3.4 Delete `IamOnlyAuthorizer` and rewire remaining consumers to the engine; update `nexus-common` doc comments
 
 ## 4. Entitlement Administration API
 
-- [ ] 4.1 Add strict request/response models for create (consumerDomain, producerDomain, scope, optional schemaName), list (consumerDomain or producerDomain filter), and revoke (by entitlementId); tests prove callers cannot supply audit fields or identifiers
+- [ ] 4.1 Add strict request/response models for create (consumerDomain, producerDomain, scopePattern), list (consumerDomain or producerDomain filter), and revoke (by entitlementId); tests prove callers cannot supply audit fields or identifiers and that malformed scope patterns are rejected
 - [ ] 4.2 Add `POST /entitlements`, `GET /entitlements?consumerDomain=|producerDomain=`, and `DELETE /entitlements/{entitlementId}` to the OAuth OpenAPI contract only, wired to the REQUEST authorizer; contract tests prove the routes do not exist on the IAM surface
-- [ ] 4.3 Implement the entitlement administration Lambda: dual authorization path (platform-admin, or publisher binding on the entitlement's producer domain; list additionally allows subscriber binding on the queried consumer domain), idempotent conditional create, conditional revoke with synchronous SQS revocation enqueue, 404/409 mapping, and one `TransactWriteItems` commit per mutation carrying its token-free audit record
-- [ ] 4.4 Add handler tests for create/list/revoke under each authorization path, non-admin denial, producer self-service scoped to its own domain only, cross-producer denial, idempotent re-create, concurrent-revoke conflict mapping, audit contents, and revocation message contents
+- [ ] 4.3 Implement the entitlement administration Lambda: dual authorization path (platform-admin, or publisher binding on the entitlement's producer domain; list additionally allows subscriber binding on the queried consumer domain), idempotent conditional create, conditional revoke, 404/409 mapping, and one `TransactWriteItems` commit per mutation carrying its token-free audit record
+- [ ] 4.4 Add handler tests for create/list/revoke under each authorization path, non-admin denial, producer self-service scoped to its own domain only, cross-producer denial, idempotent re-create, concurrent-revoke conflict mapping, and audit contents
 
 ## 5. Subscription Commands
 
@@ -35,10 +35,10 @@
 
 ## 6. Entitlement Revocation Worker
 
-- [ ] 6.1 Add the revocation SQS queue with its own DLQ, redrive policy, and retention matching the established command-queue pattern
-- [ ] 6.2 Implement the revocation worker Lambda: bounded-batch candidate queries through the producer reverse index, per-candidate coverage re-evaluation through the engine, idempotent disable of Nexus-managed rules and per-environment desired state in every environment, and retention of rule identities, pinned versions, and subscription records
-- [ ] 6.3 Persist durable per-subscription progress so a revocation completes only when every candidate is covered, disabled, or recorded in a durable failure state; retries re-read current grants and never emit unqualified success
-- [ ] 6.4 Add worker tests for last-grant revocation, overlapping-grant preservation, revocation during activation, partial disable failure with durable recording, resumed retries with re-evaluation, idempotent disablement, and no mutation of downstream application-bus rules
+- [ ] 6.1 Add the revocation SQS queue with its own DLQ, redrive policy, and retention matching the established command-queue pattern; add the entitlements-table stream consumer Lambda that translates entitlement `REMOVE` records (old image) into revocation queue messages and `EntitlementRevoked` business events, idempotent on the stream event id, with bisect-batch-on-error, retry caps, and an on-failure destination; consumer tests prove duplicate stream deliveries yield exactly one message and event, and non-entitlement records (audit inserts) are ignored
+- [ ] 6.2 Implement the revocation worker Lambda: bounded-batch candidate queries through the producer reverse index (narrowed by key equality or prefix where the revoked pattern allows), per-candidate coverage re-evaluation through the engine, idempotent disable of Nexus-managed rules and per-environment desired state in every environment, and retention of rule identities, pinned versions, and subscription records
+- [ ] 6.3 Add the scheduled reconciliation sweep (EventBridge Scheduler, hourly): a sweep Lambda that scans active subscriptions, re-evaluates each against current coverage through the engine, and disables any uncovered Nexus-managed rules and per-environment desired state, reusing the worker's disable logic
+- [ ] 6.4 Add worker tests for last-grant revocation, overlapping-grant preservation, revocation during activation, idempotent disablement, redrive with re-evaluation after a new grant, and no mutation of downstream application-bus rules; add sweep tests for drift disablement and no-op when coverage is intact
 
 ## 7. Subscription Reads
 
@@ -48,20 +48,20 @@
 
 ## 8. Subscriber Schema Catalog
 
-- [ ] 8.1 Implement `GET /schemas?consumerDomain={domain}`: read current entitlements, expand domain-wide grants against per-environment registries, look up exact-schema grants, deduplicate overlapping coverage, report latest version per environment, and apply producer-domain and environment filters with opaque cursor pagination
+- [ ] 8.1 Implement `GET /schemas?consumerDomain={domain}`: read current entitlements, expand scope patterns against per-environment registry listings (exact names looked up directly), deduplicate overlapping coverage, report latest version per environment, and apply producer-domain and environment filters with watermark cursor pagination per the design (sources in producer-domain order, listing resumes at the watermark and stops when the page fills, page size capped at 50, cursor binds the filter set and carries no authorization state)
 - [ ] 8.2 Implement `GET /schemas/{schemaName}?consumerDomain={domain}&domain={producerDomain}` with full latest content per environment under the same coverage check; uncovered targets return `403 Forbidden`
 - [ ] 8.3 Implement the platform-role bypass: `platform-admin` and `platform-auditor` omit consumerDomain and receive the platform-wide catalog, auditor read-only
-- [ ] 8.4 Add catalog behavior tests for grant union expansion, future schemas under a domain-wide grant, future versions under an exact-schema grant, exact-schema isolation, empty catalog for zero entitlements, environment skew, pagination across re-evaluated grants, revoked access, and platform bypass
+- [ ] 8.4 Add catalog behavior tests for grant union expansion, future schemas under a `*` grant, future versions under an exact-name grant, prefix-family expansion including future members with non-matching schemas excluded, empty catalog for zero entitlements, environment skew, stable ordering with no duplicates across pages, revoked coverage absent from later pages, mid-sequence grants excluded behind the watermark, cursor/filter mismatch returning 400, and platform bypass
 
 ## 9. Infrastructure and Operations
 
-- [ ] 9.1 Provision the entitlements table, event-streams producer GSI, revocation queue and worker, and least-privilege IAM: administration Lambda gets conditional write plus transactional write on entitlements; the worker gets event-streams read/update and EventBridge rule disable only; consumers get none
-- [ ] 9.2 Add metrics, structured audit logs, and alarms for authorization denials, revocation enqueue/progress/durable failures, failed rule disablement, command outcomes, and catalog latency without logging schema content, tokens, or claims
+- [ ] 9.1 Provision the entitlements table and its stream, the event-streams producer GSI, the revocation queue, the stream consumer, the worker, and the sweep schedule, with least-privilege IAM: administration Lambda gets conditional write plus transactional write on entitlements; the stream consumer gets entitlements-stream read, revocation-queue send, and control-plane bus put-events; the worker and sweep get event-streams read/update and EventBridge rule disable only; consumers get none
+- [ ] 9.2 Add metrics, structured audit logs, and alarms for authorization denials, revocation queue and DLQ depth, stream-consumer IteratorAge and on-failure destination deliveries, failed rule disablement, reconciliation drift, command outcomes, and catalog latency without logging schema content, tokens, or claims
 - [ ] 9.3 Add the seed path for migration: platform-admin tooling that creates subscriber bindings (via the grant-engine admin API) and entitlements for consumer domains retaining access before subscription re-evaluation, and verify rollback never bulk re-enables uncovered rules
 
 ## 10. Documentation and Validation
 
-- [ ] 10.1 Update `docs/development/decisions.md` with the two-store model, composite resource grammar, dual-path entitlement administration, revocation transport and completion semantics, 403-over-404 denial, and `IamOnlyAuthorizer` deletion
+- [ ] 10.1 Update `docs/development/decisions.md` with the two-store model, the scope-pattern grammar (including the prefix naming-hygiene caveat), entitlements as control-plane intent with EventBridge rules as compiled enforcement, composite resource grammar, dual-path entitlement administration, stream-driven side-effect transport (change records versus business events), reconciliation-bounded revocation completion, 403-over-404 denial, and `IamOnlyAuthorizer` deletion
 - [ ] 10.2 Update `docs/development/architecture.md` with the entitlements table, engine composition, revocation worker flow, flat-verb subscription views, and catalog expansion
 - [ ] 10.3 Update API and operational documentation with breaking route, request-body, authorization, and visibility migrations
 - [ ] 10.4 Run focused crate tests during each red/green/refactor cycle, then `make check` and `make test` for the workspace
