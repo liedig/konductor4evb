@@ -308,6 +308,36 @@ pub async fn mark_stream_removed(
     Ok(())
 }
 
+/// Flips one environment's desired-state flag on a stream record. Rule
+/// identities, pinned versions, and the record itself are retained — only the
+/// per-environment `enabled` flag changes.
+pub async fn set_stream_env_enabled(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    stream: &EventStream,
+    env_name: &str,
+    enabled: bool,
+) -> Result<()> {
+    ddb.update_item()
+        .table_name(table)
+        .key(PK, s(&stream.producer_domain))
+        .key(
+            SK,
+            s(&EventStream::sort_key(
+                &stream.schema_name,
+                &stream.consumer_domain,
+            )),
+        )
+        .update_expression("SET environments.#env.enabled = :enabled, updatedAt = :now")
+        .expression_attribute_names("#env", env_name)
+        .expression_attribute_values(":enabled", AttributeValue::Bool(enabled))
+        .expression_attribute_values(":now", s(&chrono::Utc::now().to_rfc3339()))
+        .send()
+        .await
+        .context("failed to persist env enabled state")?;
+    Ok(())
+}
+
 fn collect_streams(items: Option<Vec<HashMap<String, AttributeValue>>>) -> Vec<EventStream> {
     items
         .unwrap_or_default()

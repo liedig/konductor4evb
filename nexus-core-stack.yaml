@@ -1470,6 +1470,65 @@ Resources:
                 Type: SQS
                 Destination: !GetAtt LambdaFailureDlq.Arn
 
+  # ---- Entitlement Revocation Worker ----
+  EntitlementRevocationWorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-entitlement-revocation-worker"
+      RetentionInDays: 30
+
+  EntitlementRevocationWorkerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: EntitlementRevocationWorkerLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-entitlement-revocation-worker"
+      CodeUri: ./control-plane/functions/entitlement-revocation-worker
+      Handler: bootstrap
+      Timeout: 120
+      Environment:
+        Variables:
+          ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+      Policies:
+        # Coverage re-evaluation is the same strongly consistent
+        # consumer-partition query the grant engine performs.
+        - !Ref EntitlementsTableReadPolicy
+        - Version: '2012-10-17'
+          Statement:
+            # Candidate queries run on the event-streams table's producer
+            # partition; disablement flips the per-env desired state only.
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource:
+                - !GetAtt EventStreamsTable.Arn
+                - !Sub "${EventStreamsTable.Arn}/index/*"
+            # Revocation disables Nexus-managed rules; it never deletes them
+            # and never touches consumer-side integration rules.
+            - Effect: Allow
+              Action:
+                - events:DisableRule
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${Organization}-*"
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt EntitlementRevocationQueue.Arn
+      Events:
+        RevocationQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt EntitlementRevocationQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
   # ---- Approval Notification Functions ----
   SendApprovalRequestNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup

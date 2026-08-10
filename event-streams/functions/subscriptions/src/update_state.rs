@@ -100,7 +100,14 @@ pub async fn handle(
 
     for (env_name, desired) in &body.environments {
         apply_rule_state(clients, &organization, env_name, &stream, desired.enabled).await?;
-        persist_env_enabled(clients, &streams_table, &stream, env_name, desired.enabled).await?;
+        streams_db::set_stream_env_enabled(
+            &clients.ddb,
+            &streams_table,
+            &stream,
+            env_name,
+            desired.enabled,
+        )
+        .await?;
     }
 
     outcome::emit(
@@ -305,35 +312,6 @@ async fn apply_rule_state(
     };
 
     result.map_err(|e| nexus_common::error::ControlPlaneError::EventBridge(e).into())
-}
-
-async fn persist_env_enabled(
-    clients: &Clients,
-    table: &str,
-    stream: &EventStream,
-    env_name: &str,
-    enabled: bool,
-) -> Result<()> {
-    clients
-        .ddb
-        .update_item()
-        .table_name(table)
-        .key(streams_db::PK, s(&stream.producer_domain))
-        .key(
-            streams_db::SK,
-            s(&EventStream::sort_key(
-                &stream.schema_name,
-                &stream.consumer_domain,
-            )),
-        )
-        .update_expression("SET environments.#env.enabled = :enabled, updatedAt = :now")
-        .expression_attribute_names("#env", env_name)
-        .expression_attribute_values(":enabled", AttributeValue::Bool(enabled))
-        .expression_attribute_values(":now", s(&chrono::Utc::now().to_rfc3339()))
-        .send()
-        .await
-        .context("failed to persist env enabled state")?;
-    Ok(())
 }
 
 #[cfg(test)]

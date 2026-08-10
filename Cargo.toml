@@ -23,6 +23,7 @@ members = [
     "control-plane/functions/oauth-authorizer",
     "control-plane/functions/binding-admin",
     "control-plane/functions/entitlement-admin",
+    "control-plane/functions/entitlement-revocation-worker",
     "control-plane/functions/entitlement-stream-consumer",
     "control-plane/functions/grant-benchmark",
 ]
