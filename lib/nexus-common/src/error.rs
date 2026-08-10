@@ -68,4 +68,7 @@ pub enum ControlPlaneError {
 
     #[error("Schemas error: {0}")]
     Schemas(String),
+
+    #[error("SQS error: {0}")]
+    Sqs(String),
 }

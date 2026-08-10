@@ -251,6 +251,11 @@ Resources:
         PointInTimeRecoveryEnabled: true
       StreamSpecification:
         StreamViewType: OLD_IMAGE
+      # Marker items written by the stream consumer carry this TTL so
+      # idempotency state never accumulates.
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
       AttributeDefinitions:
         - AttributeName: PK
           AttributeType: S
@@ -390,6 +395,27 @@ Resources:
       VisibilityTimeout: 30
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt PublishDlq.Arn
+        maxReceiveCount: 3
+
+  EntitlementRevocationDlq:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub "nexus-entitlement-revocation-dlq"
+      MessageRetentionPeriod: 1209600
+
+  EntitlementRevocationQueue:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub "nexus-entitlement-revocation-queue"
+      # The worker disables rules across every candidate subscription; the
+      # timeout must cover a bounded batch of EventBridge writes.
+      VisibilityTimeout: 120
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt EntitlementRevocationDlq.Arn
         maxReceiveCount: 3
 
   SubscriptionsDlqDepthAlarm:
@@ -1389,6 +1415,60 @@ Resources:
             RestApiId: !Ref NexusOAuthApi
             Path: /entitlements/{entitlementId}
             Method: DELETE
+
+  # ---- Entitlement Revocation Transport (stream consumer) ----
+  EntitlementStreamConsumerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-entitlement-stream-consumer"
+      RetentionInDays: 30
+
+  EntitlementStreamConsumerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: EntitlementStreamConsumerLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-entitlement-stream-consumer"
+      CodeUri: ./control-plane/functions/entitlement-stream-consumer
+      Handler: bootstrap
+      Environment:
+        Variables:
+          ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+          REVOCATION_QUEUE_URL: !Ref EntitlementRevocationQueue
+      Policies:
+        # Idempotency markers are conditional puts (and best-effort releases)
+        # on the entitlements table itself.
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+              Resource: !GetAtt AuthorizationEntitlementsTable.Arn
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource: !GetAtt EntitlementRevocationQueue.Arn
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !GetAtt NexusEventBus.Arn
+      Events:
+        EntitlementsStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt AuthorizationEntitlementsTable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 100
+            BisectBatchOnFunctionError: true
+            MaximumRetryAttempts: 3
+            DestinationConfig:
+              OnFailure:
+                Type: SQS
+                Destination: !GetAtt LambdaFailureDlq.Arn
 
   # ---- Approval Notification Functions ----
   SendApprovalRequestNotificationFunctionLogGroup:

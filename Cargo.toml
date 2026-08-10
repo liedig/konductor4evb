@@ -23,6 +23,7 @@ members = [
     "control-plane/functions/oauth-authorizer",
     "control-plane/functions/binding-admin",
     "control-plane/functions/entitlement-admin",
+    "control-plane/functions/entitlement-stream-consumer",
     "control-plane/functions/grant-benchmark",
 ]
 
@@ -36,7 +37,7 @@ aws-sdk-dynamodb = { version = "1", features = ["test-util"] }
 aws-sdk-eventbridge = { version = "1", features = ["test-util"] }
 aws-sdk-sesv2 = { version = "1", features = ["test-util"] }
 aws-sdk-sfn = { version = "1", features = ["test-util"] }
-aws-sdk-sqs = "1"
+aws-sdk-sqs = { version = "1", features = ["test-util"] }
 aws-sdk-sts = "1"
 aws-sdk-schemas = { version = "1", features = ["test-util"] }
 aws-sdk-cloudwatch = "1"
