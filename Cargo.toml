@@ -22,6 +22,7 @@ members = [
     "event-streams/functions/describe-schema",
     "control-plane/functions/oauth-authorizer",
     "control-plane/functions/binding-admin",
+    "control-plane/functions/entitlement-admin",
     "control-plane/functions/grant-benchmark",
 ]
 

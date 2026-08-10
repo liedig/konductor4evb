@@ -841,6 +841,154 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BindingAdminFunction.Arn}/invocations"
 
+  /entitlements:
+    post:
+      operationId: CreateEntitlement
+      summary: Grant a consumer domain coverage over a producer domain's schemas
+      description: Creates a coverage entitlement. Authorized for platform-admins and for callers holding a publisher binding on the producer domain (producer self-service). The scope pattern is `*` (whole producer domain, including future schemas), an exact schema name (all versions, including future versions), or a name prefix with a single trailing `*` (a family, including future members). Identical re-creates are idempotent. Server-assigned fields (entitlementId, createdAt, createdBy) are rejected if supplied.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEntitlementRequest"
+      responses:
+        "200":
+          description: An identical entitlement already existed (idempotent re-create)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entitlement"
+        "201":
+          description: Entitlement created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entitlement"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (caller is neither a platform-admin nor a publisher on the producer domain)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: The entitlement changed concurrently; retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EntitlementAdminFunction.Arn}/invocations"
+    get:
+      operationId: ListEntitlements
+      summary: List entitlements by consumer or producer domain
+      description: Exactly one of consumerDomain or producerDomain is required. Consumer lists authorize platform-admins, publishers on any producer domain, and subscribers on the queried consumer domain; producer lists authorize platform-admins and publishers on the queried producer domain.
+      parameters:
+        - name: consumerDomain
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: producerDomain
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Entitlements matching the filter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListEntitlementsResponse"
+        "400":
+          description: Validation error (missing or ambiguous filter)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EntitlementAdminFunction.Arn}/invocations"
+
+  /entitlements/{entitlementId}:
+    delete:
+      operationId: RevokeEntitlement
+      summary: Revoke an entitlement
+      description: Durable conditional delete that commits with its audit record in one transaction; new subscribe and enable decisions deny uncovered targets immediately. Active subscriptions the entitlement covered are disabled asynchronously by the revocation worker, with a scheduled sweep as backstop. Authorized for platform-admins and for callers holding a publisher binding on the entitlement's producer domain.
+      parameters:
+        - name: entitlementId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Entitlement revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entitlementId:
+                    type: string
+                  state:
+                    type: string
+                    enum: [revoked]
+        "403":
+          description: Access denied (caller is neither a platform-admin nor a publisher on the entitlement's producer domain)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Entitlement not found (unknown or already revoked)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EntitlementAdminFunction.Arn}/invocations"
+
   /bindings/{bindingId}:
     delete:
       operationId: RevokeBinding
@@ -963,6 +1111,49 @@ components:
           type: string
           description: Trusted principal identifier of the administrator who created the binding
 
+    CreateEntitlementRequest:
+      type: object
+      required: [consumerDomain, producerDomain, scopePattern]
+      additionalProperties: false
+      properties:
+        consumerDomain:
+          type: string
+          minLength: 1
+          description: Consumer domain the entitlement covers
+        producerDomain:
+          type: string
+          minLength: 1
+          description: Producer domain granting the coverage
+        scopePattern:
+          type: string
+          minLength: 1
+          description: "`*` (whole producer domain including future schemas), an exact schema name (all versions including future versions), or a name prefix with a single trailing `*` (a family including future members)"
+      example:
+        consumerDomain: checkout
+        producerDomain: orders
+        scopePattern: "Order*"
+    Entitlement:
+      type: object
+      properties:
+        entitlementId:
+          type: string
+        consumerDomain:
+          type: string
+        producerDomain:
+          type: string
+        scopePattern:
+          type: string
+        createdAt:
+          type: string
+        createdBy:
+          type: string
+    ListEntitlementsResponse:
+      type: object
+      properties:
+        entitlements:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entitlement"
     ListBindingsResponse:
       type: object
       properties:

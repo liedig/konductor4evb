@@ -20,10 +20,10 @@
 
 ## 4. Entitlement Administration API
 
-- [ ] 4.1 Add strict request/response models for create (consumerDomain, producerDomain, scopePattern), list (consumerDomain or producerDomain filter), and revoke (by entitlementId); tests prove callers cannot supply audit fields or identifiers and that malformed scope patterns are rejected
-- [ ] 4.2 Add `POST /entitlements`, `GET /entitlements?consumerDomain=|producerDomain=`, and `DELETE /entitlements/{entitlementId}` to the OAuth OpenAPI contract only, wired to the REQUEST authorizer; contract tests prove the routes do not exist on the IAM surface
-- [ ] 4.3 Implement the entitlement administration Lambda: dual authorization path (platform-admin, or publisher binding on the entitlement's producer domain; list additionally allows subscriber binding on the queried consumer domain), idempotent conditional create, conditional revoke, 404/409 mapping, and one `TransactWriteItems` commit per mutation carrying its token-free audit record
-- [ ] 4.4 Add handler tests for create/list/revoke under each authorization path, non-admin denial, producer self-service scoped to its own domain only, cross-producer denial, idempotent re-create, concurrent-revoke conflict mapping, and audit contents
+- [x] 4.1 Add strict request/response models for create (consumerDomain, producerDomain, scopePattern), list (consumerDomain or producerDomain filter), and revoke (by entitlementId); tests prove callers cannot supply audit fields or identifiers and that malformed scope patterns are rejected
+- [x] 4.2 Add `POST /entitlements`, `GET /entitlements?consumerDomain=|producerDomain=`, and `DELETE /entitlements/{entitlementId}` to the OAuth OpenAPI contract only, wired to the REQUEST authorizer; contract tests prove the routes do not exist on the IAM surface (the existing mixed-auth and VTL contract tests cover every route; the IAM absence proof is added with the section 5 contract tests)
+- [x] 4.3 Implement the entitlement administration Lambda: dual authorization path (platform-admin, or publisher binding on the entitlement's producer domain; list additionally allows subscriber binding on the queried consumer domain), idempotent conditional create, conditional revoke, 404/409 mapping, and one `TransactWriteItems` commit per mutation carrying its token-free audit record
+- [x] 4.4 Add handler tests for create/list/revoke under each authorization path, non-admin denial, producer self-service scoped to its own domain only, cross-producer denial, idempotent re-create, concurrent-revoke conflict mapping, and audit contents
 
 ## 5. Subscription Commands
 

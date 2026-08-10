@@ -30,6 +30,7 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
         ControlPlaneError::DomainNotFound { .. }
         | ControlPlaneError::RequestNotFound { .. }
         | ControlPlaneError::BindingNotFound { .. }
+        | ControlPlaneError::EntitlementNotFound { .. }
         | ControlPlaneError::SchemaNotFound { .. } => error_response(
             404,
             ApiError {
@@ -42,6 +43,7 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
         ),
         ControlPlaneError::DomainAlreadyExists { .. }
         | ControlPlaneError::BindingConflict { .. }
+        | ControlPlaneError::EntitlementConflict { .. }
         | ControlPlaneError::SchemaAlreadyExists { .. } => error_response(
             409,
             ApiError {

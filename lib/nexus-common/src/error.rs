@@ -43,6 +43,10 @@ pub enum ControlPlaneError {
 
     #[error("binding conflict: {reason}")]
     BindingConflict { reason: String },
+    #[error("entitlement not found: {entitlement_id}")]
+    EntitlementNotFound { entitlement_id: String },
+    #[error("entitlement conflict: {reason}")]
+    EntitlementConflict { reason: String },
 
     #[error("schema not found: {schema_name}")]
     SchemaNotFound { schema_name: String },

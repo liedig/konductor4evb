@@ -47,6 +47,36 @@ fn role_for_action(action: &str) -> Option<ResourceRole> {
     }
 }
 
+/// Direct binding check for administration paths that authorize by role and
+/// domain outside an engine action (entitlement administration authorizes a
+/// publisher binding on the producer domain or a subscriber binding on the
+/// consumer domain). Uses the same candidate-principal mapping and strongly
+/// consistent point reads as engine decisions; a store error fails closed.
+pub async fn has_role_binding(
+    store: &BindingStore,
+    principal: &TrustedPrincipal,
+    role: ResourceRole,
+    domain: &str,
+) -> bool {
+    for candidate in candidate_principals(principal) {
+        let pk = format!("PRINCIPAL#{}", candidate.key_segment());
+        let sk = format!("ROLE#{}#DOMAIN#{}", role.as_str(), domain);
+        match store.get_binding(&pk, &sk).await {
+            Ok(Some(_)) => return true,
+            Ok(None) => {}
+            Err(error) => {
+                warn!(
+                    domain,
+                    error = %error,
+                    "binding check: store error, fail closed"
+                );
+                return false;
+            }
+        }
+    }
+    false
+}
+
 /// The principals a trusted principal can claim bindings through: each
 /// issuer-qualified team group for OAuth, the account for IAM. Groups that
 /// cannot form a key segment are dropped; the model rejects `#` segments on
