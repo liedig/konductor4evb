@@ -231,6 +231,75 @@ Resources:
               - dynamodb:GetItem
             Resource: !GetAtt AuthorizationBindingsTable.Arn
 
+  # ---- DynamoDB (authorization entitlements) ----
+  # Consumer-coverage store: Entitlement items keyed by consumer domain,
+  # EntitlementAuditRecord items keyed by entitlement. Sparse GSIs serve
+  # administration paths; coverage decisions use strongly consistent queries
+  # on the consumer partition. The OLD_IMAGE stream feeds the revocation
+  # worker with each removed entitlement's full prior state.
+  AuthorizationEntitlementsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub "nexus-authorization-entitlements"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      StreamSpecification:
+        StreamViewType: OLD_IMAGE
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+        - AttributeName: entitlementId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: by-producer
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: by-entitlement-id
+          KeySchema:
+            - AttributeName: entitlementId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  # Reserved for the subscription consumers that add-subscriber-entitlements
+  # wires: decision reads are strongly consistent queries on the consumer
+  # partition, so Query on the table is the entire permission set.
+  # Deliberately attached to no role in this change.
+  EntitlementsTableReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "nexus-entitlements-table-read"
+      Description: Read-only entitlements-table access for coverage-decision consumers
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:Query
+            Resource: !GetAtt AuthorizationEntitlementsTable.Arn
+
   # ---- Dead Letter Queue (read Lambda functions) ----
   LambdaFailureDlq:
     Type: AWS::SQS::Queue
@@ -2072,6 +2141,15 @@ Outputs:
   BindingsTableReadPolicyArn:
     Description: Reserved read-only bindings-table managed policy (attach to future publisher consumers)
     Value: !Ref BindingsTableReadPolicy
+  AuthorizationEntitlementsTableName:
+    Description: Authorization entitlements DynamoDB table name
+    Value: !Ref AuthorizationEntitlementsTable
+  AuthorizationEntitlementsTableStreamArn:
+    Description: Authorization entitlements table stream ARN (OLD_IMAGE) for the revocation worker
+    Value: !GetAtt AuthorizationEntitlementsTable.StreamArn
+  EntitlementsTableReadPolicyArn:
+    Description: Reserved read-only entitlements-table managed policy (attach to coverage-decision consumers)
+    Value: !Ref EntitlementsTableReadPolicy
   SubscriptionDeliveryRoleArn:
     Description: Role EventBridge assumes to deliver subscription events to app-side buses
     Value: !GetAtt SubscriptionDeliveryRole.Arn

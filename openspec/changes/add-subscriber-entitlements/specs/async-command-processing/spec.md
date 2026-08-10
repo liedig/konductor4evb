@@ -35,3 +35,9 @@ The subscription command handler and workflows SHALL emit outcome events on the 
 - **WHEN** a subscribe command is denied because the caller lacks a subscriber binding or no current entitlement covers the target producer schema
 - **THEN** the handler SHALL emit `SubscribeFailed` with the authorization reason
 - **AND THEN** the message SHALL be acknowledged (not retried) since the failure is deterministic
+
+#### Scenario: Validation failure emits outcome event
+
+- **WHEN** a subscribe command fails business validation (e.g., unknown domain or rule-name constraint violation)
+- **THEN** the handler SHALL emit `SubscribeFailed` with the validation error
+- **AND THEN** the message SHALL be acknowledged (not retried) since the failure is deterministic

@@ -1,6 +1,7 @@
 pub mod api;
 pub mod dynamodb;
 pub mod entitlement;
+pub mod entitlement_store;
 pub mod envelope;
 pub mod error;
 pub mod grant;

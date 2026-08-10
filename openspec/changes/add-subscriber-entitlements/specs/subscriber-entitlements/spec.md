@@ -2,19 +2,36 @@
 
 ### Requirement: Entitlement storage holds consumer-domain coverage grants
 
-Nexus SHALL store entitlements in a dedicated entitlements table keyed by consumer domain with a stable entitlement identifier. An entitlement SHALL grant a consumer domain coverage of exactly one scope: `DOMAIN` (all schemas from a producer domain, including schemas created later) or `SCHEMA` (all versions of one named producer schema, including versions published later). Every entitlement SHALL carry consumer domain, producer domain, scope, creation metadata, and the trusted actor that created it. Entitlements SHALL be environment-agnostic. Revocation SHALL delete the entitlement row; revoked history SHALL exist only in audit records, so current coverage is always an existence check.
+Nexus SHALL store entitlements in a dedicated entitlements table keyed by consumer domain with a stable entitlement identifier. An entitlement SHALL grant a consumer domain coverage of the producer schemas matched by exactly one scope pattern: a string in the EventBridge schema-name charset with an optional single trailing `*`. The pattern `*` SHALL cover all schemas from the producer domain including schemas created later; an exact name SHALL cover all versions of one schema including versions published later; a name prefix with a trailing `*` SHALL cover the matching family including matching schemas created later. Malformed patterns SHALL be rejected before any write. Every entitlement SHALL carry consumer domain, producer domain, scope pattern, creation metadata, and the trusted actor that created it. Entitlements SHALL be environment-agnostic: coverage SHALL be evaluated identically regardless of the environment the consumer works in, and per-environment control SHALL live in the subscription rather than the entitlement. Revocation SHALL delete the entitlement row; revoked history SHALL exist only in audit records, so current coverage is always an existence check.
 
-#### Scenario: Domain-wide entitlement covers future schemas
+#### Scenario: Domain-wide pattern covers future schemas
 
-- **WHEN** a consumer domain holds a `DOMAIN` entitlement for producer domain `orders`
+- **WHEN** a consumer domain holds an entitlement with scope pattern `*` for producer domain `orders`
 - **AND WHEN** a publisher later creates a new schema in `orders`
 - **THEN** the new schema SHALL be covered without any entitlement change
 
-#### Scenario: Exact-schema entitlement covers future versions
+#### Scenario: Exact-name pattern covers future versions
 
-- **WHEN** a consumer domain holds a `SCHEMA` entitlement for one producer schema
+- **WHEN** a consumer domain holds an entitlement whose scope pattern is the exact name of one producer schema
 - **AND WHEN** a publisher later appends a new version to that schema
 - **THEN** the new version SHALL be covered without any entitlement change
+
+#### Scenario: Prefix pattern covers a family including future members
+
+- **WHEN** a consumer domain holds an entitlement with scope pattern `Order*` for producer domain `orders`
+- **THEN** existing and later-created `orders` schemas whose names begin with `Order` SHALL be covered
+- **AND THEN** schemas whose names do not begin with `Order` SHALL NOT be covered
+
+#### Scenario: Malformed pattern rejected
+
+- **WHEN** an entitlement create carries a scope pattern outside the schema-name charset or with a wildcard other than a single trailing `*`
+- **THEN** the request SHALL be rejected and no entitlement SHALL be created
+
+#### Scenario: Coverage is environment-agnostic
+
+- **WHEN** a subscription is created under a covering entitlement with per-environment directives
+- **THEN** the entitlement SHALL cover every environment's directive identically
+- **AND THEN** per-environment versions and enablement SHALL be governed by the subscription alone
 
 #### Scenario: Revoked entitlement no longer covers
 
@@ -54,7 +71,7 @@ Entitlement administration SHALL be exposed as flat-verb routes on the OAuth con
 
 ### Requirement: Entitlement mutations are conditional with atomic audit
 
-Entitlement creates SHALL be idempotent for the same consumer domain, producer domain, and scope via a not-exists condition. Revokes SHALL be conditioned on the entitlement's current existence. Every mutation SHALL commit a token-free audit record (mutation type, trusted actor, timestamp, scope summary) in the same transaction as the mutation itself. A successful revoke SHALL enqueue exactly one revocation message carrying the full revoked scope to the revocation queue.
+Entitlement creates SHALL be idempotent for the same consumer domain, producer domain, and scope via a not-exists condition. Revokes SHALL be conditioned on the entitlement's current existence. Every mutation SHALL commit a token-free audit record (mutation type, trusted actor, timestamp, scope summary) in the same transaction as the mutation itself. A committed revoke SHALL result in exactly one revocation message carrying the full revoked scope being enqueued to the revocation queue, produced from the entitlements table stream so the notification is atomic with the delete and cannot be lost by a post-commit handler failure. Duplicate stream deliveries SHALL NOT produce duplicate revocation messages. A committed revoke SHALL also emit an `EntitlementRevoked` business event on the control-plane bus.
 
 #### Scenario: Identical re-create is idempotent
 
@@ -72,6 +89,13 @@ Entitlement creates SHALL be idempotent for the same consumer domain, producer d
 
 - **WHEN** an entitlement revoke commits
 - **THEN** exactly one revocation message carrying the revoked consumer domain, producer domain, and scope SHALL be enqueued for asynchronous subscription re-evaluation
+
+#### Scenario: Revocation notification survives handler failure
+
+- **WHEN** an entitlement revoke commits
+- **AND WHEN** the administration handler fails before returning a response
+- **THEN** the revocation message SHALL still be enqueued via the entitlements table stream
+- **AND THEN** an `EntitlementRevoked` business event SHALL still be emitted
 
 ### Requirement: Subscribe authorization composes binding and coverage inside the grant engine
 
@@ -111,7 +135,7 @@ The grant engine SHALL evaluate subscribe-family actions against both authorizat
 
 ### Requirement: Entitlement revocation disables uncovered subscriptions asynchronously
 
-Revocation SHALL take effect for new decisions synchronously with the entitlement delete. A revocation worker SHALL then process the queued revocation message in bounded batches: query candidate active subscriptions through the producer reverse index, re-evaluate each candidate's producer schema against the consumer domain's remaining current grants through the engine, and where no grant covers, disable the Nexus-managed EventBridge rule and per-environment desired state in every environment. The worker SHALL retain subscription records, rule identities, and pinned versions. The worker SHALL persist per-subscription progress durably, SHALL treat disablement as idempotent, SHALL re-read current grants on every retry, and SHALL NOT report completion until every candidate is covered, disabled, or recorded in a durable failure state. Revocation SHALL NOT automatically re-enable subscriptions after a later grant.
+Revocation SHALL take effect for new decisions synchronously with the entitlement delete. A revocation worker SHALL then process the queued revocation message in bounded batches: query candidate active subscriptions through the producer reverse index, re-evaluate each candidate's producer schema against the consumer domain's remaining current grants through the engine, and where no grant covers, disable the Nexus-managed EventBridge rule and per-environment desired state in every environment. The worker SHALL retain subscription records, rule identities, and pinned versions. Disablement SHALL be idempotent, and every retry SHALL re-read current grants. Worker failures SHALL be retried through the queue's redrive policy and surfaced via the dead-letter queue. A scheduled reconciliation sweep SHALL re-evaluate active subscriptions against current coverage and disable any that remain uncovered. Revocation SHALL NOT automatically re-enable subscriptions after a later grant.
 
 #### Scenario: Uncovered subscription is disabled in every environment
 
@@ -122,13 +146,19 @@ Revocation SHALL take effect for new decisions synchronously with the entitlemen
 #### Scenario: Alternative grant cancels disablement
 
 - **WHEN** a candidate subscription remains covered by another current entitlement at evaluation time
-- **THEN** the worker SHALL leave it enabled and record it as covered
+- **THEN** the worker SHALL leave it enabled
 
-#### Scenario: Partial failure is durably recorded
+#### Scenario: Worker failure retries and surfaces
 
 - **WHEN** disabling fails for a subset of candidates
-- **THEN** the worker SHALL record per-subscription failure state for retry
-- **AND THEN** the revocation SHALL NOT be reported complete until every candidate resolves
+- **THEN** the message SHALL be retried through the queue's redrive policy with current grants re-read
+- **AND THEN** a message that exhausts retries SHALL land in the dead-letter queue with an alarm
+
+#### Scenario: Reconciliation sweep disables uncovered drift
+
+- **WHEN** an active subscription has no current covering entitlement
+- **AND WHEN** the scheduled reconciliation sweep runs
+- **THEN** the sweep SHALL disable the subscription's Nexus-managed rule and desired state in every environment
 
 #### Scenario: Retry honors a newly added grant
 
@@ -147,7 +177,7 @@ The consumer schema catalog SHALL expose exactly the schemas covered by the quer
 #### Scenario: Catalog expands current entitlements
 
 - **WHEN** a caller with a `subscriber` binding on `checkout` requests the catalog for `checkout`
-- **THEN** the response SHALL contain exactly the schemas covered by `checkout`'s current domain-wide and exact-schema entitlements, deduplicated, with latest version per environment
+- **THEN** the response SHALL contain exactly the schemas matched by `checkout`'s current entitlement scope patterns, deduplicated, with latest version per environment
 
 #### Scenario: Zero entitlements yields an empty catalog
 

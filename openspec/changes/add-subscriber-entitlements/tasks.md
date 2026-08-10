@@ -7,9 +7,9 @@
 
 ## 2. Entitlement Storage
 
-- [ ] 2.1 Add the `nexus-authorization-entitlements` DynamoDB table to the core stack: consumer-domain partition key, entitlement-id sort key, producer reverse GSI (`PRODUCER#{producerDomain}`), audit record item type, an `OLD_IMAGE` stream, and retention policy matching the bindings table
-- [ ] 2.2 Add entitlement access helpers in `nexus-common` (key construction, get/put/conditional delete, consumer-domain query, producer GSI query, transactional write with audit) with unit tests against the documented key patterns
-- [ ] 2.3 Add a producer reverse index GSI on the event-streams table (`PRODUCER#{producerDomain}`, sort key carrying schema name) serving revocation candidate queries and outbound subscription views, with backfill or projection coverage for existing records
+- [x] 2.1 Add the `nexus-authorization-entitlements` DynamoDB table to the core stack: consumer-domain partition key, entitlement-id sort key, producer reverse GSI (`PRODUCER#{producerDomain}`), audit record item type, an `OLD_IMAGE` stream, and retention policy matching the bindings table
+- [x] 2.2 Add entitlement access helpers in `nexus-common` (key construction, get/put/conditional delete, consumer-domain query, producer GSI query, transactional write with audit) with unit tests against the documented key patterns
+- [x] 2.3 The event-streams table's base key (`producerDomain` hash, `{schemaName}#{consumerDomain}` sort) already is the producer reverse index the design wants — no new GSI or backfill is needed. Verify revocation candidate queries and outbound subscription views against it, and add the schema-name prefix query helper that prefix-pattern revocations narrow with
 
 ## 3. Grant Engine Extension
 

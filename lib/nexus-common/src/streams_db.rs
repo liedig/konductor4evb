@@ -173,6 +173,28 @@ pub async fn query_streams_by_schema(
     .context("failed to query streams by schema")
 }
 
+/// Revocation-candidate census for prefix-pattern revocations: every
+/// subscription in a producer domain whose schema name starts with `prefix`.
+pub async fn query_streams_by_schema_prefix(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    producer_domain: &str,
+    schema_name_prefix: &str,
+) -> Result<Vec<EventStream>> {
+    query_all_pages(|exclusive_start_key| {
+        ddb.query()
+            .table_name(table)
+            .key_condition_expression("#pk = :producer AND begins_with(#sk, :prefix)")
+            .expression_attribute_names("#pk", PK)
+            .expression_attribute_names("#sk", SK)
+            .expression_attribute_values(":producer", s(producer_domain))
+            .expression_attribute_values(":prefix", s(schema_name_prefix))
+            .set_exclusive_start_key(exclusive_start_key)
+    })
+    .await
+    .context("failed to query streams by schema-name prefix")
+}
+
 pub async fn query_streams_by_producer(
     ddb: &aws_sdk_dynamodb::Client,
     table: &str,
