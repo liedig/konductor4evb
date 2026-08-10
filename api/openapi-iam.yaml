@@ -563,18 +563,32 @@ paths:
   /schemas:
     get:
       operationId: ListSchemas
-      summary: Discover event schemas offered by a producer domain
+      summary: Discover the schemas a consumer domain is entitled to
       description: >
-        Read-only schema discovery. Lists schemas from the producer's
-        per-environment registries. When no environment is specified, returns
-        all environments; when an environment is specified, returns only that
-        environment's registry and schemas.
+        The subscriber catalog: exactly the schemas covered by the given
+        consumer domain's current entitlements, expanded from the producers'
+        per-environment registries (the source of truth), deduplicated across
+        overlapping grants, with the latest version per environment so skew is
+        visible before subscribing. Requires a `subscriber` binding on the
+        consumer domain. `platform-admin` and `platform-auditor` callers may
+        omit `consumerDomain` to inspect the platform-wide catalog. A consumer
+        domain with no entitlements receives an empty list — enumeration
+        reveals nothing about what exists. Pagination uses an opaque
+        continuation token bound to the request's filter set; authorization is
+        re-evaluated on every page.
       x-amazon-apigateway-auth:
         type: AWS_IAM
       parameters:
+        - name: consumerDomain
+          in: query
+          required: false
+          description: The consumer domain whose entitlements expand into the catalog. Omit only as a platform role.
+          schema:
+            type: string
         - name: domain
           in: query
-          required: true
+          required: false
+          description: Narrow the catalog to one producer domain. A producer that does not exist or is not ACTIVE yields an empty list.
           schema:
             type: string
         - name: environment
@@ -583,15 +597,33 @@ paths:
           schema:
             type: string
           description: Filter to a single environment (e.g., dev, staging, prod).
+        - name: maxResults
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 50
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         "200":
-          description: Schemas offered by the domain
+          description: The entitlement-covered catalog page
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ListSchemasResponse"
-        "404":
-          description: Domain not found or not active
+        "400":
+          description: Validation error (malformed or filter-mismatched continuation token)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: No subscriber binding on the consumer domain, or the platform-wide catalog was requested without a platform role
           content:
             application/json:
               schema:
@@ -713,6 +745,12 @@ paths:
     get:
       operationId: DescribeSchema
       summary: Describe a schema including per-environment latest versions
+      description: >
+        Full schema detail under the same coverage check as the catalog: a
+        `subscriber` binding on the consumer domain plus a current covering
+        entitlement. Platform roles may omit `consumerDomain` to inspect any
+        schema. Uncovered targets receive 403; a schema absent from every
+        environment receives 404.
       x-amazon-apigateway-auth:
         type: AWS_IAM
       parameters:
@@ -725,6 +763,13 @@ paths:
         - name: domain
           in: query
           required: true
+          description: The producer domain.
+          schema:
+            type: string
+        - name: consumerDomain
+          in: query
+          required: false
+          description: The consumer domain whose coverage authorizes the read. Omit only as a platform role.
           schema:
             type: string
       responses:
@@ -734,6 +779,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SchemaDetail"
+        "403":
+          description: No subscriber binding or no covering entitlement, or consumerDomain omitted without a platform role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Domain or schema not found
           content:
@@ -1166,6 +1217,9 @@ components:
         schemaName:
           type: string
           example: acme-orders@OrderNotification
+        producerDomain:
+          type: string
+          description: The producer domain the schema was expanded from.
         source:
           type: string
         detailType:
@@ -1192,43 +1246,22 @@ components:
     ListSchemasResponse:
       type: object
       properties:
-        domain:
-          type: string
-        environments:
-          type: object
-          additionalProperties:
-            $ref: "#/components/schemas/EnvironmentSchemas"
-          example:
-            dev:
-              registry: acme-dev-sales-schema-registry
-              schemas:
-                - schemaName: acme-sales@InvoiceCreated
-                  source: acme-sales
-                  detailType: InvoiceCreated
-                  version: 1
-
-    EnvironmentSchemas:
-      type: object
-      properties:
-        registry:
-          type: string
-        schemas:
+        items:
           type: array
           items:
-            $ref: "#/components/schemas/SchemaVersionEntry"
-
-    SchemaVersionEntry:
-      type: object
-      properties:
-        schemaName:
+            $ref: "#/components/schemas/SchemaSummary"
+        nextToken:
           type: string
-          example: acme-orders@OrderNotification
-        source:
-          type: string
-        detailType:
-          type: string
-        version:
-          type: integer
+          description: Opaque watermark cursor, bound to the request's filter set.
+      example:
+        items:
+          - schemaName: acme-orders@OrderNotification
+            producerDomain: orders
+            source: acme-orders
+            detailType: OrderNotification
+            latestVersions:
+              dev: 5
+              prod: 3
 
     ErrorResponse:
       type: object

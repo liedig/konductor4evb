@@ -965,11 +965,21 @@ Resources:
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+          ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
       Policies:
+        # Catalog authorization: subscriber-binding point read plus the
+        # strongly consistent consumer-partition entitlement query.
+        - !Ref BindingsTableReadPolicy
+        - !Ref EntitlementsTableReadPolicy
         - Version: '2012-10-17'
           Statement:
+            # ACTIVE-domain expansion reads; Scan serves the platform-wide
+            # catalog path (bounded by the 1,000-domain deployment cap).
             - Effect: Allow
-              Action: [dynamodb:GetItem]
+              Action: [dynamodb:GetItem, dynamodb:Scan]
               Resource: !GetAtt DomainsTable.Arn
             - Effect: Allow
               Action: [schemas:ListSchemas, schemas:ListSchemaVersions, schemas:DescribeSchema]
@@ -1010,7 +1020,15 @@ Resources:
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+          ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
       Policies:
+        # Detail authorization: subscriber-binding point read plus the
+        # coverage query on the consumer entitlement partition.
+        - !Ref BindingsTableReadPolicy
+        - !Ref EntitlementsTableReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow

@@ -971,6 +971,97 @@ fn subscription_read_functions_read_the_bindings_table() {
 }
 
 #[test]
+fn schema_catalog_is_entitlement_filtered_and_watermark_paginated() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let op = at(at(at(&doc, "paths"), "/schemas"), "get");
+        let params = seq(at(op, "parameters"));
+        let mut names: Vec<&str> = params.iter().map(|p| text(at(p, "name"))).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["consumerDomain", "domain", "environment", "maxResults", "nextToken"],
+            "the catalog is consumer-keyed with producer/environment filters and a watermark cursor"
+        );
+        for name in &names {
+            let param = params
+                .iter()
+                .find(|p| text(at(p, "name")) == *name)
+                .unwrap();
+            assert!(
+                !boolean(at(param, "required")),
+                "{name} must be optional — consumerDomain is omitted only by platform roles"
+            );
+        }
+        let max = at(
+            at(
+                params
+                    .iter()
+                    .find(|p| text(at(p, "name")) == "maxResults")
+                    .unwrap(),
+                "schema",
+            ),
+            "maximum",
+        );
+        assert_eq!(int(max), 50, "page size is capped at 50");
+        let responses = mapping(at(op, "responses"));
+        assert!(
+            responses.contains_key("400"),
+            "cursor/filter mismatch is a 400"
+        );
+        assert!(
+            responses.contains_key("403"),
+            "missing binding or platform role is a 403"
+        );
+        assert!(
+            !responses.contains_key("404"),
+            "a producer filter that matches nothing yields an empty list, not a 404"
+        );
+    }
+}
+
+#[test]
+fn schema_detail_requires_coverage_or_a_platform_role() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let op = at(at(at(&doc, "paths"), "/schemas/{schemaName}"), "get");
+        let params = seq(at(op, "parameters"));
+        let names: Vec<&str> = params.iter().map(|p| text(at(p, "name"))).collect();
+        assert!(
+            names.contains(&"consumerDomain"),
+            "detail authorizes coverage against the consumer domain"
+        );
+        let responses = mapping(at(op, "responses"));
+        for code in ["403", "404"] {
+            assert!(
+                responses.contains_key(code),
+                "detail must distinguish uncovered ({code}) from absent"
+            );
+        }
+    }
+}
+
+#[test]
+fn catalog_functions_read_bindings_and_entitlements() {
+    let doc = core_template();
+    for logical_id in ["ListSchemasFunction", "DescribeSchemaFunction"] {
+        let func = resource(&doc, logical_id);
+        let env = mapping(at(at(props(func), "Environment"), "Variables"));
+        for var in ["BINDINGS_TABLE", "ENTITLEMENTS_TABLE"] {
+            assert!(
+                env.contains_key(var),
+                "{logical_id} needs {var} for coverage authorization"
+            );
+        }
+        let (_, managed) = function_policy_shape(&doc, logical_id);
+        for policy in ["BindingsTableReadPolicy", "EntitlementsTableReadPolicy"] {
+            assert!(
+                managed.contains(&policy.to_string()),
+                "{logical_id} must attach {policy}"
+            );
+        }
+    }
+}
+
+#[test]
 fn activation_workflow_queries_entitlements_before_enabling() {
     let doc = core_template();
     let workflow = resource(&doc, "ActivateSubscriptionWorkflow");

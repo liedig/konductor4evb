@@ -48,10 +48,10 @@
 
 ## 8. Subscriber Schema Catalog
 
-- [ ] 8.1 Implement `GET /schemas?consumerDomain={domain}`: read current entitlements, expand scope patterns against per-environment registry listings (exact names looked up directly), deduplicate overlapping coverage, report latest version per environment, and apply producer-domain and environment filters with watermark cursor pagination per the design (sources in producer-domain order, listing resumes at the watermark and stops when the page fills, page size capped at 50, cursor binds the filter set and carries no authorization state)
-- [ ] 8.2 Implement `GET /schemas/{schemaName}?consumerDomain={domain}&domain={producerDomain}` with full latest content per environment under the same coverage check; uncovered targets return `403 Forbidden`
-- [ ] 8.3 Implement the platform-role bypass: `platform-admin` and `platform-auditor` omit consumerDomain and receive the platform-wide catalog, auditor read-only
-- [ ] 8.4 Add catalog behavior tests for grant union expansion, future schemas under a `*` grant, future versions under an exact-name grant, prefix-family expansion including future members with non-matching schemas excluded, empty catalog for zero entitlements, environment skew, stable ordering with no duplicates across pages, revoked coverage absent from later pages, mid-sequence grants excluded behind the watermark, cursor/filter mismatch returning 400, and platform bypass
+- [x] 8.1 Implement `GET /schemas?consumerDomain={domain}`: read current entitlements, expand scope patterns against per-environment registry listings (exact names looked up directly), deduplicate overlapping coverage, report latest version per environment, and apply producer-domain and environment filters with watermark cursor pagination per the design (sources in producer-domain order, listing resumes at the watermark and stops when the page fills, page size capped at 50, cursor binds the filter set and carries no authorization state)
+- [x] 8.2 Implement `GET /schemas/{schemaName}?consumerDomain={domain}&domain={producerDomain}` with full latest content per environment under the same coverage check; uncovered targets return `403 Forbidden`
+- [x] 8.3 Implement the platform-role bypass: `platform-admin` and `platform-auditor` omit consumerDomain and receive the platform-wide catalog, auditor read-only
+- [x] 8.4 Add catalog behavior tests for grant union expansion, future schemas under a `*` grant, future versions under an exact-name grant, prefix-family expansion including future members with non-matching schemas excluded, empty catalog for zero entitlements, environment skew, stable ordering with no duplicates across pages, revoked coverage absent from later pages, mid-sequence grants excluded behind the watermark, cursor/filter mismatch returning 400, and platform bypass
 
 ## 9. Infrastructure and Operations
 
