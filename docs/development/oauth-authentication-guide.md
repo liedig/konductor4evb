@@ -204,16 +204,19 @@ After login, the browser redirects to `http://localhost?code=XXXX`. Copy the cod
 | GET | `/domains/{domainName}` | admin or auditor | Describe a single domain |
 | PUT | `/domains/{domainName}` | admin | Update domain metadata (async, 202) |
 | POST | `/domains/registrations/decide` | admin | Approve or reject a registration |
-| GET | `/subscriptions` | admin or auditor | List subscriptions (filtered by caller account) |
+| GET | `/subscriptions?domain=…&direction=…` | admin or auditor | List subscriptions (inbound/outbound, binding-scoped) |
 | POST | `/subscriptions` | admin | Subscribe to a producer schema (async, 202) |
+| POST | `/subscriptions/state` | admin | Enable/disable per environment (async, 202) |
 | GET | `/subscriptions/{subscriptionId}` | admin or auditor | Describe a subscription |
-| PATCH | `/subscriptions/{subscriptionId}` | admin | Enable/disable per environment (async, 202) |
 | DELETE | `/subscriptions/{subscriptionId}` | admin | Unsubscribe (async, 202) |
-| GET | `/schemas` | admin or auditor | List schemas for a domain |
-| GET | `/schemas/{schemaName}` | admin or auditor | Describe a schema (latest versions per env) |
+| GET | `/schemas?consumerDomain=…` | admin or auditor | Subscriber catalog (entitlement-expanded; omit consumerDomain for the platform-wide view) |
+| GET | `/schemas/{schemaName}?consumerDomain=…&domain=…` | admin or auditor | Describe a schema (latest versions per env; 403 when uncovered) |
 | POST | `/bindings` | admin | Create a role binding (idempotent) |
 | GET | `/bindings?domain=…` | admin | List role bindings for a domain |
 | DELETE | `/bindings/{bindingId}` | admin | Revoke a role binding (durable) |
+| POST | `/entitlements` | admin | Create a subscriber entitlement (deterministic key, idempotent) |
+| GET | `/entitlements?consumerDomain=…` | admin | List entitlements by consumer or producer domain |
+| DELETE | `/entitlements/{entitlementId}` | admin | Revoke an entitlement (converges subscriptions via the revocation pipeline) |
 
 ### Using curl
 
@@ -338,6 +341,21 @@ Notes:
 - AWS-account bindings apply to every principal in the account (IAM role, user, or session); there is no per-ARN granularity.
 - Server-assigned fields (`bindingId`, `state`, `createdAt`, `createdBy`) are rejected if supplied in a create body.
 - Revocation is a durable delete that takes effect on the next authorization decision; list bindings with `GET /bindings?domain=<domain>` to find the `bindingId` to revoke.
+
+### Seeding entitlements (migration path)
+
+Consumer domains retain event access through **entitlements**. Seed them the same way — through the admin API, idempotent on re-run:
+
+```bash
+TOKEN="<platform-admin access token>" \
+ENTITLEMENTS='[
+  {"consumerDomain":"checkout","producerDomain":"orders","scopePattern":"*"},
+  {"consumerDomain":"billing","producerDomain":"orders","scopePattern":"Order*"}
+]' \
+make seed-entitlements
+```
+
+Migration order matters: seed the `subscriber` **bindings first** (`make seed-bindings`), then the entitlements, then let the revocation worker and hourly sweep re-evaluate any existing subscriptions — subscriptions whose coverage lapsed are disabled, never deleted, and nothing re-enables them automatically. The scope grammar: `*` covers the producer's whole domain including future schemas, an exact event name covers all its versions including future ones, and a trailing `*` covers a name family.
 
 ## Decoding and Inspecting a Token
 

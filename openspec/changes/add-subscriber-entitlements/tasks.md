@@ -61,8 +61,8 @@
 
 ## 10. Documentation and Validation
 
-- [ ] 10.1 Update `docs/development/decisions.md` with the two-store model, the scope-pattern grammar (including the prefix naming-hygiene caveat), entitlements as control-plane intent with EventBridge rules as compiled enforcement, composite resource grammar, dual-path entitlement administration, stream-driven side-effect transport (change records versus business events), reconciliation-bounded revocation completion, 403-over-404 denial, and `IamOnlyAuthorizer` retention for platform-operated paths
-- [ ] 10.2 Update `docs/development/architecture.md` with the entitlements table, engine composition, revocation worker flow, flat-verb subscription views, and catalog expansion
-- [ ] 10.3 Update API and operational documentation with breaking route, request-body, authorization, and visibility migrations
-- [ ] 10.4 Run focused crate tests during each red/green/refactor cycle, then `make check` and `make test` for the workspace
-- [ ] 10.5 Run strict OpenSpec validation and verify the implementation satisfies every subscriber-entitlements, event-subscriptions, schema-management, async-command-processing, and control-plane-access scenario
+- [x] 10.1 Update `docs/development/decisions.md` with the two-store model, the scope-pattern grammar (including the prefix naming-hygiene caveat), entitlements as control-plane intent with EventBridge rules as compiled enforcement, composite resource grammar, dual-path entitlement administration, stream-driven side-effect transport (change records versus business events), reconciliation-bounded revocation completion, 403-over-404 denial, and `IamOnlyAuthorizer` retention for platform-operated paths
+- [x] 10.2 Update `docs/development/architecture.md` with the entitlements table, engine composition, revocation worker flow, flat-verb subscription views, and catalog expansion
+- [x] 10.3 Update API and operational documentation with breaking route, request-body, authorization, and visibility migrations
+- [x] 10.4 Run focused crate tests during each red/green/refactor cycle, then `make check` and `make test` for the workspace
+- [x] 10.5 Run strict OpenSpec validation and verify the implementation satisfies every subscriber-entitlements, event-subscriptions, schema-management, async-command-processing, and control-plane-access scenario

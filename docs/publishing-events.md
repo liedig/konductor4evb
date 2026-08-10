@@ -134,11 +134,11 @@ Nexus validates the envelope it generates (identity, numeric version, structure,
 | `403` (schema writes) | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
 | `404` (schema writes) | Domain missing/inactive, or appending a version to a schema that does not exist | Check domain status; create the schema first |
 | `409` (create schema) | Schema already exists in this environment | Append a version instead |
-| `202` then nothing arrives | Publish denied (no binding), schema missing in that environment, or delivery failing | Confirm your binding; check the schema exists (`GET /schemas?domain=...`); the platform's publish DLQ holds exhausted messages |
+| `202` then nothing arrives | Publish denied (no binding), schema missing in that environment, or delivery failing | Confirm your binding; check the schema exists (`GET /schemas/{schemaName}?domain=...` — any caller with a binding on a covered consumer domain, or a platform role, can describe); the platform's publish DLQ holds exhausted messages |
 
 ## Discovering schemas
 
-`GET /schemas?domain={domain}` lists a domain's schemas with the latest version per environment, and `GET /schemas/{schemaName}?domain={domain}` returns detail including content. Use it to confirm your schema landed in the right environment, or to browse another domain's contract before subscribing. Discovery is currently open to any authenticated caller; see [Domain Management Guide — Discovering schemas](domain-management.md#discovering-schemas).
+`GET /schemas?consumerDomain={domain}` is the subscriber catalog: it expands that consumer domain's entitlements into the covered schemas with the latest version per environment — every listed entry is currently subscribable. `GET /schemas/{schemaName}?consumerDomain={domain}&domain={producer}` returns detail including content; uncovered targets answer `403`. Platform roles omit `consumerDomain` for the platform-wide view. See [Domain Management Guide — Discovering schemas](domain-management.md#discovering-schemas).
 
 ## Deep dive
 

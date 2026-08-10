@@ -392,13 +392,15 @@ Once domains are `ACTIVE`, teams connect them with **schema-first subscriptions*
 
 ### Discovering schemas
 
-Browse what a producer domain offers:
+Your catalog shows exactly what your domain may subscribe to — nothing more:
 
 ```bash
-awscurl -X GET "${API_URL}/schemas?domain=orders" --region ${AWS_REGION}
+awscurl -X GET "${API_URL}/schemas?consumerDomain=checkout" --region ${AWS_REGION}
 ```
 
-The response lists each schema (named `{source}@{event-name}`, e.g. `acme-orders@OrderNotification`) with the **latest version per environment** — so you can see before subscribing if dev is ahead of prod.
+The response expands your domain's **entitlements** (granted by the platform team) against producer registries, listing each covered schema (named `{source}@{event-name}`, e.g. `acme-orders@OrderNotification`) with the **latest version per environment** — so you can see before subscribing if dev is ahead of prod. If the catalog is empty, your domain has no entitlements yet: ask the platform team to grant one (e.g. `orders` / `OrderNotification*`). Filter with `&domain=orders` or `&environment=prod`, and page with `nextToken` (up to 50 entries per page).
+
+Entitlements follow one grammar: `*` covers a producer's whole domain (future schemas included), an exact event name covers all its versions (future versions included), and a trailing `*` covers a name family. You never write patterns yourself — the platform grants them — but reading your catalog tells you exactly which grammar you received.
 
 ### Subscribing
 
@@ -416,11 +418,11 @@ awscurl -X POST "${API_URL}/subscriptions" \
 Key things to know:
 
 - **You always subscribe to the latest schema version** — it is resolved and pinned per environment when the subscription activates. There is no version parameter: the schema is the contract, and there is one current representation of an event.
-- **The caller's AWS account must own the consumer domain.** Subscribing is a consumer-side action.
+- **You need a subscriber binding and entitlement coverage.** Your principal must hold the `subscriber` role on the consumer domain (granted via the binding administration API), and an entitlement must cover the target schema. Both are checked at subscribe time — and again inside the activation workflow, so a grant revoked mid-flight stops before any rule is created. A `403` on an existing subscription or schema means a missing binding or coverage, not a missing resource.
 - **Activation is all-or-nothing across environments.** If the schema is missing in any environment's registry, the subscription fails as a whole.
 - **Start with an environment paused** (e.g., avoid production event volume while developing) by passing initial state: `"environments": {"prod": {"enabled": false}}`.
 
-Track progress with `GET /subscriptions/{consumerDomain}.{producerDomain}.{eventName}` — status moves `PENDING → ACTIVE` (or `FAILED` with error detail).
+Track progress with `GET /subscriptions/{consumerDomain}.{producerDomain}.{eventName}` — status moves `PENDING → ACTIVE` (or `FAILED` with error detail). List your domain's streams with `GET /subscriptions?domain=checkout&direction=inbound` (or `direction=outbound` as a producer).
 
 ### Consuming events
 
@@ -429,13 +431,16 @@ Once the stream is `ACTIVE`, matching events arrive on **your app-side domain bu
 ### Pausing and resuming
 
 ```bash
-awscurl -X PATCH "${API_URL}/subscriptions/checkout.orders.OrderNotification" \
+awscurl -X POST "${API_URL}/subscriptions/state" \
   --region ${AWS_REGION} \
   -H "Content-Type: application/json" \
-  -d '{"environments": {"prod": {"enabled": false}}}'
+  -d '{
+    "id": "checkout.orders.OrderNotification",
+    "environments": {"prod": {"enabled": false}}
+  }'
 ```
 
-Disabling flips the delivery rule off atomically — the subscription, its pinned version, and the contract remain intact. Use it for cost control during development or as a kill switch during incidents.
+Disabling flips the delivery rule off atomically — the subscription, its pinned version, and the contract remain intact. Use it for cost control during development or as a kill switch during incidents. Re-enabling re-checks entitlement coverage: if the platform revoked your entitlement while the stream was paused, the enable is denied. Revocation itself never deletes your subscription — it disables the delivery rules, and a new grant plus an explicit re-enable restores the stream.
 
 ### Unsubscribing
 

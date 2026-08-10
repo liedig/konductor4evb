@@ -193,7 +193,31 @@ Creates are conditioned on `attribute_not_exists` (identical re-creates are idem
 
 **Binding administration** is flat-verb, OAuth-only, and platform-admin-only: `POST /bindings`, `GET /bindings?domain=…`, `DELETE /bindings/{bindingId}`, served by the `binding-admin` Lambda. The `platform-admin` global role resolves from the controlled Cognito group, never from the grant table, so administration cannot deadlock against an empty table. The IAM surface has no binding routes — IAM callers are *governed by* bindings, they do not govern them.
 
-**Consumer wiring**: the publish consumer and schema-admin handlers authorize through `DynamoGrantEngine` (reading bindings via the reserved `nexus-bindings-table-read` managed policy) — the engine's first production consumers. The domain-management and subscription mutation paths still run behind the bridging `IamOnlyAuthorizer` (allows IAM, denies OAuth) until `add-subscriber-entitlements` migrates them and deletes the bridge. A manifest-seeded parity suite (from the `evaluate-authorization-engine` spike's frozen fixtures) proves `InMemoryGrantEngine` and `DynamoGrantEngine` decide identically.
+**Consumer wiring**: the publish consumer, schema-admin handlers, and all subscription paths (commands and reads) authorize through `DynamoGrantEngine`, with subscription create/enable additionally gated by entitlement coverage. The bridging `IamOnlyAuthorizer` (allows IAM, denies OAuth) remains wired only on paths that are platform-operated by definition (domain management, entitlement administration on the IAM surface) — it is retained there deliberately, not as a migration stopover. A manifest-seeded parity suite (from the `evaluate-authorization-engine` spike's frozen fixtures) proves `InMemoryGrantEngine` and `DynamoGrantEngine` decide identically.
+
+### Entitlements
+
+Where bindings answer "may this principal act for this domain?", **entitlements** answer "which producer event contracts may this consumer domain see?". They live in a second table, `nexus-authorization-entitlements`, because their revocation semantics differ: a binding gates nothing materialized, but revoking an entitlement can strand active subscriptions that must be converged.
+
+| Attribute | Type | Key |
+|-----------|------|-----|
+| `consumerDomain` | String | Partition key (PK) |
+| `grant` | String (`{producerDomain}#{scopePattern}`) | Sort key (SK) |
+| `producerDomain` | String | GSI: `by-producer` (PK) |
+| `entitlementId` | String | GSI: `by-entitlement` (PK) |
+| `scopePattern` | String | — |
+| `grantedBy` / `grantedAt` / `revokedAt` | — | audit provenance |
+| `expiresAt` | Number (epoch, optional) | TTL — removal can lag expiry by days; expiry is also evaluated logically at read time |
+
+The **scope pattern** is a single additive grammar reused by coverage checks, subscription authorization, and catalog expansion: `*` covers the producer's whole domain (including future schemas), an exact detail type covers every version of one schema (including future versions), and a `*` suffix covers a prefix family (including future members). `DynamoGrantEngine::covers()` evaluates coverage against ACTIVE entitlements; `list_entitlements()` feeds the catalog expansion.
+
+**Revocation pipeline.** Revoke is a durable conditional delete in the admin transaction — effective at the *next decision* immediately. Converging already-materialized subscriptions is event-driven off the table's DynamoDB stream:
+
+1. **Stream consumer** (`entitlement-stream-consumer`) claims each REMOVE image with a conditional idempotency-marker put (a replayed record is a no-op), enqueues a revocation message to the `EntitlementRevocationQueue` (DLQ after 3 receives), and forwards audit records to `nexus-bus`. The stream carries **change records**, never business events.
+2. **Worker** (`entitlement-revocation-worker`) re-reads the consumer's remaining entitlements (fail-closed), finds candidate streams via exact, schema-prefix, or whole-partition queries narrowed by the revoked pattern, and disables the subscription's rules in every environment — the subscription record and its pinned version are retained so re-granting can re-enable.
+3. **Sweep** (`entitlement-coverage-sweep`, hourly `rate(1 hour)`) scans the event-streams table, re-evaluates coverage per stream, and disables any ACTIVE stream that lost coverage — bounding out-of-band drift and covering missed fast-path deliveries. Drift disablements are alarmed; steady state is zero.
+
+**Entitlement administration** mirrors binding administration: flat verbs, platform-admin-only, with a dual surface — OAuth for operators (`POST /entitlements`, `GET /entitlements`, `DELETE /entitlements/{entitlementId}`) and IAM for platform service roles under `IamOnlyAuthorizer`. Creates are deterministic-key conditioned (identical re-creates answer 200 with the stored entitlement); revokes are state-conditioned deletes; every mutation commits with its token-free `AuditRecord` in one `TransactWriteItems`.
 
 ### Endpoints
 
@@ -205,11 +229,11 @@ Creates are conditioned on `attribute_not_exists` (identical re-creates are idem
 | `PUT` | `/domains/{domainName}` | Async (SQS) | `domain-registrations` (update) |
 | `POST` | `/domains/registrations/decide` | Sync (Lambda proxy) | `decide-registration` |
 | `POST` | `/subscriptions` | Async (SQS) | `subscriptions` (subscribe) |
-| `GET` | `/subscriptions` | Sync (Lambda proxy) | `list-subscriptions` |
+| `POST` | `/subscriptions/state` | Async (SQS) | `subscriptions` (enable/disable per env) |
+| `GET` | `/subscriptions` | Sync (Lambda proxy) | `list-subscriptions` (direction-scoped) |
 | `GET` | `/subscriptions/{subscriptionId}` | Sync (Lambda proxy) | `describe-subscription` |
-| `PATCH` | `/subscriptions/{subscriptionId}` | Async (SQS) | `subscriptions` (enable/disable per env) |
 | `DELETE` | `/subscriptions/{subscriptionId}` | Async (SQS) | `subscriptions` (unsubscribe) |
-| `GET` | `/schemas` | Sync (Lambda proxy) | `list-schemas` |
+| `GET` | `/schemas` | Sync (Lambda proxy) | `list-schemas` (entitlement-expanded catalog) |
 | `GET` | `/schemas/{schemaName}` | Sync (Lambda proxy) | `describe-schema` |
 | `POST` | `/publish` | Async (SQS) | `publish-events` (store-and-forward publish) |
 | `POST` | `/schemas` | Sync (Lambda proxy) | `schema-admin` (create schema, version 1) |
@@ -217,8 +241,11 @@ Creates are conditioned on `attribute_not_exists` (identical re-creates are idem
 | `POST` | `/bindings` | Sync (Lambda proxy, OAuth only) | `binding-admin` (create) |
 | `GET` | `/bindings` | Sync (Lambda proxy, OAuth only) | `binding-admin` (list by domain) |
 | `DELETE` | `/bindings/{bindingId}` | Sync (Lambda proxy, OAuth only) | `binding-admin` (revoke) |
+| `POST` | `/entitlements` | Sync (Lambda proxy, OAuth + IAM) | `entitlement-admin` (create) |
+| `GET` | `/entitlements` | Sync (Lambda proxy, OAuth + IAM) | `entitlement-admin` (list) |
+| `DELETE` | `/entitlements/{entitlementId}` | Sync (Lambda proxy, OAuth + IAM) | `entitlement-admin` (revoke) |
 
-Each command handler Lambda receives SQS messages with a `HttpMethod` message attribute and dispatches accordingly (`domain-registrations`: register/update; `subscriptions`: subscribe/update-state/unsubscribe). Subscription write integrations also inject the caller's AWS account id (`$context.identity.accountId`) into the message body for ownership validation.
+Each command handler Lambda receives SQS messages with a `HttpMethod` message attribute and dispatches accordingly (`domain-registrations`: register/update; `subscriptions`: subscribe/update-state/unsubscribe). Subscription commands carry the versioned trusted-principal envelope in message attributes; the handler reconstructs the principal and authorizes via `DynamoGrantEngine` before any state change.
 
 ---
 
@@ -605,7 +632,9 @@ graph LR
     wf -->|"SubscriptionActivated"| bus["Nexus Bus"]
 ```
 
-Activation is **all-or-nothing across environments**: if the schema is missing in any env or any step fails, compensation deletes the rules created so far and the record becomes `FAILED`. Unsubscribe removes targets, rules, and alarms per env (idempotent), marks the record `REMOVED`, and retains it 90 days via TTL. Orphaned integration rules on the consumer's own bus are the application team's responsibility.
+Activation is **all-or-nothing across environments**: if the schema is missing in any env or any step fails, compensation deletes the rules created so far and the record becomes `FAILED`. Before the first rule is created, the workflow **re-queries entitlement coverage** (`QueryCoveringEntitlements` → `CoverageGate`): the command handler's decision and rule materialization are separated by queue latency, so a grant revoked in between must stop the pipeline without materializing anything. Unsubscribe removes targets, rules, and alarms per env (idempotent), marks the record `REMOVED`, and retains it 90 days via TTL. Orphaned integration rules on the consumer's own bus are the application team's responsibility.
+
+**Subscription authorization** splits by composite resource: `subscription:environment:{id}:{env}` create/enable decisions require both a `subscriber` binding on the consumer domain *and* entitlement coverage of the target detail type (self-subscription within a domain skips the coverage check — a domain always sees its own schemas); disable and unsubscribe require the binding alone, so a lapsed entitlement can never wedge a subscription. Entitlement revocation later disables the subscription's rules in every environment via the revocation pipeline — the subscription record, its pinned version, and its enabled flags are retained, and re-granting coverage does not re-enable automatically: the consumer re-enables explicitly.
 
 Per-environment **enable/disable** maps to native rule state (e.g., subscribe with prod paused during development; kill switch during incidents). Disabled ≠ removed: the contract stays signed and the pinned version is retained.
 
@@ -616,9 +645,11 @@ PENDING ──activation succeeds──> ACTIVE ──unsubscribe──> REMOVED
    └──────activation fails──────> FAILED
 ```
 
-### Schema Discovery
+### Schema Discovery (Subscriber Catalog)
 
-`GET /schemas?domain={producer}` merges the producer's per-env registries keyed by schema name, reporting the latest version per environment — version skew is visible before subscribing. Read-only; schema writes go through the publisher schema-management endpoints above.
+`GET /schemas?consumerDomain={domain}` is the **subscriber catalog**: the caller's current entitlements are expanded against the producers' per-environment registries — `*` grants list the whole registry, prefix grants list and filter, exact grants look the schema up directly. Overlapping grants deduplicate into one entry per schema reporting the latest version per environment, so version skew is visible before subscribing. Every entry is, by construction, currently subscribable by the caller.
+
+Pagination is a **watermark cursor**, not an offset: the caller's sources are ordered by producer domain, each page resumes at the watermark, and listing stops when the page fills (max 50). The cursor carries only the watermark plus a hash of the filter set — no authorization state — so coverage granted mid-sequence behind the watermark never appears on later pages, and revoked coverage cannot be re-emitted. A filter mismatch answers 400. `GET /schemas/{schemaName}?consumerDomain=…&domain=…` runs the same coverage check and returns the latest content per environment; uncovered targets answer 403, absent ones 404. Platform roles (`platform-admin`, `platform-auditor`) omit `consumerDomain` and receive the platform-wide catalog sourced from ACTIVE domains; non-platform callers must name a consumer domain they hold a `subscriber` binding on. Read-only; schema writes go through the publisher schema-management endpoints above.
 
 ---
 
