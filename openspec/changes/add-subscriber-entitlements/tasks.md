@@ -55,9 +55,9 @@
 
 ## 9. Infrastructure and Operations
 
-- [ ] 9.1 Provision the entitlements table and its stream, the event-streams producer GSI, the revocation queue, the stream consumer, the worker, and the sweep schedule, with least-privilege IAM: administration Lambda gets conditional write plus transactional write on entitlements; the stream consumer gets entitlements-stream read, revocation-queue send, and control-plane bus put-events; the worker and sweep get event-streams read/update and EventBridge rule disable only; consumers get none
-- [ ] 9.2 Add metrics, structured audit logs, and alarms for authorization denials, revocation queue and DLQ depth, stream-consumer IteratorAge and on-failure destination deliveries, failed rule disablement, reconciliation drift, command outcomes, and catalog latency without logging schema content, tokens, or claims
-- [ ] 9.3 Add the seed path for migration: platform-admin tooling that creates subscriber bindings (via the grant-engine admin API) and entitlements for consumer domains retaining access before subscription re-evaluation, and verify rollback never bulk re-enables uncovered rules
+- [x] 9.1 Provision the entitlements table and its stream, the event-streams producer GSI, the revocation queue, the stream consumer, the worker, and the sweep schedule, with least-privilege IAM: administration Lambda gets conditional write plus transactional write on entitlements; the stream consumer gets entitlements-stream read, revocation-queue send, and control-plane bus put-events; the worker and sweep get event-streams read/update and EventBridge rule disable only; consumers get none
+- [x] 9.2 Add metrics, structured audit logs, and alarms for authorization denials, revocation queue and DLQ depth, stream-consumer IteratorAge and on-failure destination deliveries, failed rule disablement, reconciliation drift, command outcomes, and catalog latency without logging schema content, tokens, or claims
+- [x] 9.3 Add the seed path for migration: platform-admin tooling that creates subscriber bindings (via the grant-engine admin API) and entitlements for consumer domains retaining access before subscription re-evaluation, and verify rollback never bulk re-enables uncovered rules
 
 ## 10. Documentation and Validation
 

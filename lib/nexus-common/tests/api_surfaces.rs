@@ -1062,6 +1062,41 @@ fn catalog_functions_read_bindings_and_entitlements() {
 }
 
 #[test]
+fn entitlement_observability_covers_the_revocation_path_and_drift() {
+    let doc = core_template();
+    let resources = mapping(at(&doc, "Resources"));
+
+    for alarm in [
+        "EntitlementRevocationDlqDepthAlarm",
+        "EntitlementStreamConsumerIteratorAgeAlarm",
+        "EntitlementRevocationWorkerErrorsAlarm",
+        "EntitlementCoverageSweepDriftAlarm",
+        "SubscriptionAuthorizationDenialsAlarm",
+        "CatalogLatencyAlarm",
+    ] {
+        assert!(
+            resources.contains_key(alarm),
+            "missing alarm {alarm} — the revocation path and its backstop must be observable"
+        );
+    }
+
+    for filter in [
+        "EntitlementCoverageSweepDriftFilter",
+        "SubscriptionAuthorizationDenialsFilter",
+    ] {
+        let resource = resource(&doc, filter);
+        assert_eq!(text(at(resource, "Type")), "AWS::Logs::MetricFilter");
+    }
+
+    let drift = resource(&doc, "EntitlementStreamConsumerIteratorAgeAlarm");
+    assert_eq!(
+        text(at(props(drift), "MetricName")),
+        "IteratorAge",
+        "a stalled entitlement stream delays revocation notification"
+    );
+}
+
+#[test]
 fn activation_workflow_queries_entitlements_before_enabling() {
     let doc = core_template();
     let workflow = resource(&doc, "ActivateSubscriptionWorkflow");

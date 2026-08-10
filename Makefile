@@ -78,6 +78,9 @@ test: ## cargo test --workspace
 seed-bindings: ## Seed developer role bindings via the admin API (requires TOKEN and BINDINGS; API_URL optional)
 	@./scripts/seed-bindings.sh
 
+seed-entitlements: ## Seed subscriber entitlements via the admin API (requires TOKEN and ENTITLEMENTS; API_URL optional)
+	@./scripts/seed-entitlements.sh
+
 SAMPLES ?= 200
 
 benchmark-grants: ## Deploy and run the in-region grant-engine latency benchmark (add-grant-engine 6.1/6.2)
