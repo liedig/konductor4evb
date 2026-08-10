@@ -3,7 +3,7 @@
 - [x] 1.1 Confirm `add-grant-engine` and `add-publisher-apis` are complete; wire this change to their bindings table, `DynamoGrantEngine`/`InMemoryGrantEngine`, action constants, trusted-principal contract, publisher bindings, and flat-verb schema operations
 - [x] 1.2 Add composite resource grammar helpers in `nexus-common` next to the action constants: typed constructors for subscription resources (`{consumer}/{producer}/{event}`), the parser used by the engine, and the new action constants (`subscription:create`, `subscription:enable`, `subscription:disable`, `subscription:delete`); unit tests cover construction, round-trip parsing, and malformed input
 - [x] 1.3 Add typed entitlement models in `nexus-common`: consumer domain, producer domain, scope pattern (schema-name charset with an optional single trailing `*`, validated at construction), creation metadata, trusted actor; reject malformed patterns at the model level
-- [ ] 1.4 Add behavior tests for OAuth-group and AWS-account domain isolation, IAM account-granularity across roles/sessions, equivalent OAuth/IAM decisions, exact-name, domain-wide `*`, and prefix coverage, future-schema and future-version coverage (including prefix families), overlapping additive grants, self-subscription implicit coverage, and fail-closed malformed resources
+- [x] 1.4 Add behavior tests for OAuth-group and AWS-account domain isolation, IAM account-granularity across roles/sessions, equivalent OAuth/IAM decisions, exact-name, domain-wide `*`, and prefix coverage, future-schema and future-version coverage (including prefix families), overlapping additive grants, self-subscription implicit coverage, and fail-closed malformed resources
 
 ## 2. Entitlement Storage
 
@@ -42,9 +42,9 @@
 
 ## 7. Subscription Reads
 
-- [ ] 7.1 Implement `GET /subscriptions?domain={domain}&direction=inbound|outbound` on both surfaces: inbound queries the consumer index under a subscriber binding; outbound queries the producer reverse index under a publisher binding with full consumer-topology visibility; support schema, version, and status filters and require direction
-- [ ] 7.2 Implement canonical `GET /subscriptions/{subscriptionId}` authorization through the visible consumer side, producer side, or platform role, returning `403 Forbidden` for unauthorized callers and `404 Not Found` for missing subscriptions
-- [ ] 7.3 Add read behavior tests for OAuth and IAM inbound/outbound visibility, publisher full outbound visibility, platform-wide inspection, `platform-auditor` read-only behavior, required direction, filtering, and 403/404 separation
+- [x] 7.1 Implement `GET /subscriptions?domain={domain}&direction=inbound|outbound` on both surfaces: inbound queries the consumer index under a subscriber binding; outbound queries the producer reverse index under a publisher binding with full consumer-topology visibility; support schema, version, and status filters and require direction
+- [x] 7.2 Implement canonical `GET /subscriptions/{subscriptionId}` authorization through the visible consumer side, producer side, or platform role, returning `403 Forbidden` for unauthorized callers and `404 Not Found` for missing subscriptions
+- [x] 7.3 Add read behavior tests for OAuth and IAM inbound/outbound visibility, publisher full outbound visibility, platform-wide inspection, `platform-auditor` read-only behavior, required direction, filtering, and 403/404 separation
 
 ## 8. Subscriber Schema Catalog
 

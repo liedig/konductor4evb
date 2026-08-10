@@ -339,24 +339,37 @@ paths:
     get:
       operationId: ListSubscriptions
       summary: List event subscriptions
-      description: Results are scoped to subscriptions where the caller's account owns the consumer domain, the producer domain, or both — a caller with no relationship to either side of a subscription will never see it, regardless of filters.
+      description: >
+        Lists subscriptions from one side of the relationship. `direction=inbound`
+        lists the given consumer domain's subscriptions and requires a `subscriber`
+        binding on it; `direction=outbound` lists the subscriptions consuming the
+        given producer domain's schemas and requires a `publisher` binding, with
+        full consumer-topology visibility for notifications and version migration.
+        Platform roles may read either side. Callers without the required binding
+        receive 403 rather than a filtered-empty result.
       x-amazon-apigateway-auth:
         type: AWS_IAM
       parameters:
-        - name: consumer
+        - name: domain
           in: query
+          required: true
+          description: The domain to list from — the consumer domain for `inbound`, the producer domain for `outbound`.
           schema:
             type: string
-        - name: producer
+        - name: direction
           in: query
+          required: true
+          description: Which side of the relationship to list.
           schema:
             type: string
+            enum: [inbound, outbound]
         - name: schema
           in: query
           schema:
             type: string
         - name: version
           in: query
+          description: Only subscriptions with this schema version pinned in at least one environment.
           schema:
             type: integer
         - name: status
@@ -364,16 +377,6 @@ paths:
           schema:
             type: string
             enum: [PENDING, ACTIVE, FAILED, REMOVED]
-        - name: nextToken
-          in: query
-          schema:
-            type: string
-        - name: maxResults
-          in: query
-          schema:
-            type: integer
-            default: 100
-            maximum: 100
       responses:
         "200":
           description: List of subscriptions
@@ -382,7 +385,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ListSubscriptionsResponse"
         "400":
-          description: Validation error
+          description: Validation error (missing or invalid domain/direction)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller lacks the binding the requested direction requires
           content:
             application/json:
               schema:
@@ -419,8 +428,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SubscriptionDetail"
+        "403":
+          description: Caller is bound to neither the consumer nor the producer side, and holds no platform role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
-          description: Subscription not found, or the caller's account owns neither the consumer nor the producer domain (returned rather than 403 so unauthorized callers cannot use this endpoint to confirm a subscription's existence)
+          description: Subscription not found
           content:
             application/json:
               schema:
@@ -1144,8 +1159,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SubscriptionSummary"
-        nextToken:
-          type: string
 
     SchemaSummary:
       type: object

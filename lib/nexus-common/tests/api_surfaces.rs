@@ -886,6 +886,91 @@ fn subscriptions_function_reads_bindings_and_entitlements() {
 }
 
 #[test]
+fn subscription_list_reads_are_flat_and_direction_scoped() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let op = at(at(at(&doc, "paths"), "/subscriptions"), "get");
+        let params = seq(at(op, "parameters"));
+        let mut names: Vec<&str> = params.iter().map(|p| text(at(p, "name"))).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["direction", "domain", "schema", "status", "version"],
+            "list is scoped by domain+direction; consumer/producer/nextToken/maxResults are gone"
+        );
+        for required in ["domain", "direction"] {
+            let param = params
+                .iter()
+                .find(|p| text(at(p, "name")) == required)
+                .unwrap_or_else(|| panic!("missing {required} parameter"));
+            assert!(
+                boolean(at(param, "required")),
+                "{required} must be a required query parameter"
+            );
+        }
+        let responses = mapping(at(op, "responses"));
+        assert!(
+            responses.contains_key("403"),
+            "list denies with 403 when the direction's binding is missing"
+        );
+    }
+}
+
+#[test]
+fn describe_subscription_separates_forbidden_from_not_found() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let op = at(
+            at(at(&doc, "paths"), "/subscriptions/{subscriptionId}"),
+            "get",
+        );
+        let responses = mapping(at(op, "responses"));
+        for code in ["403", "404"] {
+            assert!(
+                responses.contains_key(code),
+                "describe must distinguish {code} — deny-as-unknown is dropped"
+            );
+        }
+        let not_found = text(at(responses.get("404").unwrap(), "description"));
+        assert!(
+            !not_found.contains("owns neither"),
+            "404 description must not retain deny-as-unknown wording"
+        );
+    }
+}
+
+#[test]
+fn list_response_has_no_pagination_token() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let schema = at(
+            at(at(&doc, "components"), "schemas"),
+            "ListSubscriptionsResponse",
+        );
+        let properties = mapping(at(schema, "properties"));
+        assert!(
+            !properties.contains_key("nextToken"),
+            "direction-scoped index queries return full result sets"
+        );
+    }
+}
+
+#[test]
+fn subscription_read_functions_read_the_bindings_table() {
+    let doc = core_template();
+    for logical_id in ["ListSubscriptionsFunction", "DescribeSubscriptionFunction"] {
+        let func = resource(&doc, logical_id);
+        let env = mapping(at(at(props(func), "Environment"), "Variables"));
+        assert!(
+            env.contains_key("BINDINGS_TABLE"),
+            "{logical_id} needs BINDINGS_TABLE for direction/side authorization"
+        );
+        let (_, managed) = function_policy_shape(&doc, logical_id);
+        assert!(
+            managed.contains(&"BindingsTableReadPolicy".to_string()),
+            "{logical_id} must attach the bindings read policy"
+        );
+    }
+}
+
+#[test]
 fn activation_workflow_queries_entitlements_before_enabling() {
     let doc = core_template();
     let workflow = resource(&doc, "ActivateSubscriptionWorkflow");

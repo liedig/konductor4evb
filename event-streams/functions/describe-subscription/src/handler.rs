@@ -1,32 +1,68 @@
+use std::env;
+
 use anyhow::{Context, Result};
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
-use std::env;
 
 use nexus_common::api;
 use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
+use nexus_common::grant::ResourceRole;
+use nexus_common::grant_engine::has_role_binding;
+use nexus_common::grant_store::BindingStore;
+use nexus_common::principal::{GlobalRole, TrustedPrincipal};
 use nexus_common::principal_context::log_principal;
-use nexus_common::streams::SubscriptionId;
+use nexus_common::streams::{EventStream, SubscriptionId};
 use nexus_common::streams_db;
+
+/// Platform roles read any subscription (operations and audit); everyone
+/// else needs the subscriber binding on the consumer domain or the
+/// publisher binding on the producer domain.
+fn is_platform(principal: &TrustedPrincipal) -> bool {
+    principal.is_platform_admin()
+        || principal
+            .global_roles()
+            .contains(&GlobalRole::PlatformAuditor)
+}
+
+/// A subscription is a relationship between two domains: either party with
+/// the matching binding, or a platform role, may see it. Unauthorized calls
+/// are a flat 403 — deny-as-unknown concealment was dropped by design.
+async fn caller_may_view(
+    store: &BindingStore,
+    principal: &TrustedPrincipal,
+    stream: &EventStream,
+) -> bool {
+    if is_platform(principal) {
+        return true;
+    }
+    for (role, domain) in [
+        (ResourceRole::Subscriber, &stream.consumer_domain),
+        (ResourceRole::Publisher, &stream.producer_domain),
+    ] {
+        if has_role_binding(store, principal, role, domain).await {
+            return true;
+        }
+    }
+    false
+}
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
     let table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
-    let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
+    let bindings_table = env::var("BINDINGS_TABLE").context("BINDINGS_TABLE not set")?;
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
 
     let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
-    let principal = log_principal(request_context);
-
-    let Some(caller_account_id) = principal
-        .ok()
-        .and_then(|p| p.iam_account_id().map(String::from))
-    else {
-        return Ok(api::from_control_plane_error(&api::validation_error(
-            "missing caller identity",
-        )));
+    let principal = match log_principal(request_context) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "describe subscription: deny (no trusted principal)");
+            return Ok(api::from_control_plane_error(
+                &ControlPlaneError::AccessDenied,
+            ));
+        }
     };
 
     let Some(raw_id) = api::path_param(&event.payload, "subscriptionId") else {
@@ -68,12 +104,9 @@ pub async fn handle(
     .await
     {
         Ok(Some(stream)) => {
-            // A subscription is a relationship between two domains; either
-            // party has a legitimate interest in seeing it, but a third
-            // party does not. Report 404 rather than 403 so the endpoint
-            // doesn't confirm the subscription's existence to a non-party.
-            match caller_may_view(ddb, &domains_table, &caller_account_id, &stream).await {
-                Ok(true) => Ok(api::success_response(
+            let store = BindingStore::new(ddb.clone(), &bindings_table);
+            if caller_may_view(&store, &principal, &stream).await {
+                Ok(api::success_response(
                     200,
                     &json!({
                         "subscriptionId": stream.subscription_id().to_string(),
@@ -88,14 +121,16 @@ pub async fn handle(
                         "updatedAt": stream.updated_at.to_rfc3339(),
                         "removedAt": stream.removed_at.map(|t| t.to_rfc3339()),
                     }),
-                )),
-                Ok(false) => Ok(not_found()),
-                Err(e) => {
-                    tracing::error!(error = %e, "ownership check failed");
-                    Ok(api::from_control_plane_error(&ControlPlaneError::DynamoDb(
-                        e.to_string(),
-                    )))
-                }
+                ))
+            } else {
+                tracing::warn!(
+                    consumer = stream.consumer_domain,
+                    producer = stream.producer_domain,
+                    "describe subscription: deny (caller bound to neither side)"
+                );
+                Ok(api::from_control_plane_error(
+                    &ControlPlaneError::AccessDenied,
+                ))
             }
         }
         Ok(None) => Ok(not_found()),
@@ -108,195 +143,222 @@ pub async fn handle(
     }
 }
 
-/// A subscription is a relationship between two domains; either party — the
-/// consumer that subscribed or the producer whose contract it pinned — has a
-/// legitimate interest in seeing it, but a third party does not.
-async fn caller_may_view(
-    ddb: &aws_sdk_dynamodb::Client,
-    domains_table: &str,
-    caller_account_id: &str,
-    stream: &nexus_common::streams::EventStream,
-) -> Result<bool> {
-    for domain in [&stream.consumer_domain, &stream.producer_domain] {
-        let output = ddb
-            .get_item()
-            .table_name(domains_table)
-            .key("domainName", nexus_common::dynamodb::s(domain))
-            .send()
-            .await
-            .context("failed to get domain record for ownership check")?;
-        let owner = output
-            .item
-            .as_ref()
-            .and_then(|item| nexus_common::dynamodb::get_s(item, "ownerAccountId"));
-        if owner.as_deref() == Some(caller_account_id) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
+    use aws_sdk_dynamodb::types::AttributeValue;
+    use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
+    use chrono::Utc;
     use lambda_runtime::Context as LambdaContext;
 
-    #[tokio::test]
-    async fn malformed_subscription_id_returns_validation_error() {
-        std::env::set_var("EVENT_STREAMS_TABLE", "streams");
-        std::env::set_var("DOMAINS_TABLE", "domains");
-        std::env::set_var("ORGANIZATION", "acme");
-        let config = aws_config::SdkConfig::builder()
-            .behavior_version(aws_config::BehaviorVersion::latest())
-            .build();
-        let ddb = aws_sdk_dynamodb::Client::new(&config);
+    use nexus_common::grant::{BindingPrincipal, RoleBinding};
+    use nexus_common::grant_store::binding_to_item;
+    use nexus_common::streams::{EnvStream, StreamStatus};
+    use nexus_common::streams_db::stream_to_item;
 
-        let event = LambdaEvent::new(
+    fn set_env() {
+        std::env::set_var("EVENT_STREAMS_TABLE", "streams");
+        std::env::set_var("BINDINGS_TABLE", "bindings");
+        std::env::set_var("ORGANIZATION", "acme");
+    }
+
+    fn iam_request_context(account_id: &str) -> Value {
+        json!({
+            "identity": {
+                "accountId": account_id,
+                "userArn": format!("arn:aws:iam::{account_id}:role/operator"),
+            }
+        })
+    }
+
+    fn oauth_platform_context(role: &str) -> Value {
+        json!({
+            "authorizer": {
+                "authenticationMechanism": "oauth",
+                "principalId": "user-1",
+                "issuer": "https://idp.example.com",
+                "clientId": "client-1",
+                "globalRoles": format!("[\"{role}\"]"),
+                "teamGroups": "[]",
+            }
+        })
+    }
+
+    fn request(context: Value, id: &str) -> LambdaEvent<Value> {
+        LambdaEvent::new(
             json!({
-                "pathParameters": { "subscriptionId": "not-enough-segments" },
-                "requestContext": { "identity": { "accountId": "111122223333" } }
+                "requestContext": context,
+                "pathParameters": { "subscriptionId": id },
             }),
             LambdaContext::default(),
-        );
-        let response = handle(&ddb, event).await.unwrap();
-
-        assert_eq!(response["statusCode"], 400);
+        )
     }
 
-    #[tokio::test]
-    async fn missing_caller_identity_returns_validation_error() {
-        std::env::set_var("EVENT_STREAMS_TABLE", "streams");
-        std::env::set_var("DOMAINS_TABLE", "domains");
-        std::env::set_var("ORGANIZATION", "acme");
-        let config = aws_config::SdkConfig::builder()
-            .behavior_version(aws_config::BehaviorVersion::latest())
-            .build();
-        let ddb = aws_sdk_dynamodb::Client::new(&config);
-
-        let event = LambdaEvent::new(
-            json!({ "pathParameters": { "subscriptionId": "checkout.orders.OrderNotification" } }),
-            LambdaContext::default(),
+    fn stream() -> EventStream {
+        let mut environments = HashMap::new();
+        environments.insert(
+            "prod".to_string(),
+            EnvStream {
+                pinned_version: Some(3),
+                rule_name: "checkout-OrderNotification".to_string(),
+                rule_arn: None,
+                enabled: true,
+                status: StreamStatus::Active,
+            },
         );
-        let response = handle(&ddb, event).await.unwrap();
-
-        assert_eq!(response["statusCode"], 400);
-    }
-
-    #[tokio::test]
-    async fn oauth_caller_without_iam_account_is_rejected() {
-        std::env::set_var("EVENT_STREAMS_TABLE", "streams");
-        std::env::set_var("DOMAINS_TABLE", "domains");
-        std::env::set_var("ORGANIZATION", "acme");
-        let config = aws_config::SdkConfig::builder()
-            .behavior_version(aws_config::BehaviorVersion::latest())
-            .build();
-        let ddb = aws_sdk_dynamodb::Client::new(&config);
-
-        let event = LambdaEvent::new(
-            json!({
-                "pathParameters": { "subscriptionId": "checkout.orders.OrderNotification" },
-                "requestContext": {
-                    "authorizer": {
-                        "authenticationMechanism": "oauth",
-                        "principalId": "user-abc-123",
-                        "issuer": "https://cognito-idp.example.com/test",
-                        "clientId": "test-client",
-                        "globalRoles": "[\"platform-admin\"]",
-                        "teamGroups": "[\"team-payments\"]"
-                    }
-                }
-            }),
-            LambdaContext::default(),
-        );
-        let response = handle(&ddb, event).await.unwrap();
-
-        assert_eq!(response["statusCode"], 400);
-        let body: Value = serde_json::from_str(response["body"].as_str().unwrap()).unwrap();
-        assert_eq!(body["code"], "ValidationException");
-        assert!(body["message"]
-            .as_str()
-            .unwrap()
-            .contains("missing caller identity"));
-    }
-
-    fn stream_between(consumer: &str, producer: &str) -> nexus_common::streams::EventStream {
-        nexus_common::streams::EventStream {
-            producer_domain: producer.to_string(),
-            consumer_domain: consumer.to_string(),
-            source: format!("acme-{producer}"),
+        EventStream {
+            producer_domain: "orders".to_string(),
+            consumer_domain: "checkout".to_string(),
+            source: "acme-orders".to_string(),
             detail_type: "OrderNotification".to_string(),
-            schema_name: format!("acme-{producer}@OrderNotification"),
-            status: nexus_common::streams::StreamStatus::Active,
-            environments: std::collections::HashMap::new(),
+            schema_name: "acme-orders@OrderNotification".to_string(),
+            status: StreamStatus::Active,
+            environments,
             request_id: None,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
             removed_at: None,
             expires_at: None,
         }
     }
 
-    fn domain_owner_client(owners: Vec<(&'static str, &'static str)>) -> aws_sdk_dynamodb::Client {
-        use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
-        use aws_smithy_mocks::{mock, mock_client, RuleMode};
-
-        let rules: Vec<_> = owners
-            .into_iter()
-            .map(|(domain, owner)| {
-                mock!(aws_sdk_dynamodb::Client::get_item)
-                    .match_requests(move |req| {
-                        req.key()
-                            .unwrap()
-                            .get("domainName")
-                            .and_then(|v| v.as_s().ok())
-                            .map(|v| v == domain)
-                            .unwrap_or(false)
-                    })
-                    .then_output(move || {
-                        GetItemOutput::builder()
-                            .item("domainName", nexus_common::dynamodb::s(domain))
-                            .item("ownerAccountId", nexus_common::dynamodb::s(owner))
-                            .build()
-                    })
+    fn stream_rule(stream: Option<EventStream>) -> Rule {
+        let item: Option<HashMap<String, AttributeValue>> = stream.as_ref().map(stream_to_item);
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| {
+                req.key()
+                    .and_then(|k| k.get(nexus_common::streams_db::PK))
+                    .and_then(|v| v.as_s().ok())
+                    .map(|v| v == "orders")
+                    .unwrap_or(false)
             })
-            .collect();
-        let rule_refs: Vec<_> = rules.iter().collect();
-        mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, rule_refs)
+            .then_output(move || {
+                let b = GetItemOutput::builder();
+                match &item {
+                    Some(i) => b.set_item(Some(i.clone())).build(),
+                    None => b.build(),
+                }
+            })
+    }
+
+    fn binding_rule(principal: BindingPrincipal, role: ResourceRole, domain: &str) -> Rule {
+        let binding = RoleBinding::new("b-1", principal, role, domain, Utc::now(), "test").unwrap();
+        let item = binding_to_item(&binding);
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests({
+                let expected = item.clone();
+                move |req| {
+                    let key = req.key().unwrap();
+                    key.get("PK").and_then(|v| v.as_s().ok())
+                        == expected.get("PK").and_then(|v| v.as_s().ok())
+                        && key.get("SK").and_then(|v| v.as_s().ok())
+                            == expected.get("SK").and_then(|v| v.as_s().ok())
+                }
+            })
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .set_item(Some(item.clone()))
+                    .build()
+            })
+    }
+
+    fn no_binding_rule() -> Rule {
+        mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| GetItemOutput::builder().build())
+    }
+
+    fn ddb_client(rules: &[&Rule]) -> aws_sdk_dynamodb::Client {
+        mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, rules)
+    }
+
+    fn body(response: &Value) -> Value {
+        serde_json::from_str(response["body"].as_str().unwrap()).unwrap()
+    }
+
+    const ID: &str = "checkout.orders.OrderNotification";
+
+    #[tokio::test]
+    async fn consumer_side_binding_sees_the_detail() {
+        set_env();
+        let stream = stream_rule(Some(stream()));
+        let binding = binding_rule(
+            BindingPrincipal::aws_account("111122223333").unwrap(),
+            ResourceRole::Subscriber,
+            "checkout",
+        );
+        let ddb = ddb_client(&[&stream, &binding]);
+
+        let resp = handle(&ddb, request(iam_request_context("111122223333"), ID))
+            .await
+            .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(body(&resp)["subscriptionId"], ID);
     }
 
     #[tokio::test]
-    async fn caller_may_view_true_for_consumer_owner() {
-        let ddb = domain_owner_client(vec![
-            ("checkout", "111122223333"),
-            ("orders", "444455556666"),
-        ]);
-        let stream = stream_between("checkout", "orders");
-        assert!(caller_may_view(&ddb, "domains", "111122223333", &stream)
+    async fn producer_side_binding_sees_the_detail() {
+        set_env();
+        let stream = stream_rule(Some(stream()));
+        // The specific binding rule precedes the catch-all miss: MatchAny
+        // evaluates rules in order, and the miss would otherwise swallow the
+        // publisher binding lookup too.
+        let binding = binding_rule(
+            BindingPrincipal::aws_account("444455556666").unwrap(),
+            ResourceRole::Publisher,
+            "orders",
+        );
+        let no_subscriber = no_binding_rule();
+        let ddb = ddb_client(&[&stream, &binding, &no_subscriber]);
+
+        let resp = handle(&ddb, request(iam_request_context("444455556666"), ID))
             .await
-            .unwrap());
+            .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
     }
 
     #[tokio::test]
-    async fn caller_may_view_true_for_producer_owner() {
-        let ddb = domain_owner_client(vec![
-            ("checkout", "111122223333"),
-            ("orders", "444455556666"),
-        ]);
-        let stream = stream_between("checkout", "orders");
-        assert!(caller_may_view(&ddb, "domains", "444455556666", &stream)
+    async fn platform_role_sees_the_detail_without_a_binding() {
+        set_env();
+        let stream = stream_rule(Some(stream()));
+        let ddb = ddb_client(&[&stream]);
+
+        let resp = handle(&ddb, request(oauth_platform_context("platform-admin"), ID))
             .await
-            .unwrap());
+            .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
     }
 
     #[tokio::test]
-    async fn caller_may_view_false_for_third_party() {
-        let ddb = domain_owner_client(vec![
-            ("checkout", "111122223333"),
-            ("orders", "444455556666"),
-        ]);
-        let stream = stream_between("checkout", "orders");
-        assert!(!caller_may_view(&ddb, "domains", "999900001111", &stream)
+    async fn third_party_gets_forbidden_not_not_found() {
+        set_env();
+        let stream = stream_rule(Some(stream()));
+        let no_binding = no_binding_rule();
+        let ddb = ddb_client(&[&stream, &no_binding]);
+
+        let resp = handle(&ddb, request(iam_request_context("999900001111"), ID))
             .await
-            .unwrap());
+            .unwrap();
+
+        assert_eq!(resp["statusCode"], 403);
+        assert_eq!(body(&resp)["code"], "AccessDeniedException");
+    }
+
+    #[tokio::test]
+    async fn unknown_subscription_is_not_found() {
+        set_env();
+        let stream = stream_rule(None);
+        let ddb = ddb_client(&[&stream]);
+
+        let resp = handle(&ddb, request(iam_request_context("111122223333"), ID))
+            .await
+            .unwrap();
+
+        assert_eq!(resp["statusCode"], 404);
+        assert_eq!(body(&resp)["code"], "ResourceNotFoundException");
     }
 }

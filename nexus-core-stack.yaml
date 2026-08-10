@@ -214,10 +214,10 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # Reserved for the publisher consumers that add-publisher-apis wires:
-  # decision reads are strongly consistent point gets on the table keys, so
-  # GetItem on the table is the entire permission set. Deliberately attached
-  # to no role in this change.
+  # Grant-engine decision reads are strongly consistent point gets on the
+  # table keys, so GetItem on the table is the entire permission set.
+  # Attached to every function that authorizes through bindings (subscription
+  # commands and reads, revocation worker, publisher APIs).
   BindingsTableReadPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
@@ -872,17 +872,19 @@ Resources:
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
       Policies:
+        # Direction authorization is a binding point read.
+        - !Ref BindingsTableReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
-              Action: [dynamodb:Query, dynamodb:Scan]
+              Action: [dynamodb:Query]
               Resource:
                 - !GetAtt EventStreamsTable.Arn
                 - !Sub "${EventStreamsTable.Arn}/index/*"
-            - Effect: Allow
-              Action: dynamodb:GetItem
-              Resource: !GetAtt DomainsTable.Arn
       Events:
         OAuthApi:
           Type: Api
@@ -917,14 +919,18 @@ Resources:
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
       Policies:
+        # Either-side authorization is a binding point read.
+        - !Ref BindingsTableReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action: [dynamodb:GetItem]
               Resource:
                 - !GetAtt EventStreamsTable.Arn
-                - !GetAtt DomainsTable.Arn
       Events:
         OAuthApi:
           Type: Api
