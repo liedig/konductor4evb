@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - created by syncing change add-event-subscriptions. Update Purpose after archive.
+How consumer domains connect to producer event contracts: schema-first subscriptions that pin the latest schema version per environment, materialize as one EventBridge rule per environment with all-or-nothing activation, and are governed by subscriber bindings and entitlement coverage rather than account ownership.
 
 ## Requirements
 

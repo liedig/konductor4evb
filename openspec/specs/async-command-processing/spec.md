@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD
+How control-plane write operations flow: API Gateway structurally validates requests, enqueues them on per-surface SQS command queues with a normalized trusted-principal envelope for at-least-once processing, returns `202 Accepted` on durable acceptance, and leaves resource authorization and business validation to the consuming command handler, which reports outcomes as deterministic events.
 
 ## Requirements
 

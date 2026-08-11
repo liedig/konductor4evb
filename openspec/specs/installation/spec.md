@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD
+How a first-time operator deploys Nexus into their own AWS environment: a single runnable installation guide covering the three-stack deploy model (notifications, core, trust), prerequisites, smoke-test walkthrough, troubleshooting, and uninstall.
 
 ## Requirements
 

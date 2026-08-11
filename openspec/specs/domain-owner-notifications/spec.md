@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD
+How the platform communicates registration lifecycle events by email: SES-based notifications for approval requests, rejections, and provisioning outcomes, sent by dedicated Lambda functions inside the approval workflow, with authenticated decision-making and no bearer-token links.
 
 ## Requirements
 

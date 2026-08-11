@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD
+How external contributions enter the project: structured GitHub issue templates for bugs and features that capture diagnostic detail up front, and the three-axis labeling system (priority, type, area, status) used to triage them.
 
 ## Requirements
 

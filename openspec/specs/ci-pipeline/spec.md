@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD
+How the repository enforces quality gates automatically: a GitHub Actions workflow that runs check, test, and build stages on pull requests and protected-branch pushes, pinned toolchains, and local/CI parity through the Makefile.
 
 ## Requirements
 
