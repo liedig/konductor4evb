@@ -2669,6 +2669,12 @@ Outputs:
   IamApiEndpoint:
     Description: AWS_IAM control-plane API endpoint for automation (dev stage; swap for staging or prod to target another environment)
     Value: !Sub "https://${NexusIamApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
+  NexusUserPoolId:
+    Description: Cognito user pool backing interactive sign-in
+    Value: !Ref NexusUserPool
+  NexusUserPoolClientId:
+    Description: Public user-pool client for SRP login from custom consoles
+    Value: !Ref NexusUserPoolClient
   NexusEventBusArn:
     Description: EventBridge Nexus event bus ARN
     Value: !GetAtt NexusEventBus.Arn

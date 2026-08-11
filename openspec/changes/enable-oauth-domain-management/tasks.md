@@ -48,9 +48,9 @@
 
 ## 8. Cognito client auth flows
 
-- [ ] 8.1 Red test (api_surfaces or template assertion): user-pool client allows `ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH`
-- [ ] 8.2 Update `NexusUserPoolClient` in `nexus-core-stack.yaml`; cfn-lint clean
-- [ ] 8.3 Commit `feat(auth): enable SRP flows for custom login clients`
+- [x] 8.1 Red test (api_surfaces or template assertion): user-pool client allows `ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH`
+- [x] 8.2 Update `NexusUserPoolClient` in `nexus-core-stack.yaml`; cfn-lint clean
+- [x] 8.3 Commit `feat(auth): enable SRP flows for custom login clients`
 
 ## 9. Test personas and docs
 

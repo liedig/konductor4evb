@@ -78,6 +78,12 @@ test: ## cargo test --workspace
 seed-bindings: ## Seed developer role bindings via the admin API (requires TOKEN and BINDINGS; API_URL optional)
 	@./scripts/seed-bindings.sh
 
+seed-users: ## Create dev personas alice (platform-admin) and bob (team-payments) in the user pool (requires ALICE_PASSWORD and BOB_PASSWORD)
+	@./scripts/seed-users.sh
+
+backfill-owner-bindings: ## Backfill owner bindings for pre-existing domains (requires TOKEN and DOMAIN_TEAMS; DRY_RUN=1 to preview)
+	@./scripts/backfill-owner-bindings.sh
+
 seed-entitlements: ## Seed subscriber entitlements via the admin API (requires TOKEN and ENTITLEMENTS; API_URL optional)
 	@./scripts/seed-entitlements.sh
 
