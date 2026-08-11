@@ -1,9 +1,18 @@
 <script setup lang="ts">
-// Persona-aware landing arrives with the auth work (section 3); until then
-// the root route sends visitors to the login page.
-await navigateTo('/login')
+import { useSessionStore } from '~/stores/session'
+
+definePageMeta({ layout: 'plain' })
+
+// Post-login persona redirect: platform roles land inbox-first, everyone else
+// domain-first (spec: Role-gated navigation and persona dashboards).
+const session = useSessionStore()
+
+onMounted(async () => {
+  const signedIn = session.status === 'signed-in' || (await session.restore())
+  await navigateTo(signedIn ? session.homeRoute : '/login')
+})
 </script>
 
 <template>
-  <div />
+  <p class="text-sm text-muted">Loading…</p>
 </template>

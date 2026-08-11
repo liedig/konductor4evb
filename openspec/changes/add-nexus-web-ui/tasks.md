@@ -17,10 +17,10 @@
 
 ## 3. Authentication
 
-- [ ] 3.1 `/login` page (design-system showcase) with SRP sign-in via Amplify Auth, safe error handling
-- [ ] 3.2 Route middleware: auth guard, persona guard (`/admin/*` platform-only), post-login persona redirect
-- [ ] 3.3 Logout + session-expiry redirect flows
-- [ ] 3.4 Commit `feat(web): custom cognito login with role-gated routing`
+- [x] 3.1 `/login` page (design-system showcase) with SRP sign-in via Amplify Auth, safe error handling
+- [x] 3.2 Route middleware: auth guard, persona guard (`/admin/*` platform-only), post-login persona redirect
+- [x] 3.3 Logout + session-expiry redirect flows
+- [x] 3.4 Commit `feat(web): custom cognito login with role-gated routing`
 
 ## 4. Domain journeys
 
