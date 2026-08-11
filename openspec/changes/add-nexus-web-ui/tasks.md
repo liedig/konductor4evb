@@ -38,11 +38,11 @@
 
 ## 6. Catalog and subscriptions
 
-- [ ] 6.1 `/catalog`: entitlement-scoped browse, producer/environment filters, pagination
-- [ ] 6.2 `/catalog/[producer]/[schema]`: version-per-environment, JSON content view, subscribe confirm with 202 + polling (2s, ~10s window) and failure-reason surfacing
-- [ ] 6.3 `/subscriptions`: inbound list with pause/resume/unsubscribe; outbound per domain on the domain page
-- [ ] 6.4 Domain page "schemas" panel via producer scope
-- [ ] 6.5 Commit `feat(web): catalog discovery and subscription journeys`
+- [x] 6.1 `/catalog`: entitlement-scoped browse, producer/environment filters, pagination
+- [x] 6.2 `/catalog/[producer]/[schema]`: version-per-environment, JSON content view, subscribe confirm with 202 + polling (2s, ~10s window) and failure-reason surfacing
+- [x] 6.3 `/subscriptions`: inbound list with pause/resume/unsubscribe; outbound per domain on the domain page
+- [x] 6.4 Domain page "schemas" panel via producer scope
+- [x] 6.5 Commit `feat(web): catalog discovery and subscription journeys`
 
 ## 7. Access grants
 

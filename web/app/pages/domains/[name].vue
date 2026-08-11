@@ -146,6 +146,9 @@ onMounted(load)
         </div>
       </NxCard>
 
+      <DomainSchemasPanel :domain="name" />
+      <DomainSubscriptionsPanel :domain="name" />
+
       <NxModal :open="editing" title="Edit domain" @close="editing = false">
         <div class="flex flex-col gap-4">
           <NxInput v-model="editForm.description" label="Description" />
