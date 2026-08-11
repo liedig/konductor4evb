@@ -21,15 +21,23 @@ Consuming an event from another AWS account means coordinating event buses, rule
 ## How It Works
 
 ```text
-  Platform Account                         Domain Account
-  ┌──────────────────────┐                 ┌──────────────────┐
-  │  API Gateway          │                │  Trust role       │
-  │  Lambda (Rust)        │── STS ────────▶│  ({org}-nexus-   │
-  │  DynamoDB             │   AssumeRole   │   trust-role)     │
-  │  Step Functions       │                │                   │
-  │  EventBridge bus      │                │  Domain bus       │
-  │  Per-domain resources │                │  Integration DLQ  │
-  └──────────────────────┘                 └──────────────────┘
+┌─ GOVERN ─────────────────────────────────────────────────────────────────┐
+│  Register → human approval → every environment provisioned atomically:   │
+│  buses, registries, DLQs, monitoring. The platform grants entitlements   │
+│  that decide which consumer domains can see and subscribe to a schema.   │
+├─ PUBLISH ────────────────────────────────────────────────────────────────┤
+│  Manage schemas append-only (POST /schemas, POST /schemas/versions) and  │
+│  publish with one call (POST /publish): publisher authorized, latest     │
+│  version pinned, canonical envelope stamped, durably queued.             │
+├─ SUBSCRIBE ──────────────────────────────────────────────────────────────┤
+│  GET /schemas returns only what your domain's entitlements cover →       │
+│  POST /subscriptions checks your binding and coverage → per-environment  │
+│  rules wired across accounts → events arrive on your own bus.            │
+├─ OPERATE ────────────────────────────────────────────────────────────────┤
+│  Pause or resume a stream per environment. Revoke an entitlement and     │
+│  uncovered streams disable automatically. Grants, revocations, and       │
+│  command outcomes are audited; silent streams trip per-stream alarms.    │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 Nexus runs in a dedicated platform account. Domain resources are provisioned into domain accounts via cross-account IAM roles. All control-plane state lives in the platform account; domain accounts only contain the resources their domains need.
