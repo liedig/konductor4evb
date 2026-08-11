@@ -117,8 +117,7 @@ struct RevokedEntitlement {
 impl RevokedEntitlement {
     fn from_old_image(image: &Value, event_id: &str, record: &Value) -> Result<Self> {
         let field = |name: &str| {
-            s_field(image, name)
-                .with_context(|| format!("entitlement old image missing {name}"))
+            s_field(image, name).with_context(|| format!("entitlement old image missing {name}"))
         };
         let revoked_at = record
             .get("dynamodb")
@@ -150,11 +149,7 @@ impl RevokedEntitlement {
 }
 
 fn s_field(image: &Value, name: &str) -> Option<String> {
-    image
-        .get(name)?
-        .get("S")?
-        .as_str()
-        .map(|s| s.to_string())
+    image.get(name)?.get("S")?.as_str().map(|s| s.to_string())
 }
 
 /// Claims the stream event id with a conditional marker write. `false` means
@@ -282,11 +277,8 @@ mod tests {
     }
 
     fn sqs_rule() -> Rule {
-        mock!(aws_sdk_sqs::Client::send_message).then_output(|| {
-            SendMessageOutput::builder()
-                .message_id("m-1")
-                .build()
-        })
+        mock!(aws_sdk_sqs::Client::send_message)
+            .then_output(|| SendMessageOutput::builder().message_id("m-1").build())
     }
 
     /// Matches only when the revocation message carries the revoked scope
@@ -297,19 +289,15 @@ mod tests {
         let scope_pattern = scope_pattern.to_string();
         mock!(aws_sdk_sqs::Client::send_message)
             .match_requests(move |req| {
-                let body: Value = serde_json::from_str(req.message_body().unwrap_or(""))
-                    .unwrap_or_default();
+                let body: Value =
+                    serde_json::from_str(req.message_body().unwrap_or("")).unwrap_or_default();
                 body["revocationId"] == event_id
                     && body["entitlementId"] == "ent-1"
                     && body["consumerDomain"] == "checkout"
                     && body["producerDomain"] == "orders"
                     && body["scopePattern"] == scope_pattern
             })
-            .then_output(|| {
-                SendMessageOutput::builder()
-                    .message_id("m-1")
-                    .build()
-            })
+            .then_output(|| SendMessageOutput::builder().message_id("m-1").build())
     }
 
     fn event_rule() -> Rule {
