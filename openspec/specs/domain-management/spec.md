@@ -83,7 +83,9 @@ The domain management capability SHALL emit the following events. Each event SHA
 
 ### Requirement: Register Domain
 
-Domain management is an administrative function of the control plane. Domain owners SHALL be able to request registration of a new domain by submitting a command that is processed asynchronously. The API SHALL accept the command and return immediately with a request ID (SQS message ID) and a descriptive message. Each request SHALL go through an approval process; only after approval SHALL the provisioning workflow be triggered. All domain details SHALL be stored in the single domains DynamoDB table. The domain name SHALL be used as the DynamoDB partition key. Uniqueness SHALL be enforced atomically via a conditional `PutItem` with `attribute_not_exists(domainName) OR #status = :REJECTED` — the system SHALL NOT perform a pre-write query to check for duplicates. A `REJECTED` record SHALL NOT block its domain name: a new registration for that name SHALL atomically replace the rejected record with a fresh registration (new `requestId`, status `PENDING_APPROVAL`, fresh approval cycle); rejection history remains available through the `DomainRegistrationRejected` events on the control plane bus.
+Domain management is an administrative function of the control plane. Any authenticated OAuth caller who belongs to at least one team group SHALL be able to request registration of a new domain by submitting a command that is processed asynchronously; IAM callers SHALL remain able to register domains exactly as before. The API SHALL accept the command and return immediately with a request ID (SQS message ID) and a descriptive message. Each request SHALL go through an approval process; only after approval SHALL the provisioning workflow be triggered. All domain details SHALL be stored in the single domains DynamoDB table. The domain name SHALL be used as the DynamoDB partition key. Uniqueness SHALL be enforced atomically via a conditional `PutItem` with `attribute_not_exists(domainName) OR #status = :REJECTED` — the system SHALL NOT perform a pre-write query to check for duplicates. A `REJECTED` record SHALL NOT block its domain name: a new registration for that name SHALL atomically replace the rejected record with a fresh registration (new `requestId`, status `PENDING_APPROVAL`, fresh approval cycle); rejection history remains available through the `DomainRegistrationRejected` events on the control plane bus.
+
+For OAuth callers the registration request SHALL carry an `owningTeam` naming exactly one of the caller's Cognito team groups, which SHALL be recorded on the domain record and used to write the owner binding at approval (see domain-ownership). IAM callers MAY omit `owningTeam`; when omitted, no owner binding is created at approval and ownership administration falls to the platform team.
 
 The set of environments a domain is provisioned into SHALL be determined by the **platform team**, not the requester. The Nexus platform SHALL hold a single configured environment list (default `["dev", "staging", "prod"]`), and every approved domain SHALL be provisioned into the full list. The registration API SHALL NOT accept an `environments` field. All environments of a given domain SHALL be provisioned into the same `ownerAccountId`.
 
@@ -94,6 +96,18 @@ The registration request SHALL include at least one secondary owner email addres
 - **WHEN** an authorized domain owner calls the register-domain API with a valid domain name, owner account ID, owner email, at least one secondary owner email, and optional description/tags
 - **THEN** API Gateway SHALL validate the request structure (including `secondaryOwnerEmails` with `minItems: 1`) and enqueue the command to the domains SQS queue
 - **AND THEN** the API SHALL return `202 Accepted` with `{"requestId":"<SQS-MessageId>","message":"Domain registration request accepted"}`
+
+#### Scenario: OAuth registration carries the owning team
+
+- **WHEN** an OAuth caller submits a register-domain command with `owningTeam` set to one of the team groups in their token
+- **THEN** the command handler SHALL record `owningTeam` on the domain record
+- **AND THEN** the approval flow SHALL use it to create the owner binding on acceptance
+
+#### Scenario: OAuth registration without a matching team is denied
+
+- **WHEN** an OAuth caller submits a register-domain command with an `owningTeam` that is absent from their token's team groups, or omits `owningTeam`
+- **THEN** the command SHALL be denied with `AccessDenied`
+- **AND THEN** no domain record SHALL be persisted and no workflow SHALL be started
 
 #### Scenario: Registration command processed and succeeded event emitted
 
@@ -143,7 +157,9 @@ The registration request SHALL include at least one secondary owner email addres
 
 ### Requirement: List Domains
 
-Users SHALL be able to list the domains they have permission to access, with filters and pagination that scale to large organizations. The response SHALL identify each domain by `domainName` and SHALL NOT include a `domainId` field. Each item SHALL include `secondaryOwnerEmails` when present on the domain record.
+Users SHALL be able to list the domains they have permission to access, with filters and pagination that scale to large organizations. Visibility SHALL be scoped by caller: platform roles (`platform-admin`, `platform-auditor`) SHALL receive the full list; OAuth callers without a platform role SHALL receive only domains owned by their team groups (owner bindings) with the full record; IAM callers SHALL remain unscoped. The response SHALL identify each domain by `domainName` and SHALL NOT include a `domainId` field. Each item SHALL include `secondaryOwnerEmails` when present on the domain record. The `taskToken` field SHALL NOT be included in list responses for any caller.
+
+The API SHALL additionally provide a names-only directory projection (e.g. `GET /domains?view=directory`) returning only `domainName`, `description`, and `status` per domain, available to any authenticated caller, to back pickers such as the entitlement-grant form.
 
 #### Scenario: List domains with default filters
 
@@ -153,21 +169,41 @@ Users SHALL be able to list the domains they have permission to access, with fil
 - **AND THEN** return results in a paginated form that can scale to thousands of domains
 - **AND THEN** the `taskToken` field SHALL NOT be included in the response
 
+#### Scenario: Platform caller lists all domains
+
+- **WHEN** a platform-admin or platform-auditor calls the list-domains API
+- **THEN** the control plane SHALL return all domains with full records
+- **AND THEN** return results in a paginated form that can scale to thousands of domains
+- **AND THEN** the `taskToken` field SHALL NOT be included in the response
+
+#### Scenario: Team caller lists owned domains only
+
+- **WHEN** an OAuth caller without a platform role calls the list-domains API
+- **THEN** the control plane SHALL return only domains whose owner bindings match the caller's team groups
+- **AND THEN** include basic metadata such as name, description, owner, ownerEmail, secondaryOwnerEmails, creation date, and status for each domain
+- **AND THEN** return results in a paginated form
+
+#### Scenario: Directory projection is names-only and open to authenticated callers
+
+- **WHEN** any authenticated caller requests the directory projection
+- **THEN** the control plane SHALL return every domain's `domainName`, `description`, and `status`
+- **AND THEN** the projection SHALL NOT include owner account IDs, owner emails, secondary owner emails, resource identifiers, or task tokens
+
 #### Scenario: List domains with filters
 
 - **WHEN** a user calls the list-domains API with filters such as owner account, tags, or status
-- **THEN** the control plane SHALL apply those filters server-side
+- **THEN** the control plane SHALL apply those filters server-side within the caller's authorized visibility
 - **AND THEN** return only matching domains along with pagination tokens where needed
 
 #### Scenario: List domains filtered by PENDING_APPROVAL status
 
 - **WHEN** a user calls the list-domains API with `status=PENDING_APPROVAL`
-- **THEN** the control plane SHALL return all domains awaiting approval
+- **THEN** the control plane SHALL return domains awaiting approval within the caller's authorized visibility
 - **AND THEN** this SHALL serve as the replacement for the former list-pending-activations endpoint
 
 ### Requirement: Describe Domain
 
-Users SHALL be able to retrieve detailed information about a specific domain by its domain name, including configuration, resources, and approval metadata. The API path SHALL be `GET /domains/{domainName}`. The `taskToken` field SHALL NOT be returned to domain owner callers. Platform team callers MAY access the `taskToken` when the domain status is `PENDING_APPROVAL`. Resource identifiers SHALL be returned as a map keyed by environment, where each entry contains the per-environment resource ARNs. The response SHALL include `secondaryOwnerEmails` when present on the domain record.
+Users SHALL be able to retrieve detailed information about a specific domain by its domain name, including configuration, resources, and approval metadata. The API path SHALL be `GET /domains/{domainName}`. OAuth callers without a platform role SHALL be authorized only when one of their team groups holds the domain's owner binding. The `taskToken` field SHALL NOT be returned to domain owner callers. Platform team callers MAY access the `taskToken` when the domain status is `PENDING_APPROVAL`. Resource identifiers SHALL be returned as a map keyed by environment, where each entry contains the per-environment resource ARNs. The response SHALL include `secondaryOwnerEmails` when present on the domain record.
 
 #### Scenario: Describe existing domain
 
@@ -231,9 +267,32 @@ Platform team members SHALL be able to approve or reject a domain registration r
 - **THEN** the Lambda SHALL return `400 Bad Request` indicating that justification is required for rejections
 - **AND THEN** no Step Functions callback SHALL be made
 
+### Requirement: Pending registrations endpoint for approvers
+
+The OAuth control plane SHALL expose `GET /domains/registrations/pending` restricted to the `platform-admin` global role, returning every domain in `PENDING_APPROVAL` status with the fields an approver needs to decide: domain name, description, owner account ID, owner email, secondary owner emails, owning team, requested-at timestamp, and the Step Functions `taskToken`. This endpoint SHALL be the only read path that projects `taskToken` for non-workflow consumers.
+
+#### Scenario: Platform admin lists pending registrations
+
+- **WHEN** an OAuth-authenticated `platform-admin` calls `GET /domains/registrations/pending`
+- **THEN** the control plane SHALL return all `PENDING_APPROVAL` domains including their `taskToken` values
+- **AND THEN** the caller MAY pass a returned `taskToken` to the decide endpoint
+
+#### Scenario: Non-admin callers are denied
+
+- **WHEN** a caller without the `platform-admin` role calls `GET /domains/registrations/pending`
+- **THEN** the control plane SHALL return `403` access denied
+- **AND THEN** no task token SHALL be disclosed
+
+#### Scenario: Empty inbox
+
+- **WHEN** a platform-admin calls the endpoint and no registrations are pending
+- **THEN** the control plane SHALL return `200 OK` with an empty collection
+
 ### Requirement: Update Domain
 
-Domain owners SHALL be able to update mutable domain metadata by submitting a command that is processed asynchronously. The update command SHALL accept `description`, `tags`, `ownerEmail`, and `secondaryOwnerEmails` fields. The domain name SHALL NOT be updatable. Status transitions SHALL NOT be performed via the update command. The `ownerAccountId` field SHALL NOT be updatable. The API path SHALL be `PUT /domains/{domainName}`. The API SHALL accept the command and return immediately; the outcome SHALL be communicated via an EventBridge event.
+Domain owners SHALL be able to update mutable domain metadata by submitting a command that is processed asynchronously. The update command SHALL accept `description`, `tags`, `ownerEmail`, and `secondaryOwnerEmails` fields; all other domain attributes SHALL be immutable through this command. The domain name SHALL NOT be updatable. Status transitions SHALL NOT be performed via the update command. The `ownerAccountId` field SHALL NOT be updatable. The API path SHALL be `PUT /domains/{domainName}`. The API SHALL accept the command and return immediately; the outcome SHALL be communicated via an EventBridge event.
+
+For OAuth callers the command SHALL be authorized by an owner binding held by one of the caller's team groups on the domain, or by the `platform-admin` role. IAM callers SHALL remain authorized exactly as before.
 
 #### Scenario: Update command accepted and enqueued
 
@@ -241,6 +300,12 @@ Domain owners SHALL be able to update mutable domain metadata by submitting a co
 - **THEN** API Gateway SHALL validate the request structure and enqueue the command to the domains SQS queue
 - **AND THEN** the `domainName` path parameter SHALL be injected into the message body by the API Gateway VTL mapping template
 - **AND THEN** the API SHALL return `202 Accepted` with `{"requestId":"<SQS-MessageId>","message":"Domain update request accepted"}`
+
+#### Scenario: OAuth update requires ownership
+
+- **WHEN** an OAuth caller without the `platform-admin` role submits an update-domain command for a domain their team groups do not own
+- **THEN** the command SHALL be denied with `AccessDenied`
+- **AND THEN** no update SHALL be applied and no event SHALL be emitted
 
 #### Scenario: Update secondary owner emails
 
@@ -279,7 +344,7 @@ The control plane SHALL use the following domain statuses to represent the lifec
 | `PROVISIONING` | Domain resources being created across accounts | System |
 | `ACTIVE` | Domain operational, resources provisioned and ready | Domain owner |
 | `PROVISIONING_FAILED` | Resource creation failed, operator intervention needed | Operator |
-| `INACTIVE` | Domain disabled (semantics TBD, future workflow) | TBD |
+| `INACTIVE` | Domain disabled by the platform team: publishing and new subscription activations are rejected; existing subscriptions, entitlements, and provisioned infrastructure are retained | Platform team |
 
 #### Scenario: Valid status transitions
 
@@ -291,7 +356,8 @@ The control plane SHALL use the following domain statuses to represent the lifec
   - `APPROVED` → `PROVISIONING` (provisioning workflow, first step)
   - `PROVISIONING` → `ACTIVE` (provisioning workflow, success)
   - `PROVISIONING` → `PROVISIONING_FAILED` (provisioning workflow, failure)
-  - `ACTIVE` → `INACTIVE` (future deactivation workflow, out of scope)
+  - `ACTIVE` → `INACTIVE` (platform-team disable)
+  - `INACTIVE` → `ACTIVE` (platform-team enable)
 
 #### Scenario: Invalid status transition rejected
 
@@ -304,6 +370,34 @@ The control plane SHALL use the following domain statuses to represent the lifec
 - **WHEN** the approval workflow cannot deliver the approval request notification
 - **THEN** the domain SHALL transition to `APPROVAL_NOTIFICATION_FAILED`, not `REJECTED`
 - **AND THEN** the record SHALL indicate operator intervention is required (recovery is operator-driven; no automated transition out of this status is defined)
+
+### Requirement: Platform-managed domain enable and disable
+
+The control plane SHALL let the platform team disable and re-enable an `ACTIVE`/`INACTIVE` domain via `POST /domains/{domainName}/state` restricted to the `platform-admin` global role. While a domain is `INACTIVE`, the control plane SHALL reject new publish commands and new subscription activations targeting the domain, SHALL reject entitlement and subscription administration for the domain, and SHALL retain all existing subscriptions, entitlements, and provisioned infrastructure unchanged.
+
+#### Scenario: Platform admin disables a domain
+
+- **WHEN** an OAuth-authenticated `platform-admin` calls `POST /domains/{domainName}/state` with action `disable` on an `ACTIVE` domain
+- **THEN** the control plane SHALL transition the domain to `INACTIVE`
+- **AND THEN** subsequent publish and subscribe-activation attempts for the domain SHALL be rejected with a descriptive error
+
+#### Scenario: Platform admin re-enables a domain
+
+- **WHEN** an OAuth-authenticated `platform-admin` calls `POST /domains/{domainName}/state` with action `enable` on an `INACTIVE` domain
+- **THEN** the control plane SHALL transition the domain to `ACTIVE`
+- **AND THEN** publishing and subscription activation SHALL resume
+
+#### Scenario: Non-admin callers cannot change domain state
+
+- **WHEN** a caller without the `platform-admin` role calls `POST /domains/{domainName}/state`
+- **THEN** the control plane SHALL return `403` access denied
+- **AND THEN** the domain status SHALL remain unchanged
+
+#### Scenario: Disable retains existing estate
+
+- **WHEN** a domain with active subscriptions and provisioned infrastructure is disabled
+- **THEN** those subscriptions and resources SHALL remain in place and unchanged
+- **AND THEN** only new publish and activation activity SHALL be rejected
 
 ### Requirement: Domain name as primary identifier
 

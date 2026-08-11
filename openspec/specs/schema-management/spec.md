@@ -10,10 +10,23 @@ How event schemas are discovered and managed: read-only discovery across each do
 
 The control plane SHALL provide read-only schema discovery as an entitlement-filtered consumer catalog. `GET /schemas?consumerDomain={consumerDomain}` SHALL list exactly the schemas covered by the consumer domain's current entitlements, expanded across environments from the per-environment registries (source of truth), deduplicating overlapping pattern coverage, and reporting the latest version per environment. Producer-domain and environment filters MAY narrow the expansion, and pagination SHALL use an opaque continuation token carrying cursors only, never authorization state. `GET /schemas/{schemaName}?consumerDomain={consumerDomain}&domain={producerDomain}` SHALL return schema detail including per-environment latest versions and the latest content under the same coverage check. Both routes SHALL require the caller to hold a `subscriber` binding on the queried consumer domain. `platform-admin` and `platform-auditor` callers MAY omit `consumerDomain` and receive the platform-wide catalog unfiltered by entitlements. No separate schema or catalog table SHALL be introduced.
 
+A caller holding a `publisher` binding on a producer domain SHALL be able to view that domain's own catalog without any consumer entitlement: `GET /schemas?domain={producerDomain}` (no `consumerDomain`) SHALL return the producer domain's schemas with the latest version per environment, and `GET /schemas/{schemaName}?domain={producerDomain}` SHALL return detail, under the same registry-backed expansion. The producer scope SHALL NOT expose other domains' schemas and SHALL NOT require or consult entitlements.
+
 #### Scenario: Catalog expands current entitlements
 
 - **WHEN** a caller with a `subscriber` binding on `checkout` requests `GET /schemas?consumerDomain=checkout`
 - **THEN** the response SHALL list exactly the schemas covered by `checkout`'s current entitlements, keyed by schema name, with the latest version per environment
+
+#### Scenario: Publisher views their own domain's schemas
+
+- **WHEN** a caller with a `publisher` binding on `orders` requests `GET /schemas?domain=orders` without `consumerDomain`
+- **THEN** the response SHALL list the schemas registered for `orders` with the latest version per environment
+- **AND THEN** no entitlement SHALL be required or consulted
+
+#### Scenario: Publisher scope does not widen to other domains
+
+- **WHEN** a caller with a `publisher` binding on `orders` requests `GET /schemas?domain=payments` without `consumerDomain` and holds no binding on `payments`
+- **THEN** the API SHALL return `403 Forbidden`
 
 #### Scenario: Version skew visible before subscribing
 
@@ -49,7 +62,7 @@ The control plane SHALL provide read-only schema discovery as an entitlement-fil
 
 #### Scenario: Platform roles inspect the full catalog
 
-- **WHEN** a `platform-admin` or `platform-auditor` caller requests `GET /schemas` without `consumerDomain`
+- **WHEN** a `platform-admin` or `platform-auditor` caller requests `GET /schemas` without `consumerDomain` and without `domain`
 - **THEN** the response SHALL span all discoverable schemas unfiltered by entitlements
 - **AND THEN** `platform-auditor` SHALL NOT be able to perform any mutation
 
