@@ -24,10 +24,12 @@ use crate::discovery;
 pub const MAX_PAGE_SIZE: usize = 50;
 
 /// Who the catalog is being expanded for: a consumer domain's current
-/// entitlements, or the platform-wide view (every ACTIVE domain, unfiltered).
+/// entitlements, a producer inspecting its own domain, or the platform-wide
+/// view (every ACTIVE domain, unfiltered).
 #[derive(Debug)]
 pub enum Scope {
     Consumer(String),
+    Producer(String),
     Platform,
 }
 
@@ -183,7 +185,9 @@ pub async fn list_catalog(
 
 fn covered(scope: &Scope, patterns: &[ScopePattern], schema_name: &str) -> bool {
     match scope {
-        Scope::Platform => true,
+        // A producer sees its own catalog in full; entitlement coverage is a
+        // consumer concept and does not constrain the publisher's view.
+        Scope::Platform | Scope::Producer(_) => true,
         // Patterns match the bare detail type, as in the engine, the
         // activation workflow, and the revocation worker.
         Scope::Consumer(_) => {

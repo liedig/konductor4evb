@@ -46,7 +46,15 @@ pub async fn handle(
         .unwrap_or(catalog::MAX_PAGE_SIZE)
         .min(catalog::MAX_PAGE_SIZE);
 
-    let scope = match resolve_scope(ddb, &bindings_table, &principal, &consumer).await {
+    let scope = match resolve_scope(
+        ddb,
+        &bindings_table,
+        &principal,
+        &consumer,
+        producer.as_deref(),
+    )
+    .await
+    {
         Ok(scope) => scope,
         Err(response) => return Ok(response),
     };
@@ -104,6 +112,7 @@ async fn resolve_sources(
         Scope::Consumer(consumer) => {
             CallerSources::for_consumer(ddb, entitlements_table, consumer, producer).await
         }
+        Scope::Producer(domain) => Ok(CallerSources::for_producer(domain)),
         Scope::Platform => CallerSources::platform_wide(ddb, producer).await,
     };
     result.map_err(|e| {
@@ -144,13 +153,15 @@ fn parse_cursor(payload: &Value, filter_hash: &str) -> Result<Option<(String, St
 }
 
 /// Consumer path: a `subscriber` binding on the queried consumer domain (or
-/// a platform role inspecting a consumer's view). No consumer domain: the
-/// platform-wide catalog, platform roles only.
+/// a platform role inspecting a consumer's view). Producer path: a
+/// `publisher` binding on the queried domain yields that domain's catalog.
+/// Neither parameter: the platform-wide catalog, platform roles only.
 async fn resolve_scope(
     ddb: &aws_sdk_dynamodb::Client,
     bindings_table: &str,
     principal: &TrustedPrincipal,
     consumer: &Option<String>,
+    producer: Option<&str>,
 ) -> Result<Scope, Value> {
     match consumer {
         Some(domain) => {
@@ -172,12 +183,27 @@ async fn resolve_scope(
             }
         }
         None if is_platform(principal) => Ok(Scope::Platform),
-        None => {
-            tracing::warn!("list schemas: deny (platform-wide catalog requires a platform role)");
-            Err(api::from_control_plane_error(
-                &ControlPlaneError::AccessDenied,
-            ))
-        }
+        None => match producer {
+            Some(domain)
+                if has_role_binding(
+                    &BindingStore::new(ddb.clone(), bindings_table),
+                    principal,
+                    ResourceRole::Publisher,
+                    domain,
+                )
+                .await =>
+            {
+                Ok(Scope::Producer(domain.to_string()))
+            }
+            _ => {
+                tracing::warn!(
+                    "list schemas: deny (catalog requires consumer, publisher, or platform scope)"
+                );
+                Err(api::from_control_plane_error(
+                    &ControlPlaneError::AccessDenied,
+                ))
+            }
+        },
     }
 }
 
@@ -832,6 +858,113 @@ mod tests {
             assert_eq!(resp["statusCode"], 200, "{role} reads the platform catalog");
             assert_eq!(body(&resp)["items"].as_array().unwrap().len(), 2);
         }
+    }
+
+    fn publisher_binding_rule(group: &'static str, domain: &'static str) -> Rule {
+        let binding = RoleBinding::new(
+            "b-pub",
+            BindingPrincipal::CognitoGroup {
+                issuer: "https://idp.example.com".to_string(),
+                group: group.to_string(),
+            },
+            ResourceRole::Publisher,
+            domain,
+            Utc::now(),
+            "test",
+        )
+        .unwrap();
+        let item = binding_to_item(&binding);
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| req.table_name() == Some("bindings"))
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .set_item(Some(item.clone()))
+                    .build()
+            })
+    }
+
+    fn oauth_team_context(group: &str) -> Value {
+        json!({
+            "authorizer": {
+                "authenticationMechanism": "oauth",
+                "principalId": "user-2",
+                "issuer": "https://idp.example.com",
+                "clientId": "client-1",
+                "globalRoles": "[]",
+                "teamGroups": format!("[\"{group}\"]"),
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn publisher_binding_yields_own_domain_catalog_without_entitlements() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule("orders", vec!["prod"]);
+        let registry = registry_rule(
+            "acme-prod-orders-schema-registry",
+            vec!["acme-orders@OrderNotification", "acme-orders@InternalAudit"],
+        );
+        let d1 = describe_rule(
+            "acme-prod-orders-schema-registry",
+            "acme-orders@OrderNotification",
+            3,
+        );
+        let d2 = describe_rule(
+            "acme-prod-orders-schema-registry",
+            "acme-orders@InternalAudit",
+            1,
+        );
+        // No entitlements rule: the producer scope must never consult the
+        // entitlement table.
+        let (ddb, schemas) = clients(&[&binding, &domain], &[&registry, &d1, &d2]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let items = body(&resp)["items"].clone();
+        let names: Vec<&str> = items
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["schemaName"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["acme-orders@InternalAudit", "acme-orders@OrderNotification"],
+            "the publisher sees its full catalog, not an entitlement view"
+        );
+    }
+
+    #[tokio::test]
+    async fn publisher_binding_on_another_domain_is_forbidden() {
+        set_env();
+        let no_binding = mock!(aws_sdk_dynamodb::Client::get_item)
+            .then_output(|| GetItemOutput::builder().build());
+        let (ddb, schemas) = clients(&[&no_binding], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            request(
+                oauth_team_context("team-payments"),
+                json!({ "domain": "orders" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 403);
+        assert_eq!(body(&resp)["code"], "AccessDeniedException");
     }
 
     #[tokio::test]

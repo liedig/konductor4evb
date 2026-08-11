@@ -201,7 +201,15 @@ async fn authorize(
         return true;
     }
     let Some(consumer) = consumer else {
-        return false;
+        // A publisher inspects its own catalog entries without a consumer
+        // context; entitlement coverage is a consumer concept.
+        return has_role_binding(
+            &BindingStore::new(ddb.clone(), bindings_table),
+            principal,
+            ResourceRole::Publisher,
+            producer,
+        )
+        .await;
     };
     let bound = has_role_binding(
         &BindingStore::new(ddb.clone(), bindings_table),
@@ -433,6 +441,88 @@ mod tests {
         )
     }
 
+    fn oauth_team_context(group: &str) -> Value {
+        json!({
+            "authorizer": {
+                "authenticationMechanism": "oauth",
+                "principalId": "user-2",
+                "issuer": "https://idp.example.com",
+                "clientId": "client-1",
+                "globalRoles": "[]",
+                "teamGroups": format!("[\"{group}\"]"),
+            }
+        })
+    }
+
+    fn publisher_binding_rule(group: &'static str, domain: &'static str) -> Rule {
+        let binding = RoleBinding::new(
+            "b-pub",
+            BindingPrincipal::CognitoGroup {
+                issuer: "https://idp.example.com".to_string(),
+                group: group.to_string(),
+            },
+            ResourceRole::Publisher,
+            domain,
+            Utc::now(),
+            "test",
+        )
+        .unwrap();
+        let item = binding_to_item(&binding);
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| req.table_name() == Some("bindings"))
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .set_item(Some(item.clone()))
+                    .build()
+            })
+    }
+
+    #[tokio::test]
+    async fn publisher_reads_own_schema_detail_without_consumer_context() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let dev = describe_rule("dev", 5, "dev-content");
+        let prod = describe_rule("prod", 3, "prod-content");
+        // No entitlements rule: publisher access must not consult coverage.
+        let (ddb, schemas) = clients(&[&binding, &domain], &[&dev, &prod]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(body(&resp)["schemaName"], SCHEMA);
+    }
+
+    #[tokio::test]
+    async fn non_publisher_without_consumer_context_is_forbidden() {
+        set_env();
+        let no_binding = mock!(aws_sdk_dynamodb::Client::get_item)
+            .then_output(|| GetItemOutput::builder().build());
+        let (ddb, schemas) = clients(&[&no_binding], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            request(
+                oauth_team_context("team-payments"),
+                json!({ "domain": "orders" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 403);
+    }
+
     #[tokio::test]
     async fn covered_schema_returns_full_detail_with_skew_visible() {
         set_env();
@@ -534,7 +624,10 @@ mod tests {
     #[tokio::test]
     async fn non_platform_without_consumer_domain_is_forbidden() {
         set_env();
-        let (ddb, schemas) = clients(&[], &[]);
+        // No publisher binding either: the detail route denies.
+        let no_binding = mock!(aws_sdk_dynamodb::Client::get_item)
+            .then_output(|| GetItemOutput::builder().build());
+        let (ddb, schemas) = clients(&[&no_binding], &[]);
         let resp = handle(
             &ddb,
             &schemas,

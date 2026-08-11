@@ -36,9 +36,9 @@
 
 ## 6. Platform enable/disable lifecycle
 
-- [ ] 6.1 Red tests: `POST /domains/{domainName}/state` transitions ACTIVE⇄INACTIVE (platform-admin only); publish and subscribe-activation reject INACTIVE domains; existing estate untouched
-- [ ] 6.2 Implement the state endpoint and the INACTIVE guards in the publish and subscribe-activation paths
-- [ ] 6.3 Green + `make check`; commit `feat(domains): platform-managed domain enable and disable`
+- [x] 6.1 Red tests: `POST /domains/{domainName}/state` transitions ACTIVE⇄INACTIVE (platform-admin only); publish and subscribe-activation reject INACTIVE domains; existing estate untouched
+- [x] 6.2 Implement the state endpoint and the INACTIVE guards in the publish and subscribe-activation paths
+- [x] 6.3 Green + `make check`; commit `feat(domains): platform-managed domain enable and disable`
 
 ## 7. Producer catalog scope
 

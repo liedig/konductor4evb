@@ -46,6 +46,13 @@ impl CallerSources {
         Ok(sources)
     }
 
+    /// The producer's own domain as the single source with universal
+    /// coverage — publishers inspect their catalog without entitlements.
+    /// Entitlement reads are never issued on this path.
+    pub fn for_producer(domain: &str) -> BTreeMap<String, Vec<ScopePattern>> {
+        BTreeMap::from([(domain.to_string(), Vec::new())])
+    }
+
     /// Every ACTIVE domain as a source with universal coverage. Sized by the
     /// 1,000-domain deployment cap; per-page cost stays at the few registries
     /// needed to fill the page because expansion stops at the page limit.
