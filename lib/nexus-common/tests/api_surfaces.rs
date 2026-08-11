@@ -1185,6 +1185,28 @@ fn approval_workflow_finalizes_through_lambda_transaction() {
 }
 
 #[test]
+fn user_pool_client_supports_srp_login() {
+    let doc = core_template();
+    let client = resource(&doc, "NexusUserPoolClient");
+    let flows: Vec<&str> = seq(at(props(client), "ExplicitAuthFlows"))
+        .iter()
+        .map(text)
+        .collect();
+    assert!(
+        flows.contains(&"ALLOW_USER_SRP_AUTH"),
+        "custom login clients authenticate via SRP: {flows:?}"
+    );
+    assert!(
+        flows.contains(&"ALLOW_REFRESH_TOKEN_AUTH"),
+        "sessions refresh without re-login: {flows:?}"
+    );
+    assert!(
+        !flows.contains(&"ALLOW_USER_PASSWORD_AUTH"),
+        "raw passwords must not traverse clients: {flows:?}"
+    );
+}
+
+#[test]
 fn domain_state_route_is_oauth_only_and_wired() {
     let oauth = oauth_contract();
     let state = at(at(&oauth, "paths"), "/domains/{domainName}/state");

@@ -42,9 +42,9 @@
 
 ## 7. Producer catalog scope
 
-- [ ] 7.1 Red tests: publisher binding + `?domain=D` (no consumerDomain) returns D's schemas; other domains 403; entitlements not consulted
-- [ ] 7.2 Add `Scope::Producer` to list-schemas resolve_scope/sources; same authorization on the detail route
-- [ ] 7.3 Green + `make check`; commit `feat(schemas): producer scope for own-domain catalog`
+- [x] 7.1 Red tests: publisher binding + `?domain=D` (no consumerDomain) returns D's schemas; other domains 403; entitlements not consulted
+- [x] 7.2 Add `Scope::Producer` to list-schemas resolve_scope/sources; same authorization on the detail route
+- [x] 7.3 Green + `make check`; commit `feat(schemas): producer scope for own-domain catalog`
 
 ## 8. Cognito client auth flows
 

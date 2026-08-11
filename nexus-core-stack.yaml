@@ -861,6 +861,11 @@ Resources:
       ClientName: !Sub "${Organization}-nexus-control-plane"
       GenerateSecret: false
       PreventUserExistenceErrors: ENABLED
+      # SRP + refresh for custom (non-hosted-UI) login clients; USER_PASSWORD_AUTH
+      # stays off so passwords never traverse the client.
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
       AllowedOAuthFlowsUserPoolClient: true
       AllowedOAuthFlows: [code]
       AllowedOAuthScopes: [openid, email, profile]
