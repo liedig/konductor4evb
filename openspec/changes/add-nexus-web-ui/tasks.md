@@ -24,11 +24,11 @@
 
 ## 4. Domain journeys
 
-- [ ] 4.1 Owner dashboard `/domains`: owned domains with status badges, empty state with request CTA
-- [ ] 4.2 Request form `/domains/new`: owning-team picker (from caller groups), full field validation mirroring the API contract, 202 handling
-- [ ] 4.3 Domain detail `/domains/[name]`: overview, edit sheet (description/emails/tags only), read-only environments/account
-- [ ] 4.4 Admin `/admin/domains`: full list, enable/disable with confirm
-- [ ] 4.5 Commit `feat(web): domain request and management journeys`
+- [x] 4.1 Owner dashboard `/domains`: owned domains with status badges, empty state with request CTA
+- [x] 4.2 Request form `/domains/new`: owning-team picker (from caller groups), full field validation mirroring the API contract, 202 handling
+- [x] 4.3 Domain detail `/domains/[name]`: overview, edit sheet (description/emails/tags only), read-only environments/account
+- [x] 4.4 Admin `/admin/domains`: full list, enable/disable with confirm
+- [x] 4.5 Commit `feat(web): domain request and management journeys`
 
 ## 5. Approvals inbox
 
