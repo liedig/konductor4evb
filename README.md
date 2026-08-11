@@ -1,6 +1,6 @@
 # EventBridge Nexus
 
-A serverless control plane for cross-account event-driven architecture at scale. Platform teams get governed domains — registration, approval, provisioning, ownership, and observability. Application teams get three simple verbs — **publish, subscribe, unsubscribe** — and never touch event buses, IAM policies, or cross-account delivery infrastructure.
+A serverless control plane for cross-account event-driven architecture at scale. Platform teams get governed domains — registration, approval, provisioning, ownership, and observability. Application teams get three simple verbs — **publish, subscribe, unsubscribe** — for event stream automation and never touch event buses other than their own, IAM policies, or cross-account delivery infrastructure.
 
 [Installation guide](docs/installation.md) | [Architecture](docs/development/architecture.md) | [API contracts](api/) (OAuth: `openapi-oauth.yaml`, IAM: `openapi-iam.yaml`)
 
