@@ -107,12 +107,15 @@ impl BindingPrincipal {
     }
 }
 
-/// The resource role a binding grants on its domain.
+/// The resource role a binding grants on its domain. `Owner` authorizes
+/// domain-management operations (metadata update, full-record reads) and
+/// never substitutes for `Publisher` or `Subscriber`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ResourceRole {
     Publisher,
     Subscriber,
+    Owner,
 }
 
 impl ResourceRole {
@@ -121,6 +124,7 @@ impl ResourceRole {
         match self {
             Self::Publisher => "publisher",
             Self::Subscriber => "subscriber",
+            Self::Owner => "owner",
         }
     }
 }
@@ -570,6 +574,10 @@ mod tests {
             "subscriber"
         );
         assert_eq!(
+            serde_json::to_value(ResourceRole::Owner).unwrap(),
+            "owner"
+        );
+        assert_eq!(
             serde_json::to_value(BindingState::Active).unwrap(),
             "active"
         );
@@ -577,5 +585,50 @@ mod tests {
             serde_json::to_value(AuditMutation::Revoke).unwrap(),
             "revoke"
         );
+    }
+
+    #[test]
+    fn owner_role_uses_the_stable_owner_token() {
+        assert_eq!(ResourceRole::Owner.as_str(), "owner");
+        let binding = RoleBinding::new(
+            "rb-owner",
+            group_principal(),
+            ResourceRole::Owner,
+            "orders",
+            Utc::now(),
+            "fixture",
+        )
+        .unwrap();
+        assert_eq!(binding.sk(), "ROLE#owner#DOMAIN#orders");
+        assert_eq!(
+            binding.gsi1sk(),
+            format!("ROLE#owner#PRINCIPAL#cognito-group#{ISSUER}#team-orders")
+        );
+    }
+
+    #[test]
+    fn create_request_accepts_owner_role() {
+        let request: CreateBindingRequest = serde_json::from_value(serde_json::json!({
+            "domain": "orders",
+            "role": "owner",
+            "principal": {"type": "cognito-group", "issuer": ISSUER, "group": "team-orders"}
+        }))
+        .unwrap();
+        assert_eq!(request.role, ResourceRole::Owner);
+    }
+
+    #[test]
+    fn role_parsing_stays_closed_to_unknown_values() {
+        for role in ["admin", "member", "Owner", "OWNER"] {
+            let body = serde_json::json!({
+                "domain": "orders",
+                "role": role,
+                "principal": {"type": "aws-account", "accountId": "111122223333"}
+            });
+            assert!(
+                serde_json::from_value::<CreateBindingRequest>(body).is_err(),
+                "must reject role {role:?}"
+            );
+        }
     }
 }

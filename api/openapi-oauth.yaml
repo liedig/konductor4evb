@@ -1145,7 +1145,8 @@ components:
           description: Domain the binding scopes to; global bindings are not representable
         role:
           type: string
-          enum: [publisher, subscriber]
+          enum: [publisher, subscriber, owner]
+          description: Role granted on the domain; `owner` authorizes domain management and is platform-administered
         principal:
           $ref: "#/components/schemas/BindingPrincipal"
       example:
@@ -1164,7 +1165,7 @@ components:
           type: string
         role:
           type: string
-          enum: [publisher, subscriber]
+          enum: [publisher, subscriber, owner]
         principal:
           $ref: "#/components/schemas/BindingPrincipal"
         createdAt:

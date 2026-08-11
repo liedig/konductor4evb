@@ -524,6 +524,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owner_binding_does_not_satisfy_publisher_or_subscriber_actions() {
+        let owner_binding = RoleBinding::new(
+            "rb-owner",
+            BindingPrincipal::cognito_group(ISSUER, "team-orders").unwrap(),
+            ResourceRole::Owner,
+            "orders",
+            chrono::Utc::now(),
+            "fixture",
+        )
+        .unwrap();
+        let engine = InMemoryGrantEngine::new(vec![owner_binding]);
+        let principal = oauth(&["team-orders"]);
+        assert_eq!(
+            engine
+                .authorize(&principal, actions::SCHEMA_PUBLISH, "orders")
+                .await,
+            AuthorizationDecision::Deny,
+            "owner must not publish"
+        );
+        assert_eq!(
+            engine
+                .authorize(
+                    &principal,
+                    actions::SUBSCRIPTION_CREATE,
+                    "checkout/orders/OrderCreated"
+                )
+                .await,
+            AuthorizationDecision::Deny,
+            "owner without a subscriber binding must not subscribe"
+        );
+    }
+
+    #[tokio::test]
+    async fn publisher_binding_does_not_satisfy_owner_checks() {
+        let engine = InMemoryGrantEngine::new(vec![orders_publisher_binding()]);
+        let principal = oauth(&["orders-publishers"]);
+        assert!(
+            !engine
+                .has_binding(
+                    &BindingPrincipal::cognito_group(ISSUER, "orders-publishers").unwrap(),
+                    ResourceRole::Owner,
+                    "orders"
+                )
+                .await
+                .unwrap(),
+            "publisher binding must not answer an owner lookup"
+        );
+        drop(principal);
+    }
+
+    #[tokio::test]
     async fn global_roles_do_not_substitute_for_bindings() {
         let engine = InMemoryGrantEngine::new(vec![orders_publisher_binding()]);
         let admin = TrustedPrincipal::oauth(
