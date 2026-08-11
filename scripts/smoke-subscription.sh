@@ -35,8 +35,9 @@ BUS="${ORGANIZATION}-${ENV_NAME}-${PRODUCER_DOMAIN}-event-bus"
 
 API_URL=$(aws cloudformation describe-stacks \
   --stack-name nexus-core \
-  --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+  --query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
   --output text --region "${AWS_REGION}")
+[ -n "${API_URL}" ] || { echo "nexus-core stack has no IamApiEndpoint output — deploy first" >&2; exit 1; }
 echo "API endpoint: ${API_URL}"
 
 echo ""

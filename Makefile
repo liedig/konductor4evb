@@ -43,9 +43,9 @@ help: ## Show this help message
 	@printf "    $(DIM)ORGANIZATION$(RESET)                 optional for: deploy-trust (default: $(CYAN)$(ORGANIZATION)$(RESET))\n"
 	@printf "    $(DIM)DOMAIN_STATUS$(RESET)               optional for: list-domains (filter by status)\n"
 	@printf "    $(DIM)OWNER_ACCOUNT_ID$(RESET)            optional for: list-domains (filter by owner)\n"
-	@printf "    $(DIM)DOMAIN$(RESET)                      required for: list-schemas\n"
-	@printf "    $(DIM)CONSUMER_DOMAIN$(RESET)             optional for: list-subscriptions (filter by consumer)\n"
-	@printf "    $(DIM)PRODUCER_DOMAIN$(RESET)             optional for: list-subscriptions (filter by producer)\n"
+	@printf "    $(DIM)CONSUMER_DOMAIN$(RESET)             required for: list-schemas (the catalog is entitlement-scoped)\n"
+	@printf "    $(DIM)DOMAIN$(RESET)                      optional for: list-schemas (producer filter); required for: list-subscriptions\n"
+	@printf "    $(DIM)DIRECTION$(RESET)                   required for: list-subscriptions (inbound|outbound)\n"
 	@printf "    $(DIM)SCHEMA_NAME$(RESET)                 optional for: list-subscriptions (filter by schema)\n"
 	@printf "    $(DIM)SUBSCRIPTION_STATUS$(RESET)         optional for: list-subscriptions (filter by status)\n\n"
 
@@ -120,9 +120,10 @@ endif
 	echo "$(BOLD)$(CYAN)=== Smoke test: $${DOMAIN_NAME} ===$(RESET)"; \
 	API_URL=$$(aws cloudformation describe-stacks \
 		--stack-name nexus-core \
-		--query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+		--query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
 		--output text \
 		--region $(AWS_REGION)); \
+	[ -n "$${API_URL}" ] || { echo "nexus-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
 	echo "  API endpoint: $${API_URL}"; \
 	echo ""; \
 	echo "$(BOLD)(1/4) Register domain$(RESET)"; \
@@ -183,9 +184,10 @@ list-domains: ## List registered domains (optional: DOMAIN_STATUS=, OWNER_ACCOUN
 	@set -euo pipefail; \
 	API_URL=$$(aws cloudformation describe-stacks \
 		--stack-name nexus-core \
-		--query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+		--query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
 		--output text \
-		--region $(AWS_REGION) 2>/dev/null) || { echo "nexus-core stack not found — deploy first with 'make deploy-core'"; exit 1; }; \
+		--region $(AWS_REGION) 2>/dev/null) || true; \
+	[ -n "$${API_URL}" ] || { echo "nexus-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
 	QUERY=""; \
 	[ -n "$(DOMAIN_STATUS)" ] && QUERY="$${QUERY}&status=$(DOMAIN_STATUS)"; \
 	[ -n "$(OWNER_ACCOUNT_ID)" ] && QUERY="$${QUERY}&ownerAccountId=$(OWNER_ACCOUNT_ID)"; \
@@ -193,36 +195,42 @@ list-domains: ## List registered domains (optional: DOMAIN_STATUS=, OWNER_ACCOUN
 	URL="$${API_URL}/domains$${QUERY:+?$$QUERY}"; \
 	awscurl -X GET "$$URL" --region $(AWS_REGION) 2>&1 | jq . 2>/dev/null || awscurl -X GET "$$URL" --region $(AWS_REGION)
 
-list-schemas: ## List schemas offered by a domain (required: DOMAIN=, optional: ENV=)
-ifndef DOMAIN
-	$(error DOMAIN is required — the producer domain name to list schemas for)
+list-schemas: ## List a consumer domain's schema catalog (required: CONSUMER_DOMAIN=, optional: DOMAIN= producer filter, ENV=)
+ifndef CONSUMER_DOMAIN
+	$(error CONSUMER_DOMAIN is required — the catalog shows only what this domain's entitlements cover; your account needs a subscriber binding on it)
 endif
 	@set -euo pipefail; \
 	API_URL=$$(aws cloudformation describe-stacks \
 		--stack-name nexus-core \
-		--query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+		--query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
 		--output text \
-		--region $(AWS_REGION) 2>/dev/null) || { echo "nexus-core stack not found — deploy first with 'make deploy-core'"; exit 1; }; \
-	QUERY="domain=$(DOMAIN)"; \
+		--region $(AWS_REGION) 2>/dev/null) || true; \
+	[ -n "$${API_URL}" ] || { echo "nexus-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
+	QUERY="consumerDomain=$(CONSUMER_DOMAIN)"; \
+	[ -n "$(DOMAIN)" ] && QUERY="$${QUERY}&domain=$(DOMAIN)"; \
 	[ -n "$(ENV)" ] && QUERY="$${QUERY}&environment=$(ENV)"; \
 	awscurl -X GET "$${API_URL}/schemas?$${QUERY}" \
 		--region $(AWS_REGION) 2>&1 | jq . 2>/dev/null || awscurl -X GET "$${API_URL}/schemas?$${QUERY}" --region $(AWS_REGION)
 
-list-subscriptions: ## List subscriptions (optional: CONSUMER_DOMAIN=, PRODUCER_DOMAIN=, SCHEMA_NAME=, SUBSCRIPTION_STATUS=)
+list-subscriptions: ## List a domain's subscriptions (required: DOMAIN=, DIRECTION=inbound|outbound, optional: SCHEMA_NAME=, SUBSCRIPTION_STATUS=)
+ifndef DOMAIN
+	$(error DOMAIN is required — the domain whose subscriptions to list)
+endif
+ifndef DIRECTION
+	$(error DIRECTION is required — inbound (subscriber view) or outbound (publisher view))
+endif
 	@set -euo pipefail; \
 	API_URL=$$(aws cloudformation describe-stacks \
 		--stack-name nexus-core \
-		--query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+		--query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
 		--output text \
-		--region $(AWS_REGION) 2>/dev/null) || { echo "nexus-core stack not found — deploy first with 'make deploy-core'"; exit 1; }; \
-	QUERY=""; \
-	[ -n "$(CONSUMER_DOMAIN)" ] && QUERY="$${QUERY}&consumer=$(CONSUMER_DOMAIN)"; \
-	[ -n "$(PRODUCER_DOMAIN)" ] && QUERY="$${QUERY}&producer=$(PRODUCER_DOMAIN)"; \
+		--region $(AWS_REGION) 2>/dev/null) || true; \
+	[ -n "$${API_URL}" ] || { echo "nexus-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
+	QUERY="domain=$(DOMAIN)&direction=$(DIRECTION)"; \
 	[ -n "$(SCHEMA_NAME)" ] && QUERY="$${QUERY}&schema=$(SCHEMA_NAME)"; \
 	[ -n "$(SUBSCRIPTION_STATUS)" ] && QUERY="$${QUERY}&status=$(SUBSCRIPTION_STATUS)"; \
-	QUERY=$${QUERY#&}; \
-	URL="$${API_URL}/subscriptions$${QUERY:+?$$QUERY}"; \
-	awscurl -X GET "$$URL" --region $(AWS_REGION) 2>&1 | jq . 2>/dev/null || awscurl -X GET "$$URL" --region $(AWS_REGION)
+	awscurl -X GET "$${API_URL}/subscriptions?$${QUERY}" \
+		--region $(AWS_REGION) 2>&1 | jq . 2>/dev/null || awscurl -X GET "$${API_URL}/subscriptions?$${QUERY}" --region $(AWS_REGION)
 
 deploy: build deploy-core ## Build then deploy the core stack
 
