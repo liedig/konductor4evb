@@ -21,23 +21,25 @@ Consuming an event from another AWS account means coordinating event buses, rule
 ## How It Works
 
 ```text
-┌─ GOVERN ─────────────────────────────────────────────────────────────────┐
-│  Register → human approval → every environment provisioned atomically:   │
-│  buses, registries, DLQs, monitoring. The platform grants entitlements   │
-│  that decide which consumer domains can see and subscribe to a schema.   │
-├─ PUBLISH ────────────────────────────────────────────────────────────────┤
-│  Manage schemas append-only (POST /schemas, POST /schemas/versions) and  │
-│  publish with one call (POST /publish): publisher authorized, latest     │
-│  version pinned, canonical envelope stamped, durably queued.             │
-├─ SUBSCRIBE ──────────────────────────────────────────────────────────────┤
-│  GET /schemas returns only what your domain's entitlements cover →       │
-│  POST /subscriptions checks your binding and coverage → per-environment  │
-│  rules wired across accounts → events arrive on your own bus.            │
-├─ OPERATE ────────────────────────────────────────────────────────────────┤
-│  Pause or resume a stream per environment. Revoke an entitlement and     │
-│  uncovered streams disable automatically. Grants, revocations, and       │
-│  command outcomes are audited; silent streams trip per-stream alarms.    │
-└──────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────── CONTROL PLANE ─────────────────────────────────────────┐
+│  OAuth + IAM surfaces · grant engine (bindings + entitlements) · audit on every      │
+│  mutation · revocation worker + hourly sweep · operator alarms                       │
+└──────────────────┬──────────────────────────────────────────────┬────────────────────┘
+                   │ authorizes every command                     │ disables uncovered
+                   ▼                                              ▼ streams on revocation
+┌─────────── DOMAIN MANAGEMENT ──────────┐   ┌──────────── EVENT STREAMS ──────────────┐
+│  register → approve → provision        │   │  schemas: create and append versions,  │
+│  every environment atomically — buses, │   │  append-only in each environment       │
+│  registries, DLQs, and monitoring in   │──▶│                                          │
+│  the platform and domain accounts      │   │  publish: one call — authorized,       │
+│                                        │   │  latest version pinned, envelope       │
+│  teardown replays the same saga        │   │  stamped, durably queued               │
+│  machinery                             │   │                                          │
+│                                        │   │  subscribe: catalog shows only what    │
+│  lifecycle events and owner            │   │  entitlements cover; per-env rules     │
+│  notifications on every transition     │   │  deliver cross-account; pause/resume   │
+│                                        │   │  per environment                       │
+└────────────────────────────────────────┘   └──────────────────────────────────────────┘
 ```
 
 Nexus runs in a dedicated platform account. Domain resources are provisioned into domain accounts via cross-account IAM roles. All control-plane state lives in the platform account; domain accounts only contain the resources their domains need.
