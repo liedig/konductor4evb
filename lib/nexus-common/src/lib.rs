@@ -1,4 +1,5 @@
 pub mod api;
+pub mod domain_scope;
 pub mod dynamodb;
 pub mod entitlement;
 pub mod entitlement_store;

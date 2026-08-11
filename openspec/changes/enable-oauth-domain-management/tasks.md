@@ -8,11 +8,11 @@
 
 ## 2. Ownership at registration and approval
 
-- [ ] 2.1 Red tests: OAuth register requires `owningTeam` ∈ caller team groups; platform groups and absent teams denied; IAM callers unaffected
-- [ ] 2.2 Extend `RegisterDomainRequest` with optional `owningTeam`; replace `IamOnlyAuthorizer` in register.rs with the new OAuth rule (IAM path unchanged); persist `owningTeam` on the domain record
-- [ ] 2.3 Red tests: approval accept path commits domain state + owner binding in one transaction; registration without `owningTeam` creates no binding; failure commits neither
-- [ ] 2.4 Implement the transactional owner-binding write in the approval accept path
-- [ ] 2.5 Green + `make check`; commit `feat(domains): establish team ownership at registration approval`
+- [x] 2.1 Red tests: OAuth register requires `owningTeam` ∈ caller team groups; platform groups and absent teams denied; IAM callers unaffected
+- [x] 2.2 Extend `RegisterDomainRequest` with optional `owningTeam`; replace `IamOnlyAuthorizer` in register.rs with the new OAuth rule (IAM path unchanged); persist `owningTeam` on the domain record
+- [x] 2.3 Red tests: approval accept path commits domain state + owner binding in one transaction; registration without `owningTeam` creates no binding; failure commits neither
+- [x] 2.4 Implement the transactional owner-binding write in the approval accept path
+- [x] 2.5 Green + `make check`; commit `feat(domains): establish team ownership at registration approval`
 
 ## 3. Scoped reads and directory projection
 

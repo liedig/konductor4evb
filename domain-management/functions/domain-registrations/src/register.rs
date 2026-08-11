@@ -432,8 +432,7 @@ mod tests {
         use aws_smithy_mocks::{mock, mock_client};
         use serde_json::Value;
 
-        const ISSUER: &str =
-            "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";
+        const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";
 
         fn valid_request() -> RegisterDomainRequest {
             RegisterDomainRequest {

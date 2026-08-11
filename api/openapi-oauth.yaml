@@ -74,6 +74,17 @@ paths:
       operationId: ListDomains
       summary: List domains
       parameters:
+        - name: view
+          in: query
+          description: >-
+            `directory` returns the names-only projection (domainName,
+            domainNamespace, description, status) available to any
+            authenticated caller; omit for the management list, which is
+            scoped to owned domains for team callers and unscoped for
+            platform roles.
+          schema:
+            type: string
+            enum: [directory]
         - name: ownerAccountId
           in: query
           schema:

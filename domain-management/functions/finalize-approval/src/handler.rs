@@ -7,7 +7,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use nexus_common::dynamodb::{get_s, s};
-use nexus_common::grant::{AuditMutation, AuditRecord, BindingPrincipal, ResourceRole, RoleBinding};
+use nexus_common::grant::{
+    AuditMutation, AuditRecord, BindingPrincipal, ResourceRole, RoleBinding,
+};
 use nexus_common::grant_store::{audit_to_item, binding_to_item};
 
 #[derive(Debug, Deserialize)]
@@ -48,7 +50,11 @@ pub async fn handle(
     let owning_team = domain.item().and_then(|item| get_s(item, "owningTeam"));
 
     let approved_at = now.to_rfc3339();
-    let mut items = vec![domain_approval_update(&domains_table, &input, &approved_at)?];
+    let mut items = vec![domain_approval_update(
+        &domains_table,
+        &input,
+        &approved_at,
+    )?];
 
     if let Some(team) = owning_team.as_deref() {
         let binding = RoleBinding::new(
@@ -236,7 +242,10 @@ mod tests {
         let items = calls[0].transact_items();
         assert_eq!(items.len(), 3, "domain update + binding put + audit put");
 
-        let update = items[0].update.as_ref().expect("first item is the domain update");
+        let update = items[0]
+            .update
+            .as_ref()
+            .expect("first item is the domain update");
         assert_eq!(update.table_name(), "domains");
         assert_eq!(update.condition_expression(), Some("#s = :pending"));
         let values = update
@@ -251,7 +260,10 @@ mod tests {
             Some(&"admin-subject-123".to_string())
         );
 
-        let put = items[1].put.as_ref().expect("second item is the binding put");
+        let put = items[1]
+            .put
+            .as_ref()
+            .expect("second item is the binding put");
         assert_eq!(put.table_name(), "bindings");
         assert_eq!(put.condition_expression(), Some("attribute_not_exists(PK)"));
         let item = put.item();
@@ -268,7 +280,10 @@ mod tests {
         let sk = get_s(audit_item, "SK").expect("audit SK");
         assert!(sk.starts_with("TS#"), "audit SK is time-ordered: {sk}");
         let pk = get_s(audit_item, "PK").expect("audit PK");
-        assert!(pk.starts_with("GRANT#rb-"), "audit PK scopes to the binding: {pk}");
+        assert!(
+            pk.starts_with("GRANT#rb-"),
+            "audit PK scopes to the binding: {pk}"
+        );
         assert_eq!(get_s(audit_item, "mutation"), Some("create".into()));
         assert_eq!(get_s(audit_item, "actor"), Some("admin-subject-123".into()));
     }
@@ -277,8 +292,8 @@ mod tests {
     async fn approval_without_owning_team_commits_only_the_domain_update() {
         set_env();
         let captured: Arc<Mutex<Vec<TransactWriteItemsInput>>> = Arc::new(Mutex::new(Vec::new()));
-        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item)
-            .then_output(|| domain_with_team(None));
+        let get_rule =
+            mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| domain_with_team(None));
         let tx_rule = capturing_tx(Arc::clone(&captured));
         let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule, &tx_rule]);
 

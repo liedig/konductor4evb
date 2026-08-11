@@ -1,12 +1,18 @@
 use anyhow::{Context, Result};
+use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_runtime::{Error, LambdaEvent};
 use nexus_common::api;
+use nexus_common::domain_scope::is_full_visibility;
 use nexus_common::dynamodb::{
     attr_to_resource_arns_map, attr_to_string_map, get_s, get_string_list, get_string_set, s,
 };
 use nexus_common::error::ControlPlaneError;
+use nexus_common::grant::ResourceRole;
+use nexus_common::grant_engine;
+use nexus_common::grant_store::BindingStore;
 use nexus_common::principal_context::log_principal;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::env;
 
 pub async fn handle(
@@ -14,14 +20,31 @@ pub async fn handle(
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
+    let bindings_table = env::var("BINDINGS_TABLE").context("BINDINGS_TABLE not set")?;
 
     let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
-    let _ = log_principal(request_context);
+    let principal = match log_principal(request_context) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "describe domain: deny (no trusted principal)");
+            return Ok(api::from_control_plane_error(
+                &ControlPlaneError::AccessDenied,
+            ));
+        }
+    };
 
-    Ok(fetch_domain(ddb, &table, &event.payload).await)
+    Ok(fetch_domain(ddb, &table, &bindings_table, &event.payload, &principal).await)
 }
 
-async fn fetch_domain(ddb: &aws_sdk_dynamodb::Client, table: &str, event: &Value) -> Value {
+/// Team callers see their own domains only; a domain outside their
+/// ownership scope answers exactly like one that does not exist.
+async fn fetch_domain(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    bindings_table: &str,
+    event: &Value,
+    principal: &nexus_common::principal::TrustedPrincipal,
+) -> Value {
     let domain_name = match api::path_param(event, "domainName") {
         Some(name) => name,
         None => {
@@ -31,63 +54,80 @@ async fn fetch_domain(ddb: &aws_sdk_dynamodb::Client, table: &str, event: &Value
         }
     };
 
-    let result = ddb
+    let item = match ddb
         .get_item()
         .table_name(table)
         .key("domainName", s(&domain_name))
         .send()
-        .await;
-
-    match result {
+        .await
+    {
         Ok(output) => match output.item {
-            Some(item) => {
-                let resource_arns =
-                    attr_to_resource_arns_map(&item, "resourceArns").map(|map| json!(map));
-                let environments = get_string_list(&item, "environments").unwrap_or_default();
-                let secondary_owner_emails = get_string_set(&item, "secondaryOwnerEmails");
-
-                let mut body = json!({
-                    "domainName": get_s(&item, "domainName"),
-                    "description": get_s(&item, "description"),
-                    "ownerAccountId": get_s(&item, "ownerAccountId"),
-                    "ownerEmail": get_s(&item, "ownerEmail"),
-                    "secondaryOwnerEmails": secondary_owner_emails,
-                    "status": get_s(&item, "status"),
-                    "environments": environments,
-                    "tags": attr_to_string_map(&item, "tags"),
-                    "resourceArns": resource_arns,
-                    "namespaceParameter": get_s(&item, "namespaceParameter"),
-                    "createdAt": get_s(&item, "createdAt"),
-                    "updatedAt": get_s(&item, "updatedAt"),
-                });
-
-                if let Some(v) = get_s(&item, "decidedBy") {
-                    body["decidedBy"] = json!(v);
-                }
-                if let Some(v) = get_s(&item, "justification") {
-                    body["justification"] = json!(v);
-                }
-                if let Some(v) = get_s(&item, "approvedAt") {
-                    body["approvedAt"] = json!(v);
-                }
-                if let Some(v) = get_s(&item, "rejectedAt") {
-                    body["rejectedAt"] = json!(v);
-                }
-                if let Some(v) = get_s(&item, "errorDetail") {
-                    body["errorDetail"] = json!(v);
-                }
-
-                api::success_response(200, &body)
-            }
+            Some(item) => item,
             None => {
-                api::from_control_plane_error(&ControlPlaneError::DomainNotFound { domain_name })
+                return api::from_control_plane_error(&ControlPlaneError::DomainNotFound {
+                    domain_name,
+                });
             }
         },
         Err(e) => {
             tracing::error!(error = %e, "domain lookup failed");
-            api::from_control_plane_error(&ControlPlaneError::DynamoDb(e.to_string()))
+            return api::from_control_plane_error(&ControlPlaneError::DynamoDb(e.to_string()));
+        }
+    };
+
+    if !is_full_visibility(principal) {
+        let store = BindingStore::new(ddb.clone(), bindings_table);
+        let owns =
+            grant_engine::has_role_binding(&store, principal, ResourceRole::Owner, &domain_name)
+                .await;
+        if !owns {
+            tracing::info!(domain = %domain_name, "describe denied: no owner binding in caller teams");
+            return api::from_control_plane_error(&ControlPlaneError::DomainNotFound {
+                domain_name,
+            });
         }
     }
+
+    render_domain(&item)
+}
+
+fn render_domain(item: &HashMap<String, AttributeValue>) -> Value {
+    let resource_arns = attr_to_resource_arns_map(item, "resourceArns").map(|map| json!(map));
+    let environments = get_string_list(item, "environments").unwrap_or_default();
+    let secondary_owner_emails = get_string_set(item, "secondaryOwnerEmails");
+
+    let mut body = json!({
+        "domainName": get_s(item, "domainName"),
+        "description": get_s(item, "description"),
+        "ownerAccountId": get_s(item, "ownerAccountId"),
+        "ownerEmail": get_s(item, "ownerEmail"),
+        "secondaryOwnerEmails": secondary_owner_emails,
+        "status": get_s(item, "status"),
+        "environments": environments,
+        "tags": attr_to_string_map(item, "tags"),
+        "resourceArns": resource_arns,
+        "namespaceParameter": get_s(item, "namespaceParameter"),
+        "createdAt": get_s(item, "createdAt"),
+        "updatedAt": get_s(item, "updatedAt"),
+    });
+
+    if let Some(v) = get_s(item, "decidedBy") {
+        body["decidedBy"] = json!(v);
+    }
+    if let Some(v) = get_s(item, "justification") {
+        body["justification"] = json!(v);
+    }
+    if let Some(v) = get_s(item, "approvedAt") {
+        body["approvedAt"] = json!(v);
+    }
+    if let Some(v) = get_s(item, "rejectedAt") {
+        body["rejectedAt"] = json!(v);
+    }
+    if let Some(v) = get_s(item, "errorDetail") {
+        body["errorDetail"] = json!(v);
+    }
+
+    api::success_response(200, &body)
 }
 
 #[cfg(test)]
@@ -96,7 +136,63 @@ mod tests {
     use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
     use aws_sdk_dynamodb::types::AttributeValue;
     use aws_smithy_mocks::{mock, mock_client};
+    use nexus_common::principal::TrustedPrincipal;
     use std::collections::HashMap;
+
+    const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";
+
+    fn iam_principal() -> TrustedPrincipal {
+        TrustedPrincipal::iam(
+            "123456789012",
+            Some("arn:aws:iam::123456789012:role/deploy".to_string()),
+        )
+    }
+
+    fn platform_principal() -> TrustedPrincipal {
+        TrustedPrincipal::oauth(
+            "admin-subject",
+            ISSUER,
+            "client-123",
+            vec![nexus_common::principal::GlobalRole::PlatformAdmin],
+            vec![],
+        )
+    }
+
+    fn team_principal(teams: &[&str]) -> TrustedPrincipal {
+        TrustedPrincipal::oauth(
+            "member-subject",
+            ISSUER,
+            "client-123",
+            vec![],
+            teams.iter().map(|t| t.to_string()).collect(),
+        )
+    }
+
+    /// The grant engine resolves ownership through strongly consistent
+    /// GetItem point reads on the bindings table.
+    fn bindings_rule(item: Option<HashMap<String, AttributeValue>>) -> aws_smithy_mocks::Rule {
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("bindings"))
+            .then_output(move || GetItemOutput::builder().set_item(item.clone()).build())
+    }
+
+    fn owner_binding(domain: &str, group: &str) -> HashMap<String, AttributeValue> {
+        HashMap::from([
+            (
+                "PK".to_string(),
+                s(&format!("PRINCIPAL#cognito-group#{ISSUER}#{group}")),
+            ),
+            ("SK".to_string(), s(&format!("ROLE#owner#DOMAIN#{domain}"))),
+            ("bindingId".to_string(), s("rb-111")),
+            ("principalType".to_string(), s("cognito-group")),
+            ("issuer".to_string(), s(ISSUER)),
+            ("group".to_string(), s(group)),
+            ("role".to_string(), s("owner")),
+            ("domain".to_string(), s(domain)),
+            ("createdAt".to_string(), s("2026-08-11T00:00:00Z")),
+            ("createdBy".to_string(), s("admin-subject")),
+        ])
+    }
 
     fn domain_item() -> HashMap<String, AttributeValue> {
         HashMap::from([
@@ -121,7 +217,7 @@ mod tests {
         let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
 
         let event = json!({"pathParameters": {"domainName": "billing"}});
-        let resp = fetch_domain(&ddb, "domains", &event).await;
+        let resp = fetch_domain(&ddb, "domains", "bindings", &event, &iam_principal()).await;
 
         assert_eq!(resp["statusCode"], 200);
         let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
@@ -136,7 +232,7 @@ mod tests {
         let ddb = mock_client!(aws_sdk_dynamodb, &[]);
         let event = json!({});
 
-        let resp = fetch_domain(&ddb, "domains", &event).await;
+        let resp = fetch_domain(&ddb, "domains", "bindings", &event, &iam_principal()).await;
 
         assert_eq!(resp["statusCode"], 400);
         let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
@@ -151,7 +247,7 @@ mod tests {
         let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
 
         let event = json!({"pathParameters": {"domainName": "missing"}});
-        let resp = fetch_domain(&ddb, "domains", &event).await;
+        let resp = fetch_domain(&ddb, "domains", "bindings", &event, &iam_principal()).await;
 
         assert_eq!(resp["statusCode"], 404);
         let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
@@ -170,7 +266,7 @@ mod tests {
         let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
 
         let event = json!({"pathParameters": {"domainName": "billing"}});
-        let resp = fetch_domain(&ddb, "domains", &event).await;
+        let resp = fetch_domain(&ddb, "domains", "bindings", &event, &iam_principal()).await;
 
         assert_eq!(resp["statusCode"], 500);
         let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
@@ -193,11 +289,103 @@ mod tests {
         let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
 
         let event = json!({"pathParameters": {"domainName": "billing"}});
-        let resp = fetch_domain(&ddb, "domains", &event).await;
+        let resp = fetch_domain(&ddb, "domains", "bindings", &event, &iam_principal()).await;
 
         assert_eq!(resp["statusCode"], 200);
         let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
         assert_eq!(body["decidedBy"], "admin@example.com");
         assert_eq!(body["justification"], "approved by team");
+    }
+
+    #[tokio::test]
+    async fn team_caller_with_owner_binding_gets_full_record() {
+        let item = domain_item();
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let bindings = bindings_rule(Some(owner_binding("billing", "team-payments")));
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule, &bindings]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let resp = fetch_domain(
+            &ddb,
+            "domains",
+            "bindings",
+            &event,
+            &team_principal(&["team-payments"]),
+        )
+        .await;
+
+        assert_eq!(resp["statusCode"], 200);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["domainName"], "billing");
+        assert!(
+            body.get("taskToken").is_none(),
+            "workflow task token must never appear in responses"
+        );
+    }
+
+    #[tokio::test]
+    async fn team_caller_without_owner_binding_gets_indistinguishable_404() {
+        let item = domain_item();
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let bindings = bindings_rule(None);
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule, &bindings]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let denied = fetch_domain(
+            &ddb,
+            "domains",
+            "bindings",
+            &event,
+            &team_principal(&["team-billing"]),
+        )
+        .await;
+
+        let missing_rule = mock!(aws_sdk_dynamodb::Client::get_item)
+            .then_output(|| GetItemOutput::builder().build());
+        let ddb2 = mock_client!(aws_sdk_dynamodb, [&missing_rule]);
+        let missing_event = json!({"pathParameters": {"domainName": "missing"}});
+        let missing = fetch_domain(
+            &ddb2,
+            "domains",
+            "bindings",
+            &missing_event,
+            &team_principal(&["team-billing"]),
+        )
+        .await;
+
+        let denied_body: Value = serde_json::from_str(denied["body"].as_str().unwrap()).unwrap();
+        let missing_body: Value = serde_json::from_str(missing["body"].as_str().unwrap()).unwrap();
+        assert_eq!(denied["statusCode"], 404);
+        assert_eq!(missing["statusCode"], 404);
+        assert_eq!(
+            denied_body["code"], missing_body["code"],
+            "denied and missing must carry the same error shape"
+        );
+        assert_eq!(denied_body["code"], "ResourceNotFoundException");
+    }
+
+    #[tokio::test]
+    async fn platform_caller_reads_any_domain_without_binding_check() {
+        let item = domain_item();
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let resp = fetch_domain(&ddb, "domains", "bindings", &event, &platform_principal()).await;
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(get_rule.num_calls(), 1);
     }
 }

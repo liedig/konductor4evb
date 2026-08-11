@@ -1164,7 +1164,9 @@ fn approval_workflow_finalizes_through_lambda_transaction() {
     );
     assert_eq!(text(at(finalize, "Next")), "EmitApprovedEvent");
     assert!(
-        !states.iter().any(|(name, _)| name.as_str() == Some("UpdateStatusApproved")),
+        !states
+            .iter()
+            .any(|(name, _)| name.as_str() == Some("UpdateStatusApproved")),
         "the direct updateItem approved path is retired"
     );
 

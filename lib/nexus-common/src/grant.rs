@@ -573,10 +573,7 @@ mod tests {
             serde_json::to_value(ResourceRole::Subscriber).unwrap(),
             "subscriber"
         );
-        assert_eq!(
-            serde_json::to_value(ResourceRole::Owner).unwrap(),
-            "owner"
-        );
+        assert_eq!(serde_json::to_value(ResourceRole::Owner).unwrap(), "owner");
         assert_eq!(
             serde_json::to_value(BindingState::Active).unwrap(),
             "active"

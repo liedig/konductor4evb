@@ -925,14 +925,21 @@ Resources:
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
-              Action: [dynamodb:Query, dynamodb:Scan]
+              Action: [dynamodb:Query, dynamodb:Scan, dynamodb:BatchGetItem]
               Resource:
                 - !GetAtt DomainsTable.Arn
                 - !Sub "${DomainsTable.Arn}/index/*"
+            - Effect: Allow
+              Action: [dynamodb:Query]
+              Resource:
+                - !GetAtt AuthorizationBindingsTable.Arn
       Events:
         OAuthApi:
           Type: Api
@@ -959,12 +966,19 @@ Resources:
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action: [dynamodb:GetItem]
               Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:Query]
+              Resource:
+                - !GetAtt AuthorizationBindingsTable.Arn
       Events:
         OAuthApi:
           Type: Api
