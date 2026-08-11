@@ -1,4 +1,4 @@
-.PHONY: help build test check smoke smoke-subscription deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions web-dev clean
+.PHONY: help build test check smoke smoke-subscription deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions web-dev deploy-web clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
@@ -111,8 +111,31 @@ check: ## cargo fmt, check, clippy (CI-equivalent local gate)
 	cargo check --workspace
 	cargo clippy --workspace -- -D warnings
 
-web-dev: ## Run the Nexus web console dev server (http://localhost:3000)
-	cd web && pnpm dev
+web-dev: ## Run the Nexus web console dev server (http://localhost:3000), proxying /dev to the deployed OAuth API
+	@set -euo pipefail; \
+	API_URL=$$(aws cloudformation describe-stacks --stack-name nexus-core \
+		--query "Stacks[0].Outputs[?OutputKey=='OAuthApiEndpoint'].OutputValue" --output text); \
+	cd web && NEXUS_DEV_API_URL="$$API_URL" pnpm dev
+
+deploy-web: ## Build the web console, publish to the web bucket, and write config.json from stack outputs
+	@set -euo pipefail; \
+	output() { aws cloudformation describe-stacks --stack-name nexus-core \
+		--query "Stacks[0].Outputs[?OutputKey=='$$1'].OutputValue" --output text; }; \
+	BUCKET=$$(output NexusWebBucketName); \
+	DISTRIBUTION=$$(output NexusWebDistributionId); \
+	WEB_URL=$$(output NexusWebUrl); \
+	POOL_ID=$$(output NexusUserPoolId); \
+	CLIENT_ID=$$(output NexusUserPoolClientId); \
+	test -n "$$BUCKET" || { echo "$(YELLOW)NexusWebBucketName output missing — deploy the core stack first (make deploy-core)$(RESET)"; exit 1; }; \
+	echo "$(CYAN)Building web console$(RESET)"; \
+	cd web && pnpm install --frozen-lockfile && pnpm build && cd ..; \
+	printf '{"apiBaseUrl":"%s/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s"}\n' \
+		"$$WEB_URL" "$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" > web/.output/public/config.json; \
+	echo "$(CYAN)Syncing to s3://$$BUCKET$(RESET)"; \
+	aws s3 sync web/.output/public "s3://$$BUCKET" --delete; \
+	echo "$(CYAN)Invalidating distribution $$DISTRIBUTION$(RESET)"; \
+	aws cloudfront create-invalidation --distribution-id "$$DISTRIBUTION" --paths "/*" > /dev/null; \
+	echo "$(GREEN)Web console deployed: $$(output NexusWebUrl)$(RESET)"
 
 smoke: ## End-to-end smoke test (register, approve, verify ACTIVE across envs)
 ifndef APP_ACCOUNT_ID

@@ -870,6 +870,10 @@ Resources:
       AllowedOAuthFlows: [code]
       AllowedOAuthScopes: [openid, email, profile]
       SupportedIdentityProviders: [COGNITO]
+      # SRP sign-in never redirects, so callback/logout URLs are inert for the
+      # console; local dev origins come from the parameters. (Referencing the
+      # web distribution here would cycle: authorizer → client → distribution
+      # → OAuth API → authorizer.)
       CallbackURLs: !Ref OAuthCallbackUrls
       LogoutURLs: !Ref OAuthLogoutUrls
       AccessTokenValidity: !Ref AccessTokenValidityMinutes
@@ -2662,6 +2666,150 @@ Resources:
         NexusEventBus: !GetAtt NexusEventBus.Arn
         Organization: !Ref Organization
 
+  # --- Web console hosting (add-nexus-web-ui) --------------------------------
+  # Static SPA: private S3 origin behind CloudFront (TLS, SPA fallback, strict
+  # response headers). `make deploy-web` publishes the build and config.json.
+
+  NexusWebBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Organization}-nexus-web-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  NexusWebOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${Organization}-nexus-web"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  NexusWebResponseHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${Organization}-nexus-web"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: true
+          ContentTypeOptions:
+            Override: true
+          FrameOptions:
+            FrameOption: DENY
+            Override: true
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: true
+          ContentSecurityPolicy:
+            # CSP wildcards only match the leftmost label, so region-scoped
+            # AWS endpoints are spelled out via the deployment region.
+            ContentSecurityPolicy: !Sub "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://cognito-idp.${AWS::Region}.amazonaws.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+            Override: true
+
+  NexusWebDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: Nexus web console
+        Enabled: true
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: s3-web
+            DomainName: !GetAtt NexusWebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt NexusWebOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          # Same-origin API access: the console calls its own distribution at
+          # /{stage}/*, which proxies to the OAuth API. This keeps the browser
+          # same-origin (no CORS surface) and connect-src at 'self'.
+          - Id: oauth-api
+            DomainName: !Sub "${NexusOAuthApi}.execute-api.${AWS::Region}.amazonaws.com"
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        DefaultCacheBehavior:
+          TargetOriginId: s3-web
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          # Managed CachingOptimized policy
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+        CacheBehaviors:
+          # config.json is rewritten by every deploy — never serve it stale.
+          - PathPattern: /config.json
+            TargetOriginId: s3-web
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            # Managed CachingDisabled policy
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+          - PathPattern: /dev/*
+            TargetOriginId: oauth-api
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            # Managed CachingDisabled + AllViewerExceptHostHeader (API Gateway
+            # derives the host from the origin domain)
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+          - PathPattern: /staging/*
+            TargetOriginId: oauth-api
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+          - PathPattern: /prod/*
+            TargetOriginId: oauth-api
+            ViewerProtocolPolicy: redirect-to-https
+            Compress: true
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+            ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+        CustomErrorResponses:
+          # SPA fallback: an OAC-backed bucket answers missing keys with 403.
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+          MinimumProtocolVersion: TLSv1.2_2021
+
+  NexusWebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref NexusWebBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${NexusWebBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                "AWS:SourceArn": !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${NexusWebDistribution}"
+
 Outputs:
   OAuthApiEndpoint:
     Description: Interactive OAuth control-plane API endpoint (dev stage; swap for staging or prod to target another environment)
@@ -2675,6 +2823,15 @@ Outputs:
   NexusUserPoolClientId:
     Description: Public user-pool client for SRP login from custom consoles
     Value: !Ref NexusUserPoolClient
+  NexusWebUrl:
+    Description: Web console URL (CloudFront distribution)
+    Value: !Sub "https://${NexusWebDistribution.DomainName}"
+  NexusWebBucketName:
+    Description: S3 bucket holding the web console build
+    Value: !Ref NexusWebBucket
+  NexusWebDistributionId:
+    Description: CloudFront distribution ID for web console cache invalidation
+    Value: !Ref NexusWebDistribution
   NexusEventBusArn:
     Description: EventBridge Nexus event bus ARN
     Value: !GetAtt NexusEventBus.Arn

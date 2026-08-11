@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "nuxi dev --port 3000",
-    "build": "nuxi generate",
+    "build": "nuxi generate && node scripts/externalize-inline-scripts.mjs",
     "lint": "eslint .",
     "typecheck": "nuxi typecheck",
     "postinstall": "nuxi prepare"

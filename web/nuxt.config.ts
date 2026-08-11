@@ -22,4 +22,18 @@ export default defineNuxtConfig({
   typescript: {
     typeCheck: false,
   },
+  nitro: {
+    // Local dev: browser calls stay same-origin (`/dev/...`) and are proxied
+    // to the deployed OAuth API (NEXUS_DEV_API_URL, set by `make web-dev`).
+    // Production serves the API same-origin through CloudFront, so no CORS
+    // surface exists anywhere.
+    devProxy: process.env.NEXUS_DEV_API_URL
+      ? {
+          '/dev': {
+            target: `${process.env.NEXUS_DEV_API_URL}/`,
+            changeOrigin: true,
+          },
+        }
+      : {},
+  },
 })

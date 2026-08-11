@@ -27,7 +27,11 @@ export const useSessionStore = defineStore('session', () => {
   const homeRoute = computed(() => (persona.value === 'platform' ? '/admin' : '/domains'))
 
   function applySession(payload: Record<string, unknown>) {
-    username.value = (payload['cognito:username'] as string | undefined) ?? null
+    // Email-alias pools put the UUID in `cognito:username`; display the email.
+    username.value =
+      (payload['email'] as string | undefined)
+      ?? (payload['cognito:username'] as string | undefined)
+      ?? null
     groups.value = (payload['cognito:groups'] as string[] | undefined) ?? []
     status.value = 'signed-in'
   }
