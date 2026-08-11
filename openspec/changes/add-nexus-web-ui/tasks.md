@@ -51,8 +51,8 @@
 
 ## 8. Hosting and release
 
-- [ ] 8.1 Stack: S3 bucket + CloudFront distribution (TLS, SPA fallback, security headers/CSP), outputs; `OAuthCallbackUrls` gains web origins
-- [ ] 8.2 `make deploy-web`: build, sync, write `config.json` from stack outputs, invalidate
-- [ ] 8.3 Verify end-to-end with seeded personas (alice: inbox-first; bob: domain-first, request → approve → catalog → grant → subscribe)
-- [ ] 8.4 README web-console section; `openspec validate add-nexus-web-ui --strict` clean
-- [ ] 8.5 Commit `feat(web): hosting stack and deploy workflow`
+- [x] 8.1 Stack: S3 bucket + CloudFront distribution (TLS, SPA fallback, security headers/CSP), outputs; `OAuthCallbackUrls` gains web origins
+- [x] 8.2 `make deploy-web`: build, sync, write `config.json` from stack outputs, invalidate
+- [x] 8.3 Verify end-to-end with seeded personas (alice: inbox-first; bob: domain-first, request → approve → catalog → grant → subscribe)
+- [x] 8.4 README web-console section; `openspec validate add-nexus-web-ui --strict` clean
+- [x] 8.5 Commit `feat(web): hosting stack and deploy workflow`
