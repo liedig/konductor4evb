@@ -10,6 +10,21 @@ use nexus_common::principal_context::log_principal;
 use serde_json::{json, Value};
 use std::env;
 
+/// Only an OAuth platform-admin may read the inbox: it carries workflow
+/// task tokens. Unparseable contexts deny like any other non-admin.
+fn is_platform_admin_caller(request_context: &Value) -> bool {
+    match log_principal(request_context) {
+        Ok(p) => {
+            matches!(&p, nexus_common::principal::TrustedPrincipal::OAuth(_))
+                && p.is_platform_admin()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "pending registrations: no trusted principal");
+            false
+        }
+    }
+}
+
 /// The platform-admin approvals inbox: pending registrations with the
 /// workflow task token and owner details. Denied to everyone else,
 /// including auditors (read-only) and IAM automation (this route exists
@@ -21,20 +36,7 @@ pub async fn handle(
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
 
     let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
-    let principal = match log_principal(request_context) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(error = %e, "pending registrations: deny (no trusted principal)");
-            return Ok(api::from_control_plane_error(
-                &ControlPlaneError::AccessDenied,
-            ));
-        }
-    };
-    let is_admin = matches!(
-        &principal,
-        nexus_common::principal::TrustedPrincipal::OAuth(_)
-    ) && principal.is_platform_admin();
-    if !is_admin {
+    if !is_platform_admin_caller(request_context) {
         tracing::warn!("pending registrations: deny (platform-admin only)");
         return Ok(api::from_control_plane_error(
             &ControlPlaneError::AccessDenied,
