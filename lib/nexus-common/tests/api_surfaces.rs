@@ -1183,3 +1183,31 @@ fn approval_workflow_finalizes_through_lambda_transaction() {
         "the approved choice must route to FinalizeApproval"
     );
 }
+
+#[test]
+fn pending_registrations_route_is_oauth_only_and_wired() {
+    let oauth = oauth_contract();
+    let pending = at(at(&oauth, "paths"), "/domains/registrations/pending");
+    let integration = at(at(pending, "get"), "x-amazon-apigateway-integration");
+    assert_eq!(text(at(integration, "type")), "aws_proxy");
+
+    // The inbox carries workflow task tokens; it must never appear on the
+    // IAM surface.
+    let iam = iam_contract();
+    assert!(
+        mapping(at(&iam, "paths"))
+            .keys()
+            .all(|p| p.as_str() != Some("/domains/registrations/pending")),
+        "pending registrations must not be exposed on the IAM API"
+    );
+
+    let doc = core_template();
+    let function = resource(&doc, "PendingRegistrationsFunction");
+    let events = mapping(at(props(function), "Events"));
+    assert_eq!(events.len(), 1, "exactly one API event: OAuth only");
+    let event = events.values().next().expect("one event");
+    assert_eq!(
+        text(at(props(event), "Path")),
+        "/domains/registrations/pending"
+    );
+}

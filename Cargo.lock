@@ -2331,6 +2331,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pending-registrations"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-smithy-mocks",
+ "lambda_runtime",
+ "nexus-common",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

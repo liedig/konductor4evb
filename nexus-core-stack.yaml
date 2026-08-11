@@ -954,6 +954,44 @@ Resources:
             Path: /domains
             Method: GET
 
+  PendingRegistrationsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-pending-registrations"
+      RetentionInDays: 30
+
+  # The platform-admin approvals inbox. OAuth surface only: the response
+  # carries workflow task tokens, so IAM automation gets no route and the
+  # handler itself still requires a platform-admin principal.
+  PendingRegistrationsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: PendingRegistrationsLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-pending-registrations"
+      CodeUri: ./domain-management/functions/pending-registrations
+      Handler: bootstrap
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:Query]
+              Resource:
+                - !Sub "${DomainsTable.Arn}/index/by-status"
+      Events:
+        OAuthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusOAuthApi
+            Path: /domains/registrations/pending
+            Method: GET
+
   DescribeDomainFunction:
     Type: AWS::Serverless::Function
     DependsOn: DescribeDomainLogGroup

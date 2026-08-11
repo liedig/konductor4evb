@@ -128,6 +128,51 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListDomainsFunction.Arn}/invocations"
 
+  /domains/registrations/pending:
+    get:
+      operationId: ListPendingRegistrations
+      summary: Pending registration inbox (platform-admin only)
+      description: >-
+        Returns domains awaiting approval, including the workflow taskToken
+        and owning team, so platform administrators can decide from the
+        console. Restricted to platform-admin callers; the route exists only
+        on the OAuth API.
+      parameters:
+        - name: nextToken
+          in: query
+          schema:
+            type: string
+        - name: maxResults
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 100
+      responses:
+        "200":
+          description: Pending registrations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PendingRegistrationsResponse"
+        "403":
+          description: Access denied (platform-admin only)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PendingRegistrationsFunction.Arn}/invocations"
+
   /domains/{domainName}:
     get:
       operationId: GetDomain
@@ -1412,6 +1457,42 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DomainSummary"
+        nextToken:
+          type: string
+
+    PendingRegistration:
+      type: object
+      properties:
+        domainName:
+          type: string
+        description:
+          type: string
+        ownerAccountId:
+          type: string
+        ownerEmail:
+          type: string
+        secondaryOwnerEmails:
+          type: array
+          items:
+            type: string
+            format: email
+        owningTeam:
+          type: string
+          description: Cognito team group that will own the domain once approved.
+        createdAt:
+          type: string
+          format: date-time
+        taskToken:
+          type: string
+          description: Approval workflow task token for the decide call.
+
+    PendingRegistrationsResponse:
+      type: object
+      properties:
+        registrations:
+          type: array
+          items:
+            $ref: "#/components/schemas/PendingRegistration"
         nextToken:
           type: string
 

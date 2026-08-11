@@ -7,6 +7,7 @@ members = [
     "domain-management/functions/domain-registrations",
     "domain-management/functions/finalize-approval",
     "domain-management/functions/list-domains",
+    "domain-management/functions/pending-registrations",
     "domain-management/functions/send-approval-outcome-notification",
     "domain-management/functions/send-approval-request-notification",
     "domain-management/functions/send-provisioning-failed-notification",

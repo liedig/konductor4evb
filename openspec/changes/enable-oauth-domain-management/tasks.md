@@ -24,9 +24,9 @@
 
 ## 4. OAuth update authorization
 
-- [ ] 4.1 Red tests: OAuth update denied without owner binding/platform-admin; allowed for owner team and platform-admin; IAM unchanged
-- [ ] 4.2 Replace `IamOnlyAuthorizer` in update.rs with grant-engine owner authorization
-- [ ] 4.3 Green + `make check`; commit `feat(domains): authorize OAuth updates via owner bindings`
+- [x] 4.1 Red tests: OAuth update denied without owner binding/platform-admin; allowed for owner team and platform-admin; IAM unchanged
+- [x] 4.2 Replace `IamOnlyAuthorizer` in update.rs with grant-engine owner authorization
+- [x] 4.3 Green + `make check`; commit `feat(domains): authorize OAuth updates via owner bindings`
 
 ## 5. Approvals inbox endpoint
 
