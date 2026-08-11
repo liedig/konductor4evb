@@ -148,6 +148,7 @@ onMounted(load)
 
       <DomainSchemasPanel :domain="name" />
       <DomainSubscriptionsPanel :domain="name" />
+      <DomainAccessPanel :domain="name" />
 
       <NxModal :open="editing" title="Edit domain" @close="editing = false">
         <div class="flex flex-col gap-4">

@@ -46,8 +46,8 @@
 
 ## 7. Access grants
 
-- [ ] 7.1 Domain page access panel: entitlement list, grant form (directory-picker consumer, schema picker + wildcard), delete with confirm
-- [ ] 7.2 Commit `feat(web): access grant management`
+- [x] 7.1 Domain page access panel: entitlement list, grant form (directory-picker consumer, schema picker + wildcard), delete with confirm
+- [x] 7.2 Commit `feat(web): access grant management`
 
 ## 8. Hosting and release
 
