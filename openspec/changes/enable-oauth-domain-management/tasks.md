@@ -30,9 +30,9 @@
 
 ## 5. Approvals inbox endpoint
 
-- [ ] 5.1 Red tests (handler + api_surfaces): `GET /domains/registrations/pending` returns pending domains with `taskToken`, owningTeam, and owner details; 403 for owner/auditor/IAM callers; empty list → 200
-- [ ] 5.2 Implement the handler and wire the route (OAuth surface only) in `nexus-core-stack.yaml` and `api/openapi-oauth.yaml`
-- [ ] 5.3 Green + `make check` + cfn-lint; commit `feat(domains): add pending-registrations inbox endpoint`
+- [x] 5.1 Red tests (handler + api_surfaces): `GET /domains/registrations/pending` returns pending domains with `taskToken`, owningTeam, and owner details; 403 for owner/auditor/IAM callers; empty list → 200
+- [x] 5.2 Implement the handler and wire the route (OAuth surface only) in `nexus-core-stack.yaml` and `api/openapi-oauth.yaml`
+- [x] 5.3 Green + `make check` + cfn-lint; commit `feat(domains): add pending-registrations inbox endpoint`
 
 ## 6. Platform enable/disable lifecycle
 

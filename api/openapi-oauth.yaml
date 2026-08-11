@@ -128,6 +128,70 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListDomainsFunction.Arn}/invocations"
 
+  /domains/{domainName}/state:
+    post:
+      operationId: SetDomainState
+      summary: Enable or disable a domain (platform-admin only)
+      description: >-
+        Platform-managed lifecycle: `disable` moves an ACTIVE domain to
+        INACTIVE (publishing and new subscription activations are rejected;
+        existing subscriptions, entitlements, and provisioned infrastructure
+        are retained), `enable` moves it back to ACTIVE.
+      parameters:
+        - name: domainName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              additionalProperties: false
+              properties:
+                action:
+                  type: string
+                  enum: [enable, disable]
+      responses:
+        "200":
+          description: Domain state after the transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainStateResponse"
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (platform-admin only)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DomainStateFunction.Arn}/invocations"
+
   /domains/registrations/pending:
     get:
       operationId: ListPendingRegistrations
@@ -1459,6 +1523,18 @@ components:
             $ref: "#/components/schemas/DomainSummary"
         nextToken:
           type: string
+
+    DomainStateResponse:
+      type: object
+      properties:
+        domainName:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        updatedAt:
+          type: string
+          format: date-time
 
     PendingRegistration:
       type: object

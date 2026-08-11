@@ -46,3 +46,29 @@ pub async fn lookup_active_domain(
         environments,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
+    use aws_smithy_mocks::{mock, mock_client};
+    use std::env;
+
+    #[tokio::test]
+    async fn inactive_domain_is_not_usable_for_subscriptions() {
+        env::set_var("DOMAINS_TABLE", "domains");
+        let rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            GetItemOutput::builder()
+                .item("domainName", s("orders"))
+                .item("status", s("INACTIVE"))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&rule]);
+
+        match lookup_active_domain(&ddb, "orders").await.unwrap() {
+            DomainLookup::NotActive(status) => assert_eq!(status, "INACTIVE"),
+            DomainLookup::Found(_) => panic!("INACTIVE domain must not validate as usable"),
+            DomainLookup::NotFound => panic!("INACTIVE domain must not look missing"),
+        }
+    }
+}

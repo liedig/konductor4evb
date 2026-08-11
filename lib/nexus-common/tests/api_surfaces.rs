@@ -1185,6 +1185,33 @@ fn approval_workflow_finalizes_through_lambda_transaction() {
 }
 
 #[test]
+fn domain_state_route_is_oauth_only_and_wired() {
+    let oauth = oauth_contract();
+    let state = at(at(&oauth, "paths"), "/domains/{domainName}/state");
+    let integration = at(at(state, "post"), "x-amazon-apigateway-integration");
+    assert_eq!(text(at(integration, "type")), "aws_proxy");
+
+    // State flips are platform-admin territory; IAM automation has no route.
+    let iam = iam_contract();
+    assert!(
+        mapping(at(&iam, "paths"))
+            .keys()
+            .all(|p| p.as_str() != Some("/domains/{domainName}/state")),
+        "domain state must not be exposed on the IAM API"
+    );
+
+    let doc = core_template();
+    let function = resource(&doc, "DomainStateFunction");
+    let events = mapping(at(props(function), "Events"));
+    assert_eq!(events.len(), 1, "exactly one API event: OAuth only");
+    let event = events.values().next().expect("one event");
+    assert_eq!(
+        text(at(props(event), "Path")),
+        "/domains/{domainName}/state"
+    );
+}
+
+#[test]
 fn pending_registrations_route_is_oauth_only_and_wired() {
     let oauth = oauth_contract();
     let pending = at(at(&oauth, "paths"), "/domains/registrations/pending");

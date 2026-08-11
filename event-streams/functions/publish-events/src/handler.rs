@@ -533,6 +533,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn publish_to_inactive_domain_is_rejected_without_delivery() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let inactive_domain_rule = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("domains-test"))
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("domainName", s("orders"))
+                    .item("status", s("INACTIVE"))
+                    .build()
+            });
+        // No Schemas or EventBridge rules: an INACTIVE domain must stop the
+        // publish before any schema lookup or event delivery.
+        let clients = clients(vec![inactive_domain_rule], vec![], vec![]);
+
+        let response = handle(
+            &clients,
+            &authorizer,
+            sqs_event(vec![record(oauth_attributes())]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response).len(), 1, "inactive domain rejects");
+    }
+
+    #[tokio::test]
     async fn denied_publish_is_acknowledged_without_any_resource_access() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![]);

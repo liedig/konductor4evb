@@ -1031,6 +1031,43 @@ Resources:
             Path: /domains/{domainName}
             Method: GET
 
+  DomainStateLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-domain-state"
+      RetentionInDays: 30
+
+  # Platform-managed enable/disable (ACTIVE <-> INACTIVE). The shallow
+  # disable leans on every mutation path already requiring ACTIVE.
+  DomainStateFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: DomainStateLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-domain-state"
+      CodeUri: ./domain-management/functions/domain-state
+      Handler: bootstrap
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:UpdateItem]
+              Resource:
+                - !GetAtt DomainsTable.Arn
+      Events:
+        OAuthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref NexusOAuthApi
+            Path: /domains/{domainName}/state
+            Method: POST
+
   # ---- Event Stream Functions (Read) ----
   ListSubscriptionsLogGroup:
     Type: AWS::Logs::LogGroup

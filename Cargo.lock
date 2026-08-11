@@ -1139,6 +1139,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "domain-state"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-smithy-mocks",
+ "chrono",
+ "lambda_runtime",
+ "nexus-common",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
