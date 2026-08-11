@@ -64,9 +64,15 @@ async function load(reset = true) {
 
 watch([consumerDomain, producerFilter, environmentFilter], () => load())
 
+const needsConsumerDomain = computed(() => !session.isPlatformRole && activeOwned.value.length === 0)
+
 onMounted(async () => {
   await loadOwnedDomains()
-  await load()
+  // Without an active owned domain there is no consumer perspective and the
+  // unscoped listing is platform-only — skip the request entirely.
+  if (!needsConsumerDomain.value) {
+    await load()
+  }
 })
 
 function detailHref(schema: SchemaSummary) {
@@ -102,6 +108,12 @@ function detailHref(schema: SchemaSummary) {
     </div>
 
     <p v-if="errorMessage" role="alert" class="text-sm text-danger">{{ errorMessage }}</p>
+
+    <NxEmptyState
+      v-else-if="needsConsumerDomain"
+      title="No active domains"
+      body="The catalog shows what one of your active domains may consume. Once a domain you requested is approved and active, select it here to browse entitled schemas."
+    />
 
     <NxEmptyState
       v-else-if="!pending && schemas.length === 0"

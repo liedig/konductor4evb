@@ -1,5 +1,8 @@
 import tailwindcss from '@tailwindcss/vite'
 
+// nuxt.config.ts executes in Node; the app's tsconfig has no node types.
+declare const process: { env: Record<string, string | undefined> }
+
 // The console is an auth-gated SPA: no SSR, statically generated and served
 // from S3 + CloudFront (see design.md, decision 1).
 export default defineNuxtConfig({

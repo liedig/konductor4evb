@@ -712,10 +712,19 @@ Resources:
           OAuthRequestAuthorizer:
             FunctionPayloadType: REQUEST
             FunctionArn: !GetAtt OAuthAuthorizerFunction.Arn
-            AuthorizerResultTtlInSeconds: 0
+            # TTL 0 (spec default: caching disabled) is dropped by the SAM
+            # transform's zero-value omission, leaving the API Gateway default
+            # of 300s. The authorizer policy is scoped to the invoked route,
+            # so a token-only cache key would poison other routes of the same
+            # caller. Keying on httpMethod and resourcePath keeps the 300s
+            # cache route-scoped and within the token's one-hour validity.
+            AuthorizerResultTtlInSeconds: 300
             Identity:
               Headers:
                 - Authorization
+              Context:
+                - httpMethod
+                - resourcePath
       DefinitionBody:
         Fn::Transform:
           Name: AWS::Include
@@ -2717,6 +2726,30 @@ Resources:
             ContentSecurityPolicy: !Sub "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://cognito-idp.${AWS::Region}.amazonaws.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
             Override: true
 
+  # Rewrites client-side routes to index.html on the static behavior only.
+  # Extension-bearing paths (/_nuxt/*.js, /config.json, /favicon.svg) pass
+  # through; the /{stage}/* API behaviors never invoke this function.
+  NexusWebSpaFallbackFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: nexus-web-spa-fallback
+      AutoPublish: true
+      FunctionConfig:
+        Comment: SPA fallback for the Nexus web console
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          if (request.method !== 'GET' && request.method !== 'HEAD') {
+            return request;
+          }
+          if (request.uri.indexOf('.') !== -1) {
+            return request;
+          }
+          request.uri = '/index.html';
+          return request;
+        }
+
   NexusWebDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -2746,6 +2779,13 @@ Resources:
           # Managed CachingOptimized policy
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
           ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+          # SPA fallback happens here (viewer-request) rather than in
+          # CustomErrorResponses: distribution-level error pages would also
+          # rewrite API errors from the /{stage}/* behaviors into 200 +
+          # index.html, silently turning failed API calls into fake successes.
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt NexusWebSpaFallbackFunction.FunctionMetadata.FunctionARN
         CacheBehaviors:
           # config.json is rewritten by every deploy — never serve it stale.
           - PathPattern: /config.json
@@ -2781,16 +2821,6 @@ Resources:
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
             ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
-        CustomErrorResponses:
-          # SPA fallback: an OAC-backed bucket answers missing keys with 403.
-          - ErrorCode: 403
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 0
-          - ErrorCode: 404
-            ResponseCode: 200
-            ResponsePagePath: /index.html
-            ErrorCachingMinTTL: 0
         ViewerCertificate:
           CloudFrontDefaultCertificate: true
           MinimumProtocolVersion: TLSv1.2_2021
