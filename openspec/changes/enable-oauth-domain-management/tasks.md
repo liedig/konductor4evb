@@ -54,7 +54,7 @@
 
 ## 9. Test personas and docs
 
-- [ ] 9.1 `scripts/seed-users.sh` + `make seed-users`: create `alice@example.com` (platform-admin) and `bob@example.com` (team-payments, creating the group if absent) with permanent passwords from env vars
-- [ ] 9.2 Owner-binding backfill script/CLI for pre-existing domains (domain → team-group mapping input) with a dry-run mode
-- [ ] 9.3 Update `docs/development/oauth-authentication-guide.md` (SRP login, seed-users) and `docs/development/architecture.md` (owner role, scoped reads, pending endpoint)
-- [ ] 9.4 `openspec validate enable-oauth-domain-management --strict` clean; full gates; commit `docs: oauth domain management and test personas`
+- [x] 9.1 `scripts/seed-users.sh` + `make seed-users`: create `alice@example.com` (platform-admin) and `bob@example.com` (team-payments, creating the group if absent) with permanent passwords from env vars
+- [x] 9.2 Owner-binding backfill script/CLI for pre-existing domains (domain → team-group mapping input) with a dry-run mode
+- [x] 9.3 Update `docs/development/oauth-authentication-guide.md` (SRP login, seed-users) and `docs/development/architecture.md` (owner role, scoped reads, pending endpoint)
+- [x] 9.4 `openspec validate enable-oauth-domain-management --strict` clean; full gates; commit `docs: oauth domain management and test personas`
