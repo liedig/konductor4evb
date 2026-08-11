@@ -1,0 +1,64 @@
+/**
+ * Nexus design tokens (docs/development/design-system.md).
+ * Dark is the default theme: `@theme` emits these at `:root`. A light palette
+ * is stubbed under `[data-theme="light"]` for later polish (design.md, open
+ * questions). Components consume semantic tokens only, never raw palette
+ * utilities.
+ */
+@theme {
+  /* Layered depth: background → surface (cards) → surface-raised (interactive) */
+  --color-background: #0b0f13;
+  --color-surface: #12171d;
+  --color-surface-raised: #1a2129;
+
+  /* Text */
+  --color-foreground: #e7ecf2;
+  --color-muted: #9aa7b4;
+  --color-faint: #6b7885;
+
+  /* Borders */
+  --color-border: #232c38;
+  --color-border-strong: #2f3a49;
+
+  /* Accent */
+  --color-accent: #3b82f6;
+  --color-accent-strong: #2563eb;
+  --color-on-accent: #ffffff;
+
+  /* Status semantics: green = ready, blue = active, red = urgent */
+  --color-success: #34d399;
+  --color-info: #60a5fa;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-neutral: #94a3b8;
+
+  --color-focus: #60a5fa;
+
+  /* Type */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', roboto,
+    'Helvetica Neue', arial, sans-serif;
+  --font-mono:
+    ui-monospace, sfmono-regular, menlo, monaco, consolas, 'Liberation Mono',
+    monospace;
+}
+
+[data-theme='light'] {
+  --color-background: #f6f8fa;
+  --color-surface: #ffffff;
+  --color-surface-raised: #eef2f6;
+  --color-foreground: #1a2330;
+  --color-muted: #55636f;
+  --color-faint: #8b98a5;
+  --color-border: #d9e0e7;
+  --color-border-strong: #c3cdd8;
+  --color-accent: #2563eb;
+  --color-accent-strong: #1d4ed8;
+  --color-on-accent: #ffffff;
+  --color-success: #059669;
+  --color-info: #2563eb;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+  --color-neutral: #64748b;
+  --color-focus: #2563eb;
+}

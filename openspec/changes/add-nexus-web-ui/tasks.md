@@ -2,18 +2,18 @@
 
 ## 1. Application scaffold
 
-- [ ] 1.1 Scaffold Nuxt 4 + Tailwind CSS v4 in `web/` (static target), wired into the repo (`.gitignore`, editor config, CI build/lint job)
-- [ ] 1.2 Runtime config: boot-time `config.json` fetch + typed runtime model
-- [ ] 1.3 `useApi` composable: token attach, single 401→refresh→retry, typed errors; session store (Amplify Auth, sessionStorage)
-- [ ] 1.4 Commit `feat(web): nuxt scaffold with runtime config and api client`
+- [x] 1.1 Scaffold Nuxt 4 + Tailwind CSS v4 in `web/` (static target), wired into the repo (`.gitignore`, editor config, CI build/lint job)
+- [x] 1.2 Runtime config: boot-time `config.json` fetch + typed runtime model
+- [x] 1.3 `useApi` composable: token attach, single 401→refresh→retry, typed errors; session store (Amplify Auth, sessionStorage)
+- [x] 1.4 Commit `feat(web): nuxt scaffold with runtime config and api client`
 
 ## 2. Design system
 
-- [ ] 2.1 `tokens.css`: Tailwind v4 `@theme` semantic tokens, dark as default root (color, type, spacing, radius `rounded-lg/xl`, `shadow-sm` only)
-- [ ] 2.2 Core primitives: button, input, select, badge/status pill, card, table, modal/confirm, toast, empty state
-- [ ] 2.3 `/design-system` gallery route rendering every primitive (excluded from prod nav)
-- [ ] 2.4 `docs/development/design-system.md`: principles (per the agreed brief), tokens, primitives, patterns, with code paths
-- [ ] 2.5 Commit `feat(web): design system tokens, primitives, and documentation`
+- [x] 2.1 `tokens.css`: Tailwind v4 `@theme` semantic tokens, dark as default root (color, type, spacing, radius `rounded-lg/xl`, `shadow-sm` only)
+- [x] 2.2 Core primitives: button, input, select, badge/status pill, card, table, modal/confirm, toast, empty state
+- [x] 2.3 `/design-system` gallery route rendering every primitive (excluded from prod nav)
+- [x] 2.4 `docs/development/design-system.md`: principles (per the agreed brief), tokens, primitives, patterns, with code paths
+- [x] 2.5 Commit `feat(web): design system tokens, primitives, and documentation`
 
 ## 3. Authentication
 
