@@ -199,6 +199,7 @@ pub fn item_to_binding(
     let role = match get_s(item, "role").ok_or(corrupt("role"))?.as_str() {
         "publisher" => ResourceRole::Publisher,
         "subscriber" => ResourceRole::Subscriber,
+        "owner" => ResourceRole::Owner,
         other => return Err(GrantStoreError::CorruptItem(format!("role={other}"))),
     };
     let created_at =
@@ -342,6 +343,23 @@ mod tests {
     }
 
     #[test]
+    fn owner_binding_item_round_trips() {
+        let binding = RoleBinding::new(
+            "rb-owner",
+            BindingPrincipal::cognito_group(ISSUER, "team-orders").unwrap(),
+            ResourceRole::Owner,
+            "orders",
+            DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
+                .unwrap()
+                .to_utc(),
+            "platform-admin-sub",
+        )
+        .unwrap();
+        let item = binding_to_item(&binding);
+        assert_eq!(item_to_binding(&item).unwrap(), binding);
+    }
+
+    #[test]
     fn group_binding_item_round_trips() {
         let binding = group_binding();
         let item = binding_to_item(&binding);
@@ -378,7 +396,7 @@ mod tests {
         ));
 
         let mut item = binding_to_item(&group_binding());
-        item.insert("role".to_string(), s("owner"));
+        item.insert("role".to_string(), s("admin"));
         assert!(matches!(
             item_to_binding(&item),
             Err(GrantStoreError::CorruptItem(_))
