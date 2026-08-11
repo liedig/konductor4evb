@@ -60,7 +60,9 @@ States:
         # covers the detail type. Uncovered or unreadable both fail closed.
         QueryCoveringEntitlements:
           Type: Task
-          Resource: "arn:aws:states:::dynamodb:query"
+          # Query has no optimized integration (get/put/update/delete only);
+          # it must go through the SDK prefix like every other Query in the repo.
+          Resource: "arn:aws:states:::aws-sdk:dynamodb:query"
           Arguments:
             TableName: "${EntitlementsTable}"
             ConsistentRead: true

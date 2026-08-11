@@ -1115,4 +1115,25 @@ fn activation_workflow_queries_entitlements_before_enabling() {
         managed.contains(&"EntitlementsTableReadPolicy"),
         "the workflow role must be able to query the entitlements table"
     );
+
+    // DynamoDB Query has no optimized integration (get/put/update/delete
+    // only); pinning the SDK ARN rejects the invalid bare form at test time
+    // instead of at deployment.
+    let asl = repo_yaml("event-streams/state-machines/activate-subscription.asl.yaml");
+    let item_states = mapping(at(
+        at(
+            at(at(&asl, "States"), "ActivateEnvironments"),
+            "ItemProcessor",
+        ),
+        "States",
+    ));
+    let query_state = item_states
+        .iter()
+        .find(|(name, _)| name.as_str() == Some("QueryCoveringEntitlements"))
+        .map(|(_, state)| state)
+        .expect("QueryCoveringEntitlements state");
+    assert_eq!(
+        text(at(query_state, "Resource")),
+        "arn:aws:states:::aws-sdk:dynamodb:query"
+    );
 }
