@@ -69,7 +69,7 @@ Deep reference for contributors and operators: [Architecture](docs/development/a
 ## Current Scope
 
 - **No domain deletion API.** Domain teardown is handled by `make teardown-domain`, which drives the same deprovisioning workflow used by the provisioning saga's rollback path. A `DELETE /domains` flow is planned.
-- **Schema discovery is open to any authenticated caller.** Publishing and schema writes are already gated by per-domain role bindings; discovery visibility restriction arrives with subscriber entitlements (in progress).
+- **Schema discovery follows entitlement coverage.** The consumer catalog (`GET /schemas?consumerDomain=…`) shows exactly what a domain's entitlements cover — publishing and schema writes are gated by per-domain role bindings, and subscribing additionally requires a covering entitlement. Platform roles get the platform-wide view.
 - **No schema promotion between environments.** Publishers append versions per environment stage; promotion workflows are a future capability.
 - **Business payloads are not validated against schema content.** The platform validates the envelope it generates, not your data — a deliberate design choice.
 

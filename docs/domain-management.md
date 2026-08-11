@@ -533,7 +533,7 @@ On the IAM surface, ensure your AWS credentials have permission to invoke the AP
 
 ### Subscribe fails with a validation error
 
-`SubscribeFailed` outcome events carry the reason: both domains must be `ACTIVE`, your account must own the consumer domain, the schema's `source` must match the producer's namespace identity, and the derived rule name (`{consumerDomain}-{eventName}`) must fit EventBridge's 64-character/`[A-Za-z0-9._-]` constraints.
+`SubscribeFailed` outcome events carry the reason: both domains must be `ACTIVE`, you must hold a `subscriber` binding on the consumer domain and a current entitlement covering the producer schema (a revoked entitlement also fails re-enable), the schema's `source` must match the producer's namespace identity, and the derived rule name (`{consumerDomain}-{eventName}`) must fit EventBridge's 64-character/`[A-Za-z0-9._-]` constraints.
 
 ---
 

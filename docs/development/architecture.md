@@ -140,7 +140,7 @@ Nexus exposes two separate API Gateway surfaces, each with its own OpenAPI contr
 
 - **IAM surface** (`api/openapi-iam.yaml`): AWS-native automation callers authenticate with SigV4. The caller's AWS account ID serves as the principal identifier. Read endpoints (list, describe) and publisher/subscription management are available on this surface. Approval is OAuth-only and not exposed on the IAM surface.
 
-Both surfaces inject a versioned **trusted-principal envelope** into SQS message attributes via VTL mapping templates, sourcing every identity field from API Gateway authorization context (`$context.authorizer.*` for OAuth, `$context.identity.*` for IAM), never from the request body. Consumer Lambda handlers reconstruct the `TrustedPrincipal` from this envelope and invoke the resource-authorization interface before any state change. The grant engine (`DynamoGrantEngine`, backed by the `nexus-authorization-bindings` table) is the production authorizer; the bridging `IamOnlyAuthorizer` still guards the domain-management and subscription mutation paths, allowing IAM mutations and denying OAuth mutations, until those paths migrate onto the engine.
+Both surfaces inject a versioned **trusted-principal envelope** into SQS message attributes via VTL mapping templates, sourcing every identity field from API Gateway authorization context (`$context.authorizer.*` for OAuth, `$context.identity.*` for IAM), never from the request body. Consumer Lambda handlers reconstruct the `TrustedPrincipal` from this envelope and invoke the resource-authorization interface before any state change. The grant engine (`DynamoGrantEngine`, backed by the `nexus-authorization-bindings` table) is the production authorizer for every path that represents a domain owner (publish, schema writes, all subscription commands and reads). The `IamOnlyAuthorizer` — allow IAM, deny OAuth — remains deliberately wired on platform-operated paths (domain registration, update, and approval), which platform teams drive with IAM credentials; it is a standing guard there, not a migration stopover.
 
 ```mermaid
 sequenceDiagram
@@ -178,7 +178,7 @@ The OAuth authorizer maps exact `cognito:groups` values to global roles (`platfo
 
 Approval decisions derive `decidedBy` from the trusted OAuth principal context, not from caller-supplied input. The `decidedBy` field is removed from the `DecideRequest` schema and rejected by `deny_unknown_fields`. The email-link bearer GET approval path has been removed; approval notification emails direct operators to sign in to Nexus rather than providing unauthenticated decision URLs. Task tokens remain the Step Functions callback mechanism, supplied in the authenticated POST body.
 
-The resource-authorization interface (`ResourceAuthorizer` trait) accepts `TrustedPrincipal` and returns `Allow` or `Deny`. The production implementation is `DynamoGrantEngine`, which evaluates additive role bindings from the `nexus-authorization-bindings` table with strongly consistent reads and fails closed on errors; `InMemoryGrantEngine` is its fixture-fed twin for tests and local development. The bridging `IamOnlyAuthorizer` (allows IAM, denies OAuth) remains wired only on paths not yet migrated to the engine, where OAuth mutations fail closed with a deterministic failure outcome (EventBridge `*Failed` event + SQS ack, no retry).
+The resource-authorization interface (`ResourceAuthorizer` trait) accepts `TrustedPrincipal` and returns `Allow` or `Deny`. The production implementation is `DynamoGrantEngine`, which evaluates additive role bindings from the `nexus-authorization-bindings` table with strongly consistent reads and fails closed on errors; `InMemoryGrantEngine` is its fixture-fed twin for tests and local development. The `IamOnlyAuthorizer` (allows IAM, denies OAuth) remains wired on platform-operated paths that never represent a domain owner, where OAuth mutations fail closed with a deterministic failure outcome (EventBridge `*Failed` event + SQS ack, no retry).
 
 ### Grant Engine
 
@@ -742,11 +742,11 @@ evb-nexus/
 │       └── deprovision-env.asl.yaml          # Idempotent per-env teardown
 ├── event-streams/
 │   ├── functions/
-│   │   ├── subscriptions/                    # Async: subscribe/PATCH/unsubscribe commands
-│   │   ├── list-subscriptions/               # Sync: list/filter event streams
+│   │   ├── subscriptions/                    # Async: subscribe/state/unsubscribe commands
+│   │   ├── list-subscriptions/               # Sync: direction-scoped stream listing
 │   │   ├── describe-subscription/            # Sync: stream detail by subscription id
-│   │   ├── list-schemas/                     # Sync: schema discovery (per-env latest versions)
-│   │   └── describe-schema/                  # Sync: schema detail + content
+│   │   ├── list-schemas/                     # Sync: entitlement-expanded catalog
+│   │   └── describe-schema/                  # Sync: schema detail + content (coverage-checked)
 │   └── state-machines/
 │       ├── activate-subscription.asl.yaml    # Per-env rule creation, all-or-nothing + saga
 │       └── remove-subscription.asl.yaml      # Idempotent per-env rule removal

@@ -104,9 +104,9 @@ The Nexus OAuth authorizer validates the following claims on every request. An a
 
 | Cognito Group | Global Role | API Access |
 |---------------|------------|------------|
-| `platform-admin` | `PlatformAdmin` | All methods (GET, POST, PUT, PATCH, DELETE) on all OAuth endpoints |
+| `platform-admin` | `PlatformAdmin` | All methods on all OAuth endpoints |
 | `platform-auditor` | `PlatformAuditor` | GET-only on read endpoints; all write and approve endpoints return `403` |
-| Any other group (e.g. `team-payments`) | No global role (opaque team-group) | No API access by itself; team-group identifiers are carried in the trusted-principal context for the future authorization engine |
+| Any other group (e.g. `team-payments`) | No global role (opaque team-group) | No API access by itself; team-group identifiers are carried in the trusted-principal context for grant-engine role-binding evaluation |
 
 ### What the Authorizer Does NOT Do
 
