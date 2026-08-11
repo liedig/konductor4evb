@@ -6,8 +6,9 @@ context: |
   For past decisions: read docs/development/decisions.md
 
   ## Scale Targets
-  - Tens of thousands of domains and billions of events per month across cross-account scenarios
+  - Up to 1,000 domains per platform deployment (realistic usage in the low hundreds; the cap bounds quota planning and blast radius) and billions of events per month across cross-account scenarios
   - Automatically handle EventBridge rule limits per bus by distributing events across domain-specific buses
+  - Per-domain buses and schema registries require EventBridge quota headroom (custom buses and registries per account) validated against the 1,000-domain cap
   - All cross-account operations backed by IAM, resource policies, AWS Organizations
   - Domain-level DLQs with at least 30 days of message retention
 
