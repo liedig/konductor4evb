@@ -1,0 +1,6 @@
+{
+  "apiBaseUrl": "https://REPLACE-WITH-OAuthApiEndpoint.execute-api.us-east-1.amazonaws.com/dev",
+  "userPoolId": "REPLACE-WITH-NexusUserPoolId",
+  "userPoolClientId": "REPLACE-WITH-NexusUserPoolClientId",
+  "region": "us-east-1"
+}

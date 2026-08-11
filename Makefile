@@ -1,4 +1,4 @@
-.PHONY: help build test check smoke smoke-subscription deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions clean
+.PHONY: help build test check smoke smoke-subscription deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions web-dev clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
@@ -110,6 +110,9 @@ check: ## cargo fmt, check, clippy (CI-equivalent local gate)
 	cargo fmt --check
 	cargo check --workspace
 	cargo clippy --workspace -- -D warnings
+
+web-dev: ## Run the Nexus web console dev server (http://localhost:3000)
+	cd web && pnpm dev
 
 smoke: ## End-to-end smoke test (register, approve, verify ACTIVE across envs)
 ifndef APP_ACCOUNT_ID
