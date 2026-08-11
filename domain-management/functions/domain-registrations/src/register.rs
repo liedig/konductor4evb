@@ -8,10 +8,7 @@ use std::env;
 use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
 use nexus_common::error::ControlPlaneError;
 use nexus_common::models::{DomainStatus, RegisterDomainRequest};
-use nexus_common::principal::{IamOnlyAuthorizer, ResourceAuthorizer, TrustedPrincipal};
-
-const OAUTH_MUTATIONS_DISABLED: &str =
-    "unauthorized: interactive OAuth mutations are not yet enabled";
+use nexus_common::principal::TrustedPrincipal;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -34,12 +31,9 @@ pub async fn handle(
         }
     })?;
 
-    let decision = IamOnlyAuthorizer
-        .authorize(principal, "domains:Register", &request.domain_name)
-        .await;
-    if !decision.is_allowed() {
-        tracing::warn!(action = "domains:Register", domain = %request.domain_name, "consumer authorization denied");
-        emit_failed(eb, &cp_bus, request, OAUTH_MUTATIONS_DISABLED).await?;
+    if let Err(reason) = authorize_registration(principal, request) {
+        tracing::warn!(action = "domains:Register", domain = %request.domain_name, "registration authorization denied");
+        emit_failed(eb, &cp_bus, request, &reason).await?;
         return Ok(());
     }
 
@@ -77,6 +71,32 @@ pub async fn handle(
     emit_succeeded(eb, &cp_bus, request, request_id, &environments, &created_at).await
 }
 
+/// OAuth callers register on behalf of exactly one of their team groups,
+/// which becomes the domain's owner at approval. Global platform groups are
+/// never carried as team groups, so membership alone enforces "platform
+/// teams cannot own domains". IAM automation keeps its trust path and may
+/// omit the team; approval then creates no owner binding.
+fn authorize_registration(
+    principal: &TrustedPrincipal,
+    request: &RegisterDomainRequest,
+) -> Result<(), String> {
+    match principal {
+        TrustedPrincipal::Iam(_) => Ok(()),
+        TrustedPrincipal::OAuth(p) => {
+            let Some(team) = request.owning_team.as_deref() else {
+                return Err("unauthorized: OAuth registration requires owningTeam naming one of the caller's team groups".to_string());
+            };
+            if p.team_groups.iter().any(|g| g == team) {
+                Ok(())
+            } else {
+                Err(format!(
+                    "unauthorized: owningTeam '{team}' is not one of the caller's team groups"
+                ))
+            }
+        }
+    }
+}
+
 fn build_put_item(
     ddb: &aws_sdk_dynamodb::Client,
     table: &str,
@@ -110,6 +130,9 @@ fn build_put_item(
 
     if let Some(desc) = &request.description {
         put = put.item("description", s(desc));
+    }
+    if let Some(team) = &request.owning_team {
+        put = put.item("owningTeam", s(team));
     }
     if let Some(tags) = &request.tags {
         put = put.item("tags", string_map_to_attr(tags));
@@ -409,6 +432,9 @@ mod tests {
         use aws_smithy_mocks::{mock, mock_client};
         use serde_json::Value;
 
+        const ISSUER: &str =
+            "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";
+
         fn valid_request() -> RegisterDomainRequest {
             RegisterDomainRequest {
                 domain_name: "billing".to_string(),
@@ -417,7 +443,18 @@ mod tests {
                 owner_email: "owner@example.com".to_string(),
                 secondary_owner_emails: vec!["backup@example.com".to_string()],
                 tags: None,
+                owning_team: None,
             }
+        }
+
+        fn oauth(groups: &[&str]) -> TrustedPrincipal {
+            TrustedPrincipal::oauth(
+                "a1b2c3d4-1111-2222-3333-444455556666",
+                ISSUER,
+                "client123",
+                vec![],
+                groups.iter().map(|g| g.to_string()).collect(),
+            )
         }
 
         fn set_env() {
@@ -466,6 +503,116 @@ mod tests {
             assert_eq!(put_rule.num_calls(), 1);
             assert_eq!(sfn_rule.num_calls(), 1);
             assert_eq!(eb_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn oauth_registration_with_owning_team_is_accepted() {
+            set_env();
+
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
+                .match_requests(|req| {
+                    req.item()
+                        .and_then(|i| i.get("owningTeam"))
+                        .and_then(|v| v.as_s().ok())
+                        .is_some_and(|v| v == "team-payments")
+                })
+                .then_output(|| PutItemOutput::builder().build());
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
+            let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries()
+                        .iter()
+                        .any(|e| e.detail_type() == Some("RegisterDomainSucceeded"))
+                })
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
+                StartExecutionOutput::builder()
+                    .execution_arn("arn:exec")
+                    .start_date(aws_sdk_sfn::primitives::DateTime::from_secs(0))
+                    .build()
+                    .unwrap()
+            });
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+
+            let mut request = valid_request();
+            request.owning_team = Some("team-payments".to_string());
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &request,
+                &oauth(&["team-payments", "team-platform"]),
+                "msg-1",
+            )
+            .await;
+
+            assert!(result.is_ok());
+            assert_eq!(put_rule.num_calls(), 1);
+            assert_eq!(sfn_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn oauth_registration_without_owning_team_fails() {
+            set_env();
+
+            let ddb = mock_client!(aws_sdk_dynamodb, &[]);
+            let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries().iter().any(|e| {
+                        e.detail_type() == Some("RegisterDomainFailed")
+                            && e.detail().is_some_and(|d| d.contains("owningTeam"))
+                    })
+                })
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let sfn = mock_client!(aws_sdk_sfn, &[]);
+
+            let result = handle(
+                &ddb,
+                &eb,
+                &sfn,
+                &valid_request(),
+                &oauth(&["team-payments"]),
+                "msg-1",
+            )
+            .await;
+
+            assert!(result.is_ok(), "denial is reported via the failed event");
+            assert_eq!(eb_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn oauth_registration_with_foreign_or_platform_team_fails() {
+            set_env();
+
+            for owning_team in ["team-other", "platform-admin"] {
+                let ddb = mock_client!(aws_sdk_dynamodb, &[]);
+                let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                    .match_requests(|req| {
+                        req.entries()
+                            .iter()
+                            .any(|e| e.detail_type() == Some("RegisterDomainFailed"))
+                    })
+                    .then_output(|| PutEventsOutput::builder().build());
+                let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+                let sfn = mock_client!(aws_sdk_sfn, &[]);
+
+                let mut request = valid_request();
+                request.owning_team = Some(owning_team.to_string());
+                let result = handle(
+                    &ddb,
+                    &eb,
+                    &sfn,
+                    &request,
+                    &oauth(&["team-payments"]),
+                    "msg-1",
+                )
+                .await;
+
+                assert!(result.is_ok(), "{owning_team}: denial via failed event");
+                assert_eq!(eb_rule.num_calls(), 1, "{owning_team}");
+            }
         }
 
         #[tokio::test]
@@ -619,6 +766,7 @@ mod tests {
                 owner_email: "owner@example.com".to_string(),
                 secondary_owner_emails: vec!["backup@example.com".to_string()],
                 tags: None,
+                owning_team: None,
             };
 
             let result = handle(
@@ -669,6 +817,7 @@ mod tests {
                 owner_email: "owner@example.com".to_string(),
                 secondary_owner_emails: vec!["backup@example.com".to_string()],
                 tags: None,
+                owning_team: None,
             };
 
             let result = handle(

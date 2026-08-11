@@ -122,6 +122,11 @@ pub struct RegisterDomainRequest {
     #[serde(deserialize_with = "deserialize_non_empty_vec")]
     pub secondary_owner_emails: Vec<String>,
     pub tags: Option<std::collections::HashMap<String, String>>,
+    /// The Cognito team group that will own the domain. Required for OAuth
+    /// callers (must be one of the caller's team groups); IAM callers may
+    /// omit it, in which case approval creates no owner binding.
+    #[serde(default)]
+    pub owning_team: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1262,6 +1262,9 @@ components:
           type: object
           additionalProperties:
             type: string
+        owningTeam:
+          type: string
+          description: Cognito team group that will own the domain; required for OAuth callers and must be one of the caller's team groups. IAM callers may omit it (approval then creates no owner binding).
       example:
         domainName: sales
         ownerAccountId: "111122223333"

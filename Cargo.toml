@@ -5,6 +5,7 @@ members = [
     "domain-management/functions/decide-registration",
     "domain-management/functions/describe-domain",
     "domain-management/functions/domain-registrations",
+    "domain-management/functions/finalize-approval",
     "domain-management/functions/list-domains",
     "domain-management/functions/send-approval-outcome-notification",
     "domain-management/functions/send-approval-request-notification",

@@ -2188,6 +2188,43 @@ Resources:
               {"event": <detailType>, "source": <source>, "time": <time>, "detail": <detail>}
 
   # ---- Step Functions ----
+  FinalizeApprovalFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/nexus-finalize-approval"
+      RetentionInDays: 30
+
+  FinalizeApprovalFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: FinalizeApprovalFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "nexus-finalize-approval"
+      CodeUri: ./domain-management/functions/finalize-approval
+      Handler: bootstrap
+      Environment:
+        Variables:
+          DOMAINS_TABLE: !Ref DomainsTable
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+          COGNITO_ISSUER: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}"
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:TransactWriteItems]
+              Resource:
+                - !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:PutItem, dynamodb:TransactWriteItems]
+              Resource:
+                - !GetAtt AuthorizationBindingsTable.Arn
+
   ApprovalWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
@@ -2219,6 +2256,11 @@ Resources:
               - events:PutEvents
             Resource:
               - !GetAtt NexusEventBus.Arn
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !GetAtt FinalizeApprovalFunction.Arn
           - Effect: Allow
             Action:
               - xray:PutTraceSegments
@@ -2255,6 +2297,7 @@ Resources:
       DefinitionSubstitutions:
         DomainsTable: !Ref DomainsTable
         NexusEventBus: !GetAtt NexusEventBus.Arn
+        FinalizeApprovalFunction: !GetAtt FinalizeApprovalFunction.Arn
         SendApprovalRequestNotificationFunction: !If
           - NotificationsEnabled
           - !GetAtt SendApprovalRequestNotificationFunction.Arn

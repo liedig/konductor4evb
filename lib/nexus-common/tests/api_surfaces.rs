@@ -1137,3 +1137,47 @@ fn activation_workflow_queries_entitlements_before_enabling() {
         "arn:aws:states:::aws-sdk:dynamodb:query"
     );
 }
+
+#[test]
+fn approval_workflow_finalizes_through_lambda_transaction() {
+    let doc = core_template();
+    let workflow = resource(&doc, "ApprovalWorkflow");
+    let substitutions = mapping(at(props(workflow), "DefinitionSubstitutions"));
+    assert!(
+        substitutions.contains_key("FinalizeApprovalFunction"),
+        "the approval workflow needs the finalize function for its transactional commit"
+    );
+
+    // The approved path must commit domain status + owner binding + audit in
+    // one Lambda-owned transaction; a direct DynamoDB updateItem would leave
+    // ownership behind. Pin the state shape so the split cannot regress.
+    let asl = repo_yaml("domain-management/state-machines/approval.asl.yaml");
+    let states = mapping(at(&asl, "States"));
+    let finalize = states
+        .iter()
+        .find(|(name, _)| name.as_str() == Some("FinalizeApproval"))
+        .map(|(_, state)| state)
+        .expect("FinalizeApproval state");
+    assert_eq!(
+        text(at(finalize, "Resource")),
+        "arn:aws:states:::lambda:invoke"
+    );
+    assert_eq!(text(at(finalize, "Next")), "EmitApprovedEvent");
+    assert!(
+        !states.iter().any(|(name, _)| name.as_str() == Some("UpdateStatusApproved")),
+        "the direct updateItem approved path is retired"
+    );
+
+    let check = states
+        .iter()
+        .find(|(name, _)| name.as_str() == Some("CheckDecision"))
+        .map(|(_, state)| state)
+        .expect("CheckDecision state");
+    let choices = seq(at(check, "Choices"));
+    assert!(
+        choices
+            .iter()
+            .any(|c| text(at(c, "Next")) == "FinalizeApproval"),
+        "the approved choice must route to FinalizeApproval"
+    );
+}

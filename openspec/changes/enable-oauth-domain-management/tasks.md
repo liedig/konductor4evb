@@ -2,9 +2,9 @@
 
 ## 1. Grant engine: owner role
 
-- [ ] 1.1 Red tests: `owner` role parses/serializes (`as_str`, serde), satisfies owner checks, and does not satisfy publisher/subscriber checks
-- [ ] 1.2 Add `ResourceRole::Owner` and sweep every role-keyed match (grant engine, store, bindings API validation) for exhaustiveness
-- [ ] 1.3 Green + `make check`; commit `feat(grants): add owner resource role`
+- [x] 1.1 Red tests: `owner` role parses/serializes (`as_str`, serde), satisfies owner checks, and does not satisfy publisher/subscriber checks
+- [x] 1.2 Add `ResourceRole::Owner` and sweep every role-keyed match (grant engine, store, bindings API validation) for exhaustiveness
+- [x] 1.3 Green + `make check`; commit `feat(grants): add owner resource role`
 
 ## 2. Ownership at registration and approval
 
