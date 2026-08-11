@@ -32,9 +32,9 @@
 
 ## 5. Approvals inbox
 
-- [ ] 5.1 `/admin` inbox: pending registrations (requester, owning team, age), approve action
-- [ ] 5.2 Reject flow with mandatory justification; expired-token/conflict error surfacing
-- [ ] 5.3 Commit `feat(web): approvals inbox`
+- [x] 5.1 `/admin` inbox: pending registrations (requester, owning team, age), approve action
+- [x] 5.2 Reject flow with mandatory justification; expired-token/conflict error surfacing
+- [x] 5.3 Commit `feat(web): approvals inbox`
 
 ## 6. Catalog and subscriptions
 
