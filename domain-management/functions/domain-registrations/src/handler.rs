@@ -214,7 +214,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_register_is_denied_without_mutation() {
+    async fn oauth_register_without_owning_team_is_denied_without_mutation() {
         set_env();
         // Only the EventBridge outcome is mocked; any DynamoDB put_item or Step
         // Functions start_execution call would fail the mocked client, proving

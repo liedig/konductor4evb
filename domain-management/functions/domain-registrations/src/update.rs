@@ -6,10 +6,39 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 
+use nexus_common::domain_scope::is_full_visibility;
 use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
 use nexus_common::error::ControlPlaneError;
+use nexus_common::grant::ResourceRole;
+use nexus_common::grant_engine;
+use nexus_common::grant_store::BindingStore;
 use nexus_common::models::DomainStatus;
-use nexus_common::principal::{IamOnlyAuthorizer, ResourceAuthorizer, TrustedPrincipal};
+use nexus_common::principal::TrustedPrincipal;
+
+/// IAM automation and platform roles update any domain; OAuth team callers
+/// update only domains their team groups own. Binding-store failures deny.
+async fn authorize_update(
+    ddb: &aws_sdk_dynamodb::Client,
+    principal: &TrustedPrincipal,
+    domain_name: &str,
+) -> bool {
+    match principal {
+        TrustedPrincipal::Iam(_) => true,
+        TrustedPrincipal::OAuth(_) if is_full_visibility(principal) => true,
+        TrustedPrincipal::OAuth(_) => {
+            let bindings_table = match env::var("BINDINGS_TABLE") {
+                Ok(t) => t,
+                Err(_) => {
+                    tracing::error!("BINDINGS_TABLE not set; denying OAuth update");
+                    return false;
+                }
+            };
+            let store = BindingStore::new(ddb.clone(), bindings_table);
+            grant_engine::has_role_binding(&store, principal, ResourceRole::Owner, domain_name)
+                .await
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -28,8 +57,8 @@ pub struct UpdateDomainBody {
     pub secondary_owner_emails: Option<Vec<String>>,
 }
 
-const OAUTH_MUTATIONS_DISABLED: &str =
-    "unauthorized: interactive OAuth mutations are not yet enabled";
+const NOT_AN_OWNER: &str =
+    "unauthorized: caller is not an owner of this domain and not a platform administrator";
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -41,16 +70,13 @@ pub async fn handle(
     let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
     let domain_name = &message.domain_name;
 
-    let decision = IamOnlyAuthorizer
-        .authorize(principal, "domains:Update", domain_name)
-        .await;
-    if !decision.is_allowed() {
+    if !authorize_update(ddb, principal, domain_name).await {
         tracing::warn!(
             action = "domains:Update",
             domain = domain_name,
             "consumer authorization denied"
         );
-        return emit_failed(eb, &cp_bus, domain_name, OAUTH_MUTATIONS_DISABLED).await;
+        return emit_failed(eb, &cp_bus, domain_name, NOT_AN_OWNER).await;
     }
 
     if message.body.description.is_none()
@@ -270,7 +296,51 @@ mod tests {
 
     fn set_env() {
         env::set_var("DOMAINS_TABLE", "domains");
+        env::set_var("BINDINGS_TABLE", "bindings");
         env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+    }
+
+    const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";
+
+    fn oauth_principal(roles: &[&str], teams: &[&str]) -> TrustedPrincipal {
+        TrustedPrincipal::oauth(
+            "member-subject",
+            ISSUER,
+            "client-123",
+            roles
+                .iter()
+                .map(|r| serde_json::from_str(&format!("\"{r}\"")).unwrap())
+                .collect(),
+            teams.iter().map(|t| t.to_string()).collect(),
+        )
+    }
+
+    fn owner_binding_item(domain: &str, group: &str) -> HashMap<String, AttributeValue> {
+        HashMap::from([
+            (
+                "PK".to_string(),
+                s(&format!("PRINCIPAL#cognito-group#{ISSUER}#{group}")),
+            ),
+            ("SK".to_string(), s(&format!("ROLE#owner#DOMAIN#{domain}"))),
+            ("bindingId".to_string(), s("rb-1")),
+            ("principalType".to_string(), s("cognito-group")),
+            ("issuer".to_string(), s(ISSUER)),
+            ("group".to_string(), s(group)),
+            ("role".to_string(), s("owner")),
+            ("domain".to_string(), s(domain)),
+            ("createdAt".to_string(), s("2026-08-11T00:00:00Z")),
+            ("createdBy".to_string(), s("admin-subject")),
+        ])
+    }
+
+    fn bindings_rule(item: Option<HashMap<String, AttributeValue>>) -> aws_smithy_mocks::Rule {
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("bindings"))
+            .then_output(move || {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .set_item(item.clone())
+                    .build()
+            })
     }
 
     #[tokio::test]
@@ -419,6 +489,113 @@ mod tests {
             &TrustedPrincipal::iam("111122223333", None),
         )
         .await;
+
+        assert!(result.is_ok());
+        assert_eq!(eb_rule.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn oauth_owner_team_updates_the_domain() {
+        set_env();
+
+        let bindings = bindings_rule(Some(owner_binding_item("billing", "team-payments")));
+        let update_rule = mock!(aws_sdk_dynamodb::Client::update_item).then_output(|| {
+            UpdateItemOutput::builder()
+                .set_attributes(Some(HashMap::from([
+                    ("domainName".into(), s("billing")),
+                    ("status".into(), s("ACTIVE")),
+                ])))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&bindings, &update_rule]);
+
+        let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                req.entries()
+                    .iter()
+                    .any(|entry| entry.detail_type() == Some("UpdateDomainSucceeded"))
+            })
+            .then_output(|| PutEventsOutput::builder().build());
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = update_message("billing", Some("new description"));
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &oauth_principal(&[], &["team-payments"]),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(update_rule.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn oauth_non_owner_team_is_denied_without_mutation() {
+        set_env();
+
+        // No update_item rule: any mutation attempt fails the mocked client.
+        let bindings = bindings_rule(None);
+        let ddb = mock_client!(aws_sdk_dynamodb, [&bindings]);
+
+        let eb_rule = failed_event_rule_with_reason("not an owner");
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = update_message("billing", Some("not allowed"));
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &oauth_principal(&[], &["team-billing"]),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(eb_rule.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn oauth_platform_admin_updates_any_domain() {
+        set_env();
+
+        let update_rule = mock!(aws_sdk_dynamodb::Client::update_item).then_output(|| {
+            UpdateItemOutput::builder()
+                .set_attributes(Some(HashMap::from([
+                    ("domainName".into(), s("billing")),
+                    ("status".into(), s("ACTIVE")),
+                ])))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&update_rule]);
+
+        let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| PutEventsOutput::builder().build());
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = update_message("billing", Some("admin correction"));
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &oauth_principal(&["platform-admin"], &[]),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(update_rule.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn oauth_caller_without_any_role_is_denied() {
+        set_env();
+
+        let ddb = mock_client!(aws_sdk_dynamodb, []);
+        let eb_rule = failed_event_rule_with_reason("unauthorized");
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = update_message("billing", Some("nope"));
+        let result = handle(&ddb, &eb, &message, &oauth_principal(&[], &[])).await;
 
         assert!(result.is_ok());
         assert_eq!(eb_rule.num_calls(), 1);

@@ -1216,6 +1216,7 @@ Resources:
       Environment:
         Variables:
           APPROVAL_STATE_MACHINE_ARN: !Ref ApprovalWorkflow
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1224,6 +1225,10 @@ Resources:
               Resource:
                 - !GetAtt DomainsTable.Arn
                 - !Sub "${DomainsTable.Arn}/index/*"
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource:
+                - !GetAtt AuthorizationBindingsTable.Arn
             - Effect: Allow
               Action: [events:PutEvents]
               Resource: !GetAtt NexusEventBus.Arn

@@ -16,11 +16,11 @@
 
 ## 3. Scoped reads and directory projection
 
-- [ ] 3.1 Red tests: team caller list → owned domains only; platform roles → all; IAM unchanged; `taskToken` never in list items
-- [ ] 3.2 Implement list scoping via owner bindings; add `?view=directory` names-only projection open to any authenticated caller
-- [ ] 3.3 Red tests: describe denied for non-owner non-platform (no existence leak); owner and platform allowed
-- [ ] 3.4 Implement describe authorization
-- [ ] 3.5 Green + `make check`; commit `feat(domains): scope reads by ownership with names-only directory`
+- [x] 3.1 Red tests: team caller list → owned domains only; platform roles → all; IAM unchanged; `taskToken` never in list items
+- [x] 3.2 Implement list scoping via owner bindings; add `?view=directory` names-only projection open to any authenticated caller
+- [x] 3.3 Red tests: describe denied for non-owner non-platform (no existence leak); owner and platform allowed
+- [x] 3.4 Implement describe authorization
+- [x] 3.5 Green + `make check`; commit `feat(domains): scope reads by ownership with names-only directory`
 
 ## 4. OAuth update authorization
 
