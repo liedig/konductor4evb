@@ -66,7 +66,6 @@ async function saveEdit() {
 }
 
 const environments = computed(() => domain.value?.environments ?? [])
-const resourceEnvs = computed(() => Object.entries(domain.value?.resourceArns ?? {}))
 
 onMounted(load)
 </script>
@@ -134,11 +133,15 @@ onMounted(load)
           <NxBadge v-for="env in environments" :key="env" tone="info">{{ env }}</NxBadge>
           <span v-if="environments.length === 0" class="text-sm text-muted">Not provisioned yet</span>
         </div>
-        <div v-if="resourceEnvs.length > 0" class="mt-4 flex flex-col gap-3">
-          <div v-for="[env, arns] in resourceEnvs" :key="env" class="rounded-lg border border-border p-4">
+        <div v-if="environments.length > 0" class="mt-4 flex flex-col gap-3">
+          <div v-for="env in environments" :key="env" class="rounded-lg border border-border p-4">
             <p class="mb-2 text-sm font-medium">{{ env }}</p>
             <dl class="grid gap-1 font-mono text-xs break-all text-muted">
-              <div v-for="(arn, label) in arns" :key="label" class="grid grid-cols-[180px_1fr] gap-2">
+              <div class="grid grid-cols-[180px_1fr] gap-2">
+                <dt>namespace</dt>
+                <dd class="text-foreground">{{ domain?.namespaces?.[env] || '—' }}</dd>
+              </div>
+              <div v-for="(arn, label) in domain?.resourceArns?.[env] ?? {}" :key="label" class="grid grid-cols-[180px_1fr] gap-2">
                 <dt>{{ label }}</dt>
                 <dd class="text-foreground">{{ arn }}</dd>
               </div>
