@@ -66,6 +66,11 @@ async function saveEdit() {
 }
 
 const environments = computed(() => domain.value?.environments ?? [])
+const openEnvs = ref<Record<string, boolean>>({})
+
+function toggleEnv(env: string) {
+  openEnvs.value = { ...openEnvs.value, [env]: !openEnvs.value[env] }
+}
 
 onMounted(load)
 </script>
@@ -134,9 +139,33 @@ onMounted(load)
           <span v-if="environments.length === 0" class="text-sm text-muted">Not provisioned yet</span>
         </div>
         <div v-if="environments.length > 0" class="mt-4 flex flex-col gap-3">
-          <div v-for="env in environments" :key="env" class="rounded-lg border border-border p-4">
-            <p class="mb-2 text-sm font-medium">{{ env }}</p>
-            <dl class="grid gap-1 font-mono text-xs break-all text-muted">
+          <div v-for="env in environments" :key="env" class="rounded-lg border border-border">
+            <button
+              type="button"
+              class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+              :aria-expanded="!!openEnvs[env]"
+              :aria-controls="`env-panel-${env}`"
+              @click="toggleEnv(env)"
+            >
+              <span class="flex min-w-0 items-baseline gap-3">
+                <span class="text-sm font-medium">{{ env }}</span>
+                <span class="truncate font-mono text-xs text-muted">{{ domain?.namespaces?.[env] || '—' }}</span>
+              </span>
+              <svg
+                class="h-4 w-4 shrink-0 text-muted transition-transform"
+                :class="{ 'rotate-180': openEnvs[env] }"
+                viewBox="0 0 16 16"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </button>
+            <dl
+              v-show="openEnvs[env]"
+              :id="`env-panel-${env}`"
+              class="grid gap-1 border-t border-border p-4 font-mono text-xs break-all text-muted"
+            >
               <div class="grid grid-cols-[180px_1fr] gap-2">
                 <dt>namespace</dt>
                 <dd class="text-foreground">{{ domain?.namespaces?.[env] || '—' }}</dd>
