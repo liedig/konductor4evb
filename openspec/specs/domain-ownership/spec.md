@@ -1,6 +1,6 @@
 ## Purpose
 
-Domain ownership ties a domain to the Cognito team group that administers it. An `owner` role binding — established transactionally at registration approval and administered thereafter only by the platform team — scopes management reads and owner-permitted writes to the owning team's members.
+Domain ownership ties a domain to the Cognito team group that administers it. An `owner` role binding — established transactionally at registration approval and administered thereafter only by the platform team — scopes management reads and owner-permitted writes to the owning team's members. Because the owning team is also the domain's producer, approval SHALL additionally establish `publisher` and `subscriber` bindings for the same team in the same transaction; the `owner` role itself still does not subsume those roles.
 
 ## Requirements
 

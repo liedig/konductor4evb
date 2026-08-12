@@ -22,11 +22,13 @@ struct FinalizeInput {
 }
 
 /// Commits the approval outcome and — when the registration recorded an
-/// owning team — the owner binding and its audit record in one transaction,
-/// so a domain can never reach APPROVED without its ownership landing (or
-/// vice versa). The domain update is conditioned on `PENDING_APPROVAL`; a
-/// repeated invocation after a successful commit is treated as already
-/// finalized.
+/// owning team — the owning team's owner, publisher, and subscriber bindings
+/// with their audit records in one transaction, so a domain can never reach
+/// APPROVED without its ownership landing (or vice versa). The owning team is
+/// the domain's producer: owner scopes management operations, publisher and
+/// subscriber scope the domain's own catalog and subscriptions. The domain
+/// update is conditioned on `PENDING_APPROVAL`; a repeated invocation after a
+/// successful commit is treated as already finalized.
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
     event: LambdaEvent<Value>,
@@ -57,26 +59,33 @@ pub async fn handle(
     )?];
 
     if let Some(team) = owning_team.as_deref() {
-        let binding = RoleBinding::new(
-            format!("rb-{}", uuid::Uuid::new_v4()),
-            BindingPrincipal::cognito_group(&issuer, team)
-                .map_err(|e| anyhow::anyhow!("stored owningTeam is unkeyable: {e}"))?,
+        let principal = BindingPrincipal::cognito_group(&issuer, team)
+            .map_err(|e| anyhow::anyhow!("stored owningTeam is unkeyable: {e}"))?;
+        for role in [
             ResourceRole::Owner,
-            &input.domain_name,
-            now,
-            &input.decided_by,
-        )
-        .map_err(|e| anyhow::anyhow!("cannot build owner binding: {e}"))?;
-        let audit = AuditRecord {
-            binding_id: binding.binding_id.clone(),
-            timestamp: now,
-            mutation: AuditMutation::Create,
-            actor: input.decided_by.clone(),
-            before: None,
-            after: Some((&binding).into()),
-        };
-        items.push(idempotent_binding_put(&bindings_table, &binding)?);
-        items.push(audit_put(&bindings_table, &audit)?);
+            ResourceRole::Publisher,
+            ResourceRole::Subscriber,
+        ] {
+            let binding = RoleBinding::new(
+                format!("rb-{}", uuid::Uuid::new_v4()),
+                principal.clone(),
+                role,
+                &input.domain_name,
+                now,
+                &input.decided_by,
+            )
+            .map_err(|e| anyhow::anyhow!("cannot build {} binding: {e}", role.as_str()))?;
+            let audit = AuditRecord {
+                binding_id: binding.binding_id.clone(),
+                timestamp: now,
+                mutation: AuditMutation::Create,
+                actor: input.decided_by.clone(),
+                before: None,
+                after: Some((&binding).into()),
+            };
+            items.push(idempotent_binding_put(&bindings_table, &binding)?);
+            items.push(audit_put(&bindings_table, &audit)?);
+        }
     }
 
     let request = items
@@ -240,7 +249,11 @@ mod tests {
         let calls = captured.lock().unwrap();
         assert_eq!(calls.len(), 1, "single transaction");
         let items = calls[0].transact_items();
-        assert_eq!(items.len(), 3, "domain update + binding put + audit put");
+        assert_eq!(
+            items.len(),
+            7,
+            "domain update + three role binding puts + three audit puts"
+        );
 
         let update = items[0]
             .update
@@ -260,32 +273,38 @@ mod tests {
             Some(&"admin-subject-123".to_string())
         );
 
-        let put = items[1]
-            .put
-            .as_ref()
-            .expect("second item is the binding put");
-        assert_eq!(put.table_name(), "bindings");
-        assert_eq!(put.condition_expression(), Some("attribute_not_exists(PK)"));
-        let item = put.item();
-        assert_eq!(
-            get_s(item, "PK"),
-            Some(format!("PRINCIPAL#cognito-group#{ISSUER}#team-orders"))
-        );
-        assert_eq!(get_s(item, "SK"), Some("ROLE#owner#DOMAIN#orders".into()));
-        assert_eq!(get_s(item, "role"), Some("owner".into()));
-        assert_eq!(get_s(item, "createdBy"), Some("admin-subject-123".into()));
+        let expected_pk = format!("PRINCIPAL#cognito-group#{ISSUER}#team-orders");
+        for (index, role) in ["owner", "publisher", "subscriber"].iter().enumerate() {
+            let put = items[1 + index * 2]
+                .put
+                .as_ref()
+                .expect("binding put after the update");
+            assert_eq!(put.table_name(), "bindings");
+            assert_eq!(put.condition_expression(), Some("attribute_not_exists(PK)"));
+            let item = put.item();
+            assert_eq!(get_s(item, "PK"), Some(expected_pk.clone()));
+            assert_eq!(
+                get_s(item, "SK"),
+                Some(format!("ROLE#{role}#DOMAIN#orders"))
+            );
+            assert_eq!(get_s(item, "role"), Some(role.to_string()));
+            assert_eq!(get_s(item, "createdBy"), Some("admin-subject-123".into()));
 
-        let audit = items[2].put.as_ref().expect("third item is the audit put");
-        let audit_item = audit.item();
-        let sk = get_s(audit_item, "SK").expect("audit SK");
-        assert!(sk.starts_with("TS#"), "audit SK is time-ordered: {sk}");
-        let pk = get_s(audit_item, "PK").expect("audit PK");
-        assert!(
-            pk.starts_with("GRANT#rb-"),
-            "audit PK scopes to the binding: {pk}"
-        );
-        assert_eq!(get_s(audit_item, "mutation"), Some("create".into()));
-        assert_eq!(get_s(audit_item, "actor"), Some("admin-subject-123".into()));
+            let audit = items[2 + index * 2]
+                .put
+                .as_ref()
+                .expect("audit put follows its binding put");
+            let audit_item = audit.item();
+            let sk = get_s(audit_item, "SK").expect("audit SK");
+            assert!(sk.starts_with("TS#"), "audit SK is time-ordered: {sk}");
+            let pk = get_s(audit_item, "PK").expect("audit PK");
+            assert!(
+                pk.starts_with("GRANT#rb-"),
+                "audit PK scopes to the binding: {pk}"
+            );
+            assert_eq!(get_s(audit_item, "mutation"), Some("create".into()));
+            assert_eq!(get_s(audit_item, "actor"), Some("admin-subject-123".into()));
+        }
     }
 
     #[tokio::test]
