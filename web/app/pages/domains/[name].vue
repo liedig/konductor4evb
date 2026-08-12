@@ -114,6 +114,10 @@ onMounted(load)
             <dd class="mt-0.5">{{ domain.secondaryOwnerEmails?.join(', ') || '—' }}</dd>
           </div>
           <div>
+            <dt class="text-muted">Namespace</dt>
+            <dd class="mt-0.5 font-mono text-xs">{{ domain.namespace || '—' }}</dd>
+          </div>
+          <div>
             <dt class="text-muted">Namespace parameter</dt>
             <dd class="mt-0.5 font-mono text-xs">{{ domain.namespaceParameter || '—' }}</dd>
           </div>
@@ -147,10 +151,7 @@ onMounted(load)
               :aria-controls="`env-panel-${env}`"
               @click="toggleEnv(env)"
             >
-              <span class="flex min-w-0 items-baseline gap-3">
-                <span class="text-sm font-medium">{{ env }}</span>
-                <span class="truncate font-mono text-xs text-muted">{{ domain?.namespaces?.[env] || '—' }}</span>
-              </span>
+              <span class="text-sm font-medium">{{ env }}</span>
               <svg
                 class="h-4 w-4 shrink-0 text-muted transition-transform"
                 :class="{ 'rotate-180': openEnvs[env] }"
@@ -166,10 +167,6 @@ onMounted(load)
               :id="`env-panel-${env}`"
               class="grid gap-1 border-t border-border p-4 font-mono text-xs break-all text-muted"
             >
-              <div class="grid grid-cols-[180px_1fr] gap-2">
-                <dt>namespace</dt>
-                <dd class="text-foreground">{{ domain?.namespaces?.[env] || '—' }}</dd>
-              </div>
               <div v-for="(arn, label) in domain?.resourceArns?.[env] ?? {}" :key="label" class="grid grid-cols-[180px_1fr] gap-2">
                 <dt>{{ label }}</dt>
                 <dd class="text-foreground">{{ arn }}</dd>

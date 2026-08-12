@@ -109,25 +109,17 @@ fn render_domain(item: &HashMap<String, AttributeValue>, org: &str) -> Value {
     let domain_name = get_s(item, "domainName").unwrap_or_default();
 
     let resolver = NamespaceResolver::default_pattern();
-    let namespaces: serde_json::Map<String, Value> = environments
-        .iter()
-        .map(|env_name| {
-            (
-                env_name.clone(),
-                json!(resolver.resolve(env_name, org, &domain_name)),
-            )
-        })
-        .collect();
+    let namespace = resolver.namespace(org, &domain_name);
 
     let mut body = json!({
         "domainName": domain_name,
+        "namespace": namespace,
         "description": get_s(item, "description"),
         "ownerAccountId": get_s(item, "ownerAccountId"),
         "ownerEmail": get_s(item, "ownerEmail"),
         "secondaryOwnerEmails": secondary_owner_emails,
         "status": get_s(item, "status"),
         "environments": environments,
-        "namespaces": namespaces,
         "tags": attr_to_string_map(item, "tags"),
         "resourceArns": resource_arns,
         "namespaceParameter": get_s(item, "namespaceParameter"),
@@ -260,7 +252,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn namespaces_resolved_for_each_environment() {
+    async fn namespace_is_the_environment_independent_identity() {
         let mut item = domain_item();
         item.insert(
             "environments".to_string(),
@@ -286,13 +278,10 @@ mod tests {
 
         assert_eq!(resp["statusCode"], 200);
         let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
-        assert_eq!(
-            body["namespaces"],
-            json!({
-                "dev": "acme-dev-billing",
-                "staging": "acme-staging-billing",
-                "prod": "acme-prod-billing",
-            })
+        assert_eq!(body["namespace"], "acme-billing");
+        assert!(
+            body.get("namespaces").is_none(),
+            "a domain has exactly one namespace; per-env names are resource names, not namespaces"
         );
     }
 

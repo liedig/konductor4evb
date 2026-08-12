@@ -48,7 +48,7 @@ export interface DomainDetail {
   secondaryOwnerEmails?: string[]
   status?: DomainStatus
   environments?: string[]
-  namespaces?: Record<string, string>
+  namespace?: string
   tags?: Record<string, string>
   resourceArns?: Record<string, PerEnvResourceArns>
   namespaceParameter?: string
