@@ -146,11 +146,6 @@ OAuth authorizer result caching SHALL be disabled by default. If enabled operati
 - **THEN** newly issued access tokens SHALL be evaluated using the changed global-role and team-group identifiers
 - **AND THEN** an already-issued access token SHALL cease to authorize Nexus requests no later than its configured expiration
 
-#### Scenario: Immediate policy freshness is required
-
-- **WHEN** an installation requires every request to receive a fresh authorizer evaluation
-- **THEN** it SHALL be able to keep authorizer result caching disabled
-
 ### Requirement: Entitlement administration is OAuth-surface only
 
 Entitlement administration routes (`POST /entitlements`, `GET /entitlements`, `DELETE /entitlements/{entitlementId}`) SHALL exist only on the OAuth control-plane surface, wired to the Nexus REQUEST authorizer. The IAM surface SHALL NOT expose entitlement administration in this capability version. Administration authorization SHALL combine the `platform-admin` global role, resolved by the OAuth authorizer from controlled Cognito groups independently of grant storage, with resource-role bindings evaluated by the grant engine: a `publisher` binding on the entitlement's producer domain authorizes create and revoke for that producer domain, and a `subscriber` binding authorizes listing the bound consumer domain's entitlements. Subscription resource routes and the consumer schema catalog SHALL remain available on both surfaces with identical post-normalization authorization semantics.
