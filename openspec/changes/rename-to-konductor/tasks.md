@@ -7,19 +7,19 @@
 
 ## 2. Code identifiers (compiler-verified)
 
-- [ ] 2.1 Rename crate `lib/nexus-common` → `lib/konductor-common` (package name, workspace members, all `nexus_common` imports); `cargo check` green
-- [ ] 2.2 Rename env vars `NEXUS_DEV_API_URL`, `NEXUS_EVENT_BUS`, `NEXUS_ROLE_ARN` → `KONDUKTOR_*` in Makefile, scripts, web config, and docs
-- [ ] 2.3 Web console: `NexusConfig` → `KonductorConfig`, `parseNexusConfig` → `parseKonductorConfig`, `$nexusConfig` → `$konductorConfig`; `pnpm typecheck` green
-- [ ] 2.4 Commit `refactor: rename nexus-common crate and code identifiers to konductor`
+- [x] 2.1 Rename crate `lib/nexus-common` → `lib/konductor-common` (package name, workspace members, all `nexus_common` imports); `cargo check` green
+- [x] 2.2 Rename env vars `NEXUS_DEV_API_URL`, `NEXUS_EVENT_BUS`, `NEXUS_ROLE_ARN` → `KONDUKTOR_*` in Makefile, scripts, web config, and docs
+- [x] 2.3 Web console: `NexusConfig` → `KonductorConfig`, `parseNexusConfig` → `parseKonductorConfig`, `$nexusConfig` → `$konductorConfig`; `pnpm typecheck` green
+- [x] 2.4 Commit `refactor: rename nexus-common crate and code identifiers to konductor`
 
 ## 3. Templates and event contracts
 
-- [ ] 3.1 Rename `nexus-core-stack.yaml` → `konductor-core-stack.yaml`; rename all `nexus-` resource names, `{org}-nexus-*` patterns, `Nexus*` output keys, and `Application=nexus` tags per the design mapping table
-- [ ] 3.2 Rename event sources `nexus.domain-management` / `nexus.event-streams` → `konductor.*` in all emitters, the SNS forwarding rule prefix, VTL templates, and test fixtures
-- [ ] 3.3 `trust-stack.yaml`: role name `{org}-nexus-trust-role` → `{org}-konductor-trust-role`, stack name and tags; update `deploy-trust`/`teardown-trust` targets and output key references (`NexusFunctionRoleArn` → `KonductorFunctionRoleArn`)
-- [ ] 3.4 `samconfig-core.toml` (and siblings): stack names `nexus-core` → `konductor-core`, notification email aliases `sliedig+nexus@` → `sliedig+konductor@`
-- [ ] 3.5 `sam validate --lint`, `make check`, `cargo test --workspace`, and the `api_surfaces` contract tests all green
-- [ ] 3.6 Commit `refactor!: rename AWS resources and lifecycle event sources to konductor` (BREAKING: event source values change)
+- [x] 3.1 Rename `nexus-core-stack.yaml` → `konductor-core-stack.yaml`; rename all `nexus-` resource names, `{org}-nexus-*` patterns, `Nexus*` output keys, and `Application=nexus` tags per the design mapping table
+- [x] 3.2 Rename event sources `nexus.domain-management` / `nexus.event-streams` → `konductor.*` in all emitters, the SNS forwarding rule prefix, VTL templates, and test fixtures
+- [x] 3.3 `trust-stack.yaml`: role name `{org}-nexus-trust-role` → `{org}-konductor-trust-role`, stack name and tags; update `deploy-trust`/`teardown-trust` targets and output key references (`NexusFunctionRoleArn` → `KonductorFunctionRoleArn`)
+- [x] 3.4 `samconfig-core.toml` (and siblings): stack names `nexus-core` → `konductor-core`, notification email aliases `sliedig+nexus@` → `sliedig+konductor@`
+- [x] 3.5 `sam validate --lint`, `make check`, `cargo test --workspace`, and the `api_surfaces` contract tests all green
+- [x] 3.6 Commit `refactor!: rename AWS resources and lifecycle event sources to konductor` (BREAKING: event source values change)
 
 ## 4. Prose sweep
 
