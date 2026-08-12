@@ -5,15 +5,15 @@ use anyhow::{Context, Result};
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
-use nexus_common::api;
-use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
-use nexus_common::grant::ResourceRole;
-use nexus_common::grant_engine::has_role_binding;
-use nexus_common::grant_store::BindingStore;
-use nexus_common::principal::{GlobalRole, TrustedPrincipal};
-use nexus_common::principal_context::log_principal;
-use nexus_common::streams::{EventStream, StreamStatus};
-use nexus_common::streams_db;
+use konductor_common::api;
+use konductor_common::error::{ControlPlaneError, ValidationExceptionReason};
+use konductor_common::grant::ResourceRole;
+use konductor_common::grant_engine::has_role_binding;
+use konductor_common::grant_store::BindingStore;
+use konductor_common::principal::{GlobalRole, TrustedPrincipal};
+use konductor_common::principal_context::log_principal;
+use konductor_common::streams::{EventStream, StreamStatus};
+use konductor_common::streams_db;
 
 /// Which side of the subscription relationship the caller is listing from.
 /// Inbound is the consumer view (a `subscriber` binding on the domain);
@@ -225,10 +225,10 @@ mod tests {
     use chrono::Utc;
     use lambda_runtime::Context as LambdaContext;
 
-    use nexus_common::grant::{BindingPrincipal, RoleBinding};
-    use nexus_common::grant_store::binding_to_item;
-    use nexus_common::streams::EnvStream;
-    use nexus_common::streams_db::stream_to_item;
+    use konductor_common::grant::{BindingPrincipal, RoleBinding};
+    use konductor_common::grant_store::binding_to_item;
+    use konductor_common::streams::EnvStream;
+    use konductor_common::streams_db::stream_to_item;
 
     fn set_env() {
         std::env::set_var("EVENT_STREAMS_TABLE", "streams");

@@ -16,13 +16,13 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use nexus_common::dynamodb::{get_s, s};
-use nexus_common::envelope::{published_at_from_sent_timestamp, EventEnvelope, SchemaName};
-use nexus_common::grant_engine::actions;
-use nexus_common::models::{DomainStatus, PublishRequest};
-use nexus_common::namespace::NamespaceResolver;
-use nexus_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
-use nexus_common::principal_context::sqs_attribute_map;
+use konductor_common::dynamodb::{get_s, s};
+use konductor_common::envelope::{published_at_from_sent_timestamp, EventEnvelope, SchemaName};
+use konductor_common::grant_engine::actions;
+use konductor_common::models::{DomainStatus, PublishRequest};
+use konductor_common::namespace::NamespaceResolver;
+use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
+use konductor_common::principal_context::sqs_attribute_map;
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
@@ -324,8 +324,8 @@ mod tests {
     use super::*;
     use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
     use chrono::Utc;
-    use nexus_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
-    use nexus_common::grant_engine::InMemoryGrantEngine;
+    use konductor_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
+    use konductor_common::grant_engine::InMemoryGrantEngine;
 
     const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TestPool";
     const SENT_MS: &str = "1785407400123"; // 2026-07-30T10:30:00.123Z
@@ -752,9 +752,12 @@ mod tests {
             )
         });
         let store_client = mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, [&store_error]);
-        let authorizer = nexus_common::grant_engine::DynamoGrantEngine::new(
-            nexus_common::grant_store::BindingStore::new(store_client.clone(), "bindings-test"),
-            nexus_common::entitlement_store::EntitlementStore::new(store_client, "bindings-test"),
+        let authorizer = konductor_common::grant_engine::DynamoGrantEngine::new(
+            konductor_common::grant_store::BindingStore::new(store_client.clone(), "bindings-test"),
+            konductor_common::entitlement_store::EntitlementStore::new(
+                store_client,
+                "bindings-test",
+            ),
         );
         // Zero rules: the fail-closed denial must precede any resource access.
         let clients = clients(vec![], vec![], vec![]);

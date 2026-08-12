@@ -1,6 +1,6 @@
 ## 1. Storage and Models
 
-- [ ] 1.1 Add the domain-count counter item conventions to the domains-table access helpers in `nexus-common` (key construction, conditional increment), with unit tests
+- [ ] 1.1 Add the domain-count counter item conventions to the domains-table access helpers in `konductor-common` (key construction, conditional increment), with unit tests
 - [ ] 1.2 Add the limit-exceeded mapping (`409 Conflict` with limit reason) to the registration API contract and error models
 
 ## 2. Enforcement

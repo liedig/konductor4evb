@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use nexus_common::principal::{GlobalRole, TrustedPrincipal};
+use konductor_common::principal::{GlobalRole, TrustedPrincipal};
 
 /// Coarse route gate for the OAuth surface.
 ///
@@ -103,7 +103,7 @@ pub fn http_method_from_arn(method_arn: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexus_common::principal::GlobalRole;
+    use konductor_common::principal::GlobalRole;
 
     fn principal(roles: Vec<GlobalRole>) -> TrustedPrincipal {
         TrustedPrincipal::oauth(

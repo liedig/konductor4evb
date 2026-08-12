@@ -4,10 +4,10 @@ use serde_json::{json, Value};
 
 use crate::register;
 use crate::update;
-use nexus_common::error::ControlPlaneError;
-use nexus_common::models::RegisterDomainRequest;
-use nexus_common::principal::TrustedPrincipal;
-use nexus_common::principal_context::sqs_attribute_map;
+use konductor_common::error::ControlPlaneError;
+use konductor_common::models::RegisterDomainRequest;
+use konductor_common::principal::TrustedPrincipal;
+use konductor_common::principal_context::sqs_attribute_map;
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
@@ -87,7 +87,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
         }
         other => Err(ControlPlaneError::ValidationException {
             message: format!("unrecognised HttpMethod: {other}"),
-            reason: nexus_common::error::ValidationExceptionReason::UnknownOperation,
+            reason: konductor_common::error::ValidationExceptionReason::UnknownOperation,
             field_list: None,
         }
         .into()),
@@ -109,7 +109,7 @@ mod tests {
             "APPROVAL_STATE_MACHINE_ARN",
             "arn:aws:states:us-east-1:123:stateMachine:approval",
         );
-        std::env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
         std::env::set_var("ENVIRONMENTS", "dev,staging,prod");
     }
 

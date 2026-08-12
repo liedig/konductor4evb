@@ -4,15 +4,15 @@ use anyhow::{Context, Result};
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
-use nexus_common::api;
-use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
-use nexus_common::grant::ResourceRole;
-use nexus_common::grant_engine::has_role_binding;
-use nexus_common::grant_store::BindingStore;
-use nexus_common::principal::{GlobalRole, TrustedPrincipal};
-use nexus_common::principal_context::log_principal;
-use nexus_common::streams::{EventStream, SubscriptionId};
-use nexus_common::streams_db;
+use konductor_common::api;
+use konductor_common::error::{ControlPlaneError, ValidationExceptionReason};
+use konductor_common::grant::ResourceRole;
+use konductor_common::grant_engine::has_role_binding;
+use konductor_common::grant_store::BindingStore;
+use konductor_common::principal::{GlobalRole, TrustedPrincipal};
+use konductor_common::principal_context::log_principal;
+use konductor_common::streams::{EventStream, SubscriptionId};
+use konductor_common::streams_db;
 
 /// Platform roles read any subscription (operations and audit); everyone
 /// else needs the subscriber binding on the consumer domain or the
@@ -84,7 +84,7 @@ pub async fn handle(
     let not_found = || {
         api::error_response(
             404,
-            nexus_common::models::ApiError {
+            konductor_common::models::ApiError {
                 code: "ResourceNotFoundException".to_string(),
                 message: format!("subscription '{raw_id}' not found"),
                 request_id: None,
@@ -154,10 +154,10 @@ mod tests {
     use chrono::Utc;
     use lambda_runtime::Context as LambdaContext;
 
-    use nexus_common::grant::{BindingPrincipal, RoleBinding};
-    use nexus_common::grant_store::binding_to_item;
-    use nexus_common::streams::{EnvStream, StreamStatus};
-    use nexus_common::streams_db::stream_to_item;
+    use konductor_common::grant::{BindingPrincipal, RoleBinding};
+    use konductor_common::grant_store::binding_to_item;
+    use konductor_common::streams::{EnvStream, StreamStatus};
+    use konductor_common::streams_db::stream_to_item;
 
     fn set_env() {
         std::env::set_var("EVENT_STREAMS_TABLE", "streams");
@@ -230,7 +230,7 @@ mod tests {
         mock!(aws_sdk_dynamodb::Client::get_item)
             .match_requests(|req| {
                 req.key()
-                    .and_then(|k| k.get(nexus_common::streams_db::PK))
+                    .and_then(|k| k.get(konductor_common::streams_db::PK))
                     .and_then(|v| v.as_s().ok())
                     .map(|v| v == "orders")
                     .unwrap_or(false)

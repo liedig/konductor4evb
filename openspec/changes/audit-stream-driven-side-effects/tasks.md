@@ -17,5 +17,5 @@
 
 ## 4. Validation
 
-- [ ] 4.1 Review the inventory against the codebase a second time to prove no write path was missed (including `nexus-common` helpers that write on behalf of handlers)
+- [ ] 4.1 Review the inventory against the codebase a second time to prove no write path was missed (including `konductor-common` helpers that write on behalf of handlers)
 - [ ] 4.2 Confirm the change made no production code modifications, run strict OpenSpec validation, and verify the decision record satisfies the proposal

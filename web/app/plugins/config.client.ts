@@ -2,7 +2,7 @@ import { Amplify } from 'aws-amplify'
 import { cognitoUserPoolsTokenProvider } from 'aws-amplify/auth/cognito'
 import { sessionStorage } from 'aws-amplify/utils'
 
-import { parseNexusConfig } from '~/types/config'
+import { parseKonductorConfig } from '~/types/config'
 
 // Boot-time runtime config: the served `config.json` (written by the deploy
 // target from stack outputs) is the single source for API and Cognito wiring,
@@ -12,7 +12,7 @@ export default defineNuxtPlugin(async () => {
   const raw = await $fetch<unknown>('/config.json').catch(() => {
     throw new Error('Could not load /config.json — run `make web-dev` for local development')
   })
-  const config = parseNexusConfig(raw)
+  const config = parseKonductorConfig(raw)
   if (config.userPoolId.startsWith('REPLACE-')) {
     throw new Error('web/public/config.json still has placeholder values — run `make web-dev` to generate it from the core stack outputs')
   }
@@ -27,5 +27,5 @@ export default defineNuxtPlugin(async () => {
     },
   })
 
-  return { provide: { nexusConfig: config } }
+  return { provide: { konductorConfig: config } }
 })

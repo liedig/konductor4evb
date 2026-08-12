@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use std::env;
 
-use nexus_common::dynamodb::{get_s, s};
-use nexus_common::models::DomainStatus;
+use konductor_common::dynamodb::{get_s, s};
+use konductor_common::models::DomainStatus;
 
 #[derive(Debug)]
 pub struct DomainRecord {
@@ -39,7 +39,7 @@ pub async fn lookup_active_domain(
     }
 
     let environments =
-        nexus_common::dynamodb::get_string_list(&item, "environments").unwrap_or_default();
+        konductor_common::dynamodb::get_string_list(&item, "environments").unwrap_or_default();
 
     Ok(DomainLookup::Found(DomainRecord {
         owner_account_id: get_s(&item, "ownerAccountId").unwrap_or_default(),

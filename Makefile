@@ -121,7 +121,7 @@ web-dev: ## Run the Nexus web console dev server (http://localhost:3000), proxyi
 	test -n "$$POOL_ID" || { echo "$(YELLOW)NexusUserPoolId output missing — deploy the core stack first (make deploy-core)$(RESET)"; exit 1; }; \
 	printf '{"apiBaseUrl":"/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s"}\n' \
 		"$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" > web/public/config.json; \
-	cd web && NEXUS_DEV_API_URL="$$API_URL" pnpm dev
+	cd web && KONDUKTOR_DEV_API_URL="$$API_URL" pnpm dev
 
 deploy-web: ## Build the web console, publish to the web bucket, and write config.json from stack outputs
 	@set -euo pipefail; \
@@ -308,7 +308,7 @@ ifndef APP_PROFILE
 	$(error APP_PROFILE is required — the AWS CLI profile for the target domain account)
 endif
 	@set -euo pipefail; \
-	NEXUS_ROLE_ARN=$$(aws cloudformation describe-stacks \
+	KONDUKTOR_ROLE_ARN=$$(aws cloudformation describe-stacks \
 		--stack-name nexus-core \
 		--query "Stacks[0].Outputs[?OutputKey=='NexusFunctionRoleArn'].OutputValue" \
 		--output text \
@@ -319,14 +319,14 @@ endif
 		--output text \
 		--region $(AWS_REGION)); \
 	echo "$(BOLD)$(CYAN)Deploying trust stack to profile: $(APP_PROFILE)$(RESET)"; \
-	echo "  NexusRoleArn:           $${NEXUS_ROLE_ARN}"; \
+	echo "  NexusRoleArn:           $${KONDUKTOR_ROLE_ARN}"; \
 	echo "  ProvisioningRoleArn:    $${PROVISIONING_ROLE_ARN}"; \
 	echo "  Organization:           $(ORGANIZATION)"; \
 	aws cloudformation deploy \
 		--template-file trust-stack.yaml \
 		--stack-name nexus-trust \
 		--parameter-overrides \
-			NexusRoleArn=$${NEXUS_ROLE_ARN} \
+			NexusRoleArn=$${KONDUKTOR_ROLE_ARN} \
 			ProvisioningWorkflowRoleArn=$${PROVISIONING_ROLE_ARN} \
 			Organization=$(ORGANIZATION) \
 		--tags Application=nexus Component=trust auto-delete=no \

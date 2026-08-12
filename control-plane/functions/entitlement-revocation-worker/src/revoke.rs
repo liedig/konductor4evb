@@ -10,11 +10,11 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use nexus_common::entitlement_store::EntitlementStore;
-use nexus_common::error::ControlPlaneError;
-use nexus_common::grant_engine::covers;
-use nexus_common::streams::{EventStream, StreamStatus};
-use nexus_common::streams_db;
+use konductor_common::entitlement_store::EntitlementStore;
+use konductor_common::error::ControlPlaneError;
+use konductor_common::grant_engine::covers;
+use konductor_common::streams::{EventStream, StreamStatus};
+use konductor_common::streams_db;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

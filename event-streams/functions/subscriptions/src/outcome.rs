@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use nexus_common::error::ControlPlaneError;
+use konductor_common::error::ControlPlaneError;
 
 pub const EVENT_SOURCE: &str = "nexus.event-streams";
 

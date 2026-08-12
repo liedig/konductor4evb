@@ -7,12 +7,12 @@ use std::env;
 use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
-use nexus_common::envelope::{rule_name, SchemaName};
-use nexus_common::grant_engine::actions;
-use nexus_common::principal::{ResourceAuthorizer, TrustedPrincipal};
-use nexus_common::streams::{EnvStream, EventStream, StreamStatus};
-use nexus_common::streams_db;
-use nexus_common::subscription_resource::SubscriptionResource;
+use konductor_common::envelope::{rule_name, SchemaName};
+use konductor_common::grant_engine::actions;
+use konductor_common::principal::{ResourceAuthorizer, TrustedPrincipal};
+use konductor_common::streams::{EnvStream, EventStream, StreamStatus};
+use konductor_common::streams_db;
+use konductor_common::subscription_resource::SubscriptionResource;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,7 +42,7 @@ pub async fn handle(
     principal: &TrustedPrincipal,
     request_id: &str,
 ) -> Result<()> {
-    let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
+    let cp_bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
     let streams_table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
     let state_machine_arn = env::var("ACTIVATE_SUBSCRIPTION_STATE_MACHINE_ARN")
@@ -241,7 +241,7 @@ async fn start_activation_workflow(
         .send()
         .await
         .map_err(|e| {
-            nexus_common::error::ControlPlaneError::StepFunctions(
+            konductor_common::error::ControlPlaneError::StepFunctions(
                 e.into_service_error().to_string(),
             )
         })?;
@@ -346,12 +346,12 @@ mod tests {
     use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
     use aws_sdk_dynamodb::types::AttributeValue;
     use aws_smithy_mocks::{mock, mock_client, RuleMode};
-    use nexus_common::dynamodb::s;
+    use konductor_common::dynamodb::s;
 
     fn set_env() {
         std::env::set_var("DOMAINS_TABLE", "domains");
         std::env::set_var("EVENT_STREAMS_TABLE", "streams");
-        std::env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
         std::env::set_var("ORGANIZATION", "acme");
         std::env::set_var(
             "ACTIVATE_SUBSCRIPTION_STATE_MACHINE_ARN",

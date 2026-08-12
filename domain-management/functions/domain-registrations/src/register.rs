@@ -5,10 +5,10 @@ use aws_sdk_sfn::operation::start_execution::StartExecutionError;
 use serde_json::json;
 use std::env;
 
-use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
-use nexus_common::error::ControlPlaneError;
-use nexus_common::models::{DomainStatus, RegisterDomainRequest};
-use nexus_common::principal::TrustedPrincipal;
+use konductor_common::dynamodb::{get_s, s, string_map_to_attr};
+use konductor_common::error::ControlPlaneError;
+use konductor_common::models::{DomainStatus, RegisterDomainRequest};
+use konductor_common::principal::TrustedPrincipal;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -21,12 +21,12 @@ pub async fn handle(
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let state_machine_arn =
         env::var("APPROVAL_STATE_MACHINE_ARN").context("APPROVAL_STATE_MACHINE_ARN not set")?;
-    let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
+    let cp_bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
     let environments_raw = env::var("ENVIRONMENTS").context("ENVIRONMENTS not set")?;
     let environments = parse_environments(&environments_raw).map_err(|e| {
         ControlPlaneError::ValidationException {
             message: format!("invalid ENVIRONMENTS value: {e}"),
-            reason: nexus_common::error::ValidationExceptionReason::FieldValidationFailed,
+            reason: konductor_common::error::ValidationExceptionReason::FieldValidationFailed,
             field_list: None,
         }
     })?;
@@ -286,7 +286,7 @@ const RESERVED_DOMAIN_NAMES: &[&str] = &["nexus"];
 
 pub(crate) fn validate_domain_name(name: &str) -> Result<(), ControlPlaneError> {
     if name.len() < 2 || name.len() > 64 {
-        return Err(nexus_common::api::validation_error(
+        return Err(konductor_common::api::validation_error(
             "Domain name must be between 2 and 64 characters",
         ));
     }
@@ -294,17 +294,17 @@ pub(crate) fn validate_domain_name(name: &str) -> Result<(), ControlPlaneError> 
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
-        return Err(nexus_common::api::validation_error(
+        return Err(konductor_common::api::validation_error(
             "Domain name must contain only lowercase letters, digits, and hyphens",
         ));
     }
     if name.starts_with('-') || name.ends_with('-') {
-        return Err(nexus_common::api::validation_error(
+        return Err(konductor_common::api::validation_error(
             "Domain name must not start or end with a hyphen",
         ));
     }
     if RESERVED_DOMAIN_NAMES.contains(&name) {
-        return Err(nexus_common::api::validation_error(format!(
+        return Err(konductor_common::api::validation_error(format!(
             "Domain name '{name}' is reserved for platform use"
         )));
     }
@@ -462,7 +462,7 @@ mod tests {
                 "APPROVAL_STATE_MACHINE_ARN",
                 "arn:aws:states:us-east-1:123:stateMachine:approval",
             );
-            env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+            env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
             env::set_var("ENVIRONMENTS", "dev,staging,prod");
         }
 

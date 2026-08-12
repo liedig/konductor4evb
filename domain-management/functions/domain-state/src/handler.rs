@@ -6,11 +6,11 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::env;
 
-use nexus_common::api;
-use nexus_common::dynamodb::{get_s, s};
-use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
-use nexus_common::models::DomainStatus;
-use nexus_common::principal_context::log_principal;
+use konductor_common::api;
+use konductor_common::dynamodb::{get_s, s};
+use konductor_common::error::{ControlPlaneError, ValidationExceptionReason};
+use konductor_common::models::DomainStatus;
+use konductor_common::principal_context::log_principal;
 
 /// Platform-managed enable/disable. Disabling is deliberately shallow: the
 /// status flip alone makes the publish, schema, and subscription paths
@@ -89,7 +89,7 @@ pub async fn handle(
 fn is_platform_admin_caller(request_context: &Value) -> bool {
     match log_principal(request_context) {
         Ok(p) => {
-            matches!(&p, nexus_common::principal::TrustedPrincipal::OAuth(_))
+            matches!(&p, konductor_common::principal::TrustedPrincipal::OAuth(_))
                 && p.is_platform_admin()
         }
         Err(e) => {

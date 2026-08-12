@@ -4,11 +4,11 @@
 
 use std::collections::HashMap;
 
-use nexus_common::principal::{
+use konductor_common::principal::{
     AuthenticationMechanism, AuthorizationDecision, GlobalRole, IamOnlyAuthorizer,
     ResourceAuthorizer, TrustedPrincipal,
 };
-use nexus_common::principal_context::{attr, log_principal, PrincipalContextError};
+use konductor_common::principal_context::{attr, log_principal, PrincipalContextError};
 
 fn attrs(pairs: &[(&str, &str)]) -> HashMap<String, String> {
     pairs

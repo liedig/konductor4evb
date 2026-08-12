@@ -2,12 +2,12 @@
 
 ## Code Style
 
-- No inline `//` comments explaining *what* code does — write self-explanatory code with clear, intention-revealing names. Exceptions: `///` doc comments on `nexus-common` public items, and brief *why*-comments for non-obvious decisions
-- Import grouping: external crates first, then `nexus_common`/local modules, separated by a blank line; ordering within groups is rustfmt's job (`make check`)
+- No inline `//` comments explaining *what* code does — write self-explanatory code with clear, intention-revealing names. Exceptions: `///` doc comments on `konductor-common` public items, and brief *why*-comments for non-obvious decisions
+- Import grouping: external crates first, then `konductor_common`/local modules, separated by a blank line; ordering within groups is rustfmt's job (`make check`)
 - Files under 300 production lines, excluding `#[cfg(test)]` modules; split when it improves clarity
 - Make invalid states unrepresentable: enums over stringly-typed values (`DomainStatus`, `Decision`), narrow purpose-built types over primitives
 - Separation of concerns without over-engineering; start simple, add complexity only when clearly required
-- Errors: typed variants via `thiserror` in `nexus-common` (`ControlPlaneError`) for control flow; `anyhow` with specific `.context()` only at Lambda binary edges
+- Errors: typed variants via `thiserror` in `konductor-common` (`ControlPlaneError`) for control flow; `anyhow` with specific `.context()` only at Lambda binary edges
 - No `unwrap()`/`expect()` in handler code paths — handle the `Option`/`Result`; panicking is acceptable only in tests
 - No `unsafe`. If a future need arises, it requires a `// SAFETY:` comment and review sign-off
 

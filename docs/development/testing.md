@@ -68,10 +68,10 @@ flowchart LR
 make test
 
 # Run tests for a specific crate
-cargo test -p nexus-common
+cargo test -p konductor-common
 
 # Run a single test by name
-cargo test -p nexus-common default_pattern_resolves_correctly
+cargo test -p konductor-common default_pattern_resolves_correctly
 
 # Run tests with output visible (nocapture)
 cargo test --workspace -- --nocapture

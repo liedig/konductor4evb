@@ -6,12 +6,12 @@ use std::env;
 use crate::subscribe;
 use crate::unsubscribe;
 use crate::update_state;
-use nexus_common::entitlement_store::EntitlementStore;
-use nexus_common::error::ControlPlaneError;
-use nexus_common::grant_engine::DynamoGrantEngine;
-use nexus_common::grant_store::BindingStore;
-use nexus_common::principal::TrustedPrincipal;
-use nexus_common::principal_context::sqs_attribute_map;
+use konductor_common::entitlement_store::EntitlementStore;
+use konductor_common::error::ControlPlaneError;
+use konductor_common::grant_engine::DynamoGrantEngine;
+use konductor_common::grant_store::BindingStore;
+use konductor_common::principal::TrustedPrincipal;
+use konductor_common::principal_context::sqs_attribute_map;
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
@@ -103,7 +103,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
         }
         _ => Err(ControlPlaneError::ValidationException {
             message: format!("unrecognised subscription command: {http_method} {route}"),
-            reason: nexus_common::error::ValidationExceptionReason::UnknownOperation,
+            reason: konductor_common::error::ValidationExceptionReason::UnknownOperation,
             field_list: None,
         }
         .into()),
@@ -128,20 +128,20 @@ mod tests {
     use chrono::Utc;
     use lambda_runtime::Context as LambdaContext;
 
-    use nexus_common::dynamodb::s;
-    use nexus_common::entitlement::{Entitlement, ScopePattern};
-    use nexus_common::entitlement_store::entitlement_to_item;
-    use nexus_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
-    use nexus_common::grant_store::binding_to_item;
-    use nexus_common::streams::{EnvStream, EventStream, StreamStatus};
-    use nexus_common::streams_db::stream_to_item;
+    use konductor_common::dynamodb::s;
+    use konductor_common::entitlement::{Entitlement, ScopePattern};
+    use konductor_common::entitlement_store::entitlement_to_item;
+    use konductor_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
+    use konductor_common::grant_store::binding_to_item;
+    use konductor_common::streams::{EnvStream, EventStream, StreamStatus};
+    use konductor_common::streams_db::stream_to_item;
 
     const ACCOUNT: &str = "111122223333";
 
     fn set_env() {
         std::env::set_var("DOMAINS_TABLE", "domains");
         std::env::set_var("EVENT_STREAMS_TABLE", "streams");
-        std::env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
         std::env::set_var("ORGANIZATION", "acme");
         std::env::set_var("BINDINGS_TABLE", "bindings");
         std::env::set_var("ENTITLEMENTS_TABLE", "entitlements");

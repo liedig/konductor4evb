@@ -7,12 +7,12 @@ use std::env;
 use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
-use nexus_common::entitlement_store::EntitlementStore;
-use nexus_common::grant_engine::{actions, covers};
-use nexus_common::principal::{ResourceAuthorizer, TrustedPrincipal};
-use nexus_common::streams::{EventStream, StreamStatus, SubscriptionId};
-use nexus_common::streams_db;
-use nexus_common::subscription_resource::SubscriptionResource;
+use konductor_common::entitlement_store::EntitlementStore;
+use konductor_common::grant_engine::{actions, covers};
+use konductor_common::principal::{ResourceAuthorizer, TrustedPrincipal};
+use konductor_common::streams::{EventStream, StreamStatus, SubscriptionId};
+use konductor_common::streams_db;
+use konductor_common::subscription_resource::SubscriptionResource;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,7 +44,7 @@ pub async fn handle(
     message: &UpdateStateMessage,
     principal: &TrustedPrincipal,
 ) -> Result<()> {
-    let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
+    let cp_bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
     let streams_table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
     let entitlements_table =
         env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
@@ -309,7 +309,7 @@ async fn apply_rule_state(
             .map_err(|e| e.into_service_error().to_string())
     };
 
-    result.map_err(|e| nexus_common::error::ControlPlaneError::EventBridge(e).into())
+    result.map_err(|e| konductor_common::error::ControlPlaneError::EventBridge(e).into())
 }
 
 #[cfg(test)]

@@ -17,12 +17,12 @@ use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
 use chrono::DateTime;
 use serde::Deserialize;
 
-use nexus_common::entitlement::{Entitlement, ScopePattern};
-use nexus_common::entitlement_store::{entitlement_to_item, EntitlementStore};
-use nexus_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
-use nexus_common::grant_engine::{actions, DynamoGrantEngine, InMemoryGrantEngine};
-use nexus_common::grant_store::{binding_to_item, BindingStore};
-use nexus_common::principal::{
+use konductor_common::entitlement::{Entitlement, ScopePattern};
+use konductor_common::entitlement_store::{entitlement_to_item, EntitlementStore};
+use konductor_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
+use konductor_common::grant_engine::{actions, DynamoGrantEngine, InMemoryGrantEngine};
+use konductor_common::grant_store::{binding_to_item, BindingStore};
+use konductor_common::principal::{
     AuthorizationDecision, GlobalRole, ResourceAuthorizer, TrustedPrincipal,
 };
 

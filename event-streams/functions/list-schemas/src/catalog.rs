@@ -17,7 +17,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use nexus_common::entitlement::ScopePattern;
+use konductor_common::entitlement::ScopePattern;
 
 use crate::discovery;
 

@@ -2,7 +2,7 @@ use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
 use lambda_runtime::Error;
 use serde_json::Value;
 
-use nexus_common::principal::TrustedPrincipal;
+use konductor_common::principal::TrustedPrincipal;
 
 use crate::claims::AccessTokenClaims;
 use crate::error::AuthorizerError;

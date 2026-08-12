@@ -76,7 +76,7 @@ fn two_apis_serve_environment_named_stages() {
 }
 
 #[test]
-fn oauth_api_attaches_request_authorizer_with_caching_disabled() {
+fn oauth_api_attaches_request_authorizer_with_route_scoped_caching() {
     let doc = core_template();
     let api = resource(&doc, "NexusOAuthApi");
     let auth = at(props(api), "Auth");
@@ -88,8 +88,8 @@ fn oauth_api_attaches_request_authorizer_with_caching_disabled() {
     assert_eq!(text(at(authorizer, "FunctionPayloadType")), "REQUEST");
     assert_eq!(
         int(at(authorizer, "AuthorizerResultTtlInSeconds")),
-        0,
-        "authorizer result caching must be disabled by default"
+        300,
+        "authorizer caching uses a 300s TTL (the SAM transform drops a declared 0); the route-scoped key below is what keeps route-scoped policies correct"
     );
     let identity = at(authorizer, "Identity");
     let headers: Vec<&str> = seq(at(identity, "Headers")).iter().map(text).collect();
@@ -97,6 +97,12 @@ fn oauth_api_attaches_request_authorizer_with_caching_disabled() {
         headers,
         ["Authorization"],
         "REQUEST authorizer identity must use the Headers list (the singular Header key is rejected by the SAM transform)"
+    );
+    let context: Vec<&str> = seq(at(identity, "Context")).iter().map(text).collect();
+    assert_eq!(
+        context,
+        ["httpMethod", "resourcePath"],
+        "cache key must include the route: the authorizer policy is scoped to the invoked route, so a token-only key would poison a caller's other routes"
     );
     assert_eq!(
         text(at(authorizer, "FunctionArn")),

@@ -15,11 +15,11 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde_json::Value;
 
 use entitlement_revocation_worker::revoke::{disable_stream_environments, RevocationContext};
-use nexus_common::entitlement::Entitlement;
-use nexus_common::entitlement_store::EntitlementStore;
-use nexus_common::grant_engine::covers;
-use nexus_common::streams::{EventStream, StreamStatus};
-use nexus_common::streams_db;
+use konductor_common::entitlement::Entitlement;
+use konductor_common::entitlement_store::EntitlementStore;
+use konductor_common::grant_engine::covers;
+use konductor_common::streams::{EventStream, StreamStatus};
+use konductor_common::streams_db;
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
@@ -127,10 +127,10 @@ mod tests {
     use lambda_runtime::Context as LambdaContext;
     use serde_json::json;
 
-    use nexus_common::entitlement::ScopePattern;
-    use nexus_common::entitlement_store::entitlement_to_item;
-    use nexus_common::streams::EnvStream;
-    use nexus_common::streams_db::stream_to_item;
+    use konductor_common::entitlement::ScopePattern;
+    use konductor_common::entitlement_store::entitlement_to_item;
+    use konductor_common::streams::EnvStream;
+    use konductor_common::streams_db::stream_to_item;
 
     fn set_env() {
         std::env::set_var("EVENT_STREAMS_TABLE", "streams");

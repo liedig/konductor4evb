@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use crate::error::AuthorizerError;
-use nexus_common::principal::GlobalRole;
+use konductor_common::principal::GlobalRole;
 
 /// The standard Cognito access-token claims Nexus consumes. Signature,
 /// expiration, and issuer are verified by the JWT layer; `token_use` and

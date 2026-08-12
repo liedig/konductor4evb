@@ -5,16 +5,16 @@ use anyhow::{Context, Result};
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
-use nexus_common::api;
-use nexus_common::dynamodb::{get_s, get_string_list, s};
-use nexus_common::entitlement_store::EntitlementStore;
-use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
-use nexus_common::grant::ResourceRole;
-use nexus_common::grant_engine::{covers, has_role_binding};
-use nexus_common::grant_store::BindingStore;
-use nexus_common::models::{ApiError, DomainStatus};
-use nexus_common::principal::{GlobalRole, TrustedPrincipal};
-use nexus_common::principal_context::log_principal;
+use konductor_common::api;
+use konductor_common::dynamodb::{get_s, get_string_list, s};
+use konductor_common::entitlement_store::EntitlementStore;
+use konductor_common::error::{ControlPlaneError, ValidationExceptionReason};
+use konductor_common::grant::ResourceRole;
+use konductor_common::grant_engine::{covers, has_role_binding};
+use konductor_common::grant_store::BindingStore;
+use konductor_common::models::{ApiError, DomainStatus};
+use konductor_common::principal::{GlobalRole, TrustedPrincipal};
+use konductor_common::principal_context::log_principal;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -276,10 +276,10 @@ mod tests {
     use chrono::Utc;
     use lambda_runtime::Context as LambdaContext;
 
-    use nexus_common::entitlement::{Entitlement, ScopePattern};
-    use nexus_common::entitlement_store::entitlement_to_item;
-    use nexus_common::grant::{BindingPrincipal, RoleBinding};
-    use nexus_common::grant_store::binding_to_item;
+    use konductor_common::entitlement::{Entitlement, ScopePattern};
+    use konductor_common::entitlement_store::entitlement_to_item;
+    use konductor_common::grant::{BindingPrincipal, RoleBinding};
+    use konductor_common::grant_store::binding_to_item;
 
     const SCHEMA: &str = "acme-orders@OrderNotification";
 
@@ -393,13 +393,13 @@ mod tests {
             })
             .then_output(|| {
                 GetItemOutput::builder()
-                    .item("domainName", nexus_common::dynamodb::s("orders"))
-                    .item("status", nexus_common::dynamodb::s("ACTIVE"))
+                    .item("domainName", konductor_common::dynamodb::s("orders"))
+                    .item("status", konductor_common::dynamodb::s("ACTIVE"))
                     .item(
                         "environments",
                         AttributeValue::L(vec![
-                            nexus_common::dynamodb::s("dev"),
-                            nexus_common::dynamodb::s("prod"),
+                            konductor_common::dynamodb::s("dev"),
+                            konductor_common::dynamodb::s("prod"),
                         ]),
                     )
                     .build()

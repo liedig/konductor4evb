@@ -71,7 +71,7 @@ Globals:
         NAMESPACE_PATTERN: !Ref NamespacePattern
         DOMAINS_TABLE: !Ref DomainsTable
         EVENT_STREAMS_TABLE: !Ref EventStreamsTable
-        NEXUS_EVENT_BUS: !Ref NexusEventBus
+        KONDUKTOR_EVENT_BUS: !Ref NexusEventBus
         DOMAIN_REGISTRATIONS_QUEUE_URL: !Ref DomainRegistrationsQueue
 
 Conditions:
@@ -1531,7 +1531,7 @@ Resources:
       Environment:
         Variables:
           DOMAINS_TABLE: !Ref DomainsTable
-          NEXUS_EVENT_BUS: !Ref NexusEventBus
+          KONDUKTOR_EVENT_BUS: !Ref NexusEventBus
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn

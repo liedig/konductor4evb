@@ -1,14 +1,16 @@
 use anyhow::{Context, Result};
 use aws_sdk_dynamodb::types::AttributeValue;
-use lambda_runtime::{Error, LambdaEvent};
-use nexus_common::api;
-use nexus_common::domain_scope::{fetch_domains_by_name, is_full_visibility, owned_domain_names};
-use nexus_common::dynamodb::{
+use konductor_common::api;
+use konductor_common::domain_scope::{
+    fetch_domains_by_name, is_full_visibility, owned_domain_names,
+};
+use konductor_common::dynamodb::{
     deserialize_pagination_token, get_s, get_string_set, s, serialize_pagination_token,
 };
-use nexus_common::error::ControlPlaneError;
-use nexus_common::principal::TrustedPrincipal;
-use nexus_common::principal_context::log_principal;
+use konductor_common::error::ControlPlaneError;
+use konductor_common::principal::TrustedPrincipal;
+use konductor_common::principal_context::log_principal;
+use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;

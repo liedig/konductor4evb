@@ -492,7 +492,7 @@ acme-prod-billing-integration-dlq     (Domain account DLQ)
 acme-prod-billing-dashboard           (CloudWatch dashboard)
 ```
 
-The domain pattern is configurable via the `NamespacePattern` SAM parameter (default: `{org}-{env}-{domain}`). The `NamespaceResolver` in `lib/nexus-common/src/namespace.rs` handles domain-resource name generation. The platform pattern (`nexus-*`) is fixed.
+The domain pattern is configurable via the `NamespacePattern` SAM parameter (default: `{org}-{env}-{domain}`). The `NamespaceResolver` in `lib/konductor-common/src/namespace.rs` handles domain-resource name generation. The platform pattern (`nexus-*`) is fixed.
 
 The `nexus` name is reserved — the register-domain handler rejects it so no domain can collide with the platform namespace.
 
@@ -753,7 +753,7 @@ evb-nexus/
 │       ├── activate-subscription.asl.yaml    # Per-env rule creation, all-or-nothing + saga
 │       └── remove-subscription.asl.yaml      # Idempotent per-env rule removal
 ├── lib/
-│   └── nexus-common/                         # Shared library (models, DDB helpers, API, validation, namespace)
+│   └── konductor-common/                         # Shared library (models, DDB helpers, API, validation, namespace)
 ├── docs/
 │   ├── development/
 │   │   ├── architecture.md                   # This document

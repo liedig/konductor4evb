@@ -44,7 +44,7 @@ function isErrorBody(data: unknown): data is ApiErrorBody {
  * session and hands off to the auth guard's `/login` redirect.
  */
 export function useApi() {
-  const config = useNexusConfig()
+  const config = useKonductorConfig()
   const session = useSessionStore()
 
   async function request<T>(method: string, path: string, options: RequestOptions = {}, retried = false): Promise<T> {

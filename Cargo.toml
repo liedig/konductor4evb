@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-    "lib/nexus-common",
+    "lib/konductor-common",
     "domain-management/functions/decide-registration",
     "domain-management/functions/describe-domain",
     "domain-management/functions/domain-registrations",

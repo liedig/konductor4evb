@@ -9,10 +9,10 @@ use std::env;
 
 use anyhow::{Context, Result};
 
-use nexus_common::dynamodb::{get_s, get_string_list};
-use nexus_common::entitlement::ScopePattern;
-use nexus_common::entitlement_store::EntitlementStore;
-use nexus_common::models::DomainStatus;
+use konductor_common::dynamodb::{get_s, get_string_list};
+use konductor_common::entitlement::ScopePattern;
+use konductor_common::entitlement_store::EntitlementStore;
+use konductor_common::models::DomainStatus;
 
 pub struct CallerSources;
 

@@ -9,18 +9,18 @@ use chrono::Utc;
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
-use nexus_common::api;
-use nexus_common::entitlement::{
+use konductor_common::api;
+use konductor_common::entitlement::{
     Entitlement, EntitlementAuditRecord, EntitlementSummary, EntitlementView,
     ListEntitlementsResponse,
 };
-use nexus_common::entitlement_store::{EntitlementStore, EntitlementStoreError};
-use nexus_common::error::ControlPlaneError;
-use nexus_common::grant::AuditMutation;
-use nexus_common::grant_engine::has_role_binding;
-use nexus_common::grant_store::BindingStore;
-use nexus_common::principal::{AuthenticationMechanism, TrustedPrincipal};
-use nexus_common::principal_context::log_principal;
+use konductor_common::entitlement_store::{EntitlementStore, EntitlementStoreError};
+use konductor_common::error::ControlPlaneError;
+use konductor_common::grant::AuditMutation;
+use konductor_common::grant_engine::has_role_binding;
+use konductor_common::grant_store::BindingStore;
+use konductor_common::principal::{AuthenticationMechanism, TrustedPrincipal};
+use konductor_common::principal_context::log_principal;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -82,7 +82,7 @@ async fn can_administer(
         || has_role_binding(
             bindings,
             principal,
-            nexus_common::grant::ResourceRole::Publisher,
+            konductor_common::grant::ResourceRole::Publisher,
             producer_domain,
         )
         .await
@@ -94,7 +94,7 @@ async fn create(
     payload: &Value,
     principal: &TrustedPrincipal,
 ) -> Result<Value, Error> {
-    let request: nexus_common::entitlement::CreateEntitlementRequest =
+    let request: konductor_common::entitlement::CreateEntitlementRequest =
         match api::parse_body(payload) {
             Ok(r) => r,
             Err(e) => return Ok(api::from_control_plane_error(&e)),
@@ -163,14 +163,14 @@ async fn list(
                 || has_role_binding(
                     bindings,
                     principal,
-                    nexus_common::grant::ResourceRole::Subscriber,
+                    konductor_common::grant::ResourceRole::Subscriber,
                     &consumer,
                 )
                 .await
                 || has_role_binding(
                     bindings,
                     principal,
-                    nexus_common::grant::ResourceRole::Publisher,
+                    konductor_common::grant::ResourceRole::Publisher,
                     &consumer,
                 )
                 .await;
@@ -285,11 +285,11 @@ mod tests {
     use aws_sdk_dynamodb::operation::query::QueryInput;
     use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsInput;
     use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
-    use nexus_common::dynamodb::get_s;
-    use nexus_common::entitlement::ScopePattern;
-    use nexus_common::entitlement_store::entitlement_to_item;
-    use nexus_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
-    use nexus_common::grant_store::binding_to_item;
+    use konductor_common::dynamodb::get_s;
+    use konductor_common::entitlement::ScopePattern;
+    use konductor_common::entitlement_store::entitlement_to_item;
+    use konductor_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
+    use konductor_common::grant_store::binding_to_item;
     use std::sync::{Arc, Mutex};
 
     const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";

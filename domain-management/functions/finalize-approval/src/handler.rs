@@ -6,11 +6,11 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use nexus_common::dynamodb::{get_s, s};
-use nexus_common::grant::{
+use konductor_common::dynamodb::{get_s, s};
+use konductor_common::grant::{
     AuditMutation, AuditRecord, BindingPrincipal, ResourceRole, RoleBinding,
 };
-use nexus_common::grant_store::{audit_to_item, binding_to_item};
+use konductor_common::grant_store::{audit_to_item, binding_to_item};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

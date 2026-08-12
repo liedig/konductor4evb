@@ -14,7 +14,7 @@ aws-sdk-dynamodb = { workspace = true }
 aws-sdk-eventbridge = { workspace = true }
 aws-sdk-schemas = { workspace = true }
 chrono = { workspace = true }
-nexus-common = { path = "../../../lib/nexus-common" }
+konductor-common = { path = "../../../lib/konductor-common" }
 lambda_runtime = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -4,14 +4,14 @@ use anyhow::{Context, Result};
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
-use nexus_common::api;
-use nexus_common::error::{ControlPlaneError, ValidationExceptionReason};
-use nexus_common::grant::ResourceRole;
-use nexus_common::grant_engine::has_role_binding;
-use nexus_common::grant_store::BindingStore;
-use nexus_common::models::ApiError;
-use nexus_common::principal::{GlobalRole, TrustedPrincipal};
-use nexus_common::principal_context::log_principal;
+use konductor_common::api;
+use konductor_common::error::{ControlPlaneError, ValidationExceptionReason};
+use konductor_common::grant::ResourceRole;
+use konductor_common::grant_engine::has_role_binding;
+use konductor_common::grant_store::BindingStore;
+use konductor_common::models::ApiError;
+use konductor_common::principal::{GlobalRole, TrustedPrincipal};
+use konductor_common::principal_context::log_principal;
 
 use crate::catalog::{self, CatalogQuery, Cursor, Scope};
 use crate::sources::CallerSources;
@@ -106,8 +106,10 @@ async fn resolve_sources(
     entitlements_table: &str,
     scope: &Scope,
     producer: Option<&str>,
-) -> Result<std::collections::BTreeMap<String, Vec<nexus_common::entitlement::ScopePattern>>, Value>
-{
+) -> Result<
+    std::collections::BTreeMap<String, Vec<konductor_common::entitlement::ScopePattern>>,
+    Value,
+> {
     let result = match scope {
         Scope::Consumer(consumer) => {
             CallerSources::for_consumer(ddb, entitlements_table, consumer, producer).await
@@ -251,10 +253,10 @@ mod tests {
     use chrono::Utc;
     use lambda_runtime::Context as LambdaContext;
 
-    use nexus_common::entitlement::{Entitlement, ScopePattern};
-    use nexus_common::entitlement_store::entitlement_to_item;
-    use nexus_common::grant::{BindingPrincipal, RoleBinding};
-    use nexus_common::grant_store::binding_to_item;
+    use konductor_common::entitlement::{Entitlement, ScopePattern};
+    use konductor_common::entitlement_store::entitlement_to_item;
+    use konductor_common::grant::{BindingPrincipal, RoleBinding};
+    use konductor_common::grant_store::binding_to_item;
 
     fn set_env() {
         std::env::set_var("ORGANIZATION", "acme");
@@ -365,12 +367,14 @@ mod tests {
             })
             .then_output(move || {
                 GetItemOutput::builder()
-                    .item("domainName", nexus_common::dynamodb::s(domain))
-                    .item("status", nexus_common::dynamodb::s("ACTIVE"))
+                    .item("domainName", konductor_common::dynamodb::s(domain))
+                    .item("status", konductor_common::dynamodb::s("ACTIVE"))
                     .item(
                         "environments",
                         AttributeValue::L(
-                            envs.iter().map(|e| nexus_common::dynamodb::s(e)).collect(),
+                            envs.iter()
+                                .map(|e| konductor_common::dynamodb::s(e))
+                                .collect(),
                         ),
                     )
                     .build()
@@ -819,12 +823,15 @@ mod tests {
             let item = HashMap::from([
                 (
                     "domainName".to_string(),
-                    nexus_common::dynamodb::s("orders"),
+                    konductor_common::dynamodb::s("orders"),
                 ),
-                ("status".to_string(), nexus_common::dynamodb::s("ACTIVE")),
+                (
+                    "status".to_string(),
+                    konductor_common::dynamodb::s("ACTIVE"),
+                ),
                 (
                     "environments".to_string(),
-                    AttributeValue::L(vec![nexus_common::dynamodb::s("prod")]),
+                    AttributeValue::L(vec![konductor_common::dynamodb::s("prod")]),
                 ),
             ]);
             aws_sdk_dynamodb::operation::scan::ScanOutput::builder()

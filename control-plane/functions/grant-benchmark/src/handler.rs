@@ -13,11 +13,11 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use nexus_common::entitlement_store::EntitlementStore;
-use nexus_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
-use nexus_common::grant_engine::{actions, DynamoGrantEngine};
-use nexus_common::grant_store::{binding_to_item, BindingStore};
-use nexus_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
+use konductor_common::entitlement_store::EntitlementStore;
+use konductor_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
+use konductor_common::grant_engine::{actions, DynamoGrantEngine};
+use konductor_common::grant_store::{binding_to_item, BindingStore};
+use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
 
 const BENCH_DOMAIN: &str = "benchmark-domain";
 const BENCH_ISSUER: &str = "https://benchmark.invalid";
@@ -228,8 +228,8 @@ async fn cleanup_fixtures(
     for binding in fixtures {
         ddb.delete_item()
             .table_name(table)
-            .key("PK", nexus_common::dynamodb::s(&binding.pk()))
-            .key("SK", nexus_common::dynamodb::s(&binding.sk()))
+            .key("PK", konductor_common::dynamodb::s(&binding.pk()))
+            .key("SK", konductor_common::dynamodb::s(&binding.sk()))
             .send()
             .await
             .context("remove fixture binding")?;

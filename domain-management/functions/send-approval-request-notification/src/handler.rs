@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use aws_sdk_sesv2::error::ProvideErrorMetadata;
 use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
+use konductor_common::dynamodb::s;
+use konductor_common::html::escape;
 use lambda_runtime::{Error, LambdaEvent};
-use nexus_common::dynamodb::s;
-use nexus_common::html::escape;
 use serde_json::Value;
 use std::env;
 
@@ -147,7 +147,7 @@ async fn send_approval_email(
     {
         if e.as_service_error()
             .and_then(ProvideErrorMetadata::code)
-            .is_some_and(nexus_common::ses::is_permanent_failure)
+            .is_some_and(konductor_common::ses::is_permanent_failure)
         {
             tracing::error!(error = %e, "permanent SES failure, acknowledging without retry");
             return Ok(());

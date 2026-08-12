@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use std::env;
 
-use nexus_common::dynamodb::{get_s, get_string_list, s};
-use nexus_common::models::DomainStatus;
+use konductor_common::dynamodb::{get_s, get_string_list, s};
+use konductor_common::models::DomainStatus;
 
 pub struct ActiveDomain {
     pub environments: Vec<String>,

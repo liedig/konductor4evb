@@ -1,18 +1,18 @@
 declare module '#app' {
   interface NuxtApp {
-    $nexusConfig: NexusConfig
+    $konductorConfig: KonductorConfig
   }
 }
 
 /** Runtime configuration served from `/config.json`, written by `make deploy-web`. */
-export interface NexusConfig {
+export interface KonductorConfig {
   apiBaseUrl: string
   userPoolId: string
   userPoolClientId: string
   region: string
 }
 
-export function parseNexusConfig(raw: unknown): NexusConfig {
+export function parseKonductorConfig(raw: unknown): KonductorConfig {
   if (typeof raw !== 'object' || raw === null) {
     throw new Error('config.json is not an object')
   }

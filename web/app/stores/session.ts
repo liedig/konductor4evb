@@ -4,7 +4,7 @@ import { defineStore } from 'pinia'
 /**
  * Session/identity store — the only Pinia state in the app (design.md,
  * decision 5). Group handling mirrors the backend principal contract
- * (nexus-common `principal.rs`): the controlled groups `platform-admin` and
+ * (konductor-common `principal.rs`): the controlled groups `platform-admin` and
  * `platform-auditor` are global roles; every other group is a team group.
  */
 

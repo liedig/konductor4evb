@@ -1,16 +1,16 @@
 use anyhow::{Context, Result};
 use aws_sdk_dynamodb::types::AttributeValue;
-use lambda_runtime::{Error, LambdaEvent};
-use nexus_common::api;
-use nexus_common::domain_scope::is_full_visibility;
-use nexus_common::dynamodb::{
+use konductor_common::api;
+use konductor_common::domain_scope::is_full_visibility;
+use konductor_common::dynamodb::{
     attr_to_resource_arns_map, attr_to_string_map, get_s, get_string_list, get_string_set, s,
 };
-use nexus_common::error::ControlPlaneError;
-use nexus_common::grant::ResourceRole;
-use nexus_common::grant_engine;
-use nexus_common::grant_store::BindingStore;
-use nexus_common::principal_context::log_principal;
+use konductor_common::error::ControlPlaneError;
+use konductor_common::grant::ResourceRole;
+use konductor_common::grant_engine;
+use konductor_common::grant_store::BindingStore;
+use konductor_common::principal_context::log_principal;
+use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
@@ -43,7 +43,7 @@ async fn fetch_domain(
     table: &str,
     bindings_table: &str,
     event: &Value,
-    principal: &nexus_common::principal::TrustedPrincipal,
+    principal: &konductor_common::principal::TrustedPrincipal,
 ) -> Value {
     let domain_name = match api::path_param(event, "domainName") {
         Some(name) => name,
@@ -136,7 +136,7 @@ mod tests {
     use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
     use aws_sdk_dynamodb::types::AttributeValue;
     use aws_smithy_mocks::{mock, mock_client};
-    use nexus_common::principal::TrustedPrincipal;
+    use konductor_common::principal::TrustedPrincipal;
     use std::collections::HashMap;
 
     const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";
@@ -153,7 +153,7 @@ mod tests {
             "admin-subject",
             ISSUER,
             "client-123",
-            vec![nexus_common::principal::GlobalRole::PlatformAdmin],
+            vec![konductor_common::principal::GlobalRole::PlatformAdmin],
             vec![],
         )
     }

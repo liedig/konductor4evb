@@ -5,9 +5,9 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde_json::Value;
 use std::env;
 
-use nexus_common::dynamodb::s;
-use nexus_common::html::escape;
-use nexus_common::ses::recipients_from_item;
+use konductor_common::dynamodb::s;
+use konductor_common::html::escape;
+use konductor_common::ses::recipients_from_item;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -89,7 +89,7 @@ pub async fn handle(
     {
         if e.as_service_error()
             .and_then(ProvideErrorMetadata::code)
-            .is_some_and(nexus_common::ses::is_permanent_failure)
+            .is_some_and(konductor_common::ses::is_permanent_failure)
         {
             tracing::error!(error = %e, "permanent SES failure, acknowledging without retry");
             return Ok(());

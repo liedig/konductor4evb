@@ -6,14 +6,14 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 
-use nexus_common::domain_scope::is_full_visibility;
-use nexus_common::dynamodb::{get_s, s, string_map_to_attr};
-use nexus_common::error::ControlPlaneError;
-use nexus_common::grant::ResourceRole;
-use nexus_common::grant_engine;
-use nexus_common::grant_store::BindingStore;
-use nexus_common::models::DomainStatus;
-use nexus_common::principal::TrustedPrincipal;
+use konductor_common::domain_scope::is_full_visibility;
+use konductor_common::dynamodb::{get_s, s, string_map_to_attr};
+use konductor_common::error::ControlPlaneError;
+use konductor_common::grant::ResourceRole;
+use konductor_common::grant_engine;
+use konductor_common::grant_store::BindingStore;
+use konductor_common::models::DomainStatus;
+use konductor_common::principal::TrustedPrincipal;
 
 /// IAM automation and platform roles update any domain; OAuth team callers
 /// update only domains their team groups own. Binding-store failures deny.
@@ -67,7 +67,7 @@ pub async fn handle(
     principal: &TrustedPrincipal,
 ) -> Result<()> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
-    let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
+    let cp_bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
     let domain_name = &message.domain_name;
 
     if !authorize_update(ddb, principal, domain_name).await {
@@ -297,7 +297,7 @@ mod tests {
     fn set_env() {
         env::set_var("DOMAINS_TABLE", "domains");
         env::set_var("BINDINGS_TABLE", "bindings");
-        env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+        env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
     }
 
     const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";

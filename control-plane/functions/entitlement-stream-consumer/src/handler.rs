@@ -21,8 +21,8 @@ use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
-use nexus_common::dynamodb::s;
-use nexus_common::error::ControlPlaneError;
+use konductor_common::dynamodb::s;
+use konductor_common::error::ControlPlaneError;
 
 pub const EVENT_SOURCE: &str = "nexus.control-plane";
 const MARKER_ITEM_TYPE: &str = "RevocationMarker";
@@ -47,7 +47,7 @@ impl Clients {
 pub async fn handle(clients: &Clients, event: LambdaEvent<Value>) -> Result<Value, Error> {
     let table = env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
     let queue_url = env::var("REVOCATION_QUEUE_URL").context("REVOCATION_QUEUE_URL not set")?;
-    let bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
+    let bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
 
     let records = event
         .payload
@@ -252,7 +252,7 @@ mod tests {
             "REVOCATION_QUEUE_URL",
             "https://sqs.us-east-1.amazonaws.com/123/revocations",
         );
-        std::env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
     }
 
     fn remove_record(event_id: &str, scope_pattern: &str) -> Value {

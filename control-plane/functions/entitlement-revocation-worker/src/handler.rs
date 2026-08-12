@@ -75,10 +75,10 @@ mod tests {
     use lambda_runtime::Context as LambdaContext;
 
     use crate::revoke::is_revocation_target;
-    use nexus_common::entitlement::{Entitlement, ScopePattern};
-    use nexus_common::entitlement_store::entitlement_to_item;
-    use nexus_common::streams::{EnvStream, EventStream, StreamStatus};
-    use nexus_common::streams_db::stream_to_item;
+    use konductor_common::entitlement::{Entitlement, ScopePattern};
+    use konductor_common::entitlement_store::entitlement_to_item;
+    use konductor_common::streams::{EnvStream, EventStream, StreamStatus};
+    use konductor_common::streams_db::stream_to_item;
 
     fn set_env() {
         std::env::set_var("EVENT_STREAMS_TABLE", "streams");

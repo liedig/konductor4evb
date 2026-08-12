@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use aws_sdk_sesv2::error::ProvideErrorMetadata;
 use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
+use konductor_common::dynamodb::s;
+use konductor_common::html::escape;
 use lambda_runtime::{Error, LambdaEvent};
-use nexus_common::dynamodb::s;
-use nexus_common::html::escape;
 use serde_json::Value;
 use std::env;
 
@@ -36,7 +36,7 @@ pub async fn handle(
         .item
         .context("domain record not found")?;
 
-    let recipients = nexus_common::ses::recipients_from_item(&item)
+    let recipients = konductor_common::ses::recipients_from_item(&item)
         .context("missing ownerEmail on domain record")?;
 
     let html_body = build_provisioning_failed_email_body(domain_name);
@@ -78,7 +78,7 @@ pub async fn handle(
     {
         if e.as_service_error()
             .and_then(ProvideErrorMetadata::code)
-            .is_some_and(nexus_common::ses::is_permanent_failure)
+            .is_some_and(konductor_common::ses::is_permanent_failure)
         {
             tracing::error!(error = %e, "permanent SES failure, acknowledging without retry");
             return Ok(());
