@@ -39,7 +39,7 @@ onMounted(async () => {
 <template>
   <div class="w-full max-w-sm">
     <div class="mb-8 text-center">
-      <img src="/brand/konductor-logo-dark-bg.svg" alt="Konductor for Amazon EventBridge" class="mx-auto h-12 w-auto" >
+      <img src="/brand/konductor-logo-dark-bg.svg" alt="Konductor for Amazon EventBridge" class="mx-auto h-20 w-auto" >
       <p class="mt-3 text-sm text-muted">Sign in to the control-plane console</p>
     </div>
     <form class="rounded-xl border border-border bg-surface p-6 shadow-sm" @submit.prevent="submit">
