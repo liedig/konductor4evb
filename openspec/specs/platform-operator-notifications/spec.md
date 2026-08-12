@@ -29,17 +29,17 @@ The platform SHALL provide an SNS topic named `konductor-platform-notifications`
 
 ### Requirement: Lifecycle event forwarding to operators
 
-All lifecycle events on the konductor bus SHALL be forwarded to the platform notifications topic by a single EventBridge rule matching `source` values with the prefix `konductor.` (covering `konductor.domain-management`, `konductor.event-streams`, and any future platform source). The rule SHALL use an input transformer producing a compact JSON message containing the detail-type, source, event time, and the full event detail, using only envelope fields guaranteed present on every event. The rule target SHALL carry a `DeadLetterConfig` referencing the EventBridge rule failure DLQ. A topic policy SHALL permit `events.amazonaws.com` to publish, scoped to the forwarding rule's ARN.
+All lifecycle events on the Konductor bus SHALL be forwarded to the platform notifications topic by a single EventBridge rule matching `source` values with the prefix `konductor.` (covering `konductor.domain-management`, `konductor.event-streams`, and any future platform source). The rule SHALL use an input transformer producing a compact JSON message containing the detail-type, source, event time, and the full event detail, using only envelope fields guaranteed present on every event. The rule target SHALL carry a `DeadLetterConfig` referencing the EventBridge rule failure DLQ. A topic policy SHALL permit `events.amazonaws.com` to publish, scoped to the forwarding rule's ARN.
 
 #### Scenario: Domain-management lifecycle event forwarded
 
-- **WHEN** any event with source `konductor.domain-management` (e.g. `DomainProvisioningSucceeded`, `DomainApprovalNotificationFailed`) is published to the konductor bus
+- **WHEN** any event with source `konductor.domain-management` (e.g. `DomainProvisioningSucceeded`, `DomainApprovalNotificationFailed`) is published to the Konductor bus
 - **THEN** the rule SHALL match and publish a message to `konductor-platform-notifications`
 - **AND THEN** the message SHALL contain the detail-type, source, event time, and full event detail
 
 #### Scenario: Event-streams lifecycle event forwarded
 
-- **WHEN** any event with source `konductor.event-streams` is published to the konductor bus
+- **WHEN** any event with source `konductor.event-streams` is published to the Konductor bus
 - **THEN** the rule SHALL match and publish a message to the topic without any per-detail-type configuration
 
 #### Scenario: Operator delivery independent of owner email path

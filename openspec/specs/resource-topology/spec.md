@@ -78,7 +78,7 @@ When a domain is provisioned, Konductor for Amazon EventBridge SHALL create the 
 
 ### Requirement: Subscription rules on platform domain buses
 
-Subscription rules SHALL live on the producer's platform-side domain event bus, one rule per subscription per environment, named `{consumerDomain}-{detailType}`. Rule patterns SHALL filter on the canonical envelope (`source`, `detail-type`, numeric `detail.metadata.schemaVersion` pinned per environment). Only the Konductor SHALL manage these rules. The `konductor-event-streams` DynamoDB table SHALL be the authoritative registry of subscription topology; the rules are its materialization.
+Subscription rules SHALL live on the producer's platform-side domain event bus, one rule per subscription per environment, named `{consumerDomain}-{detailType}`. Rule patterns SHALL filter on the canonical envelope (`source`, `detail-type`, numeric `detail.metadata.schemaVersion` pinned per environment). Only Konductor SHALL manage these rules. The `konductor-event-streams` DynamoDB table SHALL be the authoritative registry of subscription topology; the rules are its materialization.
 
 #### Scenario: Rule placement and naming
 
