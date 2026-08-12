@@ -60,3 +60,4 @@
 ## 9. Hardening follow-ups
 
 - [x] 9.1 Busy-state robustness: in-flight guards on submit/decide/save handlers (rapid clicks and Enter-resubmission can no longer double-fire while a request is in flight), and a 30s `AbortSignal.timeout` in `useApi` so a hung request surfaces a "request timed out" toast instead of holding the busy state forever. Verified live: spinner + disabled state render for the full SRP exchange; sign-in completes to the persona home.
+- [x] 9.2 Brand assets: Konductor logo (dark/light background variants) imported to `web/public/brand/`; dark variant placed in the layout header and login page (light variant staged for the future light theme, which is stubbed under `data-theme='light'`)

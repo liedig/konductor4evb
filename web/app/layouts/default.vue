@@ -26,8 +26,8 @@ async function logout() {
   <div class="min-h-screen">
     <header class="border-b border-border bg-surface">
       <div class="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-3">
-        <NuxtLink to="/" class="text-sm font-semibold tracking-wide">
-          Konductor <span class="text-accent">for Amazon EventBridge</span>
+        <NuxtLink to="/" class="shrink-0">
+          <img src="/brand/konductor-logo-dark-bg.svg" alt="Konductor for Amazon EventBridge" class="h-7 w-auto" >
         </NuxtLink>
         <nav class="flex items-center gap-1">
           <NuxtLink
