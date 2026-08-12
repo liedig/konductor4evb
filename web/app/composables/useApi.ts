@@ -56,8 +56,13 @@ export function useApi() {
         query: options.query,
         body: options.body as Record<string, unknown> | undefined,
         headers: { Authorization: `Bearer ${token}` },
+        // A request that never settles must not hold a page's busy state hostage.
+        signal: AbortSignal.timeout(30_000),
       })
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'TimeoutError') {
+        throw new ApiError(0, { code: 'RequestTimeout', message: 'The request timed out. Check your connection and try again.' })
+      }
       const status = error instanceof FetchError ? (error.status ?? 0) : 0
       if (status === 401 && !retried) {
         return request<T>(method, path, options, true)

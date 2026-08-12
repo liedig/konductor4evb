@@ -45,6 +45,7 @@ function startEdit() {
 }
 
 async function saveEdit() {
+  if (busy.value) return
   busy.value = true
   try {
     const tags = editForm.tags.split('\n').map(l => l.trim()).filter(Boolean)

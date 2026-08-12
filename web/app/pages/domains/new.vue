@@ -61,7 +61,7 @@ function parseTags(): Record<string, string> | undefined {
 }
 
 async function submit() {
-  if (!validate()) return
+  if (busy.value || !validate()) return
   busy.value = true
   try {
     accepted.value = await domainsApi.register({

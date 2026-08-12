@@ -15,6 +15,7 @@ const busy = ref(false)
 const GENERIC_ERROR = 'Invalid username or password.'
 
 async function submit() {
+  if (busy.value) return
   error.value = ''
   busy.value = true
   try {

@@ -37,7 +37,7 @@ async function load() {
 }
 
 async function decide(registration: PendingRegistration, decision: 'ACCEPT' | 'REJECT', reason?: string) {
-  if (!registration.taskToken || !registration.domainName) return
+  if (!registration.taskToken || !registration.domainName || busyName.value) return
   busyName.value = registration.domainName
   try {
     await approvals.decide({

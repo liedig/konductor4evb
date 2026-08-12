@@ -56,3 +56,7 @@
 - [x] 8.3 Verify end-to-end with seeded personas (alice: inbox-first; bob: domain-first, request → approve → catalog → grant → subscribe)
 - [x] 8.4 README web-console section; `openspec validate add-konductor-web-ui --strict` clean
 - [x] 8.5 Commit `feat(web): hosting stack and deploy workflow`
+
+## 9. Hardening follow-ups
+
+- [x] 9.1 Busy-state robustness: in-flight guards on submit/decide/save handlers (rapid clicks and Enter-resubmission can no longer double-fire while a request is in flight), and a 30s `AbortSignal.timeout` in `useApi` so a hung request surfaces a "request timed out" toast instead of holding the busy state forever. Verified live: spinner + disabled state render for the full SRP exchange; sign-in completes to the persona home.
