@@ -203,7 +203,7 @@ Ensure the trust-stack has been deployed to this account before approving.
 <tr><td><strong>Environments</strong></td><td>{environments_display}</td></tr>
 </table>
 <p style="margin-top:24px">
-  <a href="{approvals_url}">Open Pending approvals</a> in the EventBridge Nexus console
+  <a href="{approvals_url}">Open Pending approvals</a> in the EventBridge Konductor console
   to review and approve or reject this registration.
 </p>
 </body>

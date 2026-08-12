@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use konductor_common::dynamodb::s;
 use konductor_common::error::ControlPlaneError;
 
-pub const EVENT_SOURCE: &str = "nexus.control-plane";
+pub const EVENT_SOURCE: &str = "konductor.control-plane";
 const MARKER_ITEM_TYPE: &str = "RevocationMarker";
 const MARKER_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 
@@ -252,7 +252,7 @@ mod tests {
             "REVOCATION_QUEUE_URL",
             "https://sqs.us-east-1.amazonaws.com/123/revocations",
         );
-        std::env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
     }
 
     fn remove_record(event_id: &str, scope_pattern: &str) -> Value {

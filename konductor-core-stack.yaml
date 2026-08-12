@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: EventBridge Nexus
+Description: EventBridge Konductor
 
 Parameters:
   Environments:
@@ -18,19 +18,19 @@ Parameters:
     Default: "{org}-{env}-{domain}"
     Description: >
       Naming convention for domain resources (per-env buses, schema registries,
-      DLQs, dashboards, alarms). Does not apply to Nexus platform resources,
-      which use the fixed {org}-nexus-* pattern.
+      DLQs, dashboards, alarms). Does not apply to Konductor platform resources,
+      which use the fixed {org}-konductor-* pattern.
   AwsOrganizationArn:
     Type: String
     Description: >-
       ARN of the AWS Organization used for RAM sharing of domain namespaces
       (e.g., arn:aws:organizations::123456789012:organization/o-abc123).
       Distinct from the Organization parameter, which is the short org
-      identifier used in Nexus resource naming.
+      identifier used in Konductor resource naming.
   NotificationSenderEmail:
     Type: String
     Default: ""
-    Description: Verified SES sender address used as the From on all Nexus notification emails. Both this and PlatformOperatorEmail must be non-empty to deploy notification resources.
+    Description: Verified SES sender address used as the From on all Konductor notification emails. Both this and PlatformOperatorEmail must be non-empty to deploy notification resources.
   PlatformOperatorEmail:
     Type: String
     Default: ""
@@ -71,7 +71,7 @@ Globals:
         NAMESPACE_PATTERN: !Ref NamespacePattern
         DOMAINS_TABLE: !Ref DomainsTable
         EVENT_STREAMS_TABLE: !Ref EventStreamsTable
-        KONDUKTOR_EVENT_BUS: !Ref NexusEventBus
+        KONDUKTOR_EVENT_BUS: !Ref KonductorEventBus
         DOMAIN_REGISTRATIONS_QUEUE_URL: !Ref DomainRegistrationsQueue
 
 Conditions:
@@ -82,12 +82,12 @@ Conditions:
 
 Resources:
   # ---- EventBridge ----
-  NexusEventBus:
+  KonductorEventBus:
     Type: AWS::Events::EventBus
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      Name: !Sub "nexus-bus"
+      Name: !Sub "konductor-bus"
 
   # ---- DynamoDB ----
   DomainsTable:
@@ -95,7 +95,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TableName: !Sub "nexus-domains"
+      TableName: !Sub "konductor-domains"
       BillingMode: PAY_PER_REQUEST
       SSESpecification:
         SSEEnabled: true
@@ -135,7 +135,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TableName: !Sub "nexus-event-streams"
+      TableName: !Sub "konductor-event-streams"
       BillingMode: PAY_PER_REQUEST
       SSESpecification:
         SSEEnabled: true
@@ -175,7 +175,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TableName: !Sub "nexus-authorization-bindings"
+      TableName: !Sub "konductor-authorization-bindings"
       BillingMode: PAY_PER_REQUEST
       SSESpecification:
         SSEEnabled: true
@@ -221,7 +221,7 @@ Resources:
   BindingsTableReadPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub "nexus-bindings-table-read"
+      ManagedPolicyName: !Sub "konductor-bindings-table-read"
       Description: Read-only bindings-table access for grant-engine decision consumers
       PolicyDocument:
         Version: '2012-10-17'
@@ -242,7 +242,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      TableName: !Sub "nexus-authorization-entitlements"
+      TableName: !Sub "konductor-authorization-entitlements"
       BillingMode: PAY_PER_REQUEST
       SSESpecification:
         SSEEnabled: true
@@ -294,7 +294,7 @@ Resources:
   EntitlementsTableReadPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: !Sub "nexus-entitlements-table-read"
+      ManagedPolicyName: !Sub "konductor-entitlements-table-read"
       Description: Read-only entitlements-table access for coverage-decision consumers
       PolicyDocument:
         Version: '2012-10-17'
@@ -310,7 +310,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-lambda-failure-dlq"
+      QueueName: !Sub "konductor-lambda-failure-dlq"
       MessageRetentionPeriod: 1209600
 
   # ---- Shared DLQ for EventBridge rule delivery failures ----
@@ -319,7 +319,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-eventbridge-rule-failure-dlq"
+      QueueName: !Sub "konductor-eventbridge-rule-failure-dlq"
       MessageRetentionPeriod: 1209600
 
   EventBridgeRuleFailureDlqPolicy:
@@ -337,7 +337,7 @@ Resources:
             Resource: !GetAtt EventBridgeRuleFailureDlq.Arn
             Condition:
               ArnLike:
-                "aws:SourceArn": !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${NexusEventBus}/*"
+                "aws:SourceArn": !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${KonductorEventBus}/*"
 
   # ---- Command Queues ----
   DomainRegistrationsDlq:
@@ -345,7 +345,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-domain-registrations-dlq"
+      QueueName: !Sub "konductor-domain-registrations-dlq"
       MessageRetentionPeriod: 1209600
 
   DomainRegistrationsQueue:
@@ -353,7 +353,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-domain-registrations-queue"
+      QueueName: !Sub "konductor-domain-registrations-queue"
       VisibilityTimeout: 30
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt DomainRegistrationsDlq.Arn
@@ -364,7 +364,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-subscriptions-dlq"
+      QueueName: !Sub "konductor-subscriptions-dlq"
       MessageRetentionPeriod: 1209600
 
   SubscriptionsQueue:
@@ -372,7 +372,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-subscriptions-queue"
+      QueueName: !Sub "konductor-subscriptions-queue"
       VisibilityTimeout: 30
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt SubscriptionsDlq.Arn
@@ -383,7 +383,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-publish-dlq"
+      QueueName: !Sub "konductor-publish-dlq"
       MessageRetentionPeriod: 1209600
 
   PublishQueue:
@@ -391,7 +391,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-publish-queue"
+      QueueName: !Sub "konductor-publish-queue"
       VisibilityTimeout: 30
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt PublishDlq.Arn
@@ -402,7 +402,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-entitlement-revocation-dlq"
+      QueueName: !Sub "konductor-entitlement-revocation-dlq"
       MessageRetentionPeriod: 1209600
 
   EntitlementRevocationQueue:
@@ -410,7 +410,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      QueueName: !Sub "nexus-entitlement-revocation-queue"
+      QueueName: !Sub "konductor-entitlement-revocation-queue"
       # The worker disables rules across every candidate subscription; the
       # timeout must cover a bounded batch of EventBridge writes.
       VisibilityTimeout: 120
@@ -421,7 +421,7 @@ Resources:
   SubscriptionsDlqDepthAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "nexus-subscriptions-dlq-depth-alarm"
+      AlarmName: !Sub "konductor-subscriptions-dlq-depth-alarm"
       AlarmDescription: Subscription commands accumulating in the DLQ — inspect and replay
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
@@ -442,7 +442,7 @@ Resources:
   EntitlementRevocationDlqDepthAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "nexus-entitlement-revocation-dlq-depth-alarm"
+      AlarmName: !Sub "konductor-entitlement-revocation-dlq-depth-alarm"
       AlarmDescription: Revocation messages permanently failed — redrive after fixing the cause
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
@@ -459,7 +459,7 @@ Resources:
   EntitlementStreamConsumerIteratorAgeAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "nexus-entitlement-stream-consumer-iterator-age-alarm"
+      AlarmName: !Sub "konductor-entitlement-stream-consumer-iterator-age-alarm"
       AlarmDescription: Entitlement stream consumer falling behind — revocation notification delayed
       Namespace: AWS/Lambda
       MetricName: IteratorAge
@@ -476,7 +476,7 @@ Resources:
   EntitlementRevocationWorkerErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "nexus-entitlement-revocation-worker-errors-alarm"
+      AlarmName: !Sub "konductor-entitlement-revocation-worker-errors-alarm"
       AlarmDescription: Revocation worker invocations failing — messages retry; check logs before the DLQ fills
       Namespace: AWS/Lambda
       MetricName: Errors
@@ -500,15 +500,15 @@ Resources:
       FilterPattern: '{ $.fields.message = "sweep disabled uncovered*" }'
       MetricTransformations:
         - MetricName: EntitlementCoverageSweepDriftDisablements
-          MetricNamespace: Nexus/Entitlements
+          MetricNamespace: Konductor/Entitlements
           MetricValue: "1"
 
   EntitlementCoverageSweepDriftAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "nexus-entitlement-coverage-sweep-drift-alarm"
+      AlarmName: !Sub "konductor-entitlement-coverage-sweep-drift-alarm"
       AlarmDescription: Reconciliation sweep disabled drifted rules — a revocation missed the fast path
-      Namespace: Nexus/Entitlements
+      Namespace: Konductor/Entitlements
       MetricName: EntitlementCoverageSweepDriftDisablements
       Statistic: Sum
       Period: 3600
@@ -526,15 +526,15 @@ Resources:
       FilterPattern: '{ $.fields.message = "*deny*" || $.fields.message = "*denied*" }'
       MetricTransformations:
         - MetricName: SubscriptionAuthorizationDenials
-          MetricNamespace: Nexus/Entitlements
+          MetricNamespace: Konductor/Entitlements
           MetricValue: "1"
 
   SubscriptionAuthorizationDenialsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "nexus-subscription-authorization-denials-alarm"
+      AlarmName: !Sub "konductor-subscription-authorization-denials-alarm"
       AlarmDescription: Elevated subscription authorization denial rate — check seeding and client configuration
-      Namespace: Nexus/Entitlements
+      Namespace: Konductor/Entitlements
       MetricName: SubscriptionAuthorizationDenials
       Statistic: Sum
       Period: 300
@@ -549,7 +549,7 @@ Resources:
   CatalogLatencyAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "nexus-catalog-latency-alarm"
+      AlarmName: !Sub "konductor-catalog-latency-alarm"
       AlarmDescription: Catalog pages consistently slow — check registry quota contention or crawling callers
       Namespace: AWS/Lambda
       MetricName: Duration
@@ -569,7 +569,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/apigateway/nexus-api"
+      LogGroupName: !Sub "/aws/apigateway/konductor-api"
       RetentionInDays: 30
 
   ListDomainsLogGroup:
@@ -577,7 +577,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-list-domains"
+      LogGroupName: !Sub "/aws/lambda/konductor-list-domains"
       RetentionInDays: 30
 
   DescribeDomainLogGroup:
@@ -585,16 +585,16 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-describe-domain"
+      LogGroupName: !Sub "/aws/lambda/konductor-describe-domain"
       RetentionInDays: 30
 
   # ---- IAM ----
-  # Dedicated trust-anchor role referenced by trust-stack.yaml NexusRoleArn parameter.
+  # Dedicated trust-anchor role referenced by trust-stack.yaml KonductorRoleArn parameter.
   # Not used as a Lambda execution role; cross-account provisioning is handled by Step Functions.
-  NexusTrustAnchorRole:
+  KonductorTrustAnchorRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "nexus-function-role"
+      RoleName: !Sub "konductor-function-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -603,12 +603,12 @@ Resources:
               Service: lambda.amazonaws.com
             Action: sts:AssumeRole
 
-  NexusTrustAnchorPolicy:
+  KonductorTrustAnchorPolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: CrossAccountAssumeRole
       Roles:
-        - !Ref NexusTrustAnchorRole
+        - !Ref KonductorTrustAnchorRole
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -616,12 +616,12 @@ Resources:
             Action:
               - sts:AssumeRole
             Resource:
-              - !Sub "arn:aws:iam::*:role/${Organization}-nexus-trust-role"
+              - !Sub "arn:aws:iam::*:role/${Organization}-konductor-trust-role"
 
-  NexusApiSqsRole:
+  KonductorApiSqsRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "nexus-apigw-sqs-role"
+      RoleName: !Sub "konductor-apigw-sqs-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -630,12 +630,12 @@ Resources:
               Service: apigateway.amazonaws.com
             Action: sts:AssumeRole
 
-  NexusApiSqsPolicy:
+  KonductorApiSqsPolicy:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName: SendToDomainRegistrations
       Roles:
-        - !Ref NexusApiSqsRole
+        - !Ref KonductorApiSqsRole
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -653,7 +653,7 @@ Resources:
   SubscriptionDeliveryRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "nexus-subscription-delivery-role"
+      RoleName: !Sub "konductor-subscription-delivery-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -682,15 +682,15 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/apigateway/nexus-iam-api"
+      LogGroupName: !Sub "/aws/apigateway/konductor-iam-api"
       RetentionInDays: 30
 
-  NexusOAuthApi:
+  KonductorOAuthApi:
     Type: AWS::Serverless::Api
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      Name: !Sub "nexus-NexusOAuthApi"
+      Name: !Sub "konductor-KonductorOAuthApi"
       # Stages are environment selectors: SAM manages `dev`; `staging` and
       # `prod` are explicit AWS::ApiGateway::Stage resources below sharing the
       # same deployment.
@@ -731,12 +731,12 @@ Resources:
           Parameters:
             Location: ./api/openapi-oauth.yaml
 
-  NexusIamApi:
+  KonductorIamApi:
     Type: AWS::Serverless::Api
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      Name: !Sub "nexus-NexusIamApi"
+      Name: !Sub "konductor-KonductorIamApi"
       StageName: dev
       TracingEnabled: true
       EndpointConfiguration:
@@ -760,13 +760,13 @@ Resources:
   # Environment-named stages sharing each API's SAM-managed deployment
   # (!Ref <Api>.Deployment is SAM's referenceable property for the generated
   # AWS::ApiGateway::Deployment). Settings mirror the SAM-managed dev stage.
-  NexusOAuthApiStagingStage:
+  KonductorOAuthApiStagingStage:
     Type: AWS::ApiGateway::Stage
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      RestApiId: !Ref NexusOAuthApi
-      DeploymentId: !Ref NexusOAuthApi.Deployment
+      RestApiId: !Ref KonductorOAuthApi
+      DeploymentId: !Ref KonductorOAuthApi.Deployment
       StageName: staging
       TracingEnabled: true
       AccessLogSetting:
@@ -778,13 +778,13 @@ Resources:
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
 
-  NexusOAuthApiProdStage:
+  KonductorOAuthApiProdStage:
     Type: AWS::ApiGateway::Stage
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      RestApiId: !Ref NexusOAuthApi
-      DeploymentId: !Ref NexusOAuthApi.Deployment
+      RestApiId: !Ref KonductorOAuthApi
+      DeploymentId: !Ref KonductorOAuthApi.Deployment
       StageName: prod
       TracingEnabled: true
       AccessLogSetting:
@@ -796,13 +796,13 @@ Resources:
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
 
-  NexusIamApiStagingStage:
+  KonductorIamApiStagingStage:
     Type: AWS::ApiGateway::Stage
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      RestApiId: !Ref NexusIamApi
-      DeploymentId: !Ref NexusIamApi.Deployment
+      RestApiId: !Ref KonductorIamApi
+      DeploymentId: !Ref KonductorIamApi.Deployment
       StageName: staging
       TracingEnabled: true
       AccessLogSetting:
@@ -814,13 +814,13 @@ Resources:
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
 
-  NexusIamApiProdStage:
+  KonductorIamApiProdStage:
     Type: AWS::ApiGateway::Stage
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      RestApiId: !Ref NexusIamApi
-      DeploymentId: !Ref NexusIamApi.Deployment
+      RestApiId: !Ref KonductorIamApi
+      DeploymentId: !Ref KonductorIamApi.Deployment
       StageName: prod
       TracingEnabled: true
       AccessLogSetting:
@@ -833,12 +833,12 @@ Resources:
           ThrottlingRateLimit: 50
 
   # ---- Cognito Identity (interactive OAuth foundation) ----
-  NexusUserPool:
+  KonductorUserPool:
     Type: AWS::Cognito::UserPool
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      UserPoolName: !Sub "${Organization}-nexus-users"
+      UserPoolName: !Sub "${Organization}-konductor-users"
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
       MfaConfiguration: "OFF"
@@ -857,17 +857,17 @@ Resources:
           Required: true
           Mutable: true
 
-  NexusUserPoolDomain:
+  KonductorUserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain
     Properties:
-      Domain: !Sub "${Organization}-nexus-${AWS::AccountId}"
-      UserPoolId: !Ref NexusUserPool
+      Domain: !Sub "${Organization}-konductor-${AWS::AccountId}"
+      UserPoolId: !Ref KonductorUserPool
 
-  NexusUserPoolClient:
+  KonductorUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
     Properties:
-      UserPoolId: !Ref NexusUserPool
-      ClientName: !Sub "${Organization}-nexus-control-plane"
+      UserPoolId: !Ref KonductorUserPool
+      ClientName: !Sub "${Organization}-konductor-control-plane"
       GenerateSecret: false
       PreventUserExistenceErrors: ENABLED
       # SRP + refresh for custom (non-hosted-UI) login clients; USER_PASSWORD_AUTH
@@ -892,18 +892,18 @@ Resources:
         AccessToken: minutes
         IdToken: minutes
 
-  NexusPlatformAdminGroup:
+  KonductorPlatformAdminGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
       GroupName: platform-admin
-      UserPoolId: !Ref NexusUserPool
+      UserPoolId: !Ref KonductorUserPool
       Description: Platform administrators (global role; may administer domains and approve registrations)
 
-  NexusPlatformAuditorGroup:
+  KonductorPlatformAuditorGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties:
       GroupName: platform-auditor
-      UserPoolId: !Ref NexusUserPool
+      UserPoolId: !Ref KonductorUserPool
       Description: Platform auditors (global read-only role; cannot mutate or approve)
 
   OAuthAuthorizerLogGroup:
@@ -911,7 +911,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-oauth-authorizer"
+      LogGroupName: !Sub "/aws/lambda/konductor-oauth-authorizer"
       RetentionInDays: 30
 
   OAuthAuthorizerFunction:
@@ -920,15 +920,15 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-oauth-authorizer"
+      FunctionName: !Sub "konductor-oauth-authorizer"
       CodeUri: ./control-plane/functions/oauth-authorizer
       Handler: bootstrap
       Description: REQUEST authorizer validating Cognito access tokens for the interactive OAuth control-plane API
       Environment:
         Variables:
-          COGNITO_ISSUER: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}"
-          COGNITO_CLIENT_ID: !Ref NexusUserPoolClient
-          COGNITO_JWKS_URI: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}/.well-known/jwks.json"
+          COGNITO_ISSUER: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${KonductorUserPool}"
+          COGNITO_CLIENT_ID: !Ref KonductorUserPoolClient
+          COGNITO_JWKS_URI: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${KonductorUserPool}/.well-known/jwks.json"
 
   # ---- Domain Management Functions (Read) ----
   ListDomainsFunction:
@@ -937,7 +937,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-list-domains"
+      FunctionName: !Sub "konductor-list-domains"
       CodeUri: ./domain-management/functions/list-domains
       Handler: bootstrap
       DeadLetterQueue:
@@ -962,13 +962,13 @@ Resources:
         OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /domains
             Method: GET
         IamApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusIamApi
+            RestApiId: !Ref KonductorIamApi
             Path: /domains
             Method: GET
 
@@ -977,7 +977,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-pending-registrations"
+      LogGroupName: !Sub "/aws/lambda/konductor-pending-registrations"
       RetentionInDays: 30
 
   # The platform-admin approvals inbox. OAuth surface only: the response
@@ -989,7 +989,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-pending-registrations"
+      FunctionName: !Sub "konductor-pending-registrations"
       CodeUri: ./domain-management/functions/pending-registrations
       Handler: bootstrap
       DeadLetterQueue:
@@ -1006,7 +1006,7 @@ Resources:
         OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /domains/registrations/pending
             Method: GET
 
@@ -1016,7 +1016,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-describe-domain"
+      FunctionName: !Sub "konductor-describe-domain"
       CodeUri: ./domain-management/functions/describe-domain
       Handler: bootstrap
       DeadLetterQueue:
@@ -1039,13 +1039,13 @@ Resources:
         OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /domains/{domainName}
             Method: GET
         IamApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusIamApi
+            RestApiId: !Ref KonductorIamApi
             Path: /domains/{domainName}
             Method: GET
 
@@ -1054,7 +1054,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-domain-state"
+      LogGroupName: !Sub "/aws/lambda/konductor-domain-state"
       RetentionInDays: 30
 
   # Platform-managed enable/disable (ACTIVE <-> INACTIVE). The shallow
@@ -1065,7 +1065,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-domain-state"
+      FunctionName: !Sub "konductor-domain-state"
       CodeUri: ./domain-management/functions/domain-state
       Handler: bootstrap
       DeadLetterQueue:
@@ -1082,7 +1082,7 @@ Resources:
         OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /domains/{domainName}/state
             Method: POST
 
@@ -1092,7 +1092,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-list-subscriptions"
+      LogGroupName: !Sub "/aws/lambda/konductor-list-subscriptions"
       RetentionInDays: 30
 
   ListSubscriptionsFunction:
@@ -1101,7 +1101,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-list-subscriptions"
+      FunctionName: !Sub "konductor-list-subscriptions"
       CodeUri: ./event-streams/functions/list-subscriptions
       Handler: bootstrap
       DeadLetterQueue:
@@ -1124,13 +1124,13 @@ Resources:
         OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /subscriptions
             Method: GET
         IamApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusIamApi
+            RestApiId: !Ref KonductorIamApi
             Path: /subscriptions
             Method: GET
 
@@ -1139,7 +1139,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-describe-subscription"
+      LogGroupName: !Sub "/aws/lambda/konductor-describe-subscription"
       RetentionInDays: 30
 
   DescribeSubscriptionFunction:
@@ -1148,7 +1148,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-describe-subscription"
+      FunctionName: !Sub "konductor-describe-subscription"
       CodeUri: ./event-streams/functions/describe-subscription
       Handler: bootstrap
       DeadLetterQueue:
@@ -1170,13 +1170,13 @@ Resources:
         OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /subscriptions/{subscriptionId}
             Method: GET
         IamApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusIamApi
+            RestApiId: !Ref KonductorIamApi
             Path: /subscriptions/{subscriptionId}
             Method: GET
 
@@ -1185,7 +1185,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-list-schemas"
+      LogGroupName: !Sub "/aws/lambda/konductor-list-schemas"
       RetentionInDays: 30
 
   ListSchemasFunction:
@@ -1194,7 +1194,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-list-schemas"
+      FunctionName: !Sub "konductor-list-schemas"
       CodeUri: ./event-streams/functions/list-schemas
       Handler: bootstrap
       DeadLetterQueue:
@@ -1225,13 +1225,13 @@ Resources:
         OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /schemas
             Method: GET
         IamApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusIamApi
+            RestApiId: !Ref KonductorIamApi
             Path: /schemas
             Method: GET
 
@@ -1240,7 +1240,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-describe-schema"
+      LogGroupName: !Sub "/aws/lambda/konductor-describe-schema"
       RetentionInDays: 30
 
   DescribeSchemaFunction:
@@ -1249,7 +1249,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-describe-schema"
+      FunctionName: !Sub "konductor-describe-schema"
       CodeUri: ./event-streams/functions/describe-schema
       Handler: bootstrap
       DeadLetterQueue:
@@ -1278,13 +1278,13 @@ Resources:
         OAuthApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /schemas/{schemaName}
             Method: GET
         IamApi:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusIamApi
+            RestApiId: !Ref KonductorIamApi
             Path: /schemas/{schemaName}
             Method: GET
 
@@ -1294,7 +1294,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-domain-registrations"
+      LogGroupName: !Sub "/aws/lambda/konductor-domain-registrations"
       RetentionInDays: 30
 
   DomainRegistrationsFunction:
@@ -1303,7 +1303,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-domain-registrations"
+      FunctionName: !Sub "konductor-domain-registrations"
       CodeUri: ./domain-management/functions/domain-registrations
       Handler: bootstrap
       Environment:
@@ -1324,7 +1324,7 @@ Resources:
                 - !GetAtt AuthorizationBindingsTable.Arn
             - Effect: Allow
               Action: [events:PutEvents]
-              Resource: !GetAtt NexusEventBus.Arn
+              Resource: !GetAtt KonductorEventBus.Arn
             - Effect: Allow
               Action: [events:RemovePermission]
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
@@ -1348,7 +1348,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-subscriptions"
+      LogGroupName: !Sub "/aws/lambda/konductor-subscriptions"
       RetentionInDays: 30
 
   SubscriptionsFunction:
@@ -1357,7 +1357,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-subscriptions"
+      FunctionName: !Sub "konductor-subscriptions"
       CodeUri: ./event-streams/functions/subscriptions
       Handler: bootstrap
       Environment:
@@ -1381,7 +1381,7 @@ Resources:
                 - !Sub "${EventStreamsTable.Arn}/index/*"
             - Effect: Allow
               Action: [events:PutEvents]
-              Resource: !GetAtt NexusEventBus.Arn
+              Resource: !GetAtt KonductorEventBus.Arn
             - Effect: Allow
               Action: [events:EnableRule, events:DisableRule]
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${Organization}-*"
@@ -1408,7 +1408,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-publish-events"
+      LogGroupName: !Sub "/aws/lambda/konductor-publish-events"
       RetentionInDays: 30
   PublishEventsFunction:
     Type: AWS::Serverless::Function
@@ -1416,7 +1416,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-publish-events"
+      FunctionName: !Sub "konductor-publish-events"
       CodeUri: ./event-streams/functions/publish-events
       Handler: bootstrap
       Environment:
@@ -1455,7 +1455,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-schema-admin"
+      LogGroupName: !Sub "/aws/lambda/konductor-schema-admin"
       RetentionInDays: 30
   SchemaAdminFunction:
     Type: AWS::Serverless::Function
@@ -1463,7 +1463,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-schema-admin"
+      FunctionName: !Sub "konductor-schema-admin"
       CodeUri: ./event-streams/functions/schema-admin
       Handler: bootstrap
       Environment:
@@ -1488,25 +1488,25 @@ Resources:
         OAuthCreateSchema:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /schemas
             Method: POST
         IamCreateSchema:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusIamApi
+            RestApiId: !Ref KonductorIamApi
             Path: /schemas
             Method: POST
         OAuthAppendSchemaVersion:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /schemas/versions
             Method: POST
         IamAppendSchemaVersion:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusIamApi
+            RestApiId: !Ref KonductorIamApi
             Path: /schemas/versions
             Method: POST
 
@@ -1516,7 +1516,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-decide-registration"
+      LogGroupName: !Sub "/aws/lambda/konductor-decide-registration"
       RetentionInDays: 30
 
   DecideFunction:
@@ -1525,13 +1525,13 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-decide-registration"
+      FunctionName: !Sub "konductor-decide-registration"
       CodeUri: ./domain-management/functions/decide-registration
       Handler: bootstrap
       Environment:
         Variables:
           DOMAINS_TABLE: !Ref DomainsTable
-          KONDUKTOR_EVENT_BUS: !Ref NexusEventBus
+          KONDUKTOR_EVENT_BUS: !Ref KonductorEventBus
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
@@ -1545,7 +1545,7 @@ Resources:
         ApiPost:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /domains/registrations/decide
             Method: POST
 
@@ -1555,7 +1555,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-binding-admin"
+      LogGroupName: !Sub "/aws/lambda/konductor-binding-admin"
       RetentionInDays: 30
 
   BindingAdminFunction:
@@ -1564,7 +1564,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-binding-admin"
+      FunctionName: !Sub "konductor-binding-admin"
       CodeUri: ./control-plane/functions/binding-admin
       Handler: bootstrap
       Environment:
@@ -1594,19 +1594,19 @@ Resources:
         CreateBinding:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /bindings
             Method: POST
         ListBindings:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /bindings
             Method: GET
         RevokeBinding:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /bindings/{bindingId}
             Method: DELETE
 
@@ -1616,7 +1616,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-entitlement-admin"
+      LogGroupName: !Sub "/aws/lambda/konductor-entitlement-admin"
       RetentionInDays: 30
 
   EntitlementAdminFunction:
@@ -1625,7 +1625,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-entitlement-admin"
+      FunctionName: !Sub "konductor-entitlement-admin"
       CodeUri: ./control-plane/functions/entitlement-admin
       Handler: bootstrap
       Environment:
@@ -1664,19 +1664,19 @@ Resources:
         CreateEntitlement:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /entitlements
             Method: POST
         ListEntitlements:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /entitlements
             Method: GET
         RevokeEntitlement:
           Type: Api
           Properties:
-            RestApiId: !Ref NexusOAuthApi
+            RestApiId: !Ref KonductorOAuthApi
             Path: /entitlements/{entitlementId}
             Method: DELETE
 
@@ -1686,7 +1686,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-entitlement-stream-consumer"
+      LogGroupName: !Sub "/aws/lambda/konductor-entitlement-stream-consumer"
       RetentionInDays: 30
 
   EntitlementStreamConsumerFunction:
@@ -1695,7 +1695,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-entitlement-stream-consumer"
+      FunctionName: !Sub "konductor-entitlement-stream-consumer"
       CodeUri: ./control-plane/functions/entitlement-stream-consumer
       Handler: bootstrap
       Environment:
@@ -1719,7 +1719,7 @@ Resources:
             - Effect: Allow
               Action:
                 - events:PutEvents
-              Resource: !GetAtt NexusEventBus.Arn
+              Resource: !GetAtt KonductorEventBus.Arn
       Events:
         EntitlementsStream:
           Type: DynamoDB
@@ -1740,7 +1740,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-entitlement-revocation-worker"
+      LogGroupName: !Sub "/aws/lambda/konductor-entitlement-revocation-worker"
       RetentionInDays: 30
 
   EntitlementRevocationWorkerFunction:
@@ -1749,7 +1749,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-entitlement-revocation-worker"
+      FunctionName: !Sub "konductor-entitlement-revocation-worker"
       CodeUri: ./control-plane/functions/entitlement-revocation-worker
       Handler: bootstrap
       Timeout: 120
@@ -1772,7 +1772,7 @@ Resources:
               Resource:
                 - !GetAtt EventStreamsTable.Arn
                 - !Sub "${EventStreamsTable.Arn}/index/*"
-            # Revocation disables Nexus-managed rules; it never deletes them
+            # Revocation disables Konductor-managed rules; it never deletes them
             # and never touches consumer-side integration rules.
             - Effect: Allow
               Action:
@@ -1799,7 +1799,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-entitlement-coverage-sweep"
+      LogGroupName: !Sub "/aws/lambda/konductor-entitlement-coverage-sweep"
       RetentionInDays: 30
 
   EntitlementCoverageSweepFunction:
@@ -1808,7 +1808,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-entitlement-coverage-sweep"
+      FunctionName: !Sub "konductor-entitlement-coverage-sweep"
       CodeUri: ./control-plane/functions/entitlement-coverage-sweep
       Handler: bootstrap
       Timeout: 300
@@ -1833,7 +1833,7 @@ Resources:
           Type: Schedule
           Properties:
             Schedule: rate(1 hour)
-            Name: !Sub "nexus-entitlement-coverage-sweep"
+            Name: !Sub "konductor-entitlement-coverage-sweep"
             Description: Reconciliation backstop — disables subscriptions whose entitlement coverage lapsed
 
   # ---- Approval Notification Functions ----
@@ -1843,7 +1843,7 @@ Resources:
     UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-send-approval-request-notification"
+      LogGroupName: !Sub "/aws/lambda/konductor-send-approval-request-notification"
       RetentionInDays: 30
 
   SendApprovalRequestNotificationFunction:
@@ -1853,7 +1853,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-send-approval-request-notification"
+      FunctionName: !Sub "konductor-send-approval-request-notification"
       CodeUri: ./domain-management/functions/send-approval-request-notification
       Handler: bootstrap
       Environment:
@@ -1863,7 +1863,7 @@ Resources:
           PLATFORM_OPERATOR_EMAIL: !Ref PlatformOperatorEmail
           # The approval email links here instead of carrying decision URLs;
           # decisions happen in the authenticated console only.
-          WEB_CONSOLE_URL: !Sub "https://${NexusWebDistribution.DomainName}"
+          WEB_CONSOLE_URL: !Sub "https://${KonductorWebDistribution.DomainName}"
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
@@ -1885,7 +1885,7 @@ Resources:
     UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-send-approval-outcome-notification"
+      LogGroupName: !Sub "/aws/lambda/konductor-send-approval-outcome-notification"
       RetentionInDays: 30
 
   SendApprovalOutcomeNotificationFunction:
@@ -1895,7 +1895,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-send-approval-outcome-notification"
+      FunctionName: !Sub "konductor-send-approval-outcome-notification"
       CodeUri: ./domain-management/functions/send-approval-outcome-notification
       Handler: bootstrap
       Environment:
@@ -1917,7 +1917,7 @@ Resources:
     UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-send-rejection-outcome-notification"
+      LogGroupName: !Sub "/aws/lambda/konductor-send-rejection-outcome-notification"
       RetentionInDays: 30
 
   SendRejectionOutcomeNotificationFunction:
@@ -1927,7 +1927,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-send-rejection-outcome-notification"
+      FunctionName: !Sub "konductor-send-rejection-outcome-notification"
       CodeUri: ./domain-management/functions/send-rejection-outcome-notification
       Handler: bootstrap
       Environment:
@@ -1949,7 +1949,7 @@ Resources:
     UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-send-provisioning-failed-notification"
+      LogGroupName: !Sub "/aws/lambda/konductor-send-provisioning-failed-notification"
       RetentionInDays: 30
 
   SendProvisioningFailedNotificationFunction:
@@ -1959,7 +1959,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-send-provisioning-failed-notification"
+      FunctionName: !Sub "konductor-send-provisioning-failed-notification"
       CodeUri: ./domain-management/functions/send-provisioning-failed-notification
       Handler: bootstrap
       Environment:
@@ -1985,7 +1985,7 @@ Resources:
     UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-send-registration-failed-notification"
+      LogGroupName: !Sub "/aws/lambda/konductor-send-registration-failed-notification"
       RetentionInDays: 30
 
   SendRegistrationFailedNotificationFunction:
@@ -1995,7 +1995,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-send-registration-failed-notification"
+      FunctionName: !Sub "konductor-send-registration-failed-notification"
       CodeUri: ./domain-management/functions/send-registration-failed-notification
       Handler: bootstrap
       Environment:
@@ -2017,7 +2017,7 @@ Resources:
     UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-send-provisioning-succeeded-notification"
+      LogGroupName: !Sub "/aws/lambda/konductor-send-provisioning-succeeded-notification"
       RetentionInDays: 30
 
   SendProvisioningSucceededNotificationFunction:
@@ -2027,7 +2027,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-send-provisioning-succeeded-notification"
+      FunctionName: !Sub "konductor-send-provisioning-succeeded-notification"
       CodeUri: ./domain-management/functions/send-provisioning-succeeded-notification
       Handler: bootstrap
       Environment:
@@ -2053,7 +2053,7 @@ Resources:
     UpdateReplacePolicy: Delete
     Condition: NotificationsEnabled
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-send-registration-delayed-notification"
+      LogGroupName: !Sub "/aws/lambda/konductor-send-registration-delayed-notification"
       RetentionInDays: 30
 
   SendRegistrationDelayedNotificationFunction:
@@ -2063,7 +2063,7 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-send-registration-delayed-notification"
+      FunctionName: !Sub "konductor-send-registration-delayed-notification"
       CodeUri: ./domain-management/functions/send-registration-delayed-notification
       Handler: bootstrap
       Environment:
@@ -2088,13 +2088,13 @@ Resources:
     Type: AWS::Events::Rule
     Condition: NotificationsEnabled
     Properties:
-      Name: !Sub "nexus-domain-registration-approved"
-      EventBusName: !Ref NexusEventBus
+      Name: !Sub "konductor-domain-registration-approved"
+      EventBusName: !Ref KonductorEventBus
       EventPattern:
         detail-type:
           - DomainRegistrationApproved
         source:
-          - nexus.domain-management
+          - konductor.domain-management
       Targets:
         - Id: SendApprovalOutcomeNotificationTarget
           Arn: !GetAtt SendApprovalOutcomeNotificationFunction.Arn
@@ -2114,13 +2114,13 @@ Resources:
     Type: AWS::Events::Rule
     Condition: NotificationsEnabled
     Properties:
-      Name: !Sub "nexus-domain-registration-rejected"
-      EventBusName: !Ref NexusEventBus
+      Name: !Sub "konductor-domain-registration-rejected"
+      EventBusName: !Ref KonductorEventBus
       EventPattern:
         detail-type:
           - DomainRegistrationRejected
         source:
-          - nexus.domain-management
+          - konductor.domain-management
       Targets:
         - Id: SendRejectionNotificationTarget
           Arn: !GetAtt SendRejectionOutcomeNotificationFunction.Arn
@@ -2140,13 +2140,13 @@ Resources:
     Type: AWS::Events::Rule
     Condition: NotificationsEnabled
     Properties:
-      Name: !Sub "nexus-domain-provisioning-failed"
-      EventBusName: !Ref NexusEventBus
+      Name: !Sub "konductor-domain-provisioning-failed"
+      EventBusName: !Ref KonductorEventBus
       EventPattern:
         detail-type:
           - DomainProvisioningFailed
         source:
-          - nexus.domain-management
+          - konductor.domain-management
       Targets:
         - Id: SendProvisioningFailedNotificationTarget
           Arn: !GetAtt SendProvisioningFailedNotificationFunction.Arn
@@ -2166,13 +2166,13 @@ Resources:
     Type: AWS::Events::Rule
     Condition: NotificationsEnabled
     Properties:
-      Name: !Sub "nexus-domain-registration-failed"
-      EventBusName: !Ref NexusEventBus
+      Name: !Sub "konductor-domain-registration-failed"
+      EventBusName: !Ref KonductorEventBus
       EventPattern:
         detail-type:
           - RegisterDomainFailed
         source:
-          - nexus.domain-management
+          - konductor.domain-management
       Targets:
         - Id: SendRegistrationFailedNotificationTarget
           Arn: !GetAtt SendRegistrationFailedNotificationFunction.Arn
@@ -2192,13 +2192,13 @@ Resources:
     Type: AWS::Events::Rule
     Condition: NotificationsEnabled
     Properties:
-      Name: !Sub "nexus-domain-provisioning-succeeded"
-      EventBusName: !Ref NexusEventBus
+      Name: !Sub "konductor-domain-provisioning-succeeded"
+      EventBusName: !Ref KonductorEventBus
       EventPattern:
         detail-type:
           - DomainProvisioningSucceeded
         source:
-          - nexus.domain-management
+          - konductor.domain-management
       Targets:
         - Id: SendProvisioningSucceededNotificationTarget
           Arn: !GetAtt SendProvisioningSucceededNotificationFunction.Arn
@@ -2218,13 +2218,13 @@ Resources:
     Type: AWS::Events::Rule
     Condition: NotificationsEnabled
     Properties:
-      Name: !Sub "nexus-domain-approval-notification-failed"
-      EventBusName: !Ref NexusEventBus
+      Name: !Sub "konductor-domain-approval-notification-failed"
+      EventBusName: !Ref KonductorEventBus
       EventPattern:
         detail-type:
           - DomainApprovalNotificationFailed
         source:
-          - nexus.domain-management
+          - konductor.domain-management
       Targets:
         - Id: SendRegistrationDelayedNotificationTarget
           Arn: !GetAtt SendRegistrationDelayedNotificationFunction.Arn
@@ -2245,8 +2245,8 @@ Resources:
     Type: AWS::SNS::Topic
     Condition: NotificationsEnabled
     Properties:
-      TopicName: !Sub "nexus-platform-notifications"
-      DisplayName: Nexus Platform
+      TopicName: !Sub "konductor-platform-notifications"
+      DisplayName: Konductor Platform
 
   PlatformNotificationsTopicPolicy:
     Type: AWS::SNS::TopicPolicy
@@ -2276,18 +2276,18 @@ Resources:
       Protocol: email
       Endpoint: !Ref PlatformOperatorEmail
 
-  # Forwards every lifecycle event on the nexus bus to operators. The
+  # Forwards every lifecycle event on the konductor bus to operators. The
   # transformer references only envelope fields guaranteed present on all
   # events; a per-detail-type path would fail delivery for events lacking it.
   PlatformOperatorNotificationRule:
     Type: AWS::Events::Rule
     Condition: NotificationsEnabled
     Properties:
-      Name: !Sub "nexus-platform-operator-notifications"
-      EventBusName: !Ref NexusEventBus
+      Name: !Sub "konductor-platform-operator-notifications"
+      EventBusName: !Ref KonductorEventBus
       EventPattern:
         source:
-          - prefix: "nexus."
+          - prefix: "konductor."
       Targets:
         - Id: PlatformNotificationsTopicTarget
           Arn: !Ref PlatformNotificationsTopic
@@ -2308,7 +2308,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-finalize-approval"
+      LogGroupName: !Sub "/aws/lambda/konductor-finalize-approval"
       RetentionInDays: 30
 
   FinalizeApprovalFunction:
@@ -2317,14 +2317,14 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-finalize-approval"
+      FunctionName: !Sub "konductor-finalize-approval"
       CodeUri: ./domain-management/functions/finalize-approval
       Handler: bootstrap
       Environment:
         Variables:
           DOMAINS_TABLE: !Ref DomainsTable
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
-          COGNITO_ISSUER: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}"
+          COGNITO_ISSUER: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${KonductorUserPool}"
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
@@ -2343,7 +2343,7 @@ Resources:
   ApprovalWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "nexus-approval-workflow-role"
+      RoleName: !Sub "konductor-approval-workflow-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -2370,7 +2370,7 @@ Resources:
             Action:
               - events:PutEvents
             Resource:
-              - !GetAtt NexusEventBus.Arn
+              - !GetAtt KonductorEventBus.Arn
           - Effect: Allow
             Action:
               - lambda:InvokeFunction
@@ -2404,14 +2404,14 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "nexus-domain-approval"
+      Name: !Sub "konductor-domain-approval"
       Role: !GetAtt ApprovalWorkflowRole.Arn
       Tracing:
         Enabled: true
       DefinitionUri: ./domain-management/state-machines/approval.asl.yaml
       DefinitionSubstitutions:
         DomainsTable: !Ref DomainsTable
-        NexusEventBus: !GetAtt NexusEventBus.Arn
+        KonductorEventBus: !GetAtt KonductorEventBus.Arn
         FinalizeApprovalFunction: !GetAtt FinalizeApprovalFunction.Arn
         SendApprovalRequestNotificationFunction: !If
           - NotificationsEnabled
@@ -2421,7 +2421,7 @@ Resources:
   ProvisioningWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "nexus-provisioning-workflow-role"
+      RoleName: !Sub "konductor-provisioning-workflow-role"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -2451,7 +2451,7 @@ Resources:
           - Effect: Allow
             Action:
               - events:PutEvents
-            Resource: !GetAtt NexusEventBus.Arn
+            Resource: !GetAtt KonductorEventBus.Arn
           - Effect: Allow
             Action:
               - schemas:CreateRegistry
@@ -2487,7 +2487,7 @@ Resources:
             Action:
               - sts:AssumeRole
             Resource:
-              - !Sub "arn:aws:iam::*:role/${Organization}-nexus-trust-role"
+              - !Sub "arn:aws:iam::*:role/${Organization}-konductor-trust-role"
           - Effect: Allow
             Action:
               - ssm:PutParameter
@@ -2526,7 +2526,7 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "nexus-provision-env"
+      Name: !Sub "konductor-provision-env"
       Role: !GetAtt ProvisioningWorkflowRole.Arn
       Tracing:
         Enabled: true
@@ -2540,7 +2540,7 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "nexus-deprovision-env"
+      Name: !Sub "konductor-deprovision-env"
       Role: !GetAtt ProvisioningWorkflowRole.Arn
       Tracing:
         Enabled: true
@@ -2552,14 +2552,14 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "nexus-provision-domain"
+      Name: !Sub "konductor-provision-domain"
       Role: !GetAtt ProvisioningWorkflowRole.Arn
       Tracing:
         Enabled: true
       DefinitionUri: ./domain-management/state-machines/provision-domain.asl.yaml
       DefinitionSubstitutions:
         DomainsTable: !Ref DomainsTable
-        NexusEventBus: !GetAtt NexusEventBus.Arn
+        KonductorEventBus: !GetAtt KonductorEventBus.Arn
         Organization: !Ref Organization
         "AWS::Region": !Ref "AWS::Region"
         "AWS::AccountId": !Ref "AWS::AccountId"
@@ -2570,19 +2570,19 @@ Resources:
         DomainApproved:
           Type: EventBridgeRule
           Properties:
-            EventBusName: !Ref NexusEventBus
+            EventBusName: !Ref KonductorEventBus
             Pattern:
               detail-type:
                 - DomainRegistrationApproved
               source:
-                - nexus.domain-management
+                - konductor.domain-management
             DeadLetterConfig:
               Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
 
   SubscriptionWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "nexus-subscription-workflow-role"
+      RoleName: !Sub "konductor-subscription-workflow-role"
       ManagedPolicyArns:
         - !Ref EntitlementsTableReadPolicy
       AssumeRolePolicyDocument:
@@ -2613,7 +2613,7 @@ Resources:
           - Effect: Allow
             Action:
               - events:PutEvents
-            Resource: !GetAtt NexusEventBus.Arn
+            Resource: !GetAtt KonductorEventBus.Arn
           - Effect: Allow
             Action:
               - schemas:DescribeSchema
@@ -2650,7 +2650,7 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "nexus-activate-subscription"
+      Name: !Sub "konductor-activate-subscription"
       Role: !GetAtt SubscriptionWorkflowRole.Arn
       Tracing:
         Enabled: true
@@ -2658,7 +2658,7 @@ Resources:
       DefinitionSubstitutions:
         EventStreamsTable: !Ref EventStreamsTable
         EntitlementsTable: !Ref AuthorizationEntitlementsTable
-        NexusEventBus: !GetAtt NexusEventBus.Arn
+        KonductorEventBus: !GetAtt KonductorEventBus.Arn
         Organization: !Ref Organization
         SubscriptionDeliveryRoleArn: !GetAtt SubscriptionDeliveryRole.Arn
         "AWS::Region": !Ref "AWS::Region"
@@ -2668,24 +2668,24 @@ Resources:
     Type: AWS::Serverless::StateMachine
     Properties:
       Type: STANDARD
-      Name: !Sub "nexus-remove-subscription"
+      Name: !Sub "konductor-remove-subscription"
       Role: !GetAtt SubscriptionWorkflowRole.Arn
       Tracing:
         Enabled: true
       DefinitionUri: ./event-streams/state-machines/remove-subscription.asl.yaml
       DefinitionSubstitutions:
         EventStreamsTable: !Ref EventStreamsTable
-        NexusEventBus: !GetAtt NexusEventBus.Arn
+        KonductorEventBus: !GetAtt KonductorEventBus.Arn
         Organization: !Ref Organization
 
-  # --- Web console hosting (add-nexus-web-ui) --------------------------------
+  # --- Web console hosting (add-konductor-web-ui) --------------------------------
   # Static SPA: private S3 origin behind CloudFront (TLS, SPA fallback, strict
   # response headers). `make deploy-web` publishes the build and config.json.
 
-  NexusWebBucket:
+  KonductorWebBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${Organization}-nexus-web-${AWS::AccountId}-${AWS::Region}"
+      BucketName: !Sub "${Organization}-konductor-web-${AWS::AccountId}-${AWS::Region}"
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -2696,20 +2696,20 @@ Resources:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
 
-  NexusWebOriginAccessControl:
+  KonductorWebOriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
       OriginAccessControlConfig:
-        Name: !Sub "${Organization}-nexus-web"
+        Name: !Sub "${Organization}-konductor-web"
         OriginAccessControlOriginType: s3
         SigningBehavior: always
         SigningProtocol: sigv4
 
-  NexusWebResponseHeadersPolicy:
+  KonductorWebResponseHeadersPolicy:
     Type: AWS::CloudFront::ResponseHeadersPolicy
     Properties:
       ResponseHeadersPolicyConfig:
-        Name: !Sub "${Organization}-nexus-web"
+        Name: !Sub "${Organization}-konductor-web"
         SecurityHeadersConfig:
           StrictTransportSecurity:
             AccessControlMaxAgeSec: 31536000
@@ -2732,13 +2732,13 @@ Resources:
   # Rewrites client-side routes to index.html on the static behavior only.
   # Extension-bearing paths (/_nuxt/*.js, /config.json, /favicon.svg) pass
   # through; the /{stage}/* API behaviors never invoke this function.
-  NexusWebSpaFallbackFunction:
+  KonductorWebSpaFallbackFunction:
     Type: AWS::CloudFront::Function
     Properties:
-      Name: nexus-web-spa-fallback
+      Name: konductor-web-spa-fallback
       AutoPublish: true
       FunctionConfig:
-        Comment: SPA fallback for the Nexus web console
+        Comment: SPA fallback for the Konductor web console
         Runtime: cloudfront-js-2.0
       FunctionCode: |
         function handler(event) {
@@ -2753,25 +2753,25 @@ Resources:
           return request;
         }
 
-  NexusWebDistribution:
+  KonductorWebDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
-        Comment: Nexus web console
+        Comment: Konductor web console
         Enabled: true
         DefaultRootObject: index.html
         PriceClass: PriceClass_100
         Origins:
           - Id: s3-web
-            DomainName: !GetAtt NexusWebBucket.RegionalDomainName
-            OriginAccessControlId: !GetAtt NexusWebOriginAccessControl.Id
+            DomainName: !GetAtt KonductorWebBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt KonductorWebOriginAccessControl.Id
             S3OriginConfig:
               OriginAccessIdentity: ""
           # Same-origin API access: the console calls its own distribution at
           # /{stage}/*, which proxies to the OAuth API. This keeps the browser
           # same-origin (no CORS surface) and connect-src at 'self'.
           - Id: oauth-api
-            DomainName: !Sub "${NexusOAuthApi}.execute-api.${AWS::Region}.amazonaws.com"
+            DomainName: !Sub "${KonductorOAuthApi}.execute-api.${AWS::Region}.amazonaws.com"
             CustomOriginConfig:
               OriginProtocolPolicy: https-only
               OriginSSLProtocols: [TLSv1.2]
@@ -2781,14 +2781,14 @@ Resources:
           Compress: true
           # Managed CachingOptimized policy
           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
-          ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+          ResponseHeadersPolicyId: !Ref KonductorWebResponseHeadersPolicy
           # SPA fallback happens here (viewer-request) rather than in
           # CustomErrorResponses: distribution-level error pages would also
           # rewrite API errors from the /{stage}/* behaviors into 200 +
           # index.html, silently turning failed API calls into fake successes.
           FunctionAssociations:
             - EventType: viewer-request
-              FunctionARN: !GetAtt NexusWebSpaFallbackFunction.FunctionMetadata.FunctionARN
+              FunctionARN: !GetAtt KonductorWebSpaFallbackFunction.FunctionMetadata.FunctionARN
         CacheBehaviors:
           # config.json is rewritten by every deploy — never serve it stale.
           - PathPattern: /config.json
@@ -2797,7 +2797,7 @@ Resources:
             Compress: true
             # Managed CachingDisabled policy
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
-            ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+            ResponseHeadersPolicyId: !Ref KonductorWebResponseHeadersPolicy
           - PathPattern: /dev/*
             TargetOriginId: oauth-api
             ViewerProtocolPolicy: redirect-to-https
@@ -2807,7 +2807,7 @@ Resources:
             # derives the host from the origin domain)
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
-            ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+            ResponseHeadersPolicyId: !Ref KonductorWebResponseHeadersPolicy
           - PathPattern: /staging/*
             TargetOriginId: oauth-api
             ViewerProtocolPolicy: redirect-to-https
@@ -2815,7 +2815,7 @@ Resources:
             AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
-            ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+            ResponseHeadersPolicyId: !Ref KonductorWebResponseHeadersPolicy
           - PathPattern: /prod/*
             TargetOriginId: oauth-api
             ViewerProtocolPolicy: redirect-to-https
@@ -2823,57 +2823,57 @@ Resources:
             AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
-            ResponseHeadersPolicyId: !Ref NexusWebResponseHeadersPolicy
+            ResponseHeadersPolicyId: !Ref KonductorWebResponseHeadersPolicy
         ViewerCertificate:
           CloudFrontDefaultCertificate: true
           MinimumProtocolVersion: TLSv1.2_2021
 
-  NexusWebBucketPolicy:
+  KonductorWebBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
-      Bucket: !Ref NexusWebBucket
+      Bucket: !Ref KonductorWebBucket
       PolicyDocument:
         Statement:
           - Effect: Allow
             Principal:
               Service: cloudfront.amazonaws.com
             Action: s3:GetObject
-            Resource: !Sub "${NexusWebBucket.Arn}/*"
+            Resource: !Sub "${KonductorWebBucket.Arn}/*"
             Condition:
               StringEquals:
-                "AWS:SourceArn": !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${NexusWebDistribution}"
+                "AWS:SourceArn": !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${KonductorWebDistribution}"
 
 Outputs:
   OAuthApiEndpoint:
     Description: Interactive OAuth control-plane API endpoint (dev stage; swap for staging or prod to target another environment)
-    Value: !Sub "https://${NexusOAuthApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
+    Value: !Sub "https://${KonductorOAuthApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
   IamApiEndpoint:
     Description: AWS_IAM control-plane API endpoint for automation (dev stage; swap for staging or prod to target another environment)
-    Value: !Sub "https://${NexusIamApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
-  NexusUserPoolId:
+    Value: !Sub "https://${KonductorIamApi}.execute-api.${AWS::Region}.amazonaws.com/dev"
+  KonductorUserPoolId:
     Description: Cognito user pool backing interactive sign-in
-    Value: !Ref NexusUserPool
-  NexusUserPoolClientId:
+    Value: !Ref KonductorUserPool
+  KonductorUserPoolClientId:
     Description: Public user-pool client for SRP login from custom consoles
-    Value: !Ref NexusUserPoolClient
-  NexusWebUrl:
+    Value: !Ref KonductorUserPoolClient
+  KonductorWebUrl:
     Description: Web console URL (CloudFront distribution)
-    Value: !Sub "https://${NexusWebDistribution.DomainName}"
-  NexusWebBucketName:
+    Value: !Sub "https://${KonductorWebDistribution.DomainName}"
+  KonductorWebBucketName:
     Description: S3 bucket holding the web console build
-    Value: !Ref NexusWebBucket
-  NexusWebDistributionId:
+    Value: !Ref KonductorWebBucket
+  KonductorWebDistributionId:
     Description: CloudFront distribution ID for web console cache invalidation
-    Value: !Ref NexusWebDistribution
-  NexusEventBusArn:
-    Description: EventBridge Nexus event bus ARN
-    Value: !GetAtt NexusEventBus.Arn
+    Value: !Ref KonductorWebDistribution
+  KonductorEventBusArn:
+    Description: EventBridge Konductor event bus ARN
+    Value: !GetAtt KonductorEventBus.Arn
   DomainsTableName:
     Description: Domains DynamoDB table name
     Value: !Ref DomainsTable
-  NexusFunctionRoleArn:
-    Description: Trust-anchor role ARN (pass as NexusRoleArn to trust-stack.yaml)
-    Value: !GetAtt NexusTrustAnchorRole.Arn
+  KonductorFunctionRoleArn:
+    Description: Trust-anchor role ARN (pass as KonductorRoleArn to trust-stack.yaml)
+    Value: !GetAtt KonductorTrustAnchorRole.Arn
   ProvisioningWorkflowRoleArn:
     Description: Provisioning workflow role ARN (pass as ProvisioningWorkflowRoleArn to trust-stack.yaml)
     Value: !GetAtt ProvisioningWorkflowRole.Arn
@@ -2906,16 +2906,16 @@ Outputs:
     Value: !Ref DeprovisionEnvWorkflow
   CognitoUserPoolId:
     Description: Cognito user pool ID for interactive control-plane identity
-    Value: !Ref NexusUserPool
+    Value: !Ref KonductorUserPool
   CognitoUserPoolIssuer:
     Description: Issuer (iss) URL the OAuth authorizer validates tokens against
-    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}"
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${KonductorUserPool}"
   CognitoUserPoolClientId:
     Description: OAuth app client ID for the interactive control-plane client
-    Value: !Ref NexusUserPoolClient
+    Value: !Ref KonductorUserPoolClient
   CognitoJwksUri:
     Description: JWKS document URL used by the OAuth authorizer to verify token signatures
-    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${NexusUserPool}/.well-known/jwks.json"
+    Value: !Sub "https://cognito-idp.${AWS::Region}.amazonaws.com/${KonductorUserPool}/.well-known/jwks.json"
   CognitoOAuthDomain:
     Description: Hosted UI / OAuth endpoint base URL for the interactive sign-in experience
-    Value: !Sub "https://${NexusUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"
+    Value: !Sub "https://${KonductorUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com"

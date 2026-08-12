@@ -14,7 +14,7 @@
 # DRY_RUN=1 prints the BINDINGS payload without calling the API:
 #   DRY_RUN=1 DOMAIN_TEAMS='{"orders":"team-orders"}' ./scripts/backfill-owner-bindings.sh
 #
-# COGNITO_ISSUER defaults to https://cognito-idp.<region>.amazonaws.com/<NexusUserPoolId>.
+# COGNITO_ISSUER defaults to https://cognito-idp.<region>.amazonaws.com/<KonductorUserPoolId>.
 set -euo pipefail
 
 : "${DOMAIN_TEAMS:?DOMAIN_TEAMS is required (a JSON object mapping domain name to team group)}"
@@ -27,11 +27,11 @@ echo "${DOMAIN_TEAMS}" | jq -e 'type == "object" and length > 0' >/dev/null || {
 if [ -z "${COGNITO_ISSUER:-}" ]; then
   : "${AWS_REGION:?AWS_REGION is required when COGNITO_ISSUER is not set}"
   USER_POOL_ID=$(aws cloudformation describe-stacks \
-    --stack-name nexus-core \
-    --query "Stacks[0].Outputs[?OutputKey=='NexusUserPoolId'].OutputValue" \
+    --stack-name konductor-core \
+    --query "Stacks[0].Outputs[?OutputKey=='KonductorUserPoolId'].OutputValue" \
     --output text \
     --region "${AWS_REGION}")
-  : "${USER_POOL_ID:?could not resolve the Nexus user pool id}"
+  : "${USER_POOL_ID:?could not resolve the Konductor user pool id}"
   COGNITO_ISSUER="https://cognito-idp.${AWS_REGION}.amazonaws.com/${USER_POOL_ID}"
 fi
 

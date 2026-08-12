@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Seed the two development personas into the Nexus user pool:
+# Seed the two development personas into the Konductor user pool:
 #
 #   alice@example.com  platform-admin   (approvals inbox, enable/disable, full reads)
 #   bob@example.com    team-payments    (domain owner/member; scoped reads)
@@ -11,7 +11,7 @@
 # Usage:
 #   ALICE_PASSWORD='...' BOB_PASSWORD='...' ./scripts/seed-users.sh
 #
-# USER_POOL_ID defaults to the NexusUserPoolId output of the nexus-core
+# USER_POOL_ID defaults to the KonductorUserPoolId output of the konductor-core
 # stack (requires AWS_REGION and credentials with cloudformation:DescribeStacks).
 set -euo pipefail
 
@@ -21,12 +21,12 @@ set -euo pipefail
 if [ -z "${USER_POOL_ID:-}" ]; then
   : "${AWS_REGION:?AWS_REGION is required when USER_POOL_ID is not set}"
   USER_POOL_ID=$(aws cloudformation describe-stacks \
-    --stack-name nexus-core \
-    --query "Stacks[0].Outputs[?OutputKey=='NexusUserPoolId'].OutputValue" \
+    --stack-name konductor-core \
+    --query "Stacks[0].Outputs[?OutputKey=='KonductorUserPoolId'].OutputValue" \
     --output text \
     --region "${AWS_REGION}")
 fi
-: "${USER_POOL_ID:?could not resolve the Nexus user pool id}"
+: "${USER_POOL_ID:?could not resolve the Konductor user pool id}"
 
 ensure_group() {
   local group="$1"
@@ -71,4 +71,4 @@ ensure_group "platform-admin" >/dev/null 2>&1 || true
 ensure_user "alice@example.com" "${ALICE_PASSWORD}" "platform-admin"
 ensure_user "bob@example.com" "${BOB_PASSWORD}" "team-payments"
 
-echo "Done. Sign in with SRP against the NexusUserPoolClientId stack output; see docs/development/oauth-authentication-guide.md."
+echo "Done. Sign in with SRP against the KonductorUserPoolClientId stack output; see docs/development/oauth-authentication-guide.md."

@@ -188,7 +188,7 @@ async fn emit_succeeded(
     let status = DomainStatus::PendingApproval.to_string();
     let result = eb.put_events().entries(
         aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
-            .event_bus_name(cp_bus).source("nexus.domain-management").detail_type("RegisterDomainSucceeded")
+            .event_bus_name(cp_bus).source("konductor.domain-management").detail_type("RegisterDomainSucceeded")
             .detail(json!({"requestId": request_id, "domainName": request.domain_name, "ownerAccountId": request.owner_account_id, "ownerEmail": request.owner_email, "secondaryOwnerEmails": request.secondary_owner_emails, "status": status, "createdAt": created_at, "environments": environments}).to_string())
             .build(),
     ).send().await.map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
@@ -214,7 +214,7 @@ async fn emit_failed(
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .event_bus_name(cp_bus)
-                .source("nexus.domain-management")
+                .source("konductor.domain-management")
                 .detail_type("RegisterDomainFailed")
                 .detail(
                     json!({
@@ -282,7 +282,7 @@ fn validate_environment_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-const RESERVED_DOMAIN_NAMES: &[&str] = &["nexus"];
+const RESERVED_DOMAIN_NAMES: &[&str] = &["konductor"];
 
 pub(crate) fn validate_domain_name(name: &str) -> Result<(), ControlPlaneError> {
     if name.len() < 2 || name.len() > 64 {
@@ -364,8 +364,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_reserved_nexus_domain_name() {
-        let err = validate_domain_name("nexus").unwrap_err();
+    fn rejects_reserved_konductor_domain_name() {
+        let err = validate_domain_name("konductor").unwrap_err();
         assert!(
             err.to_string().to_lowercase().contains("reserved"),
             "error should mention reserved: {err}"
@@ -462,7 +462,7 @@ mod tests {
                 "APPROVAL_STATE_MACHINE_ARN",
                 "arn:aws:states:us-east-1:123:stateMachine:approval",
             );
-            env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
+            env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
             env::set_var("ENVIRONMENTS", "dev,staging,prod");
         }
 

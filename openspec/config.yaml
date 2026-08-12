@@ -16,9 +16,9 @@ context: |
   - **Domain**: A logical grouping of related events owned by a team; each domain has its own event buses, schema registry, DLQ, and monitoring
   - **Domain event buses**: EventBridge buses provisioned per domain in producer and platform accounts; consumers interact with domains, not individual buses
   - **Publish API**: Lets producers send events to a domain without knowing bus topology or cross-account routing
-  - **Subscribe/Unsubscribe APIs**: Let consumers connect to or disconnect from domain events; the Nexus creates/updates/deletes rules, IAM, and resource policies behind the scenes
+  - **Subscribe/Unsubscribe APIs**: Let consumers connect to or disconnect from domain events; the Konductor creates/updates/deletes rules, IAM, and resource policies behind the scenes
   - **Schema registry**: Per-domain registries storing event schemas, tracking versions, analyzing compatibility, and supporting consumer migration
-  - **Platform teams**: Manage domains, Nexus policies, and governance
+  - **Platform teams**: Manage domains, Konductor policies, and governance
   - **Application teams**: Use simple publish/subscribe APIs; do not manage EventBridge resources directly
 
   ## Conventions

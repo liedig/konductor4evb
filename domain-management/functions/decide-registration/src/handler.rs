@@ -76,7 +76,7 @@ pub async fn handle(sfn: &aws_sdk_sfn::Client, event: LambdaEvent<Value>) -> Res
                 },
             ),
             DecisionOutcome::Failed(msg) => {
-                tracing::error!(error = %msg, "nexus-domain-approval decision call failed");
+                tracing::error!(error = %msg, "konductor-domain-approval decision call failed");
                 api::error_response(
                     500,
                     ApiError {

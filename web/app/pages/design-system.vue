@@ -121,7 +121,7 @@ const statuses = ['ACTIVE', 'PENDING_APPROVAL', 'PROVISIONING', 'FAILED', 'INACT
     <NxCard title="Empty state">
       <NxEmptyState
         title="No domains yet"
-        body="Request a domain to start publishing events through the Nexus."
+        body="Request a domain to start publishing events through the Konductor."
       >
         <template #actions>
           <NxButton>Request a domain</NxButton>

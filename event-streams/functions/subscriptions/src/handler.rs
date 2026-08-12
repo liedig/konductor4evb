@@ -141,7 +141,7 @@ mod tests {
     fn set_env() {
         std::env::set_var("DOMAINS_TABLE", "domains");
         std::env::set_var("EVENT_STREAMS_TABLE", "streams");
-        std::env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
         std::env::set_var("ORGANIZATION", "acme");
         std::env::set_var("BINDINGS_TABLE", "bindings");
         std::env::set_var("ENTITLEMENTS_TABLE", "entitlements");

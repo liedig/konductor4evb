@@ -11,9 +11,9 @@ use std::path::PathBuf;
 
 /// Loads the core control-plane SAM template from the repository root.
 pub fn core_template() -> Value {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../nexus-core-stack.yaml");
-    let text = std::fs::read_to_string(&path).expect("read nexus-core-stack.yaml");
-    serde_yaml::from_str(&text).expect("parse nexus-core-stack.yaml")
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../konductor-core-stack.yaml");
+    let text = std::fs::read_to_string(&path).expect("read konductor-core-stack.yaml");
+    serde_yaml::from_str(&text).expect("parse konductor-core-stack.yaml")
 }
 
 /// Unwraps nested CloudFormation intrinsic tags to the underlying value.

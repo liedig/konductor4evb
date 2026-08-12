@@ -1,8 +1,8 @@
 openapi: "3.0.1"
 info:
-  title: EventBridge Nexus API
+  title: EventBridge Konductor API
   version: "1.0.0"
-  description: EventBridge Nexus — central integration platform for managing AWS EventBridge domains, subscriptions, and cross-account event routing.
+  description: EventBridge Konductor — central integration platform for managing AWS EventBridge domains, subscriptions, and cross-account event routing.
 
 # The stage is the environment selector: publish and schema write operations
 # infer the target environment from $context.stage. Environment-agnostic
@@ -54,7 +54,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainRegistrationsQueue.QueueName}"
         requestParameters:
@@ -316,7 +316,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainRegistrationsQueue.QueueName}"
         requestParameters:
@@ -374,7 +374,7 @@ paths:
       summary: Publish an event to a domain (store-and-forward)
       description: >
         Flat publish: the caller provides the domain, event name, and business
-        data; Nexus resolves the latest schema version, builds the canonical
+        data; Konductor resolves the latest schema version, builds the canonical
         envelope, and publishes to the domain's event bus for the
         stage-selected environment. The request is durably queued before
         processing; the 202 response carries the queue message ID.
@@ -408,7 +408,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${PublishQueue.QueueName}"
         requestParameters:
@@ -463,7 +463,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
         requestParameters:
@@ -626,7 +626,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
         requestParameters:
@@ -678,7 +678,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
         requestParameters:
@@ -776,7 +776,7 @@ paths:
       operationId: CreateSchema
       summary: Create an event schema (publisher)
       description: >
-        Flat schema creation mirroring EventBridge CreateSchema. Nexus derives
+        Flat schema creation mirroring EventBridge CreateSchema. Konductor derives
         the canonical schema name {namespaceIdentity}@{eventName}, targets the
         stage-selected environment's registry, and creates version 1. Requires
         a publisher binding for the domain. Schemas are append-only.

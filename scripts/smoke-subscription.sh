@@ -34,15 +34,15 @@ REGISTRY="${ORGANIZATION}-${ENV_NAME}-${PRODUCER_DOMAIN}-schema-registry"
 BUS="${ORGANIZATION}-${ENV_NAME}-${PRODUCER_DOMAIN}-event-bus"
 
 API_URL=$(aws cloudformation describe-stacks \
-  --stack-name nexus-core \
+  --stack-name konductor-core \
   --query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
   --output text --region "${AWS_REGION}")
-[ -n "${API_URL}" ] || { echo "nexus-core stack has no IamApiEndpoint output — deploy first" >&2; exit 1; }
+[ -n "${API_URL}" ] || { echo "konductor-core stack has no IamApiEndpoint output — deploy first" >&2; exit 1; }
 echo "API endpoint: ${API_URL}"
 
 echo ""
 echo "(1/8) Register schema ${SCHEMA_NAME} in every environment's registry"
-for REG_ENV in $(aws dynamodb get-item --table-name nexus-domains \
+for REG_ENV in $(aws dynamodb get-item --table-name konductor-domains \
   --key "{\"domainName\":{\"S\":\"${PRODUCER_DOMAIN}\"}}" \
   --region "${AWS_REGION}" --output json | jq -r '.Item.environments.L[].S'); do
   aws schemas create-schema \
@@ -133,7 +133,7 @@ echo "  record REMOVED, rule gone ✓"
 
 echo ""
 echo "(9/9) Clean up schema ${SCHEMA_NAME} from every environment's registry"
-for REG_ENV in $(aws dynamodb get-item --table-name nexus-domains \
+for REG_ENV in $(aws dynamodb get-item --table-name konductor-domains \
   --key "{\"domainName\":{\"S\":\"${PRODUCER_DOMAIN}\"}}" \
   --region "${AWS_REGION}" --output json | jq -r '.Item.environments.L[].S'); do
   aws schemas delete-schema \

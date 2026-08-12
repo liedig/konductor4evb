@@ -8,11 +8,14 @@ use support::{at, boolean, core_template, int, mapping, props, resource, seq, te
 fn cognito_identity_resources_exist() {
     let doc = core_template();
     for (logical_id, expected_type) in [
-        ("NexusUserPool", "AWS::Cognito::UserPool"),
-        ("NexusUserPoolDomain", "AWS::Cognito::UserPoolDomain"),
-        ("NexusUserPoolClient", "AWS::Cognito::UserPoolClient"),
-        ("NexusPlatformAdminGroup", "AWS::Cognito::UserPoolGroup"),
-        ("NexusPlatformAuditorGroup", "AWS::Cognito::UserPoolGroup"),
+        ("KonductorUserPool", "AWS::Cognito::UserPool"),
+        ("KonductorUserPoolDomain", "AWS::Cognito::UserPoolDomain"),
+        ("KonductorUserPoolClient", "AWS::Cognito::UserPoolClient"),
+        ("KonductorPlatformAdminGroup", "AWS::Cognito::UserPoolGroup"),
+        (
+            "KonductorPlatformAuditorGroup",
+            "AWS::Cognito::UserPoolGroup",
+        ),
     ] {
         assert_eq!(
             text(at(resource(&doc, logical_id), "Type")),
@@ -25,8 +28,8 @@ fn cognito_identity_resources_exist() {
 #[test]
 fn controlled_groups_use_exact_global_role_names() {
     let doc = core_template();
-    let admin = resource(&doc, "NexusPlatformAdminGroup");
-    let auditor = resource(&doc, "NexusPlatformAuditorGroup");
+    let admin = resource(&doc, "KonductorPlatformAdminGroup");
+    let auditor = resource(&doc, "KonductorPlatformAuditorGroup");
     assert_eq!(text(at(props(admin), "GroupName")), "platform-admin");
     assert_eq!(text(at(props(auditor), "GroupName")), "platform-auditor");
 }
@@ -34,7 +37,7 @@ fn controlled_groups_use_exact_global_role_names() {
 #[test]
 fn app_client_is_confidential_free_public_client() {
     let doc = core_template();
-    let client = resource(&doc, "NexusUserPoolClient");
+    let client = resource(&doc, "KonductorUserPoolClient");
     let p = props(client);
     assert!(
         !boolean(at(p, "GenerateSecret")),
@@ -47,7 +50,7 @@ fn app_client_is_confidential_free_public_client() {
 #[test]
 fn app_client_uses_authorization_code_flow_and_standard_scopes() {
     let doc = core_template();
-    let client = resource(&doc, "NexusUserPoolClient");
+    let client = resource(&doc, "KonductorUserPoolClient");
     let p = props(client);
     let flows: Vec<&str> = seq(at(p, "AllowedOAuthFlows")).iter().map(text).collect();
     assert_eq!(
@@ -64,7 +67,7 @@ fn app_client_uses_authorization_code_flow_and_standard_scopes() {
 #[test]
 fn access_token_lifetime_is_bounded_and_configurable() {
     let doc = core_template();
-    let client = resource(&doc, "NexusUserPoolClient");
+    let client = resource(&doc, "KonductorUserPoolClient");
     let p = props(client);
     assert_eq!(
         text(at(p, "AccessTokenValidity")),
@@ -84,9 +87,9 @@ fn access_token_lifetime_is_bounded_and_configurable() {
 #[test]
 fn client_is_bound_to_the_user_pool_and_urls_are_parameterized() {
     let doc = core_template();
-    let client = resource(&doc, "NexusUserPoolClient");
+    let client = resource(&doc, "KonductorUserPoolClient");
     let p = props(client);
-    assert_eq!(text(at(p, "UserPoolId")), "NexusUserPool");
+    assert_eq!(text(at(p, "UserPoolId")), "KonductorUserPool");
     assert_eq!(text(at(p, "CallbackURLs")), "OAuthCallbackUrls");
     assert_eq!(text(at(p, "LogoutURLs")), "OAuthLogoutUrls");
 }

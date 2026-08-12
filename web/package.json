@@ -1,5 +1,5 @@
 {
-  "name": "nexus-web",
+  "name": "konductor-web",
   "private": true,
   "type": "module",
   "scripts": {

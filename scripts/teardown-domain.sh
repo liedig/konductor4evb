@@ -3,7 +3,7 @@
 # smoke testing or ad-hoc experimentation. Not part of any deploy/CI path —
 # invoke it explicitly.
 #
-# Drives the same nexus-deprovision-env workflow the provisioning saga's own
+# Drives the same konductor-deprovision-env workflow the provisioning saga's own
 # rollback path uses, once per environment on the domain record, then deletes
 # the domain's DynamoDB record. Safe to re-run: deprovision-env is idempotent
 # ("already gone" is a no-op), and a missing domain record is treated as
@@ -16,7 +16,7 @@ set -euo pipefail
 : "${DOMAIN_NAME:?DOMAIN_NAME is required (the domain to tear down)}"
 
 ITEM=$(aws dynamodb get-item \
-  --table-name nexus-domains \
+  --table-name konductor-domains \
   --key "{\"domainName\":{\"S\":\"${DOMAIN_NAME}\"}}" \
   --region "${AWS_REGION}" \
   --output json | jq -r '.Item // empty')
@@ -29,7 +29,7 @@ fi
 OWNER_ACCOUNT=$(echo "${ITEM}" | jq -r '.ownerAccountId.S')
 ENVS=$(echo "${ITEM}" | jq -r '.environments.L[]?.S // empty')
 STATE_MACHINE_ARN=$(aws cloudformation describe-stacks \
-  --stack-name nexus-core \
+  --stack-name konductor-core \
   --query "Stacks[0].Outputs[?OutputKey=='DeprovisionEnvStateMachineArn'].OutputValue" \
   --output text \
   --region "${AWS_REGION}")
@@ -108,7 +108,7 @@ else
 fi
 
 aws dynamodb delete-item \
-  --table-name nexus-domains \
+  --table-name konductor-domains \
   --key "{\"domainName\":{\"S\":\"${DOMAIN_NAME}\"}}" \
   --region "${AWS_REGION}"
 

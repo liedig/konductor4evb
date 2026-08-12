@@ -16,9 +16,9 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
-      title: 'EventBridge Nexus',
+      title: 'EventBridge Konductor',
       meta: [
-        { name: 'description', content: 'EventBridge Nexus control-plane console' },
+        { name: 'description', content: 'EventBridge Konductor control-plane console' },
       ],
     },
   },

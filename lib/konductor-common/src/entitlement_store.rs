@@ -124,7 +124,7 @@ pub fn entitlement_audit_to_item(
 }
 
 impl EntitlementStore {
-    /// Builds a store against `table` (the `nexus-authorization-entitlements`
+    /// Builds a store against `table` (the `konductor-authorization-entitlements`
     /// table provisioned by the core stack).
     pub fn new(client: aws_sdk_dynamodb::Client, table: impl Into<String>) -> Self {
         Self {

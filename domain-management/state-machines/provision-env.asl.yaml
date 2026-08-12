@@ -114,7 +114,7 @@ States:
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
     Assign:
       appBus: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -146,7 +146,7 @@ States:
       Principal: "${AWS::AccountId}"
       StatementId: allow-platform-subscription-delivery
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: CreateIntegrationDlq
     Catch:
@@ -168,7 +168,7 @@ States:
     Arguments:
       QueueName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-integration-dlq' %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
     Assign:
       integrationDlq: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -375,7 +375,7 @@ States:
     Arguments:
       QueueUrl: "{% $integrationDlq.QueueUrl %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: CompensateAppEventBus
     Catch:
@@ -408,7 +408,7 @@ States:
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: CompensateDlqDepthAlarm
     Catch:

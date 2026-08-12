@@ -16,7 +16,7 @@ pub enum AuthenticationMechanism {
 
 /// A coarse, platform-wide role mapped from a controlled Cognito group.
 ///
-/// These are the only global roles Nexus recognizes at this foundation stage;
+/// These are the only global roles Konductor recognizes at this foundation stage;
 /// publisher and subscriber access is intentionally not represented here and is
 /// never inferred from team-group identifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

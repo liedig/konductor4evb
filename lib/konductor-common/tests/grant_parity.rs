@@ -246,7 +246,10 @@ fn oauth(groups: &[&str], global_roles: Vec<GlobalRole>) -> TrustedPrincipal {
 #[tokio::test]
 async fn s01_platform_admin_allowed_by_global_role_composition() {
     let bindings = manifest_bindings();
-    let admin = oauth(&["nexus-platform-admins"], vec![GlobalRole::PlatformAdmin]);
+    let admin = oauth(
+        &["konductor-platform-admins"],
+        vec![GlobalRole::PlatformAdmin],
+    );
     assert_parity(
         &bindings,
         &[],
@@ -262,7 +265,7 @@ async fn s01_platform_admin_allowed_by_global_role_composition() {
 async fn s02_platform_auditor_reads_but_cannot_administer() {
     let bindings = manifest_bindings();
     let auditor = oauth(
-        &["nexus-platform-auditors"],
+        &["konductor-platform-auditors"],
         vec![GlobalRole::PlatformAuditor],
     );
     assert_parity(
@@ -580,7 +583,9 @@ async fn iam_account_subscribe_parity_with_cognito_group() {
 
     let session = TrustedPrincipal::iam(
         "444455556666",
-        Some("arn:aws:sts::444455556666:assumed-role/nexus-subscriber/spike-session".to_string()),
+        Some(
+            "arn:aws:sts::444455556666:assumed-role/konductor-subscriber/spike-session".to_string(),
+        ),
     );
     assert_parity(
         &bindings,
@@ -689,7 +694,9 @@ async fn s11_cognito_group_and_aws_account_parity() {
 
     let session_principal = TrustedPrincipal::iam(
         "111122223333",
-        Some("arn:aws:sts::111122223333:assumed-role/nexus-publisher/spike-session".to_string()),
+        Some(
+            "arn:aws:sts::111122223333:assumed-role/konductor-publisher/spike-session".to_string(),
+        ),
     );
     assert_parity(
         &bindings,

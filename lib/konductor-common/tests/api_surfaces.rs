@@ -53,8 +53,8 @@ fn operations(doc: &Value) -> Vec<Op> {
 fn two_apis_serve_environment_named_stages() {
     let doc = core_template();
     for (logical_id, location) in [
-        ("NexusOAuthApi", "./api/openapi-oauth.yaml"),
-        ("NexusIamApi", "./api/openapi-iam.yaml"),
+        ("KonductorOAuthApi", "./api/openapi-oauth.yaml"),
+        ("KonductorIamApi", "./api/openapi-iam.yaml"),
     ] {
         let api = resource(&doc, logical_id);
         assert_eq!(text(at(api, "Type")), "AWS::Serverless::Api");
@@ -78,7 +78,7 @@ fn two_apis_serve_environment_named_stages() {
 #[test]
 fn oauth_api_attaches_request_authorizer_with_route_scoped_caching() {
     let doc = core_template();
-    let api = resource(&doc, "NexusOAuthApi");
+    let api = resource(&doc, "KonductorOAuthApi");
     let auth = at(props(api), "Auth");
     assert_eq!(
         text(at(auth, "DefaultAuthorizer")),
@@ -113,7 +113,7 @@ fn oauth_api_attaches_request_authorizer_with_route_scoped_caching() {
 #[test]
 fn iam_api_uses_aws_iam_authorization() {
     let doc = core_template();
-    let api = resource(&doc, "NexusIamApi");
+    let api = resource(&doc, "KonductorIamApi");
     let auth = at(props(api), "Auth");
     assert_eq!(text(at(auth, "DefaultAuthorizer")), "AWS_IAM");
 }
@@ -199,7 +199,7 @@ fn decide_function_is_oauth_post_only() {
     assert_eq!(events.len(), 1, "decide must have exactly one API event");
     let event = at(events.get("ApiPost").expect("ApiPost event"), "Properties");
     assert_eq!(text(at(event, "Method")), "POST");
-    assert_eq!(text(at(event, "RestApiId")), "NexusOAuthApi");
+    assert_eq!(text(at(event, "RestApiId")), "KonductorOAuthApi");
     assert!(
         events.get("ApiGet").is_none(),
         "bearer GET decide must be removed"
@@ -247,7 +247,7 @@ fn binding_admin_function_is_wired_to_the_oauth_surface_only() {
         let event_props = at(event, "Properties");
         assert_eq!(
             text(at(event_props, "RestApiId")),
-            "NexusOAuthApi",
+            "KonductorOAuthApi",
             "event {:?} must target the OAuth API",
             name
         );
@@ -733,7 +733,7 @@ fn entitlement_admin_function_is_wired_to_the_oauth_surface_only() {
         let event_props = at(event, "Properties");
         assert_eq!(
             text(at(event_props, "RestApiId")),
-            "NexusOAuthApi",
+            "KonductorOAuthApi",
             "event {:?} must target the OAuth API",
             name
         );
@@ -1193,7 +1193,7 @@ fn approval_workflow_finalizes_through_lambda_transaction() {
 #[test]
 fn user_pool_client_supports_srp_login() {
     let doc = core_template();
-    let client = resource(&doc, "NexusUserPoolClient");
+    let client = resource(&doc, "KonductorUserPoolClient");
     let flows: Vec<&str> = seq(at(props(client), "ExplicitAuthFlows"))
         .iter()
         .map(text)

@@ -2,7 +2,7 @@
 //! (EventBridge `CreateSchema` semantics) and `POST /schemas/versions`
 //! appends a version (`UpdateSchema` semantics) on both control-plane
 //! surfaces. The grant engine authorizes the publisher action for the target
-//! domain before any resource access; Nexus derives the canonical schema
+//! domain before any resource access; Konductor derives the canonical schema
 //! name and the stage-selected environment's registry. Schemas are
 //! append-only: no delete, retire, or historical-version replacement.
 

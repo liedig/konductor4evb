@@ -112,7 +112,7 @@ pub async fn is_currently_covered(ctx: &RevocationContext<'_>, stream: &EventStr
     }
 }
 
-/// Disables every enabled environment's Nexus-managed rule and flips its
+/// Disables every enabled environment's Konductor-managed rule and flips its
 /// persisted desired state. Idempotent: already-disabled environments are
 /// skipped, and rule identities, pinned versions, and the subscription
 /// record are retained. Returns the number of environments disabled.

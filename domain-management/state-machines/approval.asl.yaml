@@ -237,8 +237,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.domain-management
           DetailType: DomainRegistrationApproved
           Detail: >-
             {% $string({
@@ -266,8 +266,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.domain-management
           DetailType: DomainRegistrationRejected
           Detail: >-
             {% $string({
@@ -296,8 +296,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.domain-management
           DetailType: DomainApprovalNotificationFailed
           Detail: >-
             {% $string({

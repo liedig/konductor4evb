@@ -109,7 +109,7 @@ mod tests {
             "APPROVAL_STATE_MACHINE_ARN",
             "arn:aws:states:us-east-1:123:stateMachine:approval",
         );
-        std::env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
         std::env::set_var("ENVIRONMENTS", "dev,staging,prod");
     }
 

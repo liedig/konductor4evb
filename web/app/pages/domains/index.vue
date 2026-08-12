@@ -57,7 +57,7 @@ onMounted(loadMore)
     <NxEmptyState
       v-if="!pending && domains.length === 0 && !errorMessage"
       title="No domains yet"
-      body="Request a domain to start publishing and subscribing to events through the Nexus. Approval is a platform-team decision."
+      body="Request a domain to start publishing and subscribing to events through the Konductor. Approval is a platform-team decision."
     >
       <template #actions>
         <NuxtLink to="/domains/new">

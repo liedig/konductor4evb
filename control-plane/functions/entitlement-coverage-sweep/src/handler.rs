@@ -1,6 +1,6 @@
 //! Hourly reconciliation sweep: scans active subscriptions, re-evaluates
 //! each against the consumer domain's current entitlements, and disables any
-//! uncovered Nexus-managed rules via the worker's disable path.
+//! uncovered Konductor-managed rules via the worker's disable path.
 //!
 //! Unlike the revocation worker — which fails closed per candidate because a
 //! revocation already happened — the sweep must fail *safe*: an entitlement

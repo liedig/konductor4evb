@@ -284,8 +284,8 @@ States:
         JitterStrategy: FULL
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.domain-management
           DetailType: DomainProvisioningSucceeded
           Detail:
             domainName: "{% $states.input.detail.domainName %}"
@@ -356,8 +356,8 @@ States:
         JitterStrategy: FULL
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.domain-management
           DetailType: DomainProvisioningFailed
           Detail:
             domainName: "{% $states.input.detail.domainName %}"
@@ -390,8 +390,8 @@ States:
         JitterStrategy: FULL
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.domain-management
           DetailType: DomainProvisioningFailed
           Detail:
             domainName: "{% $states.input.detail.domainName %}"

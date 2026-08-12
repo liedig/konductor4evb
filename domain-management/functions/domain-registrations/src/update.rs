@@ -192,7 +192,7 @@ async fn emit_success(
 ) -> Result<()> {
     let result = eb.put_events().entries(
         aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
-            .event_bus_name(cp_bus).source("nexus.domain-management").detail_type("UpdateDomainSucceeded")
+            .event_bus_name(cp_bus).source("konductor.domain-management").detail_type("UpdateDomainSucceeded")
             .detail(json!({"domainName": domain_name, "updatedAt": now, "status": get_s(attrs, "status"), "changedFields": changed_fields}).to_string())
             .build(),
     ).send().await.map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
@@ -218,7 +218,7 @@ async fn emit_failed(
         .entries(
             aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
                 .event_bus_name(cp_bus)
-                .source("nexus.domain-management")
+                .source("konductor.domain-management")
                 .detail_type("UpdateDomainFailed")
                 .detail(
                     json!({
@@ -297,7 +297,7 @@ mod tests {
     fn set_env() {
         env::set_var("DOMAINS_TABLE", "domains");
         env::set_var("BINDINGS_TABLE", "bindings");
-        env::set_var("KONDUKTOR_EVENT_BUS", "nexus-bus");
+        env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
     }
 
     const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";

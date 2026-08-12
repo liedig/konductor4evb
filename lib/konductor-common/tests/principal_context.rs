@@ -209,7 +209,7 @@ fn log_principal_returns_iam_from_proxy_context() {
     let ctx = serde_json::json!({
         "identity": {
             "accountId": "111122223333",
-            "userArn": "arn:aws:sts::111122223333:assumed-role/nexus-trust-role/session"
+            "userArn": "arn:aws:sts::111122223333:assumed-role/konductor-trust-role/session"
         }
     });
     let principal = log_principal(&ctx).unwrap();

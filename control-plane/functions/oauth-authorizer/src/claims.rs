@@ -3,7 +3,7 @@ use serde::Deserialize;
 use crate::error::AuthorizerError;
 use konductor_common::principal::GlobalRole;
 
-/// The standard Cognito access-token claims Nexus consumes. Signature,
+/// The standard Cognito access-token claims Konductor consumes. Signature,
 /// expiration, and issuer are verified by the JWT layer; `token_use` and
 /// `client_id` are asserted here. ID tokens are never accepted.
 #[derive(Debug, Deserialize)]

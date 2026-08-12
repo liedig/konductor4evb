@@ -139,7 +139,7 @@ pub struct DecideRequest {
 }
 
 /// Flat publish request: the caller supplies the domain, event name, and
-/// business data — Nexus owns identity, schema resolution, envelope
+/// business data — Konductor owns identity, schema resolution, envelope
 /// construction, and bus selection. `deny_unknown_fields` rejects
 /// caller-supplied identity, version, registry, bus, or envelope fields.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -153,7 +153,7 @@ pub struct PublishRequest {
 }
 
 /// Flat schema creation request, mirroring EventBridge `CreateSchema`
-/// semantics: Nexus derives the canonical schema name and the stage-selected
+/// semantics: Konductor derives the canonical schema name and the stage-selected
 /// environment's registry; the caller never supplies either.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
