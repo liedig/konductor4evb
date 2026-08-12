@@ -31,10 +31,10 @@
 
 ## 5. Redeploy and live verification
 
-- [ ] 5.1 Delete the disposable `nexus-core` stack and any `nexus-trust` stacks (dev only; nothing to preserve)
-- [ ] 5.2 Deploy `konductor-core`, `make seed-users`, `make deploy-web`; confirm the `KonductorWebUrl` (renamed) output
-- [ ] 5.3 Live pass per design decision 5: both personas sign in, request → inbox → decide round-trip, and a lifecycle event with source `konductor.domain-management` reaches the platform notifications topic
-- [ ] 5.4 Commit any deploy-fix fallout separately; stack stable
+- [x] 5.1 Delete the disposable `nexus-core` stack and any `nexus-trust` stacks (dev only; nothing to preserve)
+- [x] 5.2 Deploy `konductor-core`, `make seed-users`, `make deploy-web`; confirm the `KonductorWebUrl` (renamed) output
+- [x] 5.3 Live pass per design decision 5: both personas sign in, request → inbox → decide round-trip, and a lifecycle event with source `konductor.domain-management` reaches the platform notifications topic
+- [x] 5.4 Commit any deploy-fix fallout separately; stack stable
 
 ## 6. Finish
 
