@@ -38,6 +38,11 @@ This document tracks architectural decisions, implemented changes, and deferred 
 ---
 
 ## Deferred Decisions
+| 2026-08-12 | rename-to-konductor | Cross-cutting | Product renamed from "EventBridge Nexus" to "Konductor for Amazon EventBridge"; repo renamed to `konductor4evb` | **Why**: "Nexus" collides with an internal EventBridge feature code name and wrongly implied the platform is an EventBridge product. **Strategy**: flag day — nothing deployed was worth keeping, so every identifier was renamed in one pass (crate `konductor-common`, stack `konductor-core`, bus `konductor-bus`, event sources `konductor.domain-management`/`konductor.event-streams`, trust role `{org}-konductor-trust-role`, env vars `KONDUKTOR_*`) with no compatibility shims or migration; the dev stacks were deleted and redeployed, and the full request → approve → provision round-trip was re-verified live. Archived OpenSpec change history intentionally keeps the old name. |
+
+---
+
+## Deferred Decisions
 
 | Topic | Dependency | Status |
 |-------|-----------|--------|

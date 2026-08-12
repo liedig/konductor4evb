@@ -38,7 +38,7 @@
 
 ## 6. Finish
 
-- [ ] 6.1 Rename the GitHub repository `evb-nexus` → `konductor4evb`; update local remotes and any hardcoded URLs (CI, docs)
-- [ ] 6.2 Update decision log (`docs/development/decisions.md`) with the rename decision and the flag-day rationale
-- [ ] 6.3 Update `docs/development/architecture.md` resource-name references
-- [ ] 6.4 `openspec validate rename-to-konductor --strict` clean; commit `chore(openspec): complete rename-to-konductor tasks`
+- [x] 6.1 Rename the GitHub repository `evb-nexus` → `konductor4evb`; update local remotes and any hardcoded URLs (CI, docs)
+- [x] 6.2 Update decision log (`docs/development/decisions.md`) with the rename decision and the flag-day rationale
+- [x] 6.3 Update `docs/development/architecture.md` resource-name references
+- [x] 6.4 `openspec validate rename-to-konductor --strict` clean; commit `chore(openspec): complete rename-to-konductor tasks`
