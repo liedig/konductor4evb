@@ -10,9 +10,12 @@ import { parseNexusConfig } from '~/types/config'
 // per browser tab via sessionStorage (design.md, decision 2).
 export default defineNuxtPlugin(async () => {
   const raw = await $fetch<unknown>('/config.json').catch(() => {
-    throw new Error('Could not load /config.json — is the console deployed?')
+    throw new Error('Could not load /config.json — run `make web-dev` for local development')
   })
   const config = parseNexusConfig(raw)
+  if (config.userPoolId.startsWith('REPLACE-')) {
+    throw new Error('web/public/config.json still has placeholder values — run `make web-dev` to generate it from the core stack outputs')
+  }
 
   cognitoUserPoolsTokenProvider.setKeyValueStorage(sessionStorage)
   Amplify.configure({

@@ -1,6 +1,0 @@
-{
-  "apiBaseUrl": "/dev",
-  "userPoolId": "REPLACE-WITH-NexusUserPoolId",
-  "userPoolClientId": "REPLACE-WITH-NexusUserPoolClientId",
-  "region": "ap-southeast-2"
-}

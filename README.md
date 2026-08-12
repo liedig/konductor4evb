@@ -78,7 +78,7 @@ Deep reference for contributors and operators: [Architecture](docs/development/a
 
 Nexus ships a role-gated web console (`web/`, Nuxt + Tailwind, statically hosted on S3 + CloudFront from the core stack). Platform admins land on the pending-approvals inbox; domain teams land on their domains. Sign-in is a custom Nexus-branded page using Cognito SRP — no hosted UI.
 
-- **Develop**: `make web-dev` (http://localhost:3000). Copy real values into `web/public/config.json` from the core stack outputs (`OAuthApiEndpoint`, `NexusUserPoolId`, `NexusUserPoolClientId`).
+- **Develop**: `make web-dev` (http://localhost:3000). It writes `web/public/config.json` from the core stack outputs and proxies `/dev/*` API calls to the deployed OAuth API, so the dev console behaves like the deployed one.
 - **Deploy**: `make deploy-web` — builds, syncs to the web bucket, writes `config.json` from current stack outputs (no rebuild needed on stack changes), and invalidates CloudFront. The console URL is the `NexusWebUrl` output.
 - **Test logins**: `make seed-users` creates the dev personas (`alice` = platform-admin, `bob` = team-payments owner).
 - Visual language: [Design System](docs/development/design-system.md); the `/design-system` route renders every primitive against the live build.

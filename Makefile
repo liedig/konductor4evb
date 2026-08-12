@@ -113,8 +113,14 @@ check: ## cargo fmt, check, clippy (CI-equivalent local gate)
 
 web-dev: ## Run the Nexus web console dev server (http://localhost:3000), proxying /dev to the deployed OAuth API
 	@set -euo pipefail; \
-	API_URL=$$(aws cloudformation describe-stacks --stack-name nexus-core \
-		--query "Stacks[0].Outputs[?OutputKey=='OAuthApiEndpoint'].OutputValue" --output text); \
+	output() { aws cloudformation describe-stacks --stack-name nexus-core \
+		--query "Stacks[0].Outputs[?OutputKey=='$$1'].OutputValue" --output text; }; \
+	API_URL=$$(output OAuthApiEndpoint); \
+	POOL_ID=$$(output NexusUserPoolId); \
+	CLIENT_ID=$$(output NexusUserPoolClientId); \
+	test -n "$$POOL_ID" || { echo "$(YELLOW)NexusUserPoolId output missing — deploy the core stack first (make deploy-core)$(RESET)"; exit 1; }; \
+	printf '{"apiBaseUrl":"/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s"}\n' \
+		"$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" > web/public/config.json; \
 	cd web && NEXUS_DEV_API_URL="$$API_URL" pnpm dev
 
 deploy-web: ## Build the web console, publish to the web bucket, and write config.json from stack outputs
