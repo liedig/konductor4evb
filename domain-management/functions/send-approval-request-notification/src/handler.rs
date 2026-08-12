@@ -17,6 +17,7 @@ pub async fn handle(
         env::var("PLATFORM_OPERATOR_EMAIL").context("PLATFORM_OPERATOR_EMAIL not set")?;
     let from_email =
         env::var("NOTIFICATION_SENDER_EMAIL").context("NOTIFICATION_SENDER_EMAIL not set")?;
+    let console_url = env::var("WEB_CONSOLE_URL").context("WEB_CONSOLE_URL not set")?;
 
     let fields = extract_event_fields(&event.payload)?;
     let is_new_account = check_is_new_account(ddb, &table, &fields.owner_account_id).await?;
@@ -37,6 +38,7 @@ pub async fn handle(
         &fields.owner_email,
         is_new_account,
         &fields.environments,
+        &console_url,
     );
 
     send_approval_email(ses, &from_email, &to_email, &fields.domain_name, html_body).await
@@ -164,6 +166,7 @@ fn build_approval_email_body(
     owner_email: &str,
     is_new_account: bool,
     environments: &[String],
+    console_url: &str,
 ) -> String {
     let domain_name = escape(domain_name);
     let owner_account_id = escape(owner_account_id);
@@ -184,6 +187,7 @@ Ensure the trust-stack has been deployed to this account before approving.
         environments.join(", ")
     };
     let environments_display = escape(&environments_display);
+    let approvals_url = format!("{}/admin", escape(console_url.trim_end_matches('/')));
 
     format!(
         r#"<html>
@@ -199,7 +203,8 @@ Ensure the trust-stack has been deployed to this account before approving.
 <tr><td><strong>Environments</strong></td><td>{environments_display}</td></tr>
 </table>
 <p style="margin-top:24px">
-  Sign in to EventBridge Nexus to review and approve or reject this domain registration request.
+  <a href="{approvals_url}">Open Pending approvals</a> in the EventBridge Nexus console
+  to review and approve or reject this registration.
 </p>
 </body>
 </html>"#
@@ -209,6 +214,8 @@ Ensure the trust-stack has been deployed to this account before approving.
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const CONSOLE_URL: &str = "https://console.example.com";
 
     fn envs() -> Vec<String> {
         vec!["dev".into(), "staging".into(), "prod".into()]
@@ -222,6 +229,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            CONSOLE_URL,
         );
         assert!(body.contains("billing"));
     }
@@ -234,6 +242,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            CONSOLE_URL,
         );
         assert!(body.contains("111122223333"));
     }
@@ -246,20 +255,36 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            CONSOLE_URL,
         );
         assert!(body.contains("owner@example.com"));
     }
 
     #[test]
-    fn approval_email_body_contains_sign_in_message() {
+    fn approval_email_body_links_to_pending_approvals() {
         let body = build_approval_email_body(
             "billing",
             "111122223333",
             "owner@example.com",
             false,
             &envs(),
+            CONSOLE_URL,
         );
-        assert!(body.contains("Sign in to EventBridge Nexus"));
+        assert!(body.contains(r#"href="https://console.example.com/admin""#));
+        assert!(body.contains("Pending approvals"));
+    }
+
+    #[test]
+    fn approval_email_body_escapes_console_url() {
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
+            "https://evil.example.com/<script>",
+        );
+        assert!(!body.contains("evil.example.com/<script>"));
     }
 
     #[test]
@@ -270,6 +295,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            CONSOLE_URL,
         );
         assert!(!body.contains("decision=approve"));
         assert!(!body.contains("decision=reject"));
@@ -284,6 +310,7 @@ mod tests {
             "owner@example.com",
             false,
             &["dev<script>".to_string()],
+            CONSOLE_URL,
         );
         assert!(body.contains("&lt;billing&gt;"));
         assert!(!body.contains("<billing>"));
@@ -298,6 +325,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            CONSOLE_URL,
         );
         assert!(body.contains("Approval Required"));
     }
@@ -310,6 +338,7 @@ mod tests {
             "owner@example.com",
             true,
             &envs(),
+            CONSOLE_URL,
         );
         assert!(body.contains("New Account Detected"));
         assert!(body.contains("trust-stack"));
@@ -323,6 +352,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            CONSOLE_URL,
         );
         assert!(!body.contains("New Account Detected"));
     }
@@ -335,14 +365,21 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            CONSOLE_URL,
         );
         assert!(body.contains("dev, staging, prod"));
     }
 
     #[test]
     fn approval_email_body_handles_empty_environments() {
-        let body =
-            build_approval_email_body("billing", "111122223333", "owner@example.com", false, &[]);
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &[],
+            CONSOLE_URL,
+        );
         assert!(body.contains("(none configured)"));
     }
 }

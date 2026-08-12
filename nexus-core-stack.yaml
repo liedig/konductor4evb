@@ -1861,6 +1861,9 @@ Resources:
           DOMAINS_TABLE: !Ref DomainsTable
           NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
           PLATFORM_OPERATOR_EMAIL: !Ref PlatformOperatorEmail
+          # The approval email links here instead of carrying decision URLs;
+          # decisions happen in the authenticated console only.
+          WEB_CONSOLE_URL: !Sub "https://${NexusWebDistribution.DomainName}"
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
