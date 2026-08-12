@@ -10,7 +10,7 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 EventBridge Nexus SHALL use IAM assumed roles to create and manage resources in domain accounts. Each domain account that participates in Nexus SHALL have a single dedicated IAM role that Nexus can assume. The trust role SHALL be named `{org}-nexus-trust-role` (no environment segment) because one role serves all environments of all domains in that domain account. This is required by the one-domain-one-account model: a domain provisioned into environments `[dev, staging, prod]` places all three envs' resources in the same domain account, and Nexus uses one trust role to create them.
 
-#### Scenario: Nexus assumes role to create resources across environments
+#### Scenario: Konductor assumes role to create resources across environments
 
 - **WHEN** the provisioning workflow needs to create resources in a domain account for any environment of a domain
 - **THEN** Nexus SHALL assume the trust role `{org}-nexus-trust-role` in the target domain account using `sts:AssumeRole`
@@ -91,18 +91,18 @@ Each app-side domain event bus SHALL carry a resource policy permitting the **pl
 
 EventBridge Nexus Lambda functions and Step Functions workflows SHALL execute using IAM roles defined in the Nexus SAM template. These roles SHALL have permissions to: manage EventBridge buses and rules in the platform account, manage DynamoDB tables, manage SQS queues in the platform account, manage CloudWatch resources, manage schema registries, emit events to the Nexus event bus, start Step Functions executions, assume trust roles in domain accounts, manage SSM parameters under `/namespace/*`, and manage RAM resource shares.
 
-#### Scenario: Nexus role permits platform account operations
+#### Scenario: Konductor role permits platform account operations
 
 - **WHEN** a Lambda function or Step Functions workflow executes in the platform account
 - **THEN** the execution role SHALL permit all operations required to manage domain resources in the platform account (EventBridge, SQS, CloudWatch, Schemas, DynamoDB, SSM, RAM)
 
-#### Scenario: Nexus role permits cross-account assumption
+#### Scenario: Konductor role permits cross-account assumption
 
 - **WHEN** the provisioning workflow needs to create resources in a domain account
 - **THEN** the Nexus execution role SHALL permit `sts:AssumeRole` for trust roles in registered domain accounts
 - **AND THEN** the trust role ARN pattern SHALL be constrained to roles matching `{org}-nexus-trust-role`
 
-#### Scenario: Nexus role permits SSM and RAM operations
+#### Scenario: Konductor role permits SSM and RAM operations
 
 - **WHEN** the provisioning workflow creates namespace parameters and manages RAM shares
 - **THEN** the execution role SHALL permit `ssm:PutParameter`, `ssm:GetParameter`, and `ssm:AddTagsToResource` scoped to `arn:aws:ssm:*:${AccountId}:parameter/namespace/*`
