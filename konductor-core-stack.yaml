@@ -1031,10 +1031,7 @@ Resources:
             - Effect: Allow
               Action: [dynamodb:GetItem]
               Resource: !GetAtt DomainsTable.Arn
-            - Effect: Allow
-              Action: [dynamodb:Query]
-              Resource:
-                - !GetAtt AuthorizationBindingsTable.Arn
+        - !Ref BindingsTableReadPolicy
       Events:
         OAuthApi:
           Type: Api
