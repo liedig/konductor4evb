@@ -2,7 +2,7 @@
 
 ### Requirement: Custom Cognito login and session
 
-The web console SHALL authenticate users through a Nexus-branded login page using Cognito SRP against the existing user pool (not the hosted UI). Sessions SHALL persist per browser tab (sessionStorage) with refresh-token renewal; logging out SHALL clear the session and return to `/login`. Unauthenticated navigation to any protected route SHALL redirect to `/login`. The console SHALL read its runtime configuration (API base URL, Cognito pool/client IDs) from a served `config.json` so stack changes never require a rebuild.
+The web console SHALL authenticate users through a Konductor-branded login page using Cognito SRP against the existing user pool (not the hosted UI). Sessions SHALL persist per browser tab (sessionStorage) with refresh-token renewal; logging out SHALL clear the session and return to `/login`. Unauthenticated navigation to any protected route SHALL redirect to `/login`. The console SHALL read its runtime configuration (API base URL, Cognito pool/client IDs) from a served `config.json` so stack changes never require a rebuild.
 
 #### Scenario: Successful sign-in lands on the persona dashboard
 

@@ -46,11 +46,11 @@ When a domain registration is rejected, the control plane SHALL send an email no
 
 ### Requirement: SES configuration
 
-Email notifications SHALL use Amazon SES with parameterised sender and recipient addresses. SES email identity verification SHALL be managed by a separate `notifications-stack.yaml` CloudFormation template, not by the Nexus core stack. The core template SHALL accept `ApprovalFromEmail` and `ApprovalToEmail` as optional parameters with empty-string defaults. When both parameters are non-empty, the core template SHALL deploy the notification Lambda functions, their log groups, and the rejection EventBridge rule. When either parameter is empty, the core template SHALL omit all notification resources. The notifications stack SHALL deploy in the same AWS region as the Nexus core stack because SES identities are regional.
+Email notifications SHALL use Amazon SES with parameterised sender and recipient addresses. SES email identity verification SHALL be managed by a separate `notifications-stack.yaml` CloudFormation template, not by the Konductor core stack. The core template SHALL accept `ApprovalFromEmail` and `ApprovalToEmail` as optional parameters with empty-string defaults. When both parameters are non-empty, the core template SHALL deploy the notification Lambda functions, their log groups, and the rejection EventBridge rule. When either parameter is empty, the core template SHALL omit all notification resources. The notifications stack SHALL deploy in the same AWS region as the Konductor core stack because SES identities are regional.
 
 #### Scenario: SES parameters defined in core template
 
-- **WHEN** the Nexus core stack is deployed
+- **WHEN** the Konductor core stack is deployed
 - **THEN** the SAM template SHALL accept optional `ApprovalFromEmail` and `ApprovalToEmail` parameters with empty-string defaults
 - **AND THEN** when both parameters are non-empty, they SHALL be passed as environment variables to the notification Lambda functions
 - **AND THEN** when either parameter is empty, the notification Lambda functions and their EventBridge rules SHALL NOT be deployed
@@ -70,14 +70,14 @@ Email notifications SHALL use Amazon SES with parameterised sender and recipient
 
 #### Scenario: Core stack deploys without SES
 
-- **WHEN** the Nexus core stack is deployed with `ApprovalFromEmail` and `ApprovalToEmail` left as empty strings
+- **WHEN** the Konductor core stack is deployed with `ApprovalFromEmail` and `ApprovalToEmail` left as empty strings
 - **THEN** the core stack SHALL deploy successfully without any notification Lambda functions or EventBridge rules
 - **AND THEN** the approval workflow SHALL still execute and wait on a task token for a manual decision
 - **AND THEN** operators SHALL be able to approve or reject registrations via the `POST /domains/registrations/decide` API endpoint
 
 #### Scenario: Notifications stack deployed in a different region than core
 
-- **WHEN** the notifications stack is deployed in a different AWS region than the Nexus core stack
+- **WHEN** the notifications stack is deployed in a different AWS region than the Konductor core stack
 - **THEN** SES identities created by the notifications stack SHALL NOT be usable by the core stack's notification Lambda functions
 - **AND THEN** the template description and documentation SHALL call out the same-region constraint
 
@@ -119,7 +119,7 @@ When domain provisioning completes successfully, the control plane SHALL send an
 
 #### Scenario: Domain-live email sent to owners
 
-- **WHEN** the provisioning workflow emits a `DomainProvisioningSucceeded` event to the nexus bus
+- **WHEN** the provisioning workflow emits a `DomainProvisioningSucceeded` event to the konductor bus
 - **THEN** an EventBridge rule SHALL match the event and invoke the provisioning-succeeded notification Lambda
 - **AND THEN** the Lambda SHALL load the domain record from DynamoDB by `domainName` and send an email via SES to the owner recipients
 - **AND THEN** the email SHALL state that the domain is provisioned and active and include the domain name
@@ -128,7 +128,7 @@ When domain provisioning completes successfully, the control plane SHALL send an
 
 - **WHEN** the core stack is deployed without notification parameters
 - **THEN** the provisioning-succeeded notification Lambda and its EventBridge rule SHALL NOT be deployed
-- **AND THEN** `DomainProvisioningSucceeded` events SHALL remain observable on the nexus bus
+- **AND THEN** `DomainProvisioningSucceeded` events SHALL remain observable on the konductor bus
 
 ### Requirement: Registration delayed notification
 
@@ -136,7 +136,7 @@ When the approval request could not be delivered to the platform team, the contr
 
 #### Scenario: Registration-delayed email sent to owners
 
-- **WHEN** the approval workflow emits a `DomainApprovalNotificationFailed` event to the nexus bus
+- **WHEN** the approval workflow emits a `DomainApprovalNotificationFailed` event to the konductor bus
 - **THEN** an EventBridge rule SHALL match the event and invoke the registration-delayed notification Lambda
 - **AND THEN** the Lambda SHALL load the domain record from DynamoDB by `domainName` and send an email via SES to the owner recipients
 - **AND THEN** the email SHALL state that the registration is delayed and the platform team has been notified, without technical error detail

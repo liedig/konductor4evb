@@ -8,38 +8,38 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 ### Requirement: Control plane assumed role in domain accounts
 
-EventBridge Nexus SHALL use IAM assumed roles to create and manage resources in domain accounts. Each domain account that participates in Nexus SHALL have a single dedicated IAM role that Nexus can assume. The trust role SHALL be named `{org}-nexus-trust-role` (no environment segment) because one role serves all environments of all domains in that domain account. This is required by the one-domain-one-account model: a domain provisioned into environments `[dev, staging, prod]` places all three envs' resources in the same domain account, and Nexus uses one trust role to create them.
+Konductor for Amazon EventBridge SHALL use IAM assumed roles to create and manage resources in domain accounts. Each domain account that participates in Konductor SHALL have a single dedicated IAM role that Konductor can assume. The trust role SHALL be named `{org}-konductor-trust-role` (no environment segment) because one role serves all environments of all domains in that domain account. This is required by the one-domain-one-account model: a domain provisioned into environments `[dev, staging, prod]` places all three envs' resources in the same domain account, and Konductor uses one trust role to create them.
 
 #### Scenario: Konductor assumes role to create resources across environments
 
 - **WHEN** the provisioning workflow needs to create resources in a domain account for any environment of a domain
-- **THEN** Nexus SHALL assume the trust role `{org}-nexus-trust-role` in the target domain account using `sts:AssumeRole`
+- **THEN** Konductor SHALL assume the trust role `{org}-konductor-trust-role` in the target domain account using `sts:AssumeRole`
 - **AND THEN** the same assumed role SHALL be used regardless of which environment the resources belong to
 
 #### Scenario: Assumed role does not exist
 
-- **WHEN** Nexus attempts to assume a role in a domain account and the role does not exist or the trust policy does not permit the assumption
+- **WHEN** Konductor attempts to assume a role in a domain account and the role does not exist or the trust policy does not permit the assumption
 - **THEN** the provisioning workflow step SHALL fail with a clear error indicating the missing or misconfigured trust role
-- **AND THEN** the error SHALL include the expected role ARN (`{org}-nexus-trust-role`) and the required trust policy configuration
+- **AND THEN** the error SHALL include the expected role ARN (`{org}-konductor-trust-role`) and the required trust policy configuration
 - **AND THEN** the saga compensation chain SHALL clean up any resources created before the failure
 
 ### Requirement: Trust role permissions for domain accounts
 
-The trust role in each domain account SHALL grant Nexus permissions to: create and delete EventBridge event buses, manage event bus policies, create and delete SQS queues (for DLQs), and create and manage IAM roles for bus-to-bus event delivery. Resource permissions SHALL be scoped by the `{org}-*` prefix so that one role can manage per-env domain resources named `{org}-dev-*`, `{org}-staging-*`, `{org}-prod-*`, and any other env a domain may be provisioned into. The trust role itself has no environment segment.
+The trust role in each domain account SHALL grant Konductor permissions to: create and delete EventBridge event buses, manage event bus policies, create and delete SQS queues (for DLQs), and create and manage IAM roles for bus-to-bus event delivery. Resource permissions SHALL be scoped by the `{org}-*` prefix so that one role can manage per-env domain resources named `{org}-dev-*`, `{org}-staging-*`, `{org}-prod-*`, and any other env a domain may be provisioned into. The trust role itself has no environment segment.
 
 #### Scenario: Trust role permits event bus management across envs
 
-- **WHEN** Nexus assumes the trust role in a domain account
+- **WHEN** Konductor assumes the trust role in a domain account
 - **THEN** the role SHALL permit `events:CreateEventBus`, `events:DeleteEventBus`, `events:DescribeEventBus`, `events:PutPermission`, and `events:RemovePermission` for domain event buses matching the `{org}-*` resource pattern, covering all envs
 
 #### Scenario: Trust role permits DLQ management across envs
 
-- **WHEN** Nexus assumes the trust role in a domain account
+- **WHEN** Konductor assumes the trust role in a domain account
 - **THEN** the role SHALL permit `sqs:CreateQueue`, `sqs:DeleteQueue`, `sqs:SetQueueAttributes`, and `sqs:GetQueueAttributes` for DLQ queues matching the `{org}-*` resource pattern, covering all envs
 
 #### Scenario: Trust role permits bus-to-bus role management across envs
 
-- **WHEN** Nexus assumes the trust role in a domain account
+- **WHEN** Konductor assumes the trust role in a domain account
 - **THEN** the role SHALL permit `iam:CreateRole`, `iam:DeleteRole`, `iam:PutRolePolicy`, and `iam:DeleteRolePolicy` for IAM roles used in bus-to-bus event delivery matching the `{org}-*-b2b-*` pattern
 
 #### Scenario: Trust role follows least privilege
@@ -50,24 +50,24 @@ The trust role in each domain account SHALL grant Nexus permissions to: create a
 
 ### Requirement: Trust stack installation
 
-Platform teams SHALL deploy a trust stack (CloudFormation/SAM template) in each domain account before EventBridge Nexus can manage resources in that account. The Nexus project SHALL provide this template. The trust stack SHALL create the IAM trust role with the correct permissions and trust policy. The trust policy SHALL name the platform account root as principal and SHALL restrict assumption to exactly the Nexus execution role and the provisioning workflow role via an `ArnEquals` condition on `aws:PrincipalArn`, so that the constraint is string-matched per request rather than pinned to IAM unique principal IDs. The trust role SHALL be named `{org}-nexus-trust-role`.
+Platform teams SHALL deploy a trust stack (CloudFormation/SAM template) in each domain account before Konductor for Amazon EventBridge can manage resources in that account. The Konductor project SHALL provide this template. The trust stack SHALL create the IAM trust role with the correct permissions and trust policy. The trust policy SHALL name the platform account root as principal and SHALL restrict assumption to exactly the Konductor execution role and the provisioning workflow role via an `ArnEquals` condition on `aws:PrincipalArn`, so that the constraint is string-matched per request rather than pinned to IAM unique principal IDs. The trust role SHALL be named `{org}-konductor-trust-role`.
 
 #### Scenario: Trust stack deployment
 
-- **WHEN** a platform team wants to onboard a new domain account to Nexus
+- **WHEN** a platform team wants to onboard a new domain account to Konductor
 - **THEN** they SHALL deploy the provided trust stack template in the domain account
-- **AND THEN** the template SHALL create an IAM role named `{org}-nexus-trust-role` whose trust policy permits `sts:AssumeRole` from the platform account root, conditioned via `ArnEquals` on `aws:PrincipalArn` to exactly the Nexus execution role ARN and the provisioning workflow role ARN
+- **AND THEN** the template SHALL create an IAM role named `{org}-konductor-trust-role` whose trust policy permits `sts:AssumeRole` from the platform account root, conditioned via `ArnEquals` on `aws:PrincipalArn` to exactly the Konductor execution role ARN and the provisioning workflow role ARN
 - **AND THEN** the role SHALL have the permissions defined in the trust role permissions requirement
 
 #### Scenario: Assumption restricted to the named platform roles
 
-- **WHEN** any platform-account principal other than the Nexus execution role or the provisioning workflow role attempts `sts:AssumeRole` on the trust role
+- **WHEN** any platform-account principal other than the Konductor execution role or the provisioning workflow role attempts `sts:AssumeRole` on the trust role
 - **THEN** the assumption SHALL be denied by the `aws:PrincipalArn` condition
 
 #### Scenario: Trust stack parameterisation
 
 - **WHEN** the trust stack template is deployed
-- **THEN** it SHALL accept parameters for: the Nexus execution role ARN (from the platform account), the provisioning workflow role ARN (from the platform account), and the organisation identifier
+- **THEN** it SHALL accept parameters for: the Konductor execution role ARN (from the platform account), the provisioning workflow role ARN (from the platform account), and the organisation identifier
 - **AND THEN** the trust stack SHALL NOT accept an environment parameter — the trust role name is environment-independent
 - **AND THEN** the trust role permissions SHALL be scoped using the `{org}-*` resource pattern so the single role can manage domain resources across all environments
 
@@ -89,7 +89,7 @@ Each app-side domain event bus SHALL carry a resource policy permitting the **pl
 
 ### Requirement: Control plane execution role
 
-EventBridge Nexus Lambda functions and Step Functions workflows SHALL execute using IAM roles defined in the Nexus SAM template. These roles SHALL have permissions to: manage EventBridge buses and rules in the platform account, manage DynamoDB tables, manage SQS queues in the platform account, manage CloudWatch resources, manage schema registries, emit events to the Nexus event bus, start Step Functions executions, assume trust roles in domain accounts, manage SSM parameters under `/namespace/*`, and manage RAM resource shares.
+Konductor for Amazon EventBridge Lambda functions and Step Functions workflows SHALL execute using IAM roles defined in the Konductor SAM template. These roles SHALL have permissions to: manage EventBridge buses and rules in the platform account, manage DynamoDB tables, manage SQS queues in the platform account, manage CloudWatch resources, manage schema registries, emit events to the Konductor event bus, start Step Functions executions, assume trust roles in domain accounts, manage SSM parameters under `/namespace/*`, and manage RAM resource shares.
 
 #### Scenario: Konductor role permits platform account operations
 
@@ -99,8 +99,8 @@ EventBridge Nexus Lambda functions and Step Functions workflows SHALL execute us
 #### Scenario: Konductor role permits cross-account assumption
 
 - **WHEN** the provisioning workflow needs to create resources in a domain account
-- **THEN** the Nexus execution role SHALL permit `sts:AssumeRole` for trust roles in registered domain accounts
-- **AND THEN** the trust role ARN pattern SHALL be constrained to roles matching `{org}-nexus-trust-role`
+- **THEN** the Konductor execution role SHALL permit `sts:AssumeRole` for trust roles in registered domain accounts
+- **AND THEN** the trust role ARN pattern SHALL be constrained to roles matching `{org}-konductor-trust-role`
 
 #### Scenario: Konductor role permits SSM and RAM operations
 
@@ -114,6 +114,6 @@ The trust relationship between a domain account and the platform SHALL remain va
 
 #### Scenario: Core stack redeploy does not sever trust
 
-- **WHEN** the platform core stack is torn down and redeployed, recreating the Nexus execution role and provisioning workflow role with new IAM unique principal IDs
-- **THEN** the provisioning workflow SHALL still successfully assume `{org}-nexus-trust-role` in every domain account
+- **WHEN** the platform core stack is torn down and redeployed, recreating the Konductor execution role and provisioning workflow role with new IAM unique principal IDs
+- **THEN** the provisioning workflow SHALL still successfully assume `{org}-konductor-trust-role` in every domain account
 - **AND THEN** no trust stack update or redeploy SHALL be required in any domain account

@@ -2,13 +2,13 @@
 
 This guide is for **domain owners** — teams who want to register a new EventBridge domain, get it approved, and start using the provisioned infrastructure. It covers the full lifecycle from registration through active operation.
 
-If you are a platform team member responsible for approving registrations or managing the Nexus installation itself, see the [Installation Guide](installation.md) for deployment and the [Trust Stack Deployment Guide](trust-stack-deployment.md) for onboarding domain accounts.
+If you are a platform team member responsible for approving registrations or managing the Konductor installation itself, see the [Installation Guide](installation.md) for deployment and the [Trust Stack Deployment Guide](trust-stack-deployment.md) for onboarding domain accounts.
 
 ---
 
 ## Overview
 
-EventBridge Nexus provisions and manages the cross-account EventBridge infrastructure your domain needs: event buses, schema registries, DLQs, and CloudWatch dashboards across all configured environments. You interact with Nexus through a REST API offered on two surfaces — IAM (SigV4-signed, for automation) and OAuth (Cognito token, for interactive users) — with identical semantics. This guide's examples use the IAM surface via `awscurl`.
+Konductor for Amazon EventBridge provisions and manages the cross-account EventBridge infrastructure your domain needs: event buses, schema registries, DLQs, and CloudWatch dashboards across all configured environments. You interact with Konductor through a REST API offered on two surfaces — IAM (SigV4-signed, for automation) and OAuth (Cognito token, for interactive users) — with identical semantics. This guide's examples use the IAM surface via `awscurl`.
 
 Your domain name is your domain's identity. It is the sole identifier used in API paths, DynamoDB records, event payloads, and resource names. Choose carefully — domain names are globally unique and cannot be renamed.
 
@@ -16,7 +16,7 @@ Your domain name is your domain's identity. It is the sole identifier used in AP
 
 ## Registering a Domain
 
-Register a domain by sending a POST request to the `/domains` endpoint. The request is asynchronous: Nexus validates the body, enqueues the command to SQS, and returns a request ID immediately. The actual processing (persistence, approval workflow trigger) happens moments later.
+Register a domain by sending a POST request to the `/domains` endpoint. The request is asynchronous: Konductor validates the body, enqueues the command to SQS, and returns a request ID immediately. The actual processing (persistence, approval workflow trigger) happens moments later.
 
 ### Request
 
@@ -62,7 +62,7 @@ The `requestId` is the SQS message ID. You can use it to correlate with CloudWat
 ### What happens next
 
 1. The command handler Lambda processes the message from SQS.
-2. It validates business rules (naming format, reserved names like `nexus`).
+2. It validates business rules (naming format, reserved names like `konductor`).
 3. It performs a conditional `PutItem` against the domains table with `attribute_not_exists(domainName)` — if the name is already taken, the registration fails with a "domain already exists" error event.
 4. It stamps the current platform-configured environment list (e.g., `["dev", "staging", "prod"]`) onto the domain record. This list is snapshotted at registration time and does not change if the platform configuration is updated later.
 5. It starts the approval Step Functions workflow.
@@ -70,7 +70,7 @@ The `requestId` is the SQS message ID. You can use it to correlate with CloudWat
 
 ### Duplicate name handling
 
-If a domain with the same name already exists, the conditional PutItem fails and a `RegisterDomainFailed` event is emitted with reason "domain already exists". The domain name is globally unique across the entire Nexus installation — this is intentional governance, not a technical limitation.
+If a domain with the same name already exists, the conditional PutItem fails and a `RegisterDomainFailed` event is emitted with reason "domain already exists". The domain name is globally unique across the entire Konductor installation — this is intentional governance, not a technical limitation.
 
 ---
 
@@ -340,7 +340,7 @@ The environments your domain is provisioned into are determined by the platform 
 
 ## Provisioned Resources
 
-When your domain reaches `ACTIVE`, Nexus has created resources in two AWS accounts across all your environments:
+When your domain reaches `ACTIVE`, Konductor has created resources in two AWS accounts across all your environments:
 
 ### Platform account resources (per environment)
 
@@ -388,7 +388,7 @@ The platform-side and app-side event buses share the same name — they live in 
 
 ## Event Subscriptions
 
-Once domains are `ACTIVE`, teams connect them with **schema-first subscriptions**: you subscribe to an event contract (a schema in the producer's registry), and Nexus builds the delivery stream in every environment. You never touch EventBridge rules or cross-account policies on the platform side.
+Once domains are `ACTIVE`, teams connect them with **schema-first subscriptions**: you subscribe to an event contract (a schema in the producer's registry), and Konductor builds the delivery stream in every environment. You never touch EventBridge rules or cross-account policies on the platform side.
 
 ### Discovering schemas
 
@@ -448,7 +448,7 @@ Disabling flips the delivery rule off atomically — the subscription, its pinne
 awscurl -X DELETE "${API_URL}/subscriptions/checkout.orders.OrderNotification" --region ${AWS_REGION}
 ```
 
-Nexus removes the platform-side delivery rules in every environment; the subscription record is retained for 90 days for audit. **Any integration rules you created on your own bus are yours to clean up** — the platform never modifies your bus.
+Konductor removes the platform-side delivery rules in every environment; the subscription record is retained for 90 days for audit. **Any integration rules you created on your own bus are yours to clean up** — the platform never modifies your bus.
 
 ### Producer obligations: the event envelope
 
@@ -498,7 +498,7 @@ Platform operators can find these domains with:
 awscurl --service execute-api "https://{api-id}.execute-api.{region}.amazonaws.com/prod/domains?status=APPROVAL_NOTIFICATION_FAILED"
 ```
 
-Operators should also sweep for records left in `PROVISIONING` by workflow crashes predating the failure-path hardening (2026-07): `?status=PROVISIONING` with no running `nexus-provision-domain` execution means a stuck record — delete it and re-register.
+Operators should also sweep for records left in `PROVISIONING` by workflow crashes predating the failure-path hardening (2026-07): `?status=PROVISIONING` with no running `konductor-provision-domain` execution means a stuck record — delete it and re-register.
 
 ### PROVISIONING_FAILED
 
@@ -522,7 +522,7 @@ If you try to register a domain name that already exists in a status other than 
 
 ### API returns 403
 
-On the IAM surface, ensure your AWS credentials have permission to invoke the API Gateway, and verify that your `awscurl --region` matches the region where Nexus is deployed. On the OAuth surface, check that your access token is unexpired and carries the role the route requires (e.g., `platform-admin` for approval and binding administration). For publish and schema writes specifically, a `403` means your principal lacks a `publisher` binding for the domain — see [Publishing Events](publishing-events.md#before-you-can-publish-publisher-bindings).
+On the IAM surface, ensure your AWS credentials have permission to invoke the API Gateway, and verify that your `awscurl --region` matches the region where Konductor is deployed. On the OAuth surface, check that your access token is unexpired and carries the role the route requires (e.g., `platform-admin` for approval and binding administration). For publish and schema writes specifically, a `403` means your principal lacks a `publisher` binding for the domain — see [Publishing Events](publishing-events.md#before-you-can-publish-publisher-bindings).
 
 ### Subscription active but no events arriving
 

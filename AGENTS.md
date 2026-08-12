@@ -28,11 +28,11 @@
 
 ## Product Naming
 
-- The product is called **EventBridge Nexus** (short form: **Nexus**)
+- The product is called **Konductor for Amazon EventBridge** (short form: **Konductor**)
 - Resource namespace convention: `{org}-{env}-{domain}` (e.g., `acme-prod-payments`)
-- Trust role: `nexus-trust-role`
-- Event source: `nexus.domain-management`
-- Lifecycle event bus: `nexus-bus`
+- Trust role: `konductor-trust-role`
+- Event source: `konductor.domain-management`
+- Lifecycle event bus: `konductor-bus`
 
 ## Git Workflow
 

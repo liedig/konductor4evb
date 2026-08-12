@@ -1,4 +1,4 @@
-# Design: add-nexus-web-ui
+# Design: add-konductor-web-ui
 
 ## Context
 
@@ -6,7 +6,7 @@ The OAuth API surface, Cognito pool (with `platform-admin`/`platform-auditor` gl
 
 ## Visual identity (product brief, agreed 2026-08-11)
 
-**Clean, airy, professional** — Nexus balances enterprise credibility with approachable clarity. The interface avoids visual noise while maintaining enough density for serious workflows.
+**Clean, airy, professional** — Konductor balances enterprise credibility with approachable clarity. The interface avoids visual noise while maintaining enough density for serious workflows.
 
 Key aesthetic principles:
 

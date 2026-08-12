@@ -1,18 +1,18 @@
 # OAuth Authentication Guide
 
-This guide explains how the Cognito user pool is provisioned, what claims the Nexus authorizer validates, and how to obtain an access token and call the OAuth API surface using API testing tools such as Insomnia, Postman, or curl.
+This guide explains how the Cognito user pool is provisioned, what claims the Konductor authorizer validates, and how to obtain an access token and call the OAuth API surface using API testing tools such as Insomnia, Postman, or curl.
 
 ---
 
-## What Nexus Provisions
+## What Konductor Provisions
 
 When you deploy the core stack (`make deploy-core`), SAM creates the following Cognito resources automatically:
 
 | Resource | Purpose |
 |----------|---------|
-| **User Pool** (`{org}-nexus-users`) | Stores user accounts. Email is the username attribute. Admin-created users only (no self-registration). Password policy: 12+ chars, mixed case, numbers. |
-| **User Pool Domain** (`{org}-nexus-{account-id}`) | Hosted UI domain for the OAuth authorization-code flow. |
-| **App Client** (`{org}-nexus-control-plane`) | OAuth client using the authorization-code flow with `openid`, `email`, and `profile` scopes. No client secret (public client). Access token validity is configurable (default 60 minutes). |
+| **User Pool** (`{org}-konductor-users`) | Stores user accounts. Email is the username attribute. Admin-created users only (no self-registration). Password policy: 12+ chars, mixed case, numbers. |
+| **User Pool Domain** (`{org}-konductor-{account-id}`) | Hosted UI domain for the OAuth authorization-code flow. |
+| **App Client** (`{org}-konductor-control-plane`) | OAuth client using the authorization-code flow with `openid`, `email`, and `profile` scopes. No client secret (public client). Access token validity is configurable (default 60 minutes). |
 | **Group: `platform-admin`** | Maps to the `PlatformAdmin` global role. Can access all API methods including POST (writes) and the approval endpoint. |
 | **Group: `platform-auditor`** | Maps to the `PlatformAuditor` global role. Can only access GET (read) endpoints. Cannot mutate or approve. |
 
@@ -33,7 +33,7 @@ Retrieve them with:
 
 ```bash
 aws cloudformation describe-stacks \
-  --stack-name nexus-core \
+  --stack-name konductor-core \
   --query 'Stacks[0].Outputs[?starts_with(OutputKey, `Cognito`) || OutputKey==`OAuthApiEndpoint`].[OutputKey,OutputValue]' \
   --output table
 ```
@@ -103,7 +103,7 @@ aws cognito-idp admin-set-user-password \
 
 ## Required Access-Token Claims
 
-The Nexus OAuth authorizer validates the following claims on every request. An access token that fails any check is rejected with `401 Unauthorized`.
+The Konductor OAuth authorizer validates the following claims on every request. An access token that fails any check is rejected with `401 Unauthorized`.
 
 | Claim | Required Value | Verified By |
 |-------|---------------|-------------|
@@ -134,7 +134,7 @@ The Nexus OAuth authorizer validates the following claims on every request. An a
 
 ## Obtaining an Access Token
 
-Nexus uses the OAuth 2.0 **authorization-code** flow. The app client does not have a client secret (public client), so the token exchange does not require one.
+Konductor uses the OAuth 2.0 **authorization-code** flow. The app client does not have a client secret (public client), so the token exchange does not require one.
 
 ### Option A: Hosted UI (Browser)
 
@@ -208,7 +208,7 @@ After login, the browser redirects to `http://localhost?code=XXXX`. Copy the cod
 
 ### Option D: Custom Login (SRP, no Hosted UI)
 
-First-party consoles (for example the Nexus web UI) sign users in with the
+First-party consoles (for example the Konductor web UI) sign users in with the
 SRP flow instead of redirecting to the hosted UI. The user-pool client allows
 `ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH`; raw-password
 authentication stays disabled, so credentials never traverse the client.
@@ -348,7 +348,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 
 ## Bootstrapping Role Bindings
 
-Resource authorization decisions are answered by the grant engine from the `nexus-authorization-bindings` table: a principal (a Cognito team group, issuer-qualified, or an AWS account) holds a role (`publisher` or `subscriber`) on a domain. Until a binding exists, every resource-scoped action by that principal is denied.
+Resource authorization decisions are answered by the grant engine from the `konductor-authorization-bindings` table: a principal (a Cognito team group, issuer-qualified, or an AWS account) holds a role (`publisher` or `subscriber`) on a domain. Until a binding exists, every resource-scoped action by that principal is denied.
 
 Binding administration cannot deadlock against an empty table: the `platform-admin` global role resolves from the controlled Cognito group (`platform-admin`), never from the grant table. Any platform-admin access token can always create the first bindings.
 

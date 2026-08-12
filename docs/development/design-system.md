@@ -1,10 +1,10 @@
 # Design System
 
-The Nexus console has one visual identity, defined once as code and documented here. Every token and primitive listed below maps to a real code path; the living gallery at `/design-system` (excluded from navigation) renders each primitive against the current build. When you change a token or primitive, update this document in the same change.
+The Konductor console has one visual identity, defined once as code and documented here. Every token and primitive listed below maps to a real code path; the living gallery at `/design-system` (excluded from navigation) renders each primitive against the current build. When you change a token or primitive, update this document in the same change.
 
 ## Principles
 
-**Clean, airy, professional.** Nexus balances enterprise credibility with approachable clarity. The interface avoids visual noise while maintaining enough density for serious workflows.
+**Clean, airy, professional.** Konductor balances enterprise credibility with approachable clarity. The interface avoids visual noise while maintaining enough density for serious workflows.
 
 - **Layered depth** — three surface levels only: `background` (page) → `surface` (cards) → `surface-raised` (interactive elements, popovers, toasts). Never invent a fourth layer.
 - **Generous whitespace** — pages breathe (`px-6 py-10` shells, `gap-10` between sections, cards pad `p-6`). Whitespace is the primary grouping device; dividers are rare.

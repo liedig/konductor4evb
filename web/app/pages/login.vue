@@ -38,7 +38,7 @@ onMounted(async () => {
 <template>
   <div class="w-full max-w-sm">
     <div class="mb-8 text-center">
-      <p class="text-lg font-semibold tracking-wide">EventBridge <span class="text-accent">Konductor</span></p>
+      <p class="text-lg font-semibold tracking-wide">Konductor <span class="text-accent">for Amazon EventBridge</span></p>
       <p class="mt-1 text-sm text-muted">Sign in to the control-plane console</p>
     </div>
     <form class="rounded-xl border border-border bg-surface p-6 shadow-sm" @submit.prevent="submit">

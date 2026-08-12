@@ -87,7 +87,7 @@ Domain management is an administrative function of the control plane. Any authen
 
 For OAuth callers the registration request SHALL carry an `owningTeam` naming exactly one of the caller's Cognito team groups, which SHALL be recorded on the domain record and used to write the owner binding at approval (see domain-ownership). IAM callers MAY omit `owningTeam`; when omitted, no owner binding is created at approval and ownership administration falls to the platform team.
 
-The set of environments a domain is provisioned into SHALL be determined by the **platform team**, not the requester. The Nexus platform SHALL hold a single configured environment list (default `["dev", "staging", "prod"]`), and every approved domain SHALL be provisioned into the full list. The registration API SHALL NOT accept an `environments` field. All environments of a given domain SHALL be provisioned into the same `ownerAccountId`.
+The set of environments a domain is provisioned into SHALL be determined by the **platform team**, not the requester. The Konductor platform SHALL hold a single configured environment list (default `["dev", "staging", "prod"]`), and every approved domain SHALL be provisioned into the full list. The registration API SHALL NOT accept an `environments` field. All environments of a given domain SHALL be provisioned into the same `ownerAccountId`.
 
 The registration request SHALL include at least one secondary owner email address. Secondary owners are co-managers of the domain who serve as backup contacts when the primary owner is unavailable. At this stage, secondary owner emails are captured for informational purposes only — no notifications are sent to secondary owners.
 
@@ -401,7 +401,7 @@ The control plane SHALL let the platform team disable and re-enable an `ACTIVE`/
 
 ### Requirement: Domain name as primary identifier
 
-The domain name SHALL be the sole identifier for a domain throughout the system. Domain names SHALL be globally unique within the Nexus installation. This uniqueness is an intentional governance feature that forces domain owners to make explicit bounded-context decisions, aligning with DDD and EDA principles. The system SHALL NOT generate or use a surrogate identifier (e.g., UUID) for domains. API paths, event payloads, DynamoDB keys, and Step Functions inputs SHALL all use the domain name as the domain identifier.
+The domain name SHALL be the sole identifier for a domain throughout the system. Domain names SHALL be globally unique within the Konductor installation. This uniqueness is an intentional governance feature that forces domain owners to make explicit bounded-context decisions, aligning with DDD and EDA principles. The system SHALL NOT generate or use a surrogate identifier (e.g., UUID) for domains. API paths, event payloads, DynamoDB keys, and Step Functions inputs SHALL all use the domain name as the domain identifier.
 
 #### Scenario: Domain name used in API paths
 
@@ -426,7 +426,7 @@ The system SHALL assume one AWS account per domain for application-side resource
 
 - **WHEN** a domain is registered with an `ownerAccountId`
 - **THEN** all application-side resources for all environments of that domain SHALL be provisioned in that account
-- **AND THEN** the trust stack in that account SHALL grant the Nexus cross-account access to manage those resources
+- **AND THEN** the trust stack in that account SHALL grant the Konductor cross-account access to manage those resources
 
 ### Requirement: Primary and secondary owner model
 

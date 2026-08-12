@@ -16,9 +16,9 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
-      title: 'EventBridge Konductor',
+      title: 'Konductor for Amazon EventBridge',
       meta: [
-        { name: 'description', content: 'EventBridge Konductor control-plane console' },
+        { name: 'description', content: 'Konductor for Amazon EventBridge control-plane console' },
       ],
     },
   },

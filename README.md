@@ -1,12 +1,12 @@
-# EventBridge Nexus
+# Konductor for Amazon EventBridge
 
 A serverless control plane for cross-account event-driven architecture at scale. Platform teams get governed domains — registration, approval, provisioning, ownership, and observability. Application teams get three simple verbs — **publish, subscribe, unsubscribe** — for event stream automation and never touch event buses other than their own, IAM policies, or cross-account delivery infrastructure.
 
 [Installation guide](docs/installation.md) | [Architecture](docs/development/architecture.md) | [API contracts](api/) (OAuth: `openapi-oauth.yaml`, IAM: `openapi-iam.yaml`)
 
-## Why Nexus
+## Why Konductor
 
-Consuming an event from another AWS account means coordinating event buses, rules, resource policies, IAM roles, and DLQs across two accounts — 12+ resources and days of infrastructure wrangling per integration, reinvented by every team with subtle drift. Nexus abstracts that away so teams focus on their events, not their plumbing.
+Consuming an event from another AWS account means coordinating event buses, rules, resource policies, IAM roles, and DLQs across two accounts — 12+ resources and days of infrastructure wrangling per integration, reinvented by every team with subtle drift. Konductor abstracts that away so teams focus on their events, not their plumbing.
 
 **Minutes, not days.** Subscribe to an event and start processing it in minutes. Cross-account delivery is invisible.
 
@@ -14,7 +14,7 @@ Consuming an event from another AWS account means coordinating event buses, rule
 
 **Simple verbs, real durability.** Publishing is one `POST /publish` call. The event is durably queued before anything downstream can lose it, and retries preserve its idempotency key and original publish timestamp.
 
-**Schema-first contracts.** Consumers subscribe to a schema contract, not a bus. Publishers manage schemas through the API — append-only and versioned per environment. Nexus pins the latest version and materializes the delivery rules.
+**Schema-first contracts.** Consumers subscribe to a schema contract, not a bus. Publishers manage schemas through the API — append-only and versioned per environment. Konductor pins the latest version and materializes the delivery rules.
 
 **Built-in ownership and observability.** Every domain has a primary owner and required secondary owners. Approval workflows, lifecycle events, CloudWatch dashboards, and per-subscription alarms come standard.
 
@@ -42,23 +42,23 @@ Consuming an event from another AWS account means coordinating event buses, rule
 └────────────────────────────────────────┘   └──────────────────────────────────────────┘
 ```
 
-Nexus runs in a dedicated platform account. Domain resources are provisioned into domain accounts via cross-account IAM roles. All control-plane state lives in the platform account; domain accounts only contain the resources their domains need.
+Konductor runs in a dedicated platform account. Domain resources are provisioned into domain accounts via cross-account IAM roles. All control-plane state lives in the platform account; domain accounts only contain the resources their domains need.
 
 Both API surfaces serve **environment-named stages** (`dev`, `staging`, `prod`): the stage in the URL selects the target environment, so callers never name an environment, registry, or bus in a request.
 
 ## Core Capabilities
 
-* **Domain lifecycle.** Register a domain via API, get human approval via email or API, and Nexus provisions all resources across every configured environment with all-or-nothing saga rollback. See [Domain Management Guide](docs/domain-management.md).
+* **Domain lifecycle.** Register a domain via API, get human approval via email or API, and Konductor provisions all resources across every configured environment with all-or-nothing saga rollback. See [Domain Management Guide](docs/domain-management.md).
 
-* **Event publishing.** `POST /publish` with a domain, event name, and business data — Nexus authorizes the publisher, resolves the latest schema version, stamps the canonical envelope, and delivers to the domain's event bus. Store-and-forward through SQS: once accepted (`202`), the event survives downstream failures and is retried with its idempotency key intact. See [Publishing Events](docs/publishing-events.md).
+* **Event publishing.** `POST /publish` with a domain, event name, and business data — Konductor authorizes the publisher, resolves the latest schema version, stamps the canonical envelope, and delivers to the domain's event bus. Store-and-forward through SQS: once accepted (`202`), the event survives downstream failures and is retried with its idempotency key intact. See [Publishing Events](docs/publishing-events.md).
 
 * **Schema management.** Publishers create schemas and append versions with `POST /schemas` and `POST /schemas/versions` — append-only, in platform-managed registries, targeting the environment selected by the API stage. See [Publishing Events](docs/publishing-events.md).
 
-* **Schema-first subscriptions.** Consumers subscribe to a schema contract, not a bus. Nexus pins the latest version per environment, materializes EventBridge rules, and wires cross-account delivery with DLQs and zero-events alarms. Per-environment enable/disable maps to native rule state. See [Domain Management Guide](docs/domain-management.md#event-subscriptions).
+* **Schema-first subscriptions.** Consumers subscribe to a schema contract, not a bus. Konductor pins the latest version per environment, materializes EventBridge rules, and wires cross-account delivery with DLQs and zero-events alarms. Per-environment enable/disable maps to native rule state. See [Domain Management Guide](docs/domain-management.md#event-subscriptions).
 
 * **Multi-environment reliability.** Every domain is provisioned across the platform-configured environment list (default: dev, staging, prod). Provisioning is all-or-nothing; deprovisioning is idempotent. See [Architecture](docs/development/architecture.md).
 
-## Working with Nexus
+## Working with Konductor
 
 The documentation builds understanding linearly — each step assumes the ones before it:
 
@@ -76,10 +76,10 @@ Deep reference for contributors and operators: [Architecture](docs/development/a
 
 ## Web Console
 
-Nexus ships a role-gated web console (`web/`, Nuxt + Tailwind, statically hosted on S3 + CloudFront from the core stack). Platform admins land on the pending-approvals inbox; domain teams land on their domains. Sign-in is a custom Nexus-branded page using Cognito SRP — no hosted UI.
+Konductor ships a role-gated web console (`web/`, Nuxt + Tailwind, statically hosted on S3 + CloudFront from the core stack). Platform admins land on the pending-approvals inbox; domain teams land on their domains. Sign-in is a custom Konductor-branded page using Cognito SRP — no hosted UI.
 
 - **Develop**: `make web-dev` (http://localhost:3000). It writes `web/public/config.json` from the core stack outputs and proxies `/dev/*` API calls to the deployed OAuth API, so the dev console behaves like the deployed one.
-- **Deploy**: `make deploy-web` — builds, syncs to the web bucket, writes `config.json` from current stack outputs (no rebuild needed on stack changes), and invalidates CloudFront. The console URL is the `NexusWebUrl` output.
+- **Deploy**: `make deploy-web` — builds, syncs to the web bucket, writes `config.json` from current stack outputs (no rebuild needed on stack changes), and invalidates CloudFront. The console URL is the `KonductorWebUrl` output.
 - **Test logins**: `make seed-users` creates the dev personas (`alice` = platform-admin, `bob` = team-payments owner).
 - Visual language: [Design System](docs/development/design-system.md); the `/design-system` route renders every primitive against the live build.
 

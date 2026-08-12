@@ -8,7 +8,7 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 ### Requirement: API layer
 
-The control plane SHALL expose separate Amazon API Gateway REST API surfaces for AWS_IAM-authenticated callers and Cognito OAuth-authenticated interactive users. The OAuth surface SHALL use the Nexus REQUEST Lambda authorizer and SHALL NOT use an API Gateway native Cognito user-pool authorizer. The API contracts SHALL be defined using OpenAPI specifications. Routes SHALL be assigned to the surface appropriate to their caller and SHALL NOT combine OAuth and IAM as interchangeable authorization mechanisms.
+The control plane SHALL expose separate Amazon API Gateway REST API surfaces for AWS_IAM-authenticated callers and Cognito OAuth-authenticated interactive users. The OAuth surface SHALL use the Konductor REQUEST Lambda authorizer and SHALL NOT use an API Gateway native Cognito user-pool authorizer. The API contracts SHALL be defined using OpenAPI specifications. Routes SHALL be assigned to the surface appropriate to their caller and SHALL NOT combine OAuth and IAM as interchangeable authorization mechanisms.
 
 Read operations and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Asynchronous write operations SHALL preserve `aws` service integrations that route commands directly through SQS queues. API Gateway mapping templates SHALL derive trusted principal context from the authenticated request context and inject it into queued commands. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI contract. Each API SHALL be served from environment-named stages (`dev`, `staging`, `prod`) sharing one deployment; the stage name SHALL be the environment selector for publish and schema write operations, and environment-agnostic operations SHALL behave identically on every stage. Domain-specific endpoints (`GET /domains/{domainName}`, `PUT /domains/{domainName}`) SHALL use the domain name as the path parameter.
 
@@ -109,13 +109,13 @@ Library crates SHALL use `thiserror` for typed, structured error definitions. La
 
 ### Requirement: Infrastructure as Code
 
-All Nexus infrastructure SHALL be defined using AWS SAM (Serverless Application Model). SAM templates SHALL define Lambda functions, API Gateway, DynamoDB tables, Step Functions state machines, IAM roles, SES configuration, SSM parameters, RAM resource shares, and all supporting resources. Step Functions state machine definitions SHALL be authored in YAML format using JSONata as the query language.
+All Konductor infrastructure SHALL be defined using AWS SAM (Serverless Application Model). SAM templates SHALL define Lambda functions, API Gateway, DynamoDB tables, Step Functions state machines, IAM roles, SES configuration, SSM parameters, RAM resource shares, and all supporting resources. Step Functions state machine definitions SHALL be authored in YAML format using JSONata as the query language.
 
-Platform-account resources (the Nexus control plane) SHALL be named using the fixed `{org}-nexus-*` pattern. Nexus is a singleton per organisation and does NOT have an `Environment` concept at the platform layer. Domain resources provisioned by Nexus (event buses, schema registries, DLQs, dashboards, alarms) SHALL follow the configurable `{org}-{env}-{domain}-*` pattern, because a single domain has a distinct set of resources per environment.
+Platform-account resources (the Konductor control plane) SHALL be named using the fixed `{org}-konductor-*` pattern. Konductor is a singleton per organisation and does NOT have an `Environment` concept at the platform layer. Domain resources provisioned by Konductor (event buses, schema registries, DLQs, dashboards, alarms) SHALL follow the configurable `{org}-{env}-{domain}-*` pattern, because a single domain has a distinct set of resources per environment.
 
 #### Scenario: SAM template deployment
 
-- **WHEN** Nexus is deployed to an AWS environment
+- **WHEN** Konductor is deployed to an AWS environment
 - **THEN** deployment SHALL use `sam build` and `sam deploy` (or equivalent CI/CD pipeline)
 - **AND THEN** all resources SHALL be created and configured from the SAM template without manual AWS console operations
 
@@ -128,62 +128,62 @@ Platform-account resources (the Nexus control plane) SHALL be named using the fi
 
 #### Scenario: Platform resources use fixed naming
 
-- **WHEN** the Nexus platform stack is deployed
-- **THEN** every platform resource (DynamoDB table, platform event bus, API Gateway, Lambda functions, IAM roles, queues, DLQs, log groups, dashboards, alarms) SHALL be named `{org}-nexus-<thing>`
+- **WHEN** the Konductor platform stack is deployed
+- **THEN** every platform resource (DynamoDB table, platform event bus, API Gateway, Lambda functions, IAM roles, queues, DLQs, log groups, dashboards, alarms) SHALL be named `{org}-konductor-<thing>`
 - **AND THEN** no platform resource name SHALL include an environment segment
 
 #### Scenario: Domain resources use configurable env-scoped naming
 
-- **WHEN** Nexus provisions a domain in a given environment
+- **WHEN** Konductor provisions a domain in a given environment
 - **THEN** all domain-owned resources SHALL be named according to the configurable pattern defaulting to `{org}-{env}-{domain}-<suffix>`
 - **AND THEN** the same domain provisioned across multiple environments SHALL produce disjoint resource sets with distinct names
 
 ### Requirement: Control plane event bus
 
-EventBridge Nexus SHALL have a dedicated Amazon EventBridge event bus for internal lifecycle events. This bus SHALL be named `{org}-nexus-bus`. The bus SHALL be used to trigger Nexus functionality (e.g., provisioning workflows) and SHALL NOT be exposed to application teams.
+Konductor for Amazon EventBridge SHALL have a dedicated Amazon EventBridge event bus for internal lifecycle events. This bus SHALL be named `{org}-konductor-bus`. The bus SHALL be used to trigger Konductor functionality (e.g., provisioning workflows) and SHALL NOT be exposed to application teams.
 
 #### Scenario: Lifecycle event emission
 
-- **WHEN** Nexus performs a state-changing operation (e.g., domain registration approved, domain creation succeeded)
-- **THEN** it SHALL emit a lifecycle event to the Nexus event bus with source prefix `nexus.` and the event type and minimum payload defined in the domain-management spec
+- **WHEN** Konductor performs a state-changing operation (e.g., domain registration approved, domain creation succeeded)
+- **THEN** it SHALL emit a lifecycle event to the Konductor event bus with source prefix `konductor.` and the event type and minimum payload defined in the domain-management spec
 
 #### Scenario: Workflow triggering via events
 
-- **WHEN** a lifecycle event is emitted to the Nexus event bus (e.g., `DomainRegistrationApproved`)
-- **THEN** an EventBridge rule on the Nexus bus SHALL match the event and trigger the appropriate workflow (e.g., provisioning Step Functions)
+- **WHEN** a lifecycle event is emitted to the Konductor event bus (e.g., `DomainRegistrationApproved`)
+- **THEN** an EventBridge rule on the Konductor bus SHALL match the event and trigger the appropriate workflow (e.g., provisioning Step Functions)
 
 ### Requirement: SES email service dependency
 
-EventBridge Nexus SHALL use Amazon SES for sending email notifications to domain owners and platform team members. SES sender and recipient addresses SHALL be parameterised in the SAM template. EventBridge Nexus SHALL support SES sandbox mode for development environments.
+Konductor for Amazon EventBridge SHALL use Amazon SES for sending email notifications to domain owners and platform team members. SES sender and recipient addresses SHALL be parameterised in the SAM template. Konductor for Amazon EventBridge SHALL support SES sandbox mode for development environments.
 
 #### Scenario: SES resources defined in SAM template
 
-- **WHEN** the Nexus is deployed
+- **WHEN** the Konductor is deployed
 - **THEN** the SAM template SHALL define parameters for `ApprovalFromEmail` and `ApprovalToEmail`
 - **AND THEN** notification Lambda functions SHALL receive these addresses as environment variables
 - **AND THEN** Lambda execution roles SHALL include `ses:SendEmail` permissions
 
 ### Requirement: SSM Parameter Store dependency
 
-EventBridge Nexus SHALL use AWS Systems Manager Parameter Store (Advanced tier) to store domain namespace identifiers. Parameters under `/namespace/*` SHALL be managed by the provisioning workflow. The SAM template SHALL define IAM permissions for SSM operations scoped to the `/namespace/*` path.
+Konductor for Amazon EventBridge SHALL use AWS Systems Manager Parameter Store (Advanced tier) to store domain namespace identifiers. Parameters under `/namespace/*` SHALL be managed by the provisioning workflow. The SAM template SHALL define IAM permissions for SSM operations scoped to the `/namespace/*` path.
 
 #### Scenario: SSM permissions defined in SAM template
 
-- **WHEN** the Nexus is deployed
+- **WHEN** the Konductor is deployed
 - **THEN** the provisioning workflow role SHALL include permissions for `ssm:PutParameter`, `ssm:GetParameter`, and `ssm:AddTagsToResource` scoped to `arn:aws:ssm:*:${AccountId}:parameter/namespace/*`
 
 ### Requirement: AWS RAM dependency
 
-EventBridge Nexus SHALL use AWS Resource Access Manager to share domain namespace SSM parameters with the AWS Organisation. RAM operations SHALL be performed by the provisioning workflow. The SAM template SHALL define IAM permissions for RAM share management.
+Konductor for Amazon EventBridge SHALL use AWS Resource Access Manager to share domain namespace SSM parameters with the AWS Organisation. RAM operations SHALL be performed by the provisioning workflow. The SAM template SHALL define IAM permissions for RAM share management.
 
 #### Scenario: RAM permissions defined in SAM template
 
-- **WHEN** the Nexus is deployed
+- **WHEN** the Konductor is deployed
 - **THEN** the provisioning workflow role SHALL include permissions for `ram:CreateResourceShare`, `ram:GetResourceShares`, `ram:AssociateResourceShare`, and `ram:ListResources`
 
 #### Scenario: AWS Organisations required for RAM
 
-- **WHEN** the Nexus provisioning workflow attempts to create a RAM resource share with the Organisation as principal
+- **WHEN** the Konductor provisioning workflow attempts to create a RAM resource share with the Organisation as principal
 - **THEN** the AWS account SHALL be a member of an AWS Organisation with RAM sharing enabled
 - **AND THEN** if RAM sharing is not enabled, the workflow SHALL fail with a clear error message
 

@@ -1,6 +1,6 @@
 # Service Quotas and Capacity Planning
 
-EventBridge Nexus provisions real AWS resources for every domain and every subscription. Several of the services it builds on have **default quotas low enough to block provisioning after only a handful of domains** — the first one you will hit is the EventBridge Schema Registry limit of **10 registries per region**, which fails the fourth domain:
+Konductor for Amazon EventBridge provisions real AWS resources for every domain and every subscription. Several of the services it builds on have **default quotas low enough to block provisioning after only a handful of domains** — the first one you will hit is the EventBridge Schema Registry limit of **10 registries per region**, which fails the fourth domain:
 
 ```json
 {
@@ -38,7 +38,7 @@ Platform account:
 | SSM parameter in RAM resource share | N | `provision-domain` |
 | EventBridge rule on producer's domain bus | S × E | `activate-subscription` |
 | Zero-events alarm | S × E | `activate-subscription` |
-| Singletons (nexus-bus, 2 DynamoDB tables, API, 13 Lambdas, 7 state machines, 6 queues) | fixed | core stack |
+| Singletons (konductor-bus, 2 DynamoDB tables, API, 13 Lambdas, 7 state machines, 6 queues) | fixed | core stack |
 
 Each domain account: E app event buses, E integration DLQs, 1 trust role. None of these approach any default quota while an account hosts a single domain (the intended model).
 
@@ -69,7 +69,7 @@ These scale with usage patterns rather than domain count:
 | Schemas per registry | `schemas` / `L-EE9E5FA9` | 100 | One schema per event type per env | 100 distinct event types per domain |
 | Schema versions per schema | `schemas` / `L-3C443A2A` | 100 | Each published revision | 100 revisions of one event type |
 | Event bus policy size | `events` / `L-FC354966` | 10,240 chars | **Does not grow** — one fixed statement per bus (`allow-platform-subscription-delivery` on app buses; one producer grant on platform buses) | Not a concern. This is a deliberate design property of resource-policy delivery: per-subscription IAM grants would have grown this policy linearly. |
-| Targets per rule | `events` (fixed) | 5 | Nexus attaches exactly 1 target per subscription rule | Not a concern |
+| Targets per rule | `events` (fixed) | 5 | Konductor attaches exactly 1 target per subscription rule | Not a concern |
 
 ## Data-plane throughput (traffic, not counts)
 
@@ -97,7 +97,7 @@ If a provisioning still fails after retry exhaustion (sustained throttling, e.g.
 
 ## Other platform-account limits (fine by default, listed for completeness)
 
-| Service | Quota | Default | Nexus usage |
+| Service | Quota | Default | Konductor usage |
 |---|---|---|---|
 | Lambda | Account concurrent executions | 1,000 (new accounts sometimes start lower — verify) | 13 functions share the pool; SQS-triggered handlers scale with command volume |
 | Step Functions | Open standard executions | 1,000,000 | One execution per registration/approval/provisioning/subscription operation |
@@ -140,7 +140,7 @@ aws service-quotas list-requested-service-quota-change-history \
   --service-code schemas
 ```
 
-Increases are per region — request them in the region where `nexus-core` is deployed. Large jumps may route to AWS Support for review; request them ahead of onboarding waves, not during.
+Increases are per region — request them in the region where `konductor-core` is deployed. Large jumps may route to AWS Support for review; request them ahead of onboarding waves, not during.
 
 ## Pre-onboarding checklist
 

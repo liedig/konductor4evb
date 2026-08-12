@@ -1,10 +1,10 @@
-# EventBridge Nexus Installation Guide
+# Konductor for Amazon EventBridge Installation Guide
 
-This guide walks you through deploying EventBridge Nexus into your own AWS environment from scratch. By the end, you will have a working Nexus installation and will have verified it by registering, approving, and activating a domain.
+This guide walks you through deploying Konductor for Amazon EventBridge into your own AWS environment from scratch. By the end, you will have a working Konductor installation and will have verified it by registering, approving, and activating a domain.
 
 ## Overview
 
-Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
+Konductor deploys as three CloudFormation stacks across two types of AWS accounts:
 
 ```text
 ┌─────────────────────────────────────────────────┐
@@ -13,7 +13,7 @@ Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
 │  1. notifications-stack (optional)               │
 │     SES email identities for testing             │
 │                                                  │
-│  2. nexus core stack (required)                  │
+│  2. konductor core stack (required)                  │
 │     API Gateway, Lambda functions, DynamoDB,     │
 │     Step Functions, EventBridge bus,             │
 │     domain event buses, DLQs, dashboards         │
@@ -24,7 +24,7 @@ Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
 │  Domain Account (one per team)                   │
 │                                                  │
 │  3. trust stack (required per account)           │
-│     IAM role granting Nexus cross-account access  │
+│     IAM role granting Konductor cross-account access  │
 │                                                  │
 └─────────────────────────────────────────────────┘
 ```
@@ -45,21 +45,21 @@ Nexus deploys as three CloudFormation stacks across two types of AWS accounts:
 
 ### AWS environment
 
-- **Platform account**: The AWS account where Nexus runs. You need credentials with permissions to deploy CloudFormation stacks, create IAM roles, and manage API Gateway, Lambda, DynamoDB, EventBridge, and SES resources.
+- **Platform account**: The AWS account where Konductor runs. You need credentials with permissions to deploy CloudFormation stacks, create IAM roles, and manage API Gateway, Lambda, DynamoDB, EventBridge, and SES resources.
 - **Domain account(s)**: One or more AWS accounts where domain resources will be provisioned. You need credentials with permissions to deploy CloudFormation stacks and create IAM roles.
-- **AWS Organizations**: The platform account must belong to an AWS Organization. Nexus uses AWS RAM to share domain namespace information across accounts. Capture the Organization ARN (e.g., `arn:aws:organizations::123456789012:organization/o-abc123`) — you will need it as a parameter.
+- **AWS Organizations**: The platform account must belong to an AWS Organization. Konductor uses AWS RAM to share domain namespace information across accounts. Capture the Organization ARN (e.g., `arn:aws:organizations::123456789012:organization/o-abc123`) — you will need it as a parameter.
 - **Email addresses** (optional): For approval and rejection notifications during testing. Both the sender and recipient addresses must be verified in SES sandbox mode. If you skip this, you can still approve domains via the API directly.
 - **Service quotas**: Default quotas in the platform account support only **3 domains** (the EventBridge Schema Registry limit is 10 registries per region). Before onboarding more, see [Service Quotas and Capacity Planning](service-quotas.md).
 
 ### Decide on your namespace
 
-Nexus is a singleton per organization. Platform resources follow the fixed `nexus-*` pattern (e.g., `nexus-bus`); the domain-account trust role follows `{org}-nexus-trust-role` (org-scoped so it's unique across organizations sharing a domain account); domain resources follow `{org}-{env}-{domain}-*` (the env comes from the `Environments` parameter, applied per-domain at provisioning time). Choose a value for:
+Konductor is a singleton per organization. Platform resources follow the fixed `konductor-*` pattern (e.g., `konductor-bus`); the domain-account trust role follows `{org}-konductor-trust-role` (org-scoped so it's unique across organizations sharing a domain account); domain resources follow `{org}-{env}-{domain}-*` (the env comes from the `Environments` parameter, applied per-domain at provisioning time). Choose a value for:
 
 | Parameter | Example | Notes |
 |---|---|---|
 | `Organization` | `acme` | Short identifier for your organization |
 
-This value is immutable once deployed. Stack names are fixed (`nexus-core`, `nexus-notifications`, `nexus-trust`) — one deployment per AWS Organization.
+This value is immutable once deployed. Stack names are fixed (`konductor-core`, `konductor-notifications`, `konductor-trust`) — one deployment per AWS Organization.
 
 ---
 
@@ -67,12 +67,12 @@ This value is immutable once deployed. Stack names are fixed (`nexus-core`, `nex
 
 This stack creates SES email identities for approval and rejection notifications. It is for testing against the SES sandbox only. Skip this phase if you do not need email notifications.
 
-**Important:** Deploy this stack in the same AWS region as the Nexus core stack. SES identities are regional.
+**Important:** Deploy this stack in the same AWS region as the Konductor core stack. SES identities are regional.
 
 ```bash
 sam deploy \
   --config-file samconfig-notifications.toml \
-  --stack-name nexus-notifications \
+  --stack-name konductor-notifications \
   --parameter-overrides \
     NotificationSenderEmail=<sender@example.com> \
     PlatformOperatorEmail=<platform-team@example.com> \
@@ -84,9 +84,9 @@ Example:
 ```bash
 sam deploy \
   --config-file samconfig-notifications.toml \
-  --stack-name nexus-notifications \
+  --stack-name konductor-notifications \
   --parameter-overrides \
-    NotificationSenderEmail=nexus-sender@example.com \
+    NotificationSenderEmail=konductor-sender@example.com \
     PlatformOperatorEmail=platform-team@example.com \
   --region us-east-1
 ```
@@ -111,14 +111,14 @@ Capture the email addresses for Phase 2:
 
 ```bash
 aws cloudformation describe-stacks \
-  --stack-name nexus-notifications \
+  --stack-name konductor-notifications \
   --query "Stacks[0].Outputs" \
   --region <region>
 ```
 
 ---
 
-## Phase 2 — Deploy the Nexus core stack
+## Phase 2 — Deploy the Konductor core stack
 
 Deploy the core stack into the platform account.
 
@@ -148,19 +148,19 @@ sam deploy --config-file samconfig-core.toml
 
 | Parameter | Description | Example |
 |---|---|---|
-| `Organization` | Organization identifier used in Nexus resource naming | `acme` |
+| `Organization` | Organization identifier used in Konductor resource naming | `acme` |
 | `AwsOrganizationArn` | AWS Organization ARN (for RAM sharing of domain namespaces). Distinct from `Organization`. | `arn:aws:organizations::123456789012:organization/o-abc123` |
 
 **Optional parameters:**
 
 | Parameter | Description | Default |
 |---|---|---|
-| `NotificationSenderEmail` | SES sender address used as the From on all Nexus notification emails (from Phase 1) | `""` (disabled) |
+| `NotificationSenderEmail` | SES sender address used as the From on all Konductor notification emails (from Phase 1) | `""` (disabled) |
 | `PlatformOperatorEmail` | SES recipient that receives domain approval requests — the platform team inbox (from Phase 1) | `""` (disabled) |
 | `NamespacePattern` | Resource naming convention | `{org}-{env}-{domain}` |
 | `Environments` | Comma-delimited list of environments every approved domain is provisioned into. Platform-team controlled; domain requesters cannot override. Each entry must match `^[a-z0-9][a-z0-9-]{0,31}$`. | `dev,staging,prod` |
 
-> **On `Environments`**: this is an org-wide governance setting. Every domain registered and approved on this Nexus deployment is provisioned across the full list. To add or remove an environment, update the parameter and redeploy — the change applies to *future* registrations only; existing domains keep the environment list they were registered with.
+> **On `Environments`**: this is an org-wide governance setting. Every domain registered and approved on this Konductor deployment is provisioned across the full list. To add or remove an environment, update the parameter and redeploy — the change applies to *future* registrations only; existing domains keep the environment list they were registered with.
 
 If you completed Phase 1, pass the email addresses:
 
@@ -169,13 +169,13 @@ sam deploy --config-file samconfig-core.toml \
   --parameter-overrides \
     Organization=acme \
     AwsOrganizationArn=arn:aws:organizations::123456789012:organization/o-abc123 \
-    NotificationSenderEmail=nexus-sender@example.com \
+    NotificationSenderEmail=konductor-sender@example.com \
     PlatformOperatorEmail=platform-team@example.com
 ```
 
 ### Confirm the platform notifications subscription
 
-When notifications are enabled, the core stack subscribes `PlatformOperatorEmail` to the `nexus-platform-notifications` SNS topic, which forwards every lifecycle event on the nexus bus to platform operators. SNS email subscriptions require a one-time confirmation:
+When notifications are enabled, the core stack subscribes `PlatformOperatorEmail` to the `konductor-platform-notifications` SNS topic, which forwards every lifecycle event on the konductor bus to platform operators. SNS email subscriptions require a one-time confirmation:
 
 1. After deploying, check the platform team inbox for an AWS Notification "Subscription Confirmation" email.
 2. Click **Confirm subscription**. Until confirmed, operator notifications are not delivered.
@@ -186,7 +186,7 @@ After deployment succeeds, capture the outputs needed for Phase 3:
 
 ```bash
 aws cloudformation describe-stacks \
-  --stack-name nexus-core \
+  --stack-name konductor-core \
   --query "Stacks[0].Outputs" \
   --region <region>
 ```
@@ -195,7 +195,7 @@ You need these two values:
 
 | Output | Used in Phase 3 as |
 |---|---|
-| `NexusFunctionRoleArn` | `NexusRoleArn` parameter |
+| `KonductorFunctionRoleArn` | `KonductorRoleArn` parameter |
 | `ProvisioningWorkflowRoleArn` | `ProvisioningWorkflowRoleArn` parameter |
 
 Also note the `ApiEndpoint` output — you will use it in the smoke test.
@@ -204,19 +204,19 @@ Also note the `ApiEndpoint` output — you will use it in the smoke test.
 
 ## Phase 3 — Onboard a domain account
 
-Deploy the trust stack in each domain account that will own domains. This grants Nexus cross-account access to provision domain resources.
+Deploy the trust stack in each domain account that will own domains. This grants Konductor cross-account access to provision domain resources.
 
 Switch your AWS CLI credentials to the domain account, then:
 
 ```bash
 aws cloudformation deploy \
   --template-file trust-stack.yaml \
-  --stack-name nexus-trust \
+  --stack-name konductor-trust \
   --parameter-overrides \
-    NexusRoleArn=<NexusFunctionRoleArn from Phase 2> \
+    KonductorRoleArn=<KonductorFunctionRoleArn from Phase 2> \
     ProvisioningWorkflowRoleArn=<ProvisioningWorkflowRoleArn from Phase 2> \
     Organization=<org> \
-  --tags Application=nexus Component=trust \
+  --tags Application=konductor Component=trust \
   --capabilities CAPABILITY_NAMED_IAM \
   --region <region>
 ```
@@ -226,17 +226,17 @@ Example:
 ```bash
 aws cloudformation deploy \
   --template-file trust-stack.yaml \
-  --stack-name nexus-trust \
+  --stack-name konductor-trust \
   --parameter-overrides \
-    NexusRoleArn=arn:aws:iam::111111111111:role/nexus-function-role \
-    ProvisioningWorkflowRoleArn=arn:aws:iam::111111111111:role/nexus-provisioning-workflow-role \
+    KonductorRoleArn=arn:aws:iam::111111111111:role/konductor-function-role \
+    ProvisioningWorkflowRoleArn=arn:aws:iam::111111111111:role/konductor-provisioning-workflow-role \
     Organization=acme \
-  --tags Application=nexus Component=trust \
+  --tags Application=konductor Component=trust \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
 
-A single trust role (`<org>-nexus-trust-role`) serves all environments of all
+A single trust role (`<org>-konductor-trust-role`) serves all environments of all
 domains in the account.
 
 For detailed instructions including verification and troubleshooting, see
@@ -266,7 +266,7 @@ The smoke test:
 3. Waits for the approval workflow to publish the task token, then approves the domain via the API
 4. Polls until the domain reaches `ACTIVE` status (up to ~3.5 minutes)
 
-If all steps pass, your Nexus installation is working. To verify provisioned
+If all steps pass, your Konductor installation is working. To verify provisioned
 resources, describe the domain and check the `resourceArns` map:
 
 ```bash
@@ -321,7 +321,7 @@ In SES sandbox mode, both the sender and recipient email addresses must be verif
 
 ### RAM share failed: not in an AWS Organization
 
-The `AwsOrganizationArn` parameter is required. Nexus uses AWS RAM to share domain namespace information across accounts. If you see errors during provisioning related to RAM:
+The `AwsOrganizationArn` parameter is required. Konductor uses AWS RAM to share domain namespace information across accounts. If you see errors during provisioning related to RAM:
 
 - Confirm the platform account belongs to an AWS Organization.
 - Verify the Organization ARN is correct (`arn:aws:organizations::...`).
@@ -333,11 +333,11 @@ If domain provisioning fails with `AccessDenied` when assuming the trust role:
 
 - Verify the trust stack is deployed in the target domain account.
 - Check the trust role's trust policy lists the correct platform account role ARNs.
-- Confirm the role ARNs match the `NexusFunctionRoleArn` and `ProvisioningWorkflowRoleArn` outputs from the core stack.
+- Confirm the role ARNs match the `KonductorFunctionRoleArn` and `ProvisioningWorkflowRoleArn` outputs from the core stack.
 
 ```bash
 aws iam get-role \
-  --role-name <org>-nexus-trust-role \
+  --role-name <org>-konductor-trust-role \
   --region <region>
 ```
 
@@ -396,7 +396,7 @@ The `DomainsTable` has `DeletionPolicy: Retain`. When you delete the core stack,
 
 ```bash
 aws dynamodb delete-table \
-  --table-name nexus-domains \
+  --table-name konductor-domains \
   --region <region>
 ```
 
@@ -404,7 +404,7 @@ aws dynamodb delete-table \
 
 ## Uninstall
 
-To remove a Nexus installation completely:
+To remove a Konductor installation completely:
 
 ### 1. Delete all domains
 
@@ -427,7 +427,7 @@ record.
 
 ```bash
 aws cloudformation delete-stack \
-  --stack-name nexus-core \
+  --stack-name konductor-core \
   --region <region>
 ```
 
@@ -437,7 +437,7 @@ Switch credentials to each domain account:
 
 ```bash
 aws cloudformation delete-stack \
-  --stack-name nexus-trust \
+  --stack-name konductor-trust \
   --region <region>
 ```
 
@@ -445,7 +445,7 @@ aws cloudformation delete-stack \
 
 ```bash
 aws cloudformation delete-stack \
-  --stack-name nexus-notifications \
+  --stack-name konductor-notifications \
   --region <region>
 ```
 
@@ -453,16 +453,16 @@ aws cloudformation delete-stack \
 
 The following resources are not automatically deleted when their stacks are removed:
 
-- **DynamoDB table**: `nexus-domains` (retained by `DeletionPolicy`)
-- **CloudWatch log groups**: Under `/aws/lambda/nexus-*` and `/aws/apigateway/nexus-*`
+- **DynamoDB table**: `konductor-domains` (retained by `DeletionPolicy`)
+- **CloudWatch log groups**: Under `/aws/lambda/konductor-*` and `/aws/apigateway/konductor-*`
 
 ```bash
 # Delete the retained DynamoDB table
-aws dynamodb delete-table --table-name nexus-domains --region <region>
+aws dynamodb delete-table --table-name konductor-domains --region <region>
 
 # List and delete log groups
 aws logs describe-log-groups \
-  --log-group-name-prefix "/aws/lambda/nexus-" \
+  --log-group-name-prefix "/aws/lambda/konductor-" \
   --region <region> \
   --query "logGroups[*].logGroupName" --output text
 
