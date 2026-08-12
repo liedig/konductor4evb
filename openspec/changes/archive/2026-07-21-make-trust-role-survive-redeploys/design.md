@@ -2,11 +2,11 @@
 
 ## Context
 
-Each domain account runs a trust stack whose single role (`{org}-nexus-trust-role`) is assumed by two platform roles: `nexus-function-role` (Lambda execution) and `nexus-provisioning-workflow-role` (Step Functions provisioning/deprovisioning). The trust policy currently lists those role ARNs as principals. IAM resolves role-ARN principals to internal unique principal IDs (`AROA...`) when the policy is saved; deleting and recreating a role (same name, new unique ID) leaves the stored principal dangling and assumption fails.
+Each domain account runs a trust stack whose single role (`{org}-konductor-trust-role`) is assumed by two platform roles: `konductor-function-role` (Lambda execution) and `konductor-provisioning-workflow-role` (Step Functions provisioning/deprovisioning). The trust policy currently lists those role ARNs as principals. IAM resolves role-ARN principals to internal unique principal IDs (`AROA...`) when the policy is saved; deleting and recreating a role (same name, new unique ID) leaves the stored principal dangling and assumption fails.
 
-Observed failure: after a core-stack teardown/redeploy, all `provision-env` executions failed with `nexus-provisioning-workflow-role is not authorized to assume ... acme-nexus-trust-role`. Recovery required deleting and redeploying the trust stack, because a plain `cloudformation deploy` sees no template/parameter change (role names are fixed, so ARNs are identical strings) and applies nothing.
+Observed failure: after a core-stack teardown/redeploy, all `provision-env` executions failed with `konductor-provisioning-workflow-role is not authorized to assume ... acme-konductor-trust-role`. Recovery required deleting and redeploying the trust stack, because a plain `cloudformation deploy` sees no template/parameter change (role names are fixed, so ARNs are identical strings) and applies nothing.
 
-Constraints: platform and domain accounts belong to the same organization; the platform stack must remain freely re-deployable during development; both platform role names are deterministic (`RoleName` set explicitly in `nexus-core-stack.yaml`), so their ARN strings are stable.
+Constraints: platform and domain accounts belong to the same organization; the platform stack must remain freely re-deployable during development; both platform role names are deterministic (`RoleName` set explicitly in `konductor-core-stack.yaml`), so their ARN strings are stable.
 
 ## Goals / Non-Goals
 
@@ -29,7 +29,7 @@ Conditions are evaluated as strings on every `sts:AssumeRole` request, never sna
 
 Alternatives rejected:
 - Document the teardown/redeploy dance: tribal-knowledge tax; failure is silent until provisioning breaks.
-- `ArnLike` with `role/nexus-*`: grants assumption to every future platform role; broader than needed.
+- `ArnLike` with `role/konductor-*`: grants assumption to every future platform role; broader than needed.
 - `aws:PrincipalArn` for assumed-role sessions resolves to the **role ARN**, not the session ARN, so exact `ArnEquals` matching works without wildcards.
 
 **D2: Derive the platform account id from the existing role-ARN parameters.**

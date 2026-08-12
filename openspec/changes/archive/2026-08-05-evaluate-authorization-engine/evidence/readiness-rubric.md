@@ -1,6 +1,6 @@
 # Readiness Rubric, Mandatory Behavior, and Evidence Templates
 
-> **Spike methodology.** This rubric is frozen before results are collected (task 1.3). It explains how evaluation criteria inform the readiness decision; it does not assign arbitrary numerical weights that imply Nexus product priorities. The readiness decision (task 7.1) applies this rubric unchanged. Two independent reviewers (task 6.4) verify evidence against this rubric and record disagreements and resolutions.
+> **Spike methodology.** This rubric is frozen before results are collected (task 1.3). It explains how evaluation criteria inform the readiness decision; it does not assign arbitrary numerical weights that imply Konductor product priorities. The readiness decision (task 7.1) applies this rubric unchanged. Two independent reviewers (task 6.4) verify evidence against this rubric and record disagreements and resolutions.
 
 ## 1. Mandatory behavior (pass/fail)
 
@@ -56,7 +56,7 @@ The criteria below inform readiness. Each is assessed as `support`, `concern`, o
 A finding is a **production-blocking constraint** if any of the following hold:
 
 1. Mandatory correctness or non-disclosure fails (Section 1).
-2. A criterion is `unsupported` for a behavior that the agreed Nexus authorization model requires (e.g., immediate revocation cannot be bounded; account-level granularity cannot be represented).
+2. A criterion is `unsupported` for a behavior that the agreed Konductor authorization model requires (e.g., immediate revocation cannot be bounded; account-level granularity cannot be represented).
 3. Latency or revocation p99 exceeds 2x the provisional target after documented tuning of the representative grant model.
 4. Maintaining the subscription reverse index or additive re-evaluation is operationally unsustainable at the evidenced volumes (operator steps unbounded, quotas exceeded without mitigation).
 5. A product requirement for explicit deny, delegation, or condition logic emerges that the additive grant model cannot express.

@@ -2,12 +2,12 @@
 
 ### Requirement: Flat publisher schema creation API
 
-The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /schemas` as a flat verb endpoint for creating an event schema. The request SHALL accept `domain`, `eventName`, `schemaType`, and `content` in the request body. The target environment SHALL be inferred from the API Gateway stage (`$context.stage`). Both surfaces SHALL normalize their authenticated principal and require the DynamoDB-backed grant engine to allow the publisher action for that domain. Nexus SHALL derive the canonical schema name `{namespaceIdentity}@{eventName}` and the stage-selected environment's registry. Both route contracts SHALL reject a duplicate schema rather than replacing it.
+The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /schemas` as a flat verb endpoint for creating an event schema. The request SHALL accept `domain`, `eventName`, `schemaType`, and `content` in the request body. The target environment SHALL be inferred from the API Gateway stage (`$context.stage`). Both surfaces SHALL normalize their authenticated principal and require the DynamoDB-backed grant engine to allow the publisher action for that domain. Konductor SHALL derive the canonical schema name `{namespaceIdentity}@{eventName}` and the stage-selected environment's registry. Both route contracts SHALL reject a duplicate schema rather than replacing it.
 
 #### Scenario: Authorized publisher creates a schema
 
 - **WHEN** a caller with a `publisher` binding for domain `orders` creates event `OrderNotification` on the `dev` stage
-- **THEN** Nexus SHALL create schema `{namespaceIdentity}@OrderNotification` in registry `{org}-dev-orders-schema-registry`
+- **THEN** Konductor SHALL create schema `{namespaceIdentity}@OrderNotification` in registry `{org}-dev-orders-schema-registry`
 - **AND THEN** the schema SHALL be created as version 1
 - **AND THEN** the API SHALL return `201 Created` with the schema name and version
 
@@ -31,12 +31,12 @@ The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /sche
 
 ### Requirement: Flat append-only schema version API
 
-The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /schemas/versions` as a flat verb endpoint for appending a schema version. The request SHALL accept `domain`, `eventName`, and `content` in the request body. The target environment SHALL be inferred from the API Gateway stage. Both surfaces SHALL normalize their authenticated principal and require the grant engine to allow the publisher action for that domain. Nexus SHALL derive the canonical schema name and SHALL use the AWS Schemas version-producing operation so existing versions remain immutable. Publisher APIs SHALL NOT expose schema deletion, retirement, version deletion, or historical-version replacement.
+The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /schemas/versions` as a flat verb endpoint for appending a schema version. The request SHALL accept `domain`, `eventName`, and `content` in the request body. The target environment SHALL be inferred from the API Gateway stage. Both surfaces SHALL normalize their authenticated principal and require the grant engine to allow the publisher action for that domain. Konductor SHALL derive the canonical schema name and SHALL use the AWS Schemas version-producing operation so existing versions remain immutable. Publisher APIs SHALL NOT expose schema deletion, retirement, version deletion, or historical-version replacement.
 
 #### Scenario: Authorized publisher appends a version
 
 - **WHEN** a caller with a `publisher` binding for domain `orders` appends a schema document for event `OrderNotification` on the `staging` stage
-- **THEN** Nexus SHALL create the next version of `{namespaceIdentity}@OrderNotification` in `{org}-staging-orders-schema-registry`
+- **THEN** Konductor SHALL create the next version of `{namespaceIdentity}@OrderNotification` in `{org}-staging-orders-schema-registry`
 - **AND THEN** all earlier versions SHALL remain unchanged
 - **AND THEN** the API SHALL return `201 Created` with the schema name and new version
 
@@ -78,7 +78,7 @@ The schema-management capability SHALL provide schema creation and append-only v
 
 #### Scenario: Only append-only write operations exposed
 
-- **WHEN** a publisher uses the Nexus schema API
+- **WHEN** a publisher uses the Konductor schema API
 - **THEN** the only schema write operations exposed SHALL be schema creation and appending a new schema version
 
 #### Scenario: Discovery behavior is unchanged by publisher APIs

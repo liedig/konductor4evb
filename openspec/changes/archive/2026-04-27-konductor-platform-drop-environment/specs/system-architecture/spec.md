@@ -2,13 +2,13 @@
 
 ### Requirement: Infrastructure as Code
 
-All Nexus infrastructure SHALL be defined using AWS SAM (Serverless Application Model). SAM templates SHALL define Lambda functions, API Gateway, DynamoDB tables, Step Functions state machines, IAM roles, SES configuration, SSM parameters, RAM resource shares, and all supporting resources. Step Functions state machine definitions SHALL be authored in YAML format using JSONata as the query language.
+All Konductor infrastructure SHALL be defined using AWS SAM (Serverless Application Model). SAM templates SHALL define Lambda functions, API Gateway, DynamoDB tables, Step Functions state machines, IAM roles, SES configuration, SSM parameters, RAM resource shares, and all supporting resources. Step Functions state machine definitions SHALL be authored in YAML format using JSONata as the query language.
 
-Platform-account resources (the Nexus control plane) SHALL be named using the fixed `{org}-nexus-*` pattern. Nexus is a singleton per organisation and does NOT have an `Environment` concept at the platform layer. Domain resources provisioned by Nexus (event buses, schema registries, DLQs, dashboards, alarms) SHALL follow the configurable `{org}-{env}-{domain}-*` pattern, because a single domain has a distinct set of resources per environment.
+Platform-account resources (the Konductor control plane) SHALL be named using the fixed `{org}-konductor-*` pattern. Konductor is a singleton per organisation and does NOT have an `Environment` concept at the platform layer. Domain resources provisioned by Konductor (event buses, schema registries, DLQs, dashboards, alarms) SHALL follow the configurable `{org}-{env}-{domain}-*` pattern, because a single domain has a distinct set of resources per environment.
 
 #### Scenario: SAM template deployment
 
-- **WHEN** Nexus is deployed to an AWS environment
+- **WHEN** Konductor is deployed to an AWS environment
 - **THEN** deployment SHALL use `sam build` and `sam deploy` (or equivalent CI/CD pipeline)
 - **AND THEN** all resources SHALL be created and configured from the SAM template without manual AWS console operations
 
@@ -21,29 +21,29 @@ Platform-account resources (the Nexus control plane) SHALL be named using the fi
 
 #### Scenario: Platform resources use fixed naming
 
-- **WHEN** the Nexus platform stack is deployed
-- **THEN** every platform resource (DynamoDB table, platform event bus, API Gateway, Lambda functions, IAM roles, queues, DLQs, log groups, dashboards, alarms) SHALL be named `{org}-nexus-<thing>`
+- **WHEN** the Konductor platform stack is deployed
+- **THEN** every platform resource (DynamoDB table, platform event bus, API Gateway, Lambda functions, IAM roles, queues, DLQs, log groups, dashboards, alarms) SHALL be named `{org}-konductor-<thing>`
 - **AND THEN** no platform resource name SHALL include an environment segment
 
 #### Scenario: Domain resources use configurable env-scoped naming
 
-- **WHEN** Nexus provisions a domain in a given environment
+- **WHEN** Konductor provisions a domain in a given environment
 - **THEN** all domain-owned resources SHALL be named according to the configurable pattern defaulting to `{org}-{env}-{domain}-<suffix>`
 - **AND THEN** the same domain provisioned across multiple environments SHALL produce disjoint resource sets with distinct names
 
 ### Requirement: Control plane event bus
 
-EventBridge Nexus SHALL have a dedicated Amazon EventBridge event bus for internal lifecycle events. This bus SHALL be named `{org}-nexus-bus`. The bus SHALL be used to trigger Nexus functionality (e.g., provisioning workflows) and SHALL NOT be exposed to application teams.
+Konductor for Amazon EventBridge SHALL have a dedicated Amazon EventBridge event bus for internal lifecycle events. This bus SHALL be named `{org}-konductor-bus`. The bus SHALL be used to trigger Konductor functionality (e.g., provisioning workflows) and SHALL NOT be exposed to application teams.
 
 #### Scenario: Lifecycle event emission
 
-- **WHEN** Nexus performs a state-changing operation (e.g., domain registration approved, domain creation succeeded)
-- **THEN** it SHALL emit a lifecycle event to the Nexus event bus with source prefix `nexus.` and the event type and minimum payload defined in the domain-management spec
+- **WHEN** Konductor performs a state-changing operation (e.g., domain registration approved, domain creation succeeded)
+- **THEN** it SHALL emit a lifecycle event to the Konductor event bus with source prefix `konductor.` and the event type and minimum payload defined in the domain-management spec
 
 #### Scenario: Workflow triggering via events
 
-- **WHEN** a lifecycle event is emitted to the Nexus event bus (e.g., `DomainRegistrationApproved`)
-- **THEN** an EventBridge rule on the Nexus bus SHALL match the event and trigger the appropriate workflow (e.g., provisioning Step Functions)
+- **WHEN** a lifecycle event is emitted to the Konductor event bus (e.g., `DomainRegistrationApproved`)
+- **THEN** an EventBridge rule on the Konductor bus SHALL match the event and trigger the appropriate workflow (e.g., provisioning Step Functions)
 
 ### Requirement: API layer
 
@@ -83,8 +83,8 @@ The control plane SHALL expose a REST API through Amazon API Gateway (REST API t
 
 ## REMOVED Requirements
 
-### Requirement: Multi-environment support (for Nexus platform)
+### Requirement: Multi-environment support (for Konductor platform)
 
-**Reason**: Nexus is an integration platform deployed once per organisation. It does not have a notion of `dev`/`staging`/`prod` at the platform layer; that concept belongs to the domains it provisions. The prior "Multi-environment support" scenario under the Infrastructure-as-Code requirement is superseded by the clearer split between platform-resource naming (fixed `{org}-nexus-*`) and domain-resource naming (configurable, env-scoped) documented in the modified Infrastructure as Code requirement above.
+**Reason**: Konductor is an integration platform deployed once per organisation. It does not have a notion of `dev`/`staging`/`prod` at the platform layer; that concept belongs to the domains it provisions. The prior "Multi-environment support" scenario under the Infrastructure-as-Code requirement is superseded by the clearer split between platform-resource naming (fixed `{org}-konductor-*`) and domain-resource naming (configurable, env-scoped) documented in the modified Infrastructure as Code requirement above.
 
-**Migration**: None at the spec level. At the code level, see the `nexus-platform-drop-environment` change tasks.
+**Migration**: None at the spec level. At the code level, see the `konductor-platform-drop-environment` change tasks.

@@ -2,7 +2,7 @@
 
 ### Requirement: Entitlement storage holds consumer-domain coverage grants
 
-Nexus SHALL store entitlements in a dedicated entitlements table keyed by consumer domain with a stable entitlement identifier. An entitlement SHALL grant a consumer domain coverage of the producer schemas matched by exactly one scope pattern: a string in the EventBridge schema-name charset with an optional single trailing `*`. The pattern `*` SHALL cover all schemas from the producer domain including schemas created later; an exact name SHALL cover all versions of one schema including versions published later; a name prefix with a trailing `*` SHALL cover the matching family including matching schemas created later. Malformed patterns SHALL be rejected before any write. Every entitlement SHALL carry consumer domain, producer domain, scope pattern, creation metadata, and the trusted actor that created it. Entitlements SHALL be environment-agnostic: coverage SHALL be evaluated identically regardless of the environment the consumer works in, and per-environment control SHALL live in the subscription rather than the entitlement. Revocation SHALL delete the entitlement row; revoked history SHALL exist only in audit records, so current coverage is always an existence check.
+Konductor SHALL store entitlements in a dedicated entitlements table keyed by consumer domain with a stable entitlement identifier. An entitlement SHALL grant a consumer domain coverage of the producer schemas matched by exactly one scope pattern: a string in the EventBridge schema-name charset with an optional single trailing `*`. The pattern `*` SHALL cover all schemas from the producer domain including schemas created later; an exact name SHALL cover all versions of one schema including versions published later; a name prefix with a trailing `*` SHALL cover the matching family including matching schemas created later. Malformed patterns SHALL be rejected before any write. Every entitlement SHALL carry consumer domain, producer domain, scope pattern, creation metadata, and the trusted actor that created it. Entitlements SHALL be environment-agnostic: coverage SHALL be evaluated identically regardless of the environment the consumer works in, and per-environment control SHALL live in the subscription rather than the entitlement. Revocation SHALL delete the entitlement row; revoked history SHALL exist only in audit records, so current coverage is always an existence check.
 
 #### Scenario: Domain-wide pattern covers future schemas
 
@@ -135,12 +135,12 @@ The grant engine SHALL evaluate subscribe-family actions against both authorizat
 
 ### Requirement: Entitlement revocation disables uncovered subscriptions asynchronously
 
-Revocation SHALL take effect for new decisions synchronously with the entitlement delete. A revocation worker SHALL then process the queued revocation message in bounded batches: query candidate active subscriptions through the producer reverse index, re-evaluate each candidate's producer schema against the consumer domain's remaining current grants through the engine, and where no grant covers, disable the Nexus-managed EventBridge rule and per-environment desired state in every environment. The worker SHALL retain subscription records, rule identities, and pinned versions. Disablement SHALL be idempotent, and every retry SHALL re-read current grants. Worker failures SHALL be retried through the queue's redrive policy and surfaced via the dead-letter queue. A scheduled reconciliation sweep SHALL re-evaluate active subscriptions against current coverage and disable any that remain uncovered. Revocation SHALL NOT automatically re-enable subscriptions after a later grant.
+Revocation SHALL take effect for new decisions synchronously with the entitlement delete. A revocation worker SHALL then process the queued revocation message in bounded batches: query candidate active subscriptions through the producer reverse index, re-evaluate each candidate's producer schema against the consumer domain's remaining current grants through the engine, and where no grant covers, disable the Konductor-managed EventBridge rule and per-environment desired state in every environment. The worker SHALL retain subscription records, rule identities, and pinned versions. Disablement SHALL be idempotent, and every retry SHALL re-read current grants. Worker failures SHALL be retried through the queue's redrive policy and surfaced via the dead-letter queue. A scheduled reconciliation sweep SHALL re-evaluate active subscriptions against current coverage and disable any that remain uncovered. Revocation SHALL NOT automatically re-enable subscriptions after a later grant.
 
 #### Scenario: Uncovered subscription is disabled in every environment
 
 - **WHEN** the last entitlement covering an active subscription is revoked and the worker processes the message
-- **THEN** the worker SHALL disable the Nexus-managed rule and desired state in every environment
+- **THEN** the worker SHALL disable the Konductor-managed rule and desired state in every environment
 - **AND THEN** the subscription record, rule identities, and pinned versions SHALL be retained
 
 #### Scenario: Alternative grant cancels disablement
@@ -158,7 +158,7 @@ Revocation SHALL take effect for new decisions synchronously with the entitlemen
 
 - **WHEN** an active subscription has no current covering entitlement
 - **AND WHEN** the scheduled reconciliation sweep runs
-- **THEN** the sweep SHALL disable the subscription's Nexus-managed rule and desired state in every environment
+- **THEN** the sweep SHALL disable the subscription's Konductor-managed rule and desired state in every environment
 
 #### Scenario: Retry honors a newly added grant
 

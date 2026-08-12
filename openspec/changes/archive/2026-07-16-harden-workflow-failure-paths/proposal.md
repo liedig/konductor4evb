@@ -43,7 +43,7 @@ None — this hardens existing behavior; no new surface area.
 
 ## Impact
 
-- **State machines**: `domain-management/state-machines/approval.asl.yaml`, `provision-domain.asl.yaml`, `provision-env.asl.yaml`, `deprovision-env.asl.yaml` (JSONata fixes, catch restructuring, Retry blocks). No new resources; `nexus-core` redeploy only.
+- **State machines**: `domain-management/state-machines/approval.asl.yaml`, `provision-domain.asl.yaml`, `provision-env.asl.yaml`, `deprovision-env.asl.yaml` (JSONata fixes, catch restructuring, Retry blocks). No new resources; `konductor-core` redeploy only.
 - **Decide Lambda contract**: unchanged (it already sends error `RegistrationRejected` with structured cause); the workflow finally consumes what it sends.
 - **Docs**: `docs/development/architecture.md` (approval failure-path semantics), `docs/service-quotas.md` (remove the "no Retry blocks / approve one at a time" operational caveat once retries land), README workflow section if timeout semantics change.
 - **Operational**: stuck-in-`PROVISIONING` records caused by past crashes need one-time manual cleanup (delete or re-approve); noted for the runbook.

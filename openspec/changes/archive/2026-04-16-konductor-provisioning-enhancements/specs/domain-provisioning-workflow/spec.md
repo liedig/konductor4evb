@@ -132,23 +132,23 @@ The provisioning workflow SHALL create all domain resources in the correct order
 
 - **WHEN** the provisioning workflow creates domain resources
 - **THEN** all resource names SHALL be derived from the `{org}-{env}-{domain}` namespace convention
-- **AND THEN** the organisation, environment, and domain name values SHALL be sourced from the event detail and Nexus configuration
+- **AND THEN** the organisation, environment, and domain name values SHALL be sourced from the event detail and Konductor configuration
 
 ### Requirement: Provisioning workflow lifecycle events
 
-The provisioning workflow SHALL emit lifecycle events to the Nexus event bus at key points: when provisioning starts, when it succeeds, and when it fails. These events SHALL conform to the event types and minimum payloads defined in the domain-management spec. The event source SHALL be `nexus.domain-management`.
+The provisioning workflow SHALL emit lifecycle events to the Konductor event bus at key points: when provisioning starts, when it succeeds, and when it fails. These events SHALL conform to the event types and minimum payloads defined in the domain-management spec. The event source SHALL be `konductor.domain-management`.
 
 #### Scenario: Provisioning started event
 
 - **WHEN** the provisioning workflow begins execution
-- **THEN** it SHALL emit a `DomainCreationStarted` event to the Nexus event bus with source `nexus.domain-management`, domainId, workflowExecutionId, startedAt, and isNewAccount flag
+- **THEN** it SHALL emit a `DomainCreationStarted` event to the Konductor event bus with source `konductor.domain-management`, domainId, workflowExecutionId, startedAt, and isNewAccount flag
 
 #### Scenario: Provisioning succeeded event
 
 - **WHEN** the provisioning workflow completes all steps successfully
-- **THEN** it SHALL emit a `DomainCreationSucceeded` event with source `nexus.domain-management`, domainId, workflowExecutionId, completedAt, resourceArns (map of all created resource ARNs), and namespaceParameter (SSM parameter path)
+- **THEN** it SHALL emit a `DomainCreationSucceeded` event with source `konductor.domain-management`, domainId, workflowExecutionId, completedAt, resourceArns (map of all created resource ARNs), and namespaceParameter (SSM parameter path)
 
 #### Scenario: Provisioning failed event
 
 - **WHEN** the provisioning workflow fails at any step
-- **THEN** it SHALL emit a `DomainCreationFailed` event with source `nexus.domain-management`, domainId, workflowExecutionId, failedAt, errorCode, errorMessage, and compensationResults (list of cleanup outcomes)
+- **THEN** it SHALL emit a `DomainCreationFailed` event with source `konductor.domain-management`, domainId, workflowExecutionId, failedAt, errorCode, errorMessage, and compensationResults (list of cleanup outcomes)

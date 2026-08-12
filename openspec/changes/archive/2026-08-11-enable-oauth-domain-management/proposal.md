@@ -2,7 +2,7 @@
 
 ## Why
 
-Interactive OAuth users can authenticate and read, but `IamOnlyAuthorizer` deliberately blocks every domain mutation on the OAuth surface ("interactive OAuth mutations are not yet enabled"), and ownership is expressed only as account/email attributes — the grant engine has no owner role, so "my team's domains" is not representable. The web UI (add-nexus-web-ui) needs domain owners to request and manage domains and platform admins to approve them, which requires completing this authorization story first.
+Interactive OAuth users can authenticate and read, but `IamOnlyAuthorizer` deliberately blocks every domain mutation on the OAuth surface ("interactive OAuth mutations are not yet enabled"), and ownership is expressed only as account/email attributes — the grant engine has no owner role, so "my team's domains" is not representable. The web UI (add-konductor-web-ui) needs domain owners to request and manage domains and platform admins to approve them, which requires completing this authorization story first.
 
 ## What Changes
 
@@ -30,11 +30,11 @@ Interactive OAuth users can authenticate and read, but `IamOnlyAuthorizer` delib
 
 ## Impact
 
-- **Grant engine** (`lib/nexus-common/src/grant.rs`): new `ResourceRole` variant; every role-keyed code path gains a third role.
+- **Grant engine** (`lib/konductor-common/src/grant.rs`): new `ResourceRole` variant; every role-keyed code path gains a third role.
 - **Domain management**: register/update handlers re-authorized; approval workflow (or decide handler) writes the owner binding; list/describe scoping; new pending endpoint; enable/disable transitions.
 - **Catalog** (`list-schemas`): producer scope in `resolve_scope`.
-- **Stack** (`nexus-core-stack.yaml`): user-pool client auth flows; new route/integration for pending registrations.
+- **Stack** (`konductor-core-stack.yaml`): user-pool client auth flows; new route/integration for pending registrations.
 - **API contracts** (`api/openapi-oauth.yaml`): new/changed endpoints and response projections.
 - **Tooling**: new `scripts/seed-users.sh`, Makefile target.
 - **Consumers**: IAM automation is unaffected (IAM paths unchanged); any existing interactive scripts that relied on unscoped `GET /domains` output must adapt to the projection split.
-- **Web UI** (add-nexus-web-ui) depends on this change for all write journeys and the approvals inbox.
+- **Web UI** (add-konductor-web-ui) depends on this change for all write journeys and the approvals inbox.

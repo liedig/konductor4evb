@@ -71,51 +71,51 @@ Domain resources SHALL be named according to the `{org}-{env}-{domain}` conventi
 
 ### Requirement: Platform account domain resources
 
-When a domain is provisioned, EventBridge Nexus SHALL create the following resources in the platform account: a domain event bus, a PutEvent policy restricting publishing to the domain's owning application account, a schema registry with access policies, a subscription rule DLQ (SQS queue), and CloudWatch observability resources (dashboard, alarms, metrics configuration).
+When a domain is provisioned, Konductor for Amazon EventBridge SHALL create the following resources in the platform account: a domain event bus, a PutEvent policy restricting publishing to the domain's owning application account, a schema registry with access policies, a subscription rule DLQ (SQS queue), and CloudWatch observability resources (dashboard, alarms, metrics configuration).
 
 #### Scenario: Domain event bus created in platform account
 
 - **WHEN** the domain provisioning workflow creates the domain event bus in the platform account
 - **THEN** the bus SHALL be named according to the `{org}-{env}-{domain}-domain-bus` convention
-- **AND THEN** the bus SHALL exist in the platform account where EventBridge Nexus operates
+- **AND THEN** the bus SHALL exist in the platform account where Konductor for Amazon EventBridge operates
 
 #### Scenario: PutEvent policy restricts publishing to domain owner
 
 - **WHEN** the domain event bus is created in the platform account
-- **THEN** the Nexus SHALL attach a resource policy to the bus that permits `events:PutEvents` only from the domain's owning application account
+- **THEN** the Konductor SHALL attach a resource policy to the bus that permits `events:PutEvents` only from the domain's owning application account
 - **AND THEN** no other application account SHALL be able to publish events to that domain bus
 
 #### Scenario: Schema registry created per domain
 
 - **WHEN** the domain is provisioned
-- **THEN** the Nexus SHALL create a schema registry in the platform account named according to the `{org}-{env}-{domain}-schema-registry` convention
+- **THEN** the Konductor SHALL create a schema registry in the platform account named according to the `{org}-{env}-{domain}-schema-registry` convention
 - **AND THEN** the registry SHALL have access policies granting write access to the domain owner and read access to authorised consumers
 
 #### Scenario: Subscription rule DLQ created in platform account
 
 - **WHEN** the domain is provisioned
-- **THEN** the Nexus SHALL create an SQS queue in the platform account named `{org}-{env}-{domain}-subscription-dlq` to serve as the dead-letter queue for subscription rules on the domain event bus
+- **THEN** the Konductor SHALL create an SQS queue in the platform account named `{org}-{env}-{domain}-subscription-dlq` to serve as the dead-letter queue for subscription rules on the domain event bus
 - **AND THEN** failed deliveries from subscription rules (domain bus to subscriber bus) SHALL be routed to this DLQ
 
 #### Scenario: Observability resources created per domain
 
 - **WHEN** the domain is provisioned
-- **THEN** the Nexus SHALL create a CloudWatch dashboard, alarms, and metrics configuration for the domain event bus in the platform account
+- **THEN** the Konductor SHALL create a CloudWatch dashboard, alarms, and metrics configuration for the domain event bus in the platform account
 
 ### Requirement: Application account domain resources
 
-When a domain is provisioned, EventBridge Nexus SHALL create the following resources in the domain's owning application account: a domain event bus (where the app receives routed events) and an integration rule DLQ (SQS queue).
+When a domain is provisioned, Konductor for Amazon EventBridge SHALL create the following resources in the domain's owning application account: a domain event bus (where the app receives routed events) and an integration rule DLQ (SQS queue).
 
 #### Scenario: Domain event bus created in application account
 
 - **WHEN** the domain provisioning workflow runs
-- **THEN** the Nexus SHALL create a domain event bus in the owning application account, named according to the `{org}-{env}-{domain}-domain-bus` convention
+- **THEN** the Konductor SHALL create a domain event bus in the owning application account, named according to the `{org}-{env}-{domain}-domain-bus` convention
 - **AND THEN** this bus SHALL be the target for subscription rules that route events from the platform domain bus to the application account
 
 #### Scenario: Integration rule DLQ created in application account
 
 - **WHEN** the domain provisioning workflow runs
-- **THEN** the Nexus SHALL create an SQS queue in the application account named `{org}-{env}-{domain}-integration-dlq` to serve as the dead-letter queue for integration rules
+- **THEN** the Konductor SHALL create an SQS queue in the application account named `{org}-{env}-{domain}-integration-dlq` to serve as the dead-letter queue for integration rules
 - **AND THEN** failed deliveries from integration rules (app bus to consuming application targets like Lambda or SQS) SHALL be routed to this DLQ
 
 ### Requirement: One domain bus per subscribing application account
@@ -142,13 +142,13 @@ Application teams SHALL only interact with the domain event bus in their own acc
 
 - **WHEN** events are delivered to the domain event bus in the application account
 - **THEN** the application team SHALL create EventBridge rules on their own domain bus to route events to their consuming applications
-- **AND THEN** the Nexus SHALL NOT manage or interfere with integration rules created by the application team
+- **AND THEN** the Konductor SHALL NOT manage or interfere with integration rules created by the application team
 
 #### Scenario: Application team cannot access platform domain bus
 
 - **WHEN** an application team attempts to create rules or modify the domain event bus in the platform account
 - **THEN** IAM policies SHALL deny the operation
-- **AND THEN** only the Nexus SHALL have permission to manage rules and policies on the platform domain bus
+- **AND THEN** only the Konductor SHALL have permission to manage rules and policies on the platform domain bus
 
 ### Requirement: Event flow path
 

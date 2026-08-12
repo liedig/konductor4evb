@@ -1,6 +1,6 @@
 ## Context
 
-The Nexus core stack (`template.yaml`) today requires two SES-related parameters, `ApprovalFromEmail` and `ApprovalToEmail`, with no defaults. The Lambdas that send approval and rejection emails assume these identities are already verified in SES. First-time installers must verify identities out of band before the core stack can deploy, and there is no path to install the core stack without SES at all (useful for local iteration or for operators who do not want email notifications yet).
+The Konductor core stack (`template.yaml`) today requires two SES-related parameters, `ApprovalFromEmail` and `ApprovalToEmail`, with no defaults. The Lambdas that send approval and rejection emails assume these identities are already verified in SES. First-time installers must verify identities out of band before the core stack can deploy, and there is no path to install the core stack without SES at all (useful for local iteration or for operators who do not want email notifications yet).
 
 SES is regional, and both identities must live in the same region as the notification Lambdas. Today this is implicit.
 
@@ -11,7 +11,7 @@ The existing capability `domain-owner-notifications` describes the behavior of a
 **Goals:**
 
 - Make SES identity management an independently deployable concern (separate CloudFormation stack).
-- Allow the Nexus core stack to deploy cleanly without SES configured, for testing and iteration.
+- Allow the Konductor core stack to deploy cleanly without SES configured, for testing and iteration.
 - Preserve existing approval/rejection notification behavior when SES is configured.
 - Align stack names and resource naming with the `{org}-{env}-{domain}` convention documented in `AGENTS.md`.
 
@@ -64,13 +64,13 @@ Operators feed these outputs into the core stack as `ApprovalFromEmail` and `App
 
 ### Decision 4: Same-region constraint is explicit
 
-The `notifications-stack.yaml` description and the installation guide call out that the stack must deploy in the same region as the Nexus core stack. SES identities are regional, and the notification Lambdas call SES via the local region endpoint.
+The `notifications-stack.yaml` description and the installation guide call out that the stack must deploy in the same region as the Konductor core stack. SES identities are regional, and the notification Lambdas call SES via the local region endpoint.
 
 **Rationale:** Cross-region SES is out of scope. Making the constraint explicit prevents a subtle misconfiguration.
 
 ### Decision 5: Align stack name to `{org}-{env}-{domain}`
 
-Update `samconfig.toml` default stack name to `acme-dev-nexus` (matching the `{org}-{env}-{domain}` pattern with `nexus` as the domain segment). The notifications stack name follows the same pattern: `acme-dev-nexus-notifications`. The trust stack pattern (already discussed): `acme-dev-nexus-trust`.
+Update `samconfig.toml` default stack name to `acme-dev-konductor` (matching the `{org}-{env}-{domain}` pattern with `konductor` as the domain segment). The notifications stack name follows the same pattern: `acme-dev-konductor-notifications`. The trust stack pattern (already discussed): `acme-dev-konductor-trust`.
 
 **Rationale:** Consistency with the naming convention documented in `AGENTS.md` and already used for AWS resources created by the stacks.
 
@@ -82,7 +82,7 @@ Update `samconfig.toml` default stack name to `acme-dev-nexus` (matching the `{o
 - **Risk:** An operator deploys core without notifications and expects approval emails. The approval workflow silently waits for a manual decision call.
   - **Mitigation:** Document clearly in the installation guide that notifications are optional but recommended for end-to-end testing, and explain the manual `POST /domains/registrations/decide` path.
 
-- **Risk:** Existing deployments of the `acme-dev-nexus`-style stack (or legacy `dev-evb-control-plane`) need a one-time rename. CloudFormation stacks cannot be renamed in place.
+- **Risk:** Existing deployments of the `acme-dev-konductor`-style stack (or legacy `dev-evb-control-plane`) need a one-time rename. CloudFormation stacks cannot be renamed in place.
   - **Mitigation:** Call out in the installation guide's "Uninstall / Migrate" section that existing deployments must be torn down and re-deployed under the new name. No data loss risk since the `DomainsTable` has `DeletionPolicy: Retain`.
 
 - **Risk:** SES sandbox enforces recipient verification. Installers testing end-to-end must verify both the From and To addresses, which is a manual SES console step.

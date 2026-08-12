@@ -2,17 +2,17 @@
 
 - [x] 1.1 Update `NamespaceResolver::default_pattern()` from `{env}-{org}-{domain}` to `{org}-{env}-{domain}` in `lib/control-plane-common/src/namespace.rs` and fix all tests
 - [x] 1.2 Update SAM template `NamespacePattern` parameter default and all `${Environment}-${Organization}` resource name patterns to `${Organization}-${Environment}` in `template.yaml`
-- [x] 1.3 Update trust-stack role naming from `${Environment}-${Organization}-cp-trust-role` to `${Organization}-${Environment}-nexus-trust-role` and all IAM resource scoping patterns in `trust-stack.yaml`
+- [x] 1.3 Update trust-stack role naming from `${Environment}-${Organization}-cp-trust-role` to `${Organization}-${Environment}-konductor-trust-role` and all IAM resource scoping patterns in `trust-stack.yaml`
 - [x] 1.4 Update provisioning workflow resource name constructions from `'${Environment}' & '-' & '${Organization}'` to `'${Organization}' & '-' & '${Environment}'` in `provisioning.asl.yaml` (will be done in full workflow rewrite)
 - [x] 1.5 Update approval workflow event source and any name references in `approval.asl.yaml`
 
-## 2. Rebrand to EventBridge Nexus
+## 2. Rebrand to Konductor for Amazon EventBridge
 
-- [x] 2.1 Rename event source prefix from `controlplane.domain-management` to `nexus.domain-management` in all Lambda functions (`register.rs`, `send-approval-notification`, `send-rejection-notification`) and state machines
-- [x] 2.2 Rename control plane event bus from `{org}-{env}-control-plane-bus` to `{org}-{env}-nexus-bus` in `template.yaml` and all references
-- [x] 2.3 Rename trust role from `{org}-{env}-cp-trust-role` to `{org}-{env}-nexus-trust-role` in `trust-stack.yaml`, `template.yaml`, and `provisioning.asl.yaml`
-- [x] 2.4 Update SAM template logical IDs referencing "ControlPlane" to "Nexus" (e.g., `ControlPlaneEventBus` → `NexusEventBus`, `ControlPlaneTrustAnchorRole` → `NexusTrustAnchorRole`)
-- [x] 2.5 Update `README.md`, `AGENTS.md`, and OpenSpec `config.yaml` context to reflect EventBridge Nexus naming
+- [x] 2.1 Rename event source prefix from `controlplane.domain-management` to `konductor.domain-management` in all Lambda functions (`register.rs`, `send-approval-notification`, `send-rejection-notification`) and state machines
+- [x] 2.2 Rename control plane event bus from `{org}-{env}-control-plane-bus` to `{org}-{env}-konductor-bus` in `template.yaml` and all references
+- [x] 2.3 Rename trust role from `{org}-{env}-cp-trust-role` to `{org}-{env}-konductor-trust-role` in `trust-stack.yaml`, `template.yaml`, and `provisioning.asl.yaml`
+- [x] 2.4 Update SAM template logical IDs referencing "ControlPlane" to "Konductor" (e.g., `ControlPlaneEventBus` → `KonductorEventBus`, `ControlPlaneTrustAnchorRole` → `KonductorTrustAnchorRole`)
+- [x] 2.5 Update `README.md`, `AGENTS.md`, and OpenSpec `config.yaml` context to reflect Konductor for Amazon EventBridge naming
 - [x] 2.6 Update `api/openapi.yaml` title, description, and any references to "control plane"
 
 ## 3. New Account Detection

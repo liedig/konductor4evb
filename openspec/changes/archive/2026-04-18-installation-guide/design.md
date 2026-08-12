@@ -1,8 +1,8 @@
 ## Context
 
-The Nexus project has three deployable CloudFormation stacks (notifications, core, trust) but no unified installation guide. The README's "Getting Started" section is a brief three-step sketch that doesn't reflect the current three-stack deploy model, the optional notifications stack, or the smoke-test workflow. The `extract-notifications-stack` change landed the three-stack model; this change writes the guide that makes it installable by an end user.
+The Konductor project has three deployable CloudFormation stacks (notifications, core, trust) but no unified installation guide. The README's "Getting Started" section is a brief three-step sketch that doesn't reflect the current three-stack deploy model, the optional notifications stack, or the smoke-test workflow. The `extract-notifications-stack` change landed the three-stack model; this change writes the guide that makes it installable by an end user.
 
-The audience is a platform operator deploying Nexus for the first time into their own AWS environment (one platform account, at least one application account).
+The audience is a platform operator deploying Konductor for the first time into their own AWS environment (one platform account, at least one application account).
 
 ## Goals / Non-Goals
 
@@ -18,7 +18,7 @@ The audience is a platform operator deploying Nexus for the first time into thei
 **Non-Goals:**
 
 - Production hardening guidance (multi-account landing zone, SCPs, guardrails).
-- CI/CD pipeline setup for Nexus itself.
+- CI/CD pipeline setup for Konductor itself.
 - API authz setup (deferred to a future change).
 - Alternate notification transport configuration (deferred).
 - Detailed architecture explanation (that's `docs/development/architecture.md`).

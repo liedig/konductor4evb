@@ -4,7 +4,7 @@
 
 ### Requirement: Direct SRP authentication for custom login clients
 
-The Cognito user-pool client SHALL allow `ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH` in its explicit auth flows, so first-party interactive clients (e.g. the Nexus web UI) can authenticate users with a custom login experience without the hosted UI. Tokens obtained through SRP SHALL be indistinguishable to the OAuth authorizer from tokens obtained via the hosted UI: the same claims, group mappings, and trusted-principal normalization SHALL apply. Self-service sign-up SHALL remain disabled; users remain admin-provisioned.
+The Cognito user-pool client SHALL allow `ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH` in its explicit auth flows, so first-party interactive clients (e.g. the Konductor web UI) can authenticate users with a custom login experience without the hosted UI. Tokens obtained through SRP SHALL be indistinguishable to the OAuth authorizer from tokens obtained via the hosted UI: the same claims, group mappings, and trusted-principal normalization SHALL apply. Self-service sign-up SHALL remain disabled; users remain admin-provisioned.
 
 #### Scenario: Custom login obtains usable tokens
 

@@ -50,14 +50,14 @@ The inner workflow's resource creation sequence SHALL match the existing per-env
 
 ### Requirement: Provisioning workflow lifecycle events
 
-The provisioning workflow SHALL emit lifecycle events to the Nexus event bus for provisioning outcomes only. No intermediate events SHALL be emitted (neither per-step within an env nor per-env completion). The outer workflow SHALL be the sole emitter of `DomainProvisioningSucceeded` and `DomainProvisioningFailed`. The event source SHALL be `nexus.domain-management`. Event payloads SHALL identify the domain by `domainName` and SHALL NOT include a `domainId` field.
+The provisioning workflow SHALL emit lifecycle events to the Konductor event bus for provisioning outcomes only. No intermediate events SHALL be emitted (neither per-step within an env nor per-env completion). The outer workflow SHALL be the sole emitter of `DomainProvisioningSucceeded` and `DomainProvisioningFailed`. The event source SHALL be `konductor.domain-management`. Event payloads SHALL identify the domain by `domainName` and SHALL NOT include a `domainId` field.
 
 #### Scenario: Provisioning succeeded event
 
 - **WHEN** the outer provisioning workflow completes all environments successfully
-- **THEN** it SHALL emit a `DomainProvisioningSucceeded` event with source `nexus.domain-management`, `domainName`, `workflowExecutionId`, `completedAt`, `environments`, `resourceArns` (map keyed by environment), `namespaceParameter` (SSM parameter path), and `isNewAccount` flag
+- **THEN** it SHALL emit a `DomainProvisioningSucceeded` event with source `konductor.domain-management`, `domainName`, `workflowExecutionId`, `completedAt`, `environments`, `resourceArns` (map keyed by environment), `namespaceParameter` (SSM parameter path), and `isNewAccount` flag
 
 #### Scenario: Provisioning failed event
 
 - **WHEN** the outer provisioning workflow fails at any environment
-- **THEN** it SHALL emit a `DomainProvisioningFailed` event with source `nexus.domain-management`, `domainName`, `workflowExecutionId`, `failedAt`, `failedEnvironment` (the first environment observed to fail), `failedStep` (step within that environment), `errorCode`, `errorMessage`, and `compensationErrors` (aggregate across inner and outer compensation)
+- **THEN** it SHALL emit a `DomainProvisioningFailed` event with source `konductor.domain-management`, `domainName`, `workflowExecutionId`, `failedAt`, `failedEnvironment` (the first environment observed to fail), `failedStep` (step within that environment), `errorCode`, `errorMessage`, and `compensationErrors` (aggregate across inner and outer compensation)

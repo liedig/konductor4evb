@@ -27,6 +27,6 @@ The Cognito access foundation wired every consumer behind the `ResourceAuthorize
 
 - Adds one DynamoDB table with an admin GSI to the core stack, with least-privilege read access for future publisher consumers and admin write access for the binding administration Lambda.
 - Adds a binding administration Lambda and three OAuth routes (`POST /bindings`, `GET /bindings`, `DELETE /bindings/{bindingId}`); no IAM-surface routes are added.
-- Renames two types in `nexus-common` (`DenyAllAuthorizer`, `IamOnlyAuthorizer`) and updates consumer wiring to the new names; behavior is unchanged.
+- Renames two types in `konductor-common` (`DenyAllAuthorizer`, `IamOnlyAuthorizer`) and updates consumer wiring to the new names; behavior is unchanged.
 - `add-publisher-apis` loses its authorization prerequisite: the publish consumer and schema handlers can wire to `DynamoGrantEngine` directly, and its tasks for a production authorization adapter are satisfied by this change.
 - No existing API behavior changes: domain-management and subscription paths continue on `IamOnlyAuthorizer` (IAM allow, OAuth deny).

@@ -6,7 +6,7 @@ The schema-management capability SHALL provide schema creation and append-only v
 
 #### Scenario: Only append-only write operations exposed
 
-- **WHEN** a publisher uses the Nexus schema API
+- **WHEN** a publisher uses the Konductor schema API
 - **THEN** the only schema write operations exposed SHALL be schema creation and appending a new schema version
 
 #### Scenario: Global visibility baseline is retired

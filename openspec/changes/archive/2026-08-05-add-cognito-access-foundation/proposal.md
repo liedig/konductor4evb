@@ -1,6 +1,6 @@
 ## Why
 
-Nexus needs a browser- and UI-compatible identity path without weakening the AWS-account identity used by existing automation and cross-account integrations. Establishing the Cognito and trusted-principal contracts now lets later authorization work add resource entitlements without coupling identity validation to an undecided policy engine.
+Konductor needs a browser- and UI-compatible identity path without weakening the AWS-account identity used by existing automation and cross-account integrations. Establishing the Cognito and trusted-principal contracts now lets later authorization work add resource entitlements without coupling identity validation to an undecided policy engine.
 
 ## What Changes
 

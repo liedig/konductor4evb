@@ -5,7 +5,7 @@
 ## 1. Execution environment
 
 - Adapter: `DynamoGrantAdapter` (real DynamoDB, strongly-consistent decision reads)
-- Tables: `nexus-spike-auth-grant` (+ `grant_id-index` GSI), `nexus-spike-auth-sub`
+- Tables: `konductor-spike-auth-grant` (+ `grant_id-index` GSI), `konductor-spike-auth-sub`
 - Region: `ap-southeast-2` (sandbox account `444433332222`, default profile)
 - SDK retries on decision reads: 0 (`AWS_MAX_ATTEMPTS=1`)
 - Decision cache: none

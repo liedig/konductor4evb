@@ -1,6 +1,6 @@
 ## Context
 
-Schema discovery is currently read-only through Nexus, while domain owners register schemas out-of-band. Event publication has no control-plane API. The access-foundation change introduces separate OAuth and IAM control-plane surfaces plus normalized trusted principals. The authorization-engine spike validated the DynamoDB-backed grant engine design without implementing it; the standalone `add-grant-engine` change delivers the production engine this change consumes.
+Schema discovery is currently read-only through Konductor, while domain owners register schemas out-of-band. Event publication has no control-plane API. The access-foundation change introduces separate OAuth and IAM control-plane surfaces plus normalized trusted principals. The authorization-engine spike validated the DynamoDB-backed grant engine design without implementing it; the standalone `add-grant-engine` change delivers the production engine this change consumes.
 
 The PRFAQ promises simple `publish`, `subscribe`, and `unsubscribe` API operations. Subscribe and unsubscribe already exist as flat endpoints (`POST /subscriptions`, `DELETE /subscriptions/{id}`). This change adds the missing `publish` endpoint and publisher schema management, completing the PRFAQ vision.
 
@@ -8,7 +8,7 @@ The PRFAQ promises simple `publish`, `subscribe`, and `unsubscribe` API operatio
 
 **Goals:**
 
-- Give publishers a flat `POST /publish` endpoint where the domain is in the request body, not the URL path. The caller provides domain, event name, and business data; Nexus handles everything else.
+- Give publishers a flat `POST /publish` endpoint where the domain is in the request body, not the URL path. The caller provides domain, event name, and business data; Konductor handles everything else.
 - Guarantee event durability through store-and-forward: API Gateway pushes to SQS (202 Accepted), a consumer Lambda resolves the schema, builds the envelope, and calls PutEvents. If PutEvents fails, SQS retries; the event is never lost once it reaches the queue.
 - Extend the canonical envelope `detail.metadata` with `idempotencyKey` and `publishedAt`, both immutable from queue time and surviving EventBridge replays.
 - Infer the target environment from the API stage (`dev`, `staging`, `prod`) rather than requiring the caller to specify it per event. The environment travels as an SQS message attribute alongside the trusted-principal envelope.
@@ -37,16 +37,16 @@ The APIs are:
 
 The domain, environment-relevant context, and event details are in the request body. Nested per-domain resource paths (`/domains/{domain}/environments/{env}/events/{eventName}`) were considered and rejected: they create multiple API resources per domain, are operationally unmanageable, and contradict the PRFAQ's promise of simple publish/subscribe/unsubscribe operations.
 
-This matches the existing Nexus pattern: `POST /subscriptions` carries the domain pair in the body, not in the URL.
+This matches the existing Konductor pattern: `POST /subscriptions` carries the domain pair in the body, not in the URL.
 
 ### Infer environment from the API stage
 
 API Gateway stages are named after platform environments (`dev`, `staging`, `prod`) instead of a static `v1`. The stage IS the environment selector:
 
 ```
-POST https://api.nexus.com/dev/publish    → targets dev environment
-POST https://api.nexus.com/staging/publish → targets staging environment
-POST https://api.nexus.com/prod/publish   → targets prod environment
+POST https://api.konductor.com/dev/publish    → targets dev environment
+POST https://api.konductor.com/staging/publish → targets staging environment
+POST https://api.konductor.com/prod/publish   → targets prod environment
 ```
 
 One API Gateway deployment, one set of Lambda functions. The stage name is available as `$context.stage` in the VTL mapping template and is injected as an SQS message attribute. The publish consumer Lambda reads it from the message attributes to select the environment-specific registry and bus.
@@ -57,7 +57,7 @@ A separate data-plane API was considered and rejected: it adds an API Gateway de
 
 ### Store-and-forward publish via SQS
 
-The publish flow uses the existing Nexus write pattern: API Gateway → SQS → consumer Lambda.
+The publish flow uses the existing Konductor write pattern: API Gateway → SQS → consumer Lambda.
 
 ```
 POST /prod/publish
@@ -145,7 +145,7 @@ Publishers manage schemas through two endpoints that mirror EventBridge's `Creat
   "content": "{ ... }"
 }
 ```
-Nexus derives the canonical schema name `{namespaceIdentity}@{eventName}`, targets the stage-selected environment's registry, and creates version 1. Returns `201 Created` with the schema name and version. Returns `409 Conflict` if the schema already exists.
+Konductor derives the canonical schema name `{namespaceIdentity}@{eventName}`, targets the stage-selected environment's registry, and creates version 1. Returns `201 Created` with the schema name and version. Returns `409 Conflict` if the schema already exists.
 
 **`POST /schemas/versions`** — Append a new version (like EventBridge `UpdateSchema`):
 ```json
@@ -155,7 +155,7 @@ Nexus derives the canonical schema name `{namespaceIdentity}@{eventName}`, targe
   "content": "{ ... }"
 }
 ```
-Nexus derives the canonical schema name, targets the stage-selected environment's registry, and creates the next version. Returns `201 Created` with the schema name and new version. Returns `404 Not Found` if the schema does not exist.
+Konductor derives the canonical schema name, targets the stage-selected environment's registry, and creates the next version. Returns `201 Created` with the schema name and new version. Returns `404 Not Found` if the schema does not exist.
 
 Both are synchronous Lambda integrations (not SQS), because schema writes must return the created version to the caller. The environment is inferred from `$context.stage`.
 
@@ -172,8 +172,8 @@ The production grant engine is implemented by the standalone `add-grant-engine` 
 Publish consumer and schema handler roles receive only:
 - Domain-state read access (DynamoDB)
 - Authorization-decision access (grant engine)
-- AWS Schemas read/write scoped to Nexus-managed registry patterns
-- EventBridge `PutEvents` scoped to Nexus-managed bus patterns
+- AWS Schemas read/write scoped to Konductor-managed registry patterns
+- EventBridge `PutEvents` scoped to Konductor-managed bus patterns
 
 Publishers cannot manage registries, buses, policies, rules, subscriber grants, or authorization configuration. Application-level authorization is mandatory because dynamic domain bindings are narrower than deploy-time IAM resource patterns.
 

@@ -2,7 +2,7 @@
 
 ## 1. Trust Stack Template
 
-- [x] 1.1 Rewrite `NexusTrustRole.AssumeRolePolicyDocument` in `trust-stack.yaml`: principal = platform account root (account id derived from the existing role-ARN parameters via `!Select`/`!Split`), `Condition: ArnEquals: aws:PrincipalArn: [NexusRoleArn, ProvisioningWorkflowRoleArn]`
+- [x] 1.1 Rewrite `KonductorTrustRole.AssumeRolePolicyDocument` in `trust-stack.yaml`: principal = platform account root (account id derived from the existing role-ARN parameters via `!Select`/`!Split`), `Condition: ArnEquals: aws:PrincipalArn: [KonductorRoleArn, ProvisioningWorkflowRoleArn]`
 - [x] 1.2 Run cfn-lint / `sam validate --lint` on the template — both pass
 
 ## 2. Documentation

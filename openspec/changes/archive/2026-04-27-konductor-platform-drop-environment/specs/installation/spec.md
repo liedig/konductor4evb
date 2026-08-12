@@ -2,7 +2,7 @@
 
 ### Requirement: Installation guide
 
-The project SHALL provide a complete, runnable installation guide at `docs/installation.md` that walks a first-time operator through deploying Nexus into their own AWS environment from scratch. The guide SHALL reflect that Nexus is deployed once per organisation into a dedicated platform account, and SHALL NOT suggest deploying Nexus per environment (the environment concept belongs to domains Nexus provisions, not to Nexus itself).
+The project SHALL provide a complete, runnable installation guide at `docs/installation.md` that walks a first-time operator through deploying Konductor into their own AWS environment from scratch. The guide SHALL reflect that Konductor is deployed once per organisation into a dedicated platform account, and SHALL NOT suggest deploying Konductor per environment (the environment concept belongs to domains Konductor provisions, not to Konductor itself).
 
 #### Scenario: First-time operator completes installation
 
@@ -10,7 +10,7 @@ The project SHALL provide a complete, runnable installation guide at `docs/insta
 - **THEN** they SHALL have the notifications stack, core stack, and trust stack deployed
 - **AND THEN** they SHALL be able to register a domain, approve it, and verify it reaches ACTIVE status
 
-#### Scenario: Installation parameters do not include Environment for Nexus stacks
+#### Scenario: Installation parameters do not include Environment for Konductor stacks
 
 - **WHEN** the operator deploys the notifications stack, core stack, or trust stack
 - **THEN** the documented parameter tables SHALL NOT include an `Environment` parameter

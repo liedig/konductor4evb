@@ -1,6 +1,6 @@
 ## Why
 
-There is no runnable, end-to-end installation guide for Nexus. The README has a minimal "Getting Started" section that assumes familiarity with the stack layout and doesn't walk through the three-stack deploy model (notifications, core, trust) or the smoke-test workflow. An operator following the current docs cannot reliably install Nexus from scratch into their own AWS environment.
+There is no runnable, end-to-end installation guide for Konductor. The README has a minimal "Getting Started" section that assumes familiarity with the stack layout and doesn't walk through the three-stack deploy model (notifications, core, trust) or the smoke-test workflow. An operator following the current docs cannot reliably install Konductor from scratch into their own AWS environment.
 
 ## What Changes
 

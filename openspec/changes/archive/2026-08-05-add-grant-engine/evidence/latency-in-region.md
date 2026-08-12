@@ -1,7 +1,7 @@
 # In-Region Decision Latency — add-grant-engine (tasks 6.1/6.2)
 
-> Measured 2026-08-05 with `make benchmark-grants` (Lambda `nexus-grant-benchmark`,
-> ap-southeast-2) against the deployed `nexus-authorization-bindings` table. The harness
+> Measured 2026-08-05 with `make benchmark-grants` (Lambda `konductor-grant-benchmark`,
+> ap-southeast-2) against the deployed `konductor-authorization-bindings` table. The harness
 > reuses the spike's declared measurement procedure
 > (`evaluate-authorization-engine/evidence/methodology.md`): sequential warm samples, SDK
 > retries disabled (max attempts 1), no decision cache, and the real `DynamoGrantEngine`
@@ -10,9 +10,9 @@
 
 ## 1. Execution environment
 
-- Evaluator: Lambda `nexus-grant-benchmark` (provided.al2023, arm64, 256 MB) in
+- Evaluator: Lambda `konductor-grant-benchmark` (provided.al2023, arm64, 256 MB) in
   ap-southeast-2, account 444433332222 — same region and account as the table
-- Table: `nexus-authorization-bindings` (PAY_PER_REQUEST, KMS, PITR)
+- Table: `konductor-authorization-bindings` (PAY_PER_REQUEST, KMS, PITR)
 - Decision path measured: `schema:publish` = one strongly consistent GetItem per candidate
   principal (one candidate per probe here)
 - Samples: 200 per probe after 20 warmup samples; 4 probes = 800 measured decisions
@@ -49,7 +49,7 @@ No remediation-ladder step applies.
 ## 4. Reproduction
 
 ```bash
-make benchmark-grants     # deploys nexus-grant-benchmark, invokes, prints the report
+make benchmark-grants     # deploys konductor-grant-benchmark, invokes, prints the report
 make teardown-benchmark   # deletes the throwaway stack
 ```
 

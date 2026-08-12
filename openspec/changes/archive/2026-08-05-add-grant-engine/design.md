@@ -28,7 +28,7 @@ Publisher bindings and subscriber entitlements have different revocation semanti
 
 ### Split bindings and entitlements into separate stores
 
-This change ships one table, `nexus-authorization-bindings`, holding both publisher and subscriber role bindings:
+This change ships one table, `konductor-authorization-bindings`, holding both publisher and subscriber role bindings:
 
 ```
 RoleBinding    PK = PRINCIPAL#{cognito-group|aws-account}#{issuer-qualified id | account id}
@@ -91,7 +91,7 @@ The spike's single readiness condition is in-region latency validation (residual
 
 - [Engine ships dark with no production consumer] → Acceptable because the decision contract is spike-proven; this change's tests prove storage, mutation, admin, and audit, and `add-publisher-apis` provides the first live traffic.
 - [Two stores mean the engine crate spans tables] → One crate, explicit per-store read paths; DDB transactions span tables if a future mutation needs atomicity across both.
-- [Stringly-typed actions invite call-site typos] → Accept for now; action strings are centralized as constants in `nexus-common` so typos surface in tests, and the trait can evolve additively later.
+- [Stringly-typed actions invite call-site typos] → Accept for now; action strings are centralized as constants in `konductor-common` so typos surface in tests, and the trait can evolve additively later.
 - [Dropping deny-as-unknown leaks schema existence via 403-vs-404] → Accepted product decision at this stage; revisit only if schema existence becomes sensitive.
 - [Conditional writes add retry complexity to admin mutations] → Condition-check failures map to deterministic 409 responses; no silent retries that could mask concurrent-admin races.
 - [In-region latency could miss SLOs] → Spike remediation ladder is pre-agreed; measurement is a task in this change and a gate on publisher rollout.

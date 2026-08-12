@@ -8,7 +8,7 @@ When domain provisioning completes successfully, the control plane SHALL send an
 
 #### Scenario: Domain-live email sent to owners
 
-- **WHEN** the provisioning workflow emits a `DomainProvisioningSucceeded` event to the nexus bus
+- **WHEN** the provisioning workflow emits a `DomainProvisioningSucceeded` event to the konductor bus
 - **THEN** an EventBridge rule SHALL match the event and invoke the provisioning-succeeded notification Lambda
 - **AND THEN** the Lambda SHALL load the domain record from DynamoDB by `domainName` and send an email via SES to the owner recipients
 - **AND THEN** the email SHALL state that the domain is provisioned and active and include the domain name
@@ -17,7 +17,7 @@ When domain provisioning completes successfully, the control plane SHALL send an
 
 - **WHEN** the core stack is deployed without notification parameters
 - **THEN** the provisioning-succeeded notification Lambda and its EventBridge rule SHALL NOT be deployed
-- **AND THEN** `DomainProvisioningSucceeded` events SHALL remain observable on the nexus bus
+- **AND THEN** `DomainProvisioningSucceeded` events SHALL remain observable on the konductor bus
 
 ### Requirement: Registration delayed notification
 
@@ -25,7 +25,7 @@ When the approval request could not be delivered to the platform team, the contr
 
 #### Scenario: Registration-delayed email sent to owners
 
-- **WHEN** the approval workflow emits a `DomainApprovalNotificationFailed` event to the nexus bus
+- **WHEN** the approval workflow emits a `DomainApprovalNotificationFailed` event to the konductor bus
 - **THEN** an EventBridge rule SHALL match the event and invoke the registration-delayed notification Lambda
 - **AND THEN** the Lambda SHALL load the domain record from DynamoDB by `domainName` and send an email via SES to the owner recipients
 - **AND THEN** the email SHALL state that the registration is delayed and the platform team has been notified, without technical error detail

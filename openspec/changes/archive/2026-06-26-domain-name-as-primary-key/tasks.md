@@ -1,6 +1,6 @@
 ## 1. DynamoDB table schema
 
-- [x] 1.1 Change `DomainsTable` partition key in `nexus-core-stack.yaml` from `domainId` (S) to `domainName` (S), including `KeySchema` and `AttributeDefinitions`
+- [x] 1.1 Change `DomainsTable` partition key in `konductor-core-stack.yaml` from `domainId` (S) to `domainName` (S), including `KeySchema` and `AttributeDefinitions`
 - [x] 1.2 Remove the `by-name` GSI from the `DomainsTable` `GlobalSecondaryIndexes` list
 - [x] 1.3 Remove `domainId` from the `AttributeDefinitions` list (no longer used as a key or GSI key)
 
@@ -21,7 +21,7 @@
 - [x] 3.7 `list-domains/main.rs`: Remove `domainId` from the response item JSON body
 - [x] 3.8 `domain-registrations/main.rs`: Update the SQS message dispatch to pass `domainName` (not `domainId`) to the register and update handlers
 
-## 4. Shared library (nexus-common)
+## 4. Shared library (konductor-common)
 
 - [x] 4.1 `models.rs`: Remove `domain_id` field from the `Domain` struct
 - [x] 4.2 `models.rs`: Remove `domainId` references from any serialization/deserialization tests
@@ -33,7 +33,7 @@
 - [x] 5.2 `provision-domain.asl.yaml`: Replace `domainId` with `domainName` in workflow inputs, DynamoDB update expressions, and event payloads (`DomainProvisioningSucceeded`, `DomainProvisioningFailed`)
 - [x] 5.3 `provision-env.asl.yaml`: Replace `domainId` with `domainName` in workflow input parameters
 - [x] 5.4 `deprovision-env.asl.yaml`: Replace `domainId` with `domainName` in workflow input parameters
-- [x] 5.5 Update `DefinitionSubstitutions` in `nexus-core-stack.yaml` for all state machines to remove any `domainId`-related substitutions
+- [x] 5.5 Update `DefinitionSubstitutions` in `konductor-core-stack.yaml` for all state machines to remove any `domainId`-related substitutions
 
 ## 6. Smoke test
 
@@ -56,5 +56,5 @@
 ## 9. End-to-end verification
 
 - [x] 9.1 Refresh demo credentials via SSO and deploy the trust stack to the demo account
-- [x] 9.2 Run `make smoke APP_ACCOUNT_ID=210987654321 OWNER_EMAIL=sliedig+nexus@example.com AWS_REGION=ap-southeast-2` and verify the domain reaches ACTIVE status using the domain name as the identifier throughout
+- [x] 9.2 Run `make smoke APP_ACCOUNT_ID=210987654321 OWNER_EMAIL=sliedig+konductor@example.com AWS_REGION=ap-southeast-2` and verify the domain reaches ACTIVE status using the domain name as the identifier throughout
 - [x] 9.3 Verify `GET /domains/{domainName}` returns the domain detail with `resourceArns` and no `domainId` field

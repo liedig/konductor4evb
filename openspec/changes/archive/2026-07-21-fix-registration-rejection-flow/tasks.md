@@ -10,13 +10,13 @@
 
 - [x] 2.1 Scaffold `send-registration-failed-notification` crate following the existing notification Lambda pattern (event detail: `domainName`, `ownerEmail`, `reason`) — Cargo.toml, main.rs, handler.rs created; added to workspace
 - [x] 2.2 Add HTML email body builder with escaping + unit tests (reason, domain name, heading, HTML-escape of inputs) — `build_failure_email_body` with 4 unit tests
-- [x] 2.3 Add the Lambda, log group, and EventBridge rule on `RegisterDomainFailed` to `nexus-core-stack.yaml` under the `NotificationsEnabled` condition — `SendRegistrationFailedNotificationFunction`, log group, `DomainRegistrationFailedRule`, `DomainRegistrationFailedRulePermission`
+- [x] 2.3 Add the Lambda, log group, and EventBridge rule on `RegisterDomainFailed` to `konductor-core-stack.yaml` under the `NotificationsEnabled` condition — `SendRegistrationFailedNotificationFunction`, log group, `DomainRegistrationFailedRule`, `DomainRegistrationFailedRulePermission`
 - [x] 2.4 cfn-lint / `sam validate --lint` — both clean
 
 ## 3. Permanent SES Failure Classification
 
-- [x] 3.1 Add a shared classification helper in `nexus-common` (permanent: `MessageRejected`, `BadRequestException`; transient: everything else) with unit tests — `lib/nexus-common/src/ses.rs` with `is_permanent_failure(&SendEmailError)` + 3 unit tests; `aws-sdk-sesv2` added to nexus-common deps
-- [x] 3.2 Apply it in all four notification handlers: permanent → log at ERROR + acknowledge; transient → propagate (retry/DLQ unchanged) — applied in all 5 notification handlers (the 4 existing + the new registration-failed handler) via `e.as_service_error().is_some_and(nexus_common::ses::is_permanent_failure)`
+- [x] 3.1 Add a shared classification helper in `konductor-common` (permanent: `MessageRejected`, `BadRequestException`; transient: everything else) with unit tests — `lib/konductor-common/src/ses.rs` with `is_permanent_failure(&SendEmailError)` + 3 unit tests; `aws-sdk-sesv2` added to konductor-common deps
+- [x] 3.2 Apply it in all four notification handlers: permanent → log at ERROR + acknowledge; transient → propagate (retry/DLQ unchanged) — applied in all 5 notification handlers (the 4 existing + the new registration-failed handler) via `e.as_service_error().is_some_and(konductor_common::ses::is_permanent_failure)`
 
 ## 4. Documentation
 

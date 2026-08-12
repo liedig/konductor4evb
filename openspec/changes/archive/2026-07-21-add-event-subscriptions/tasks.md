@@ -1,6 +1,6 @@
 # Tasks: add-event-subscriptions
 
-## 1. Shared Library (lib/nexus-common)
+## 1. Shared Library (lib/konductor-common)
 
 - [x] 1.1 Add event-envelope module: derive `source` from namespace identity, compose/split `{source}@{detail-type}` schema names, build rule patterns (source + detail-type + numeric `detail.metadata.schemaVersion`)
 - [x] 1.2 Add rule-name derivation `{consumerDomain}-{detailType}` with validation (charset `[A-Za-z0-9._-]`, ≤ 64 chars) and unit tests covering boundary cases
@@ -13,9 +13,9 @@
 - [x] 2.2 Add read endpoints: `GET /subscriptions` (filters: consumer, producer, schema, version, status), `GET /subscriptions/{subscriptionId}`, `GET /schemas?domain=`, `GET /schemas/{schemaName}?domain=` — `aws_proxy` integrations
 - [x] 2.3 Validate the OpenAPI document and regenerate any derived artifacts (parsed, all $refs resolve; full gate is cfn-lint/sam validate in 3.4)
 
-## 3. Infrastructure (nexus-core-stack.yaml)
+## 3. Infrastructure (konductor-core-stack.yaml)
 
-- [x] 3.1 Add `nexus-event-streams` DynamoDB table: PK `producerDomain`, SK `{schemaName}#{consumerDomain}`, `by-consumer` GSI, TTL on `expiresAt`
+- [x] 3.1 Add `konductor-event-streams` DynamoDB table: PK `producerDomain`, SK `{schemaName}#{consumerDomain}`, `by-consumer` GSI, TTL on `expiresAt`
 - [x] 3.2 Add subscriptions command queue + DLQ (≥ 14 days retention), wire API Gateway SQS integration role
 - [x] 3.3 Add IAM: subscription command handler role, workflow role (EventBridge PutRule/PutTargets/RemoveTargets/DeleteRule/Enable/DisableRule on `{org}-*-event-bus`, `schemas:DescribeSchema/ListSchemas`, streams table access), delivery role used by rule targets for cross-account PutEvents
 - [x] 3.4 Run cfn-lint and deploy to a dev stack to verify template validity (cfn-lint passes; core stack deployed successfully)

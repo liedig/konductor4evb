@@ -1,8 +1,8 @@
 ## Context
 
-Nexus currently authenticates API callers with IAM and performs limited ownership checks in handlers. Planned OAuth access, platform roles, domain-scoped publisher and subscriber roles, and producer/schema entitlements require a shared authorization decision model. The selected model must also work after an API request crosses the SQS boundary and must revoke rights quickly enough to stop both new commands and already-materialized subscriptions.
+Konductor currently authenticates API callers with IAM and performs limited ownership checks in handlers. Planned OAuth access, platform roles, domain-scoped publisher and subscriber roles, and producer/schema entitlements require a shared authorization decision model. The selected model must also work after an API request crosses the SQS boundary and must revoke rights quickly enough to stop both new commands and already-materialized subscriptions.
 
-This change is a technical spike, not a production authorization implementation. It validates a purpose-built grant model stored in DynamoDB and evaluated by Nexus. DynamoDB is the selected initial engine because Nexus needs to own enterprise group-to-resource mappings and maintain reverse indexes for immediate subscription revocation.
+This change is a technical spike, not a production authorization implementation. It validates a purpose-built grant model stored in DynamoDB and evaluated by Konductor. DynamoDB is the selected initial engine because Konductor needs to own enterprise group-to-resource mappings and maintain reverse indexes for immediate subscription revocation.
 
 The evaluation fixes common scenario fixtures, mandatory correctness and non-disclosure behavior, workload profiles, and measurement procedures before results are collected. The spike runs in an isolated AWS sandbox and retains all reports and evidence under this change directory. Amazon Verified Permissions (AVP) is a considered, rejected alternative, not a candidate harness in this spike.
 
@@ -20,7 +20,7 @@ The evaluation fixes common scenario fixtures, mandatory correctness and non-dis
 **Non-Goals:**
 
 - Implement production API authorizers, grant administration APIs, policy stores, reconciliation workers, or subscription changes.
-- Change existing Nexus authorization behavior or canonical capability specifications.
+- Change existing Konductor authorization behavior or canonical capability specifications.
 - Select the final production data model, Cedar schema, API contract, deployment topology, or migration plan beyond what is necessary to evaluate feasibility.
 - Benchmark EventBridge data-plane event delivery; authorization applies to control-plane and publish API requests.
 - Compare authorization products other than DynamoDB-backed grants and AVP.
@@ -40,7 +40,7 @@ The harness will define a versioned fixture manifest containing:
 
 The DynamoDB evaluator translates the manifest into grant items and returns only a decision, reason category, evaluation timestamp, and trace reference. The manifest prevents storage-specific concepts from changing expected behavior.
 
-Alternative considered: Amazon Verified Permissions (AVP), with Nexus identities and resources represented as Cedar entities and grants represented as policies. Rejected for the initial engine because AVP would still require Nexus-owned mappings and reverse indexes to identify subscriptions affected by entitlement revocation, adding a second authorization representation without removing the reconciliation responsibility.
+Alternative considered: Amazon Verified Permissions (AVP), with Konductor identities and resources represented as Cedar entities and grants represented as policies. Rejected for the initial engine because AVP would still require Konductor-owned mappings and reverse indexes to identify subscriptions affected by entitlement revocation, adding a second authorization representation without removing the reconciliation responsibility.
 
 ### Model grants as additive and make default denial explicit
 
@@ -76,11 +76,11 @@ Alternative considered: co-locating subscription link items in the grant table f
 
 ### Compare Cognito groups with AWS account principals
 
-Cognito authorization subjects are derived from a trusted issuer and its authenticated group claims. IAM authorization subjects are the authenticated AWS account IDs supplied by the API boundary. IAM roles, users, and assumed-role sessions within the same account do not receive separate Nexus resource grants. Their principal ARN may be retained as audit provenance, but the DynamoDB evaluator must not use it to select domain, schema, publisher, or subscriber grants.
+Cognito authorization subjects are derived from a trusted issuer and its authenticated group claims. IAM authorization subjects are the authenticated AWS account IDs supplied by the API boundary. IAM roles, users, and assumed-role sessions within the same account do not receive separate Konductor resource grants. Their principal ARN may be retained as audit provenance, but the DynamoDB evaluator must not use it to select domain, schema, publisher, or subscriber grants.
 
 The parity scenarios bind a Cognito group and an AWS account to equivalent logical permissions and expect identical decisions. The spike records the trusted boundary context required before each engine call so that AVP is not credited with authentication it does not perform and DynamoDB is not penalized for equivalent boundary work.
 
-Alternative considered: grant Nexus resources to individual IAM role or user ARNs. Rejected because the agreed IAM authorization granularity is AWS account identity; finer IAM identity remains an audit concern and can continue to be governed within the owning account's IAM policies.
+Alternative considered: grant Konductor resources to individual IAM role or user ARNs. Rejected because the agreed IAM authorization granularity is AWS account identity; finer IAM identity remains an audit concern and can continue to be governed within the owning account's IAM policies.
 
 ### Reauthorize asynchronous commands with current grants
 
@@ -175,7 +175,7 @@ There is no production migration in this change.
 4. Destroy sandbox resources and verify cleanup.
 5. Open a separate OpenSpec change for the DynamoDB production architecture; do not reuse spike resources implicitly.
 
-Rollback consists of stopping the spike, deleting its sandbox resources, and retaining the incomplete evidence with a clear status. Existing Nexus behavior is unaffected.
+Rollback consists of stopping the spike, deleting its sandbox resources, and retaining the incomplete evidence with a clear status. Existing Konductor behavior is unaffected.
 
 ## Open Questions
 

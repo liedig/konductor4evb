@@ -1,15 +1,15 @@
 ## Why
 
-The project has outgrown its original "control plane" framing. It is not a control plane in the control/data plane sense — it is a central integration platform for EventBridge. The name "EventBridge Nexus" better communicates what it does: the connection point that links domains, accounts, and event flows.
+The project has outgrown its original "control plane" framing. It is not a control plane in the control/data plane sense — it is a central integration platform for EventBridge. The name "Konductor for Amazon EventBridge" better communicates what it does: the connection point that links domains, accounts, and event flows.
 
 Beyond naming, the provisioning workflow has gaps that need addressing before building further capabilities. There is no rollback — if provisioning fails partway through, orphaned resources are left behind requiring manual cleanup. The control plane has no awareness of which accounts have been onboarded — it discovers missing trust roles only when `AssumeRole` fails during provisioning. Domain namespaces are invisible to application accounts, forcing teams to look up naming conventions or make cross-account calls to discover what domains exist. Finally, the resource naming convention `{env}-{org}-{domain}` groups by environment rather than by domain, making it harder to reason about resources across environments.
 
 ## What Changes
 
-### Rebrand: EventBridge Control Plane to EventBridge Nexus
+### Rebrand: EventBridge Control Plane to Konductor for Amazon EventBridge
 
 - Rename across all documentation, code comments, event source prefixes, resource names, and config
-- Event source prefix changes from `controlplane.domain-management` to `nexus.domain-management`
+- Event source prefix changes from `controlplane.domain-management` to `konductor.domain-management`
 - OpenSpec config context updated to reflect new name and purpose
 
 ### Naming convention: `{org}-{env}-{domain}` replaces `{env}-{org}-{domain}`
@@ -47,7 +47,7 @@ Beyond naming, the provisioning workflow has gaps that need addressing before bu
 - A RAM resource share (`{org}-domain-namespaces`) is created if it does not exist, with the AWS Organization as principal
 - The SSM parameter is associated with the RAM share
 - Application accounts see `/namespace/*` parameters locally — no cross-account IAM required
-- Parameters are read-only to consuming accounts; only the Nexus (platform account) can write them
+- Parameters are read-only to consuming accounts; only the Konductor (platform account) can write them
 - Namespace parameters are environment-independent — created once per domain regardless of which environment triggers first provisioning
 
 ## Capabilities
@@ -61,14 +61,14 @@ _(none — these are enhancements to existing capabilities and cross-cutting con
 - `domain-provisioning-workflow`: Saga rollback, new account detection, namespace parameter creation, RAM sharing, updated resource naming convention
 - `cross-account-trust-model`: Trust role naming convention flip, new account detection awareness
 - `resource-topology`: Resource naming convention flip from `{env}-{org}-{domain}` to `{org}-{env}-{domain}`, domain namespace defined as `{org}-{domain}` (environment-independent)
-- `system-architecture`: Rebrand to EventBridge Nexus, event source prefix change, SSM Parameter Store and RAM added as service dependencies
+- `system-architecture`: Rebrand to Konductor for Amazon EventBridge, event source prefix change, SSM Parameter Store and RAM added as service dependencies
 
 ## Impact
 
 ### Code changes
 
 - **Modify**: All Lambda functions and shared library references to the naming convention (string construction using `{env}-{org}` flips to `{org}-{env}`)
-- **Modify**: Event source prefix in all EventBridge `PutEvents` calls (`controlplane.*` to `nexus.*`)
+- **Modify**: Event source prefix in all EventBridge `PutEvents` calls (`controlplane.*` to `konductor.*`)
 - **Modify**: Provisioning workflow state machine — add account detection step, saga compensation chain, SSM parameter creation, RAM share management
 - **Modify**: Approval notification Lambda — surface new account flag in notification email
 

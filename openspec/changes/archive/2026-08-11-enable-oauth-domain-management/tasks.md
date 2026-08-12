@@ -31,7 +31,7 @@
 ## 5. Approvals inbox endpoint
 
 - [x] 5.1 Red tests (handler + api_surfaces): `GET /domains/registrations/pending` returns pending domains with `taskToken`, owningTeam, and owner details; 403 for owner/auditor/IAM callers; empty list → 200
-- [x] 5.2 Implement the handler and wire the route (OAuth surface only) in `nexus-core-stack.yaml` and `api/openapi-oauth.yaml`
+- [x] 5.2 Implement the handler and wire the route (OAuth surface only) in `konductor-core-stack.yaml` and `api/openapi-oauth.yaml`
 - [x] 5.3 Green + `make check` + cfn-lint; commit `feat(domains): add pending-registrations inbox endpoint`
 
 ## 6. Platform enable/disable lifecycle
@@ -49,7 +49,7 @@
 ## 8. Cognito client auth flows
 
 - [x] 8.1 Red test (api_surfaces or template assertion): user-pool client allows `ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH`
-- [x] 8.2 Update `NexusUserPoolClient` in `nexus-core-stack.yaml`; cfn-lint clean
+- [x] 8.2 Update `KonductorUserPoolClient` in `konductor-core-stack.yaml`; cfn-lint clean
 - [x] 8.3 Commit `feat(auth): enable SRP flows for custom login clients`
 
 ## 9. Test personas and docs

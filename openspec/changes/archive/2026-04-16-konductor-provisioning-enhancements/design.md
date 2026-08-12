@@ -8,7 +8,7 @@ The provisioning workflow role already has scoped permissions for EventBridge, S
 
 **Goals:**
 
-- Rename the project to EventBridge Nexus across code, config, events, and documentation
+- Rename the project to Konductor for Amazon EventBridge across code, config, events, and documentation
 - Flip the resource naming convention to `{org}-{env}-{domain}` so resources group by domain across environments
 - Detect new (previously unseen) accounts during provisioning and surface this in the approval notification
 - Implement saga-pattern rollback in the provisioning workflow so failed provisioning cleans up after itself
@@ -49,7 +49,7 @@ The provisioning workflow role already has scoped permissions for EventBridge, S
 - Path: `/namespace/{domain}` (e.g., `/namespace/billing`)
 - Value: `{org}-{domain}` (e.g., `acme-billing`)
 - Tier: Advanced (required for RAM sharing)
-- Owner: EventBridge Nexus (platform account)
+- Owner: Konductor for Amazon EventBridge (platform account)
 - Read-only to consuming accounts
 
 ### Decision 3: RAM sharing at the AWS Organization level
@@ -61,7 +61,7 @@ The provisioning workflow role already has scoped permissions for EventBridge, S
 **Alternatives considered:**
 
 - Per-account RAM shares — Fine-grained access control but adds complexity for managing share membership. Not justified since namespace values are non-sensitive.
-- No RAM, use Nexus API for discovery — Forces cross-account API calls and IAM setup for what should be simple parameter reads. Defeats the purpose of local references.
+- No RAM, use Konductor API for discovery — Forces cross-account API calls and IAM setup for what should be simple parameter reads. Defeats the purpose of local references.
 
 **Provisioning workflow integration:**
 
@@ -92,7 +92,7 @@ The provisioning workflow role already has scoped permissions for EventBridge, S
 
 **Choice:** Replace the current catch-and-fail-fast pattern with a saga compensation chain. On failure at any step, the workflow walks backwards through successfully created resources and deletes them before marking the domain as `PROVISIONING_FAILED`.
 
-**Rationale:** The current workflow leaves orphaned resources on partial failure. These require manual cleanup and are invisible to the Nexus. A saga ensures the system is either fully provisioned or fully clean.
+**Rationale:** The current workflow leaves orphaned resources on partial failure. These require manual cleanup and are invisible to the Konductor. A saga ensures the system is either fully provisioned or fully clean.
 
 **Implementation approach:**
 
@@ -119,20 +119,20 @@ App-account resource deletion reuses the assumed role credentials from `AssumeAp
 - Manual cleanup only — Current approach. Error-prone, invisible orphaned resources.
 - Parallel compensation — Delete all resources simultaneously. Risk of dependency issues (e.g., can't delete a bus with active rules). Sequential reverse-order is safer.
 
-### Decision 6: Rebrand to EventBridge Nexus
+### Decision 6: Rebrand to Konductor for Amazon EventBridge
 
-**Choice:** Rename from "EventBridge Control Plane" to "EventBridge Nexus" across all artifacts.
+**Choice:** Rename from "EventBridge Control Plane" to "Konductor for Amazon EventBridge" across all artifacts.
 
-**Rationale:** The system is an integration platform, not a control plane in the infrastructure control/data plane sense. "Nexus" communicates that it is the central connection point linking domains, accounts, and event flows.
+**Rationale:** The system is an integration platform, not a control plane in the infrastructure control/data plane sense. "Konductor" communicates that it is the central connection point linking domains, accounts, and event flows.
 
 **Scope of rename:**
 
-- Event source prefix: `controlplane.domain-management` → `nexus.domain-management`
-- Control plane event bus: `{org}-{env}-control-plane-bus` → `{org}-{env}-nexus-bus`
-- Trust role: `{org}-{env}-cp-trust-role` → `{org}-{env}-nexus-trust-role`
+- Event source prefix: `controlplane.domain-management` → `konductor.domain-management`
+- Control plane event bus: `{org}-{env}-control-plane-bus` → `{org}-{env}-konductor-bus`
+- Trust role: `{org}-{env}-cp-trust-role` → `{org}-{env}-konductor-trust-role`
 - Code references: module names, log messages, error prefixes
 - Documentation: README, AGENTS.md, OpenSpec config context
-- SAM template: resource logical IDs referencing "ControlPlane" renamed to "Nexus"
+- SAM template: resource logical IDs referencing "ControlPlane" renamed to "Konductor"
 
 ### Decision 7: Provisioning workflow role permissions additions
 

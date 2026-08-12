@@ -17,7 +17,7 @@ The spike SHALL evaluate a DynamoDB-backed grant engine using the defined logica
 
 ### Requirement: Common authorization scenario suite
 
-The spike SHALL exercise the DynamoDB-backed grant engine against the full Nexus authorization model: global platform roles, Cognito group bindings, domain-scoped publisher and subscriber roles, producer-domain and exact-schema entitlements, additive grants, revocation, Cognito-group and IAM-authenticated AWS account principals, non-disclosing denials, and asynchronous SQS command authorization.
+The spike SHALL exercise the DynamoDB-backed grant engine against the full Konductor authorization model: global platform roles, Cognito group bindings, domain-scoped publisher and subscriber roles, producer-domain and exact-schema entitlements, additive grants, revocation, Cognito-group and IAM-authenticated AWS account principals, non-disclosing denials, and asynchronous SQS command authorization.
 
 #### Scenario: Global platform roles
 
@@ -28,7 +28,7 @@ The spike SHALL exercise the DynamoDB-backed grant engine against the full Nexus
 
 #### Scenario: Cognito group binding
 
-- **WHEN** an OAuth principal belongs to a Cognito group bound to a Nexus role
+- **WHEN** an OAuth principal belongs to a Cognito group bound to a Konductor role
 - **THEN** the DynamoDB evaluator SHALL derive the expected effective role and decisions from the trusted group binding
 
 #### Scenario: Domain-scoped publisher
@@ -96,7 +96,7 @@ The spike SHALL exercise the DynamoDB-backed grant engine against the full Nexus
 
 ### Requirement: Measurable evaluation evidence
 
-The spike SHALL collect quantitative and qualitative evidence for latency, cost, auditability, local testability, policy administration, operational complexity, AWS account principal support, Cognito integration, hierarchy and inheritance, immediate revocation, and asynchronous handling. Raw observations, calculation assumptions, failed trials, and evidence sources SHALL be retained with the spike result. Before measurements begin, the spike evidence plan SHALL declare sample sizes, workload volumes, target throughput, measurement boundaries, DynamoDB configuration, and any provisional evaluation targets. These parameters SHALL be identified as spike methodology rather than settled Nexus production requirements.
+The spike SHALL collect quantitative and qualitative evidence for latency, cost, auditability, local testability, policy administration, operational complexity, AWS account principal support, Cognito integration, hierarchy and inheritance, immediate revocation, and asynchronous handling. Raw observations, calculation assumptions, failed trials, and evidence sources SHALL be retained with the spike result. Before measurements begin, the spike evidence plan SHALL declare sample sizes, workload volumes, target throughput, measurement boundaries, DynamoDB configuration, and any provisional evaluation targets. These parameters SHALL be identified as spike methodology rather than settled Konductor production requirements.
 
 #### Scenario: Latency benchmark
 
@@ -125,7 +125,7 @@ The spike SHALL collect quantitative and qualitative evidence for latency, cost,
 
 ### Requirement: Evidence-based DynamoDB readiness decision
 
-The spike SHALL publish a readiness decision for DynamoDB-backed grants before the next implementation change. Correct scenario behavior and unauthorized non-disclosure SHALL be mandatory. Before measurements begin, the spike evidence plan SHALL declare a readiness rubric explaining how all evaluation criteria will inform production readiness without representing arbitrary numerical weights as Nexus product priorities. Unsupported or unmeasured behavior SHALL remain explicit and SHALL NOT be inferred as successful. The readiness decision SHALL include the DynamoDB result, AVP as the rejected alternative, evidence, recommended production SLOs, material trade-offs, assumptions, residual risks, and conditions that would require reevaluation.
+The spike SHALL publish a readiness decision for DynamoDB-backed grants before the next implementation change. Correct scenario behavior and unauthorized non-disclosure SHALL be mandatory. Before measurements begin, the spike evidence plan SHALL declare a readiness rubric explaining how all evaluation criteria will inform production readiness without representing arbitrary numerical weights as Konductor product priorities. Unsupported or unmeasured behavior SHALL remain explicit and SHALL NOT be inferred as successful. The readiness decision SHALL include the DynamoDB result, AVP as the rejected alternative, evidence, recommended production SLOs, material trade-offs, assumptions, residual risks, and conditions that would require reevaluation.
 
 #### Scenario: DynamoDB satisfies mandatory behavior
 

@@ -2,9 +2,9 @@
 
 ## Context
 
-Domain provisioning already creates the endpoints of every future event stream: a platform-side domain bus (with PutEvents restricted to the owner account), a per-domain schema registry, a subscription DLQ, and an app-side domain bus in the consumer's account. What is missing is the middle: a governed way to connect a consumer domain to a producer domain's events. Today that would require hand-crafted EventBridge rules and cross-account policies — the exact toil Nexus exists to remove.
+Domain provisioning already creates the endpoints of every future event stream: a platform-side domain bus (with PutEvents restricted to the owner account), a per-domain schema registry, a subscription DLQ, and an app-side domain bus in the consumer's account. What is missing is the middle: a governed way to connect a consumer domain to a producer domain's events. Today that would require hand-crafted EventBridge rules and cross-account policies — the exact toil Konductor exists to remove.
 
-This change introduces subscriptions as **contracts, not plumbing**: a consumer subscribes to a schema in the producer's registry (always the latest version), and Nexus materializes the event stream (rules, filters, DLQ wiring) in every environment. Two principles from the platform's design philosophy shape everything below:
+This change introduces subscriptions as **contracts, not plumbing**: a consumer subscribes to a schema in the producer's registry (always the latest version), and Konductor materializes the event stream (rules, filters, DLQ wiring) in every environment. Two principles from the platform's design philosophy shape everything below:
 
 1. **One representation of an event at any point in time.** Events are business contracts, not software dependency graphs. Subscribers do not choose versions; they bind to the current contract, and version pinning exists to make transitions observable and bounded — not to let consumers live on old versions indefinitely.
 2. **Strict platform/app segregation.** The platform owns everything up to and including delivery onto the consumer's app-side bus. What happens after that (integration rules, targets, orphan cleanup) is the application team's responsibility.
@@ -18,7 +18,7 @@ Constraints inherited from the existing system: writes are async (API Gateway �
 - Subscribe a consumer domain to a producer domain's schema with one API call; events flowing in every environment without the consumer touching any AWS resource
 - Unsubscribe cleanly: platform-side stream removed, record retained 90 days for audit
 - Per-environment enable/disable of a subscription (e.g., dev/test active, prod paused), settable at subscribe time and afterwards
-- The `nexus-event-streams` table answers all topology questions — subscribers per schema (and per version), inbound streams per consumer — without enumerating AWS resources
+- The `konductor-event-streams` table answers all topology questions — subscribers per schema (and per version), inbound streams per consumer — without enumerating AWS resources
 - Rule patterns pin the schema version per environment, making "who consumes v3?" an enforceable governance input for the future evolution thread
 - Read-only schema discovery so consumers can find contracts to subscribe to
 - A canonical event envelope contract that the future publish capability stamps and validates
@@ -41,7 +41,7 @@ Constraints inherited from the existing system: writes are async (API Gateway �
 
 ### D2: Subscription binds to the latest schema version, pinned per environment
 
-At subscribe time, Nexus resolves the **latest** version of the schema in each environment's registry and pins it in that env's rule pattern. Subscribers cannot select historical versions.
+At subscribe time, Konductor resolves the **latest** version of the schema in each environment's registry and pins it in that env's rule pattern. Subscribers cannot select historical versions.
 
 **Why:** the schema is the contract; offering old versions would institutionalize multiple concurrent representations of the same event. Pinning (rather than matching any version) makes the consumer population per version *observable and enforceable* — the substrate the evolution thread needs for managed transitions and grace periods.
 
@@ -90,7 +90,7 @@ The resulting rule pattern:
 
 **Alternatives considered:** filtering on schema ARN — rejected: ARNs are env-specific and derivable, adding noise; reverse-DNS source (`com.prezzee.orders`) — rejected: introduces a second identity convention when the platform already owns one; free-text producer-chosen source — rejected: guarantees drift (`prezzee-orders` vs `Prezzee.Orders`).
 
-### D6: `nexus-event-streams` table is the source of intent; rules are materialization
+### D6: `konductor-event-streams` table is the source of intent; rules are materialization
 
 New table (table-per-entity convention). Nobody enumerates rules across N buses to understand topology, and a future reconciliation job can diff table-vs-rules to detect drift.
 
@@ -118,7 +118,7 @@ Enablement is a per-env property of a subscription (dev active, prod paused for 
 
 ### D8: Control-plane shape follows the established write path
 
-- **Writes** (`POST/PATCH/DELETE` on subscriptions): API Gateway → subscriptions SQS command queue (+ DLQ, `HttpMethod` attribute, 202 Accepted) → subscription command handler → validation + record write → Step Functions **subscribe/unsubscribe workflow** → outcome events (`SubscriptionCreated|SubscriptionFailed|SubscriptionRemoved|...`) on the nexus bus.
+- **Writes** (`POST/PATCH/DELETE` on subscriptions): API Gateway → subscriptions SQS command queue (+ DLQ, `HttpMethod` attribute, 202 Accepted) → subscription command handler → validation + record write → Step Functions **subscribe/unsubscribe workflow** → outcome events (`SubscriptionCreated|SubscriptionFailed|SubscriptionRemoved|...`) on the konductor bus.
 - **Reads**: dedicated sync Lambdas (`list-subscriptions`, `describe-subscription`, `list-schemas`) per the one-Lambda-per-operation convention.
 - **Subscribe workflow** (per env, Map state like `provision-domain`): resolve latest schema version (`schemas:DescribeSchema`) → `PutRule` (pattern + state from desired enablement) → `PutTargets` (consumer app bus, `DeadLetterConfig` → the producer's existing subscription DLQ, retry policy). Compensation: delete rules created so far; **all-or-nothing across envs** — if the schema is missing in any env, the subscription fails entirely (consistent with domain provisioning; schema promotion discipline belongs to the evolution thread).
 - **Unsubscribe workflow**: per env `RemoveTargets` → `DeleteRule`, idempotent ("already gone" = no-op), then mark record `REMOVED` + set TTL.

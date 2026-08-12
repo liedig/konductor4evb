@@ -14,7 +14,7 @@ Replace "the workflow SHALL emit a `DomainCreationFailed` event" with "the workf
 
 Replace the entire requirement text:
 
-The provisioning workflow SHALL emit lifecycle events to the Nexus event bus for provisioning outcomes only. No intermediate events SHALL be emitted. The event source SHALL be `nexus.domain-management`.
+The provisioning workflow SHALL emit lifecycle events to the Konductor event bus for provisioning outcomes only. No intermediate events SHALL be emitted. The event source SHALL be `konductor.domain-management`.
 
 #### Scenario: Provisioning started event
 
@@ -25,11 +25,11 @@ REMOVE this scenario entirely.
 Replace: emit a `DomainCreationSucceeded` event → emit a `DomainProvisioningSucceeded` event. Add `isNewAccount` flag to the payload.
 
 - **WHEN** the provisioning workflow completes all steps successfully
-- **THEN** it SHALL emit a `DomainProvisioningSucceeded` event with source `nexus.domain-management`, domainId, workflowExecutionId, completedAt, resourceArns (map of all created resource ARNs), namespaceParameter (SSM parameter path), and isNewAccount flag
+- **THEN** it SHALL emit a `DomainProvisioningSucceeded` event with source `konductor.domain-management`, domainId, workflowExecutionId, completedAt, resourceArns (map of all created resource ARNs), namespaceParameter (SSM parameter path), and isNewAccount flag
 
 #### Scenario: Provisioning failed event
 
 Replace: emit a `DomainCreationFailed` event → emit a `DomainProvisioningFailed` event.
 
 - **WHEN** the provisioning workflow fails at any step
-- **THEN** it SHALL emit a `DomainProvisioningFailed` event with source `nexus.domain-management`, domainId, workflowExecutionId, failedAt, errorCode, errorMessage, and compensationResults (list of cleanup outcomes)
+- **THEN** it SHALL emit a `DomainProvisioningFailed` event with source `konductor.domain-management`, domainId, workflowExecutionId, failedAt, errorCode, errorMessage, and compensationResults (list of cleanup outcomes)

@@ -8,7 +8,7 @@ Domain management is an administrative function of the control plane. Any authen
 
 For OAuth callers the registration request SHALL carry an `owningTeam` naming exactly one of the caller's Cognito team groups, which SHALL be recorded on the domain record and used to write the owner binding at approval (see domain-ownership). IAM callers MAY omit `owningTeam`; when omitted, no owner binding is created at approval and ownership administration falls to the platform team.
 
-The set of environments a domain is provisioned into SHALL be determined by the **platform team**, not the requester. The Nexus platform SHALL hold a single configured environment list (default `["dev", "staging", "prod"]`), and every approved domain SHALL be provisioned into the full list. The registration API SHALL NOT accept an `environments` field. All environments of a given domain SHALL be provisioned into the same `ownerAccountId`.
+The set of environments a domain is provisioned into SHALL be determined by the **platform team**, not the requester. The Konductor platform SHALL hold a single configured environment list (default `["dev", "staging", "prod"]`), and every approved domain SHALL be provisioned into the full list. The registration API SHALL NOT accept an `environments` field. All environments of a given domain SHALL be provisioned into the same `ownerAccountId`.
 
 The registration request SHALL include at least one secondary owner email address. Secondary owners are co-managers of the domain who serve as backup contacts when the primary owner is unavailable. At this stage, secondary owner emails are captured for informational purposes only — no notifications are sent to secondary owners.
 

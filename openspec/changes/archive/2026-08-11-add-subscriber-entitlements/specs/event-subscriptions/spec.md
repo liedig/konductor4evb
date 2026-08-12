@@ -43,7 +43,7 @@ Before activating a subscription, the control plane SHALL validate that: both th
 
 ### Requirement: Final entitlement check before enablement
 
-Immediately before any workflow transitions a Nexus-managed EventBridge rule to `ENABLED`, including initial activation and per-environment enable operations, the control plane SHALL perform a final current-entitlement check through the grant engine for the subscription's consumer domain and producer schema. If no current entitlement covers the schema at that moment, the workflow SHALL NOT enable the rule and SHALL record the denial.
+Immediately before any workflow transitions a Konductor-managed EventBridge rule to `ENABLED`, including initial activation and per-environment enable operations, the control plane SHALL perform a final current-entitlement check through the grant engine for the subscription's consumer domain and producer schema. If no current entitlement covers the schema at that moment, the workflow SHALL NOT enable the rule and SHALL record the denial.
 
 #### Scenario: Revocation during activation blocks enablement
 

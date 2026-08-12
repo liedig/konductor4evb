@@ -2,7 +2,7 @@
 
 The current control-plane API is an API Gateway REST API whose routes are primarily protected by `AWS_IAM`. Several write routes use direct API Gateway-to-SQS service integrations, so inserting an authentication proxy Lambda would weaken the established durable-acceptance path. Approval currently treats a Step Functions task token and caller-supplied decider field as part of the public interaction, which does not establish who is making the decision.
 
-Nexus needs an interactive OAuth/OIDC identity path while retaining AWS account identity for automation. Resource-level policy evaluation uses the DynamoDB-backed grant engine validated by the separate authorization-engine spike. This change therefore establishes identity validation, coarse global roles, trusted Cognito team-group propagation, account-granular IAM identity, and authorization boundaries without implementing the resource policy engine.
+Konductor needs an interactive OAuth/OIDC identity path while retaining AWS account identity for automation. Resource-level policy evaluation uses the DynamoDB-backed grant engine validated by the separate authorization-engine spike. This change therefore establishes identity validation, coarse global roles, trusted Cognito team-group propagation, account-granular IAM identity, and authorization boundaries without implementing the resource policy engine.
 
 ## Goals / Non-Goals
 
@@ -14,7 +14,7 @@ Nexus needs an interactive OAuth/OIDC identity path while retaining AWS account 
 - Preserve direct API Gateway-to-SQS integrations and carry authenticated principal context into asynchronous consumers.
 - Require OAuth `platform-admin` authorization for approval independently of Step Functions callback state.
 - Bound stale authorizer decisions and token-revocation exposure.
-- Leave a clean Cognito federation seam without coupling Nexus to enterprise-specific attributes.
+- Leave a clean Cognito federation seam without coupling Konductor to enterprise-specific attributes.
 
 **Non-Goals:**
 
@@ -34,7 +34,7 @@ This separation avoids ambiguous principal semantics, permits independent API Ga
 
 ### 2. Use a dedicated Cognito user pool as the interactive identity broker
 
-The stack will provision a dedicated user pool, an OAuth application client suitable for the interactive application, controlled `platform-admin` and `platform-auditor` groups, and configuration outputs needed by the OAuth client and authorizer. Cognito is the federation seam: a future customer may connect an external IdP and manage Cognito group membership directly or add pre-token customization. Nexus consumes only standard Cognito claims and `cognito:groups`; controlled group names map to global roles, while other validated values are carried as opaque trusted team-group identifiers. Nexus does not interpret arbitrary enterprise attributes or define resource bindings in this change.
+The stack will provision a dedicated user pool, an OAuth application client suitable for the interactive application, controlled `platform-admin` and `platform-auditor` groups, and configuration outputs needed by the OAuth client and authorizer. Cognito is the federation seam: a future customer may connect an external IdP and manage Cognito group membership directly or add pre-token customization. Konductor consumes only standard Cognito claims and `cognito:groups`; controlled group names map to global roles, while other validated values are carried as opaque trusted team-group identifiers. Konductor does not interpret arbitrary enterprise attributes or define resource bindings in this change.
 
 OAuth configuration must use access tokens for API access. ID tokens are not accepted by the authorizer. Redirect URIs, logout URIs, and supported OAuth flows are deployment parameters with secure defaults appropriate to the chosen interactive client; client secrets are not embedded in browser-delivered code.
 
@@ -124,4 +124,4 @@ Rollback before step 6 can disable the OAuth routes while leaving IAM behavior i
 ## Open Questions
 
 - How will the DynamoDB grant engine and storage model implement the downstream `TrustedPrincipal` authorization interface? This is validated by `evaluate-authorization-engine` and does not change the identity contract defined here.
-- What customer-facing guidance and supported templates should be provided for external IdP mappings or Cognito pre-token customization? That guidance is deferred; the supported Nexus input remains standard Cognito identity plus trusted `cognito:groups`, with non-global values carried opaquely as team-group identifiers.
+- What customer-facing guidance and supported templates should be provided for external IdP mappings or Cognito pre-token customization? That guidance is deferred; the supported Konductor input remains standard Cognito identity plus trusted `cognito:groups`, with non-global values carried opaquely as team-group identifiers.

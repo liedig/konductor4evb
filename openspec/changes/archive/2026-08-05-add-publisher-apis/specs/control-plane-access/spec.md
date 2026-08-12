@@ -2,14 +2,14 @@
 
 ### Requirement: Separate OAuth and IAM API surfaces
 
-Nexus SHALL expose separate REST API surfaces for OAuth-authenticated interactive users and AWS_IAM-authenticated callers. The IAM surface SHALL use the authenticated AWS account as its resource-authorization identity and MAY retain the IAM principal ARN only as audit provenance. A route exposed on both surfaces SHALL enforce the same operation contract and authorization semantics after trusted-principal normalization. AWS-native direct EventBridge publishing, cross-account provisioning, and EventBridge delivery SHALL remain IAM-based and outside the OAuth control-plane identity mechanism.
+Konductor SHALL expose separate REST API surfaces for OAuth-authenticated interactive users and AWS_IAM-authenticated callers. The IAM surface SHALL use the authenticated AWS account as its resource-authorization identity and MAY retain the IAM principal ARN only as audit provenance. A route exposed on both surfaces SHALL enforce the same operation contract and authorization semantics after trusted-principal normalization. AWS-native direct EventBridge publishing, cross-account provisioning, and EventBridge delivery SHALL remain IAM-based and outside the OAuth control-plane identity mechanism.
 
 API Gateway stages SHALL be named after platform environments (`dev`, `staging`, `prod`) instead of a static version stage. The stage name SHALL be available as `$context.stage` in mapping templates and request contexts. Publish and schema write operations SHALL use the stage to infer the target environment. Environment-agnostic operations (register, approve, list, describe) SHALL behave identically on any stage.
 
 #### Scenario: Interactive caller uses the OAuth surface
 
 - **WHEN** an interactive client invokes an OAuth control-plane route
-- **THEN** the route SHALL require a valid Cognito access token through the Nexus REQUEST authorizer
+- **THEN** the route SHALL require a valid Cognito access token through the Konductor REQUEST authorizer
 - **AND THEN** IAM request signing SHALL NOT substitute for the OAuth credential on that route
 
 #### Scenario: AWS caller uses the IAM surface
@@ -33,5 +33,5 @@ API Gateway stages SHALL be named after platform environments (`dev`, `staging`,
 
 #### Scenario: AWS-native data-plane integration operates
 
-- **WHEN** a producer publishes directly through AWS-native EventBridge paths or Nexus provisions or delivers resources across accounts
+- **WHEN** a producer publishes directly through AWS-native EventBridge paths or Konductor provisions or delivers resources across accounts
 - **THEN** those interactions SHALL continue to use IAM roles and resource policies
