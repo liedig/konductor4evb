@@ -3,7 +3,7 @@
 ## 1. Preconditions
 
 - [x] 1.1 Fold the authorizer caching delta into `add-nexus-web-ui` (user decision: fold in, do NOT archive — the web UI change has further work coming)
-- [ ] 1.2 Create the feature branch `chore-rename-to-konductor`
+- [x] 1.2 Create the feature branch `chore-rename-to-konductor`
 
 ## 2. Code identifiers (compiler-verified)
 
@@ -23,11 +23,11 @@
 
 ## 4. Prose sweep
 
-- [ ] 4.1 Docs (`README.md`, `docs/**`), `AGENTS.md` product-naming section (full form "Konductor for Amazon EventBridge", short form "Konductor"), `CLAUDE.md` if applicable, `openspec/config.yaml` glossary
-- [ ] 4.2 Spec prose sweep: all `openspec/specs/**` mentions of Nexus not covered by the six deltas; also the active `add-nexus-web-ui` delta prose (stays unarchived per 1.1)
-- [ ] 4.3 Web UI and email brand strings: login page, layout header, page titles/descriptions, notification email bodies
-- [ ] 4.4 Verify: `rg -i nexus` returns hits only under `openspec/changes/archive/` (historical record, intentionally untouched)
-- [ ] 4.5 Commit `docs: rename product to Konductor for Amazon EventBridge`
+- [x] 4.1 Docs (`README.md`, `docs/**`), `AGENTS.md` product-naming section (full form "Konductor for Amazon EventBridge", short form "Konductor"), `CLAUDE.md` if applicable, `openspec/config.yaml` glossary
+- [x] 4.2 Spec prose sweep: all `openspec/specs/**` mentions of Nexus not covered by the six deltas; also the active `add-nexus-web-ui` delta prose (stays unarchived per 1.1)
+- [x] 4.3 Web UI and email brand strings: login page, layout header, page titles/descriptions, notification email bodies
+- [x] 4.4 Verify: `rg -i nexus` returns hits only under `openspec/changes/archive/` (historical record, intentionally untouched)
+- [x] 4.5 Commit `docs: rename product to Konductor for Amazon EventBridge`
 
 ## 5. Redeploy and live verification
 
