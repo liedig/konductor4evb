@@ -72,6 +72,12 @@ function toggleEnv(env: string) {
   openEnvs.value = { ...openEnvs.value, [env]: !openEnvs.value[env] }
 }
 
+function arnConsoleLink(env: string, arn: string | undefined): string | null {
+  if (!arn) return null
+  const siblings = Object.values(domain.value?.resourceArns?.[env] ?? {})
+  return consoleLinkFor(arn, regionFromArns(siblings))
+}
+
 onMounted(load)
 </script>
 
@@ -169,7 +175,16 @@ onMounted(load)
             >
               <div v-for="(arn, label) in domain?.resourceArns?.[env] ?? {}" :key="label" class="grid grid-cols-[180px_1fr] gap-2">
                 <dt>{{ label }}</dt>
-                <dd class="text-foreground">{{ arn }}</dd>
+                <dd class="text-foreground">
+                  <a
+                    v-if="arnConsoleLink(env, arn)"
+                    :href="arnConsoleLink(env, arn)!"
+                    target="_blank"
+                    rel="noopener"
+                    class="underline decoration-dotted underline-offset-2 hover:text-accent"
+                  >{{ arn }}</a>
+                  <template v-else>{{ arn }}</template>
+                </dd>
               </div>
             </dl>
           </div>
