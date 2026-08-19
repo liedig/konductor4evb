@@ -86,6 +86,19 @@ Conditions:
       - !Not [!Equals [!Ref PlatformOperatorEmail, ""]]
 
 Resources:
+  # ---- Platform tooling ----
+  # Console grouping for operators: every resource this stack owns, always in
+  # sync with the stack itself (no tag bookkeeping).
+  KonductorCoreResourceGroup:
+    Type: AWS::ResourceGroups::Group
+    Properties:
+      Name: konductor-core
+      Description: All resources managed by the konductor-core stack
+      ResourceQuery:
+        Type: CLOUDFORMATION_STACK_1_0
+        Query:
+          StackIdentifier: !Ref AWS::StackId
+
   # ---- EventBridge ----
   KonductorEventBus:
     Type: AWS::Events::EventBus
