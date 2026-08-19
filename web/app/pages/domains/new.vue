@@ -19,7 +19,7 @@ const form = reactive({
   ownerEmail: '',
   secondaryOwnerEmails: [''],
   description: '',
-  tags: '',
+  customTags: [] as { key: string, value: string }[],
 })
 const fieldErrors = reactive<Record<string, string>>({})
 const busy = ref(false)
@@ -50,14 +50,18 @@ function validate(): boolean {
   return Object.values(fieldErrors).every(e => e === '')
 }
 
+const MAX_CUSTOM_TAGS = 3
+
+function addTag() {
+  if (form.customTags.length < MAX_CUSTOM_TAGS) form.customTags.push({ key: '', value: '' })
+}
+
 function parseTags(): Record<string, string> | undefined {
-  const entries = form.tags
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(line => line.split('='))
+  const entries = form.customTags
+    .map(t => [t.key.trim(), t.value.trim()] as const)
+    .filter(([key, value]) => key !== '' && value !== '')
   if (entries.length === 0) return undefined
-  return Object.fromEntries(entries.filter(pair => pair.length === 2 && pair[0] && pair[1]))
+  return Object.fromEntries(entries)
 }
 
 async function submit() {
@@ -112,7 +116,7 @@ async function submit() {
         <NxInput
           v-model="form.domainName"
           label="Domain name"
-          placeholder="payments"
+          placeholder="my-domain"
           hint="Stable identifier; cannot be changed later."
           :error="fieldErrors.domainName"
           required
@@ -165,17 +169,33 @@ async function submit() {
             </NxButton>
           </div>
         </div>
-        <NxInput v-model="form.description" label="Description" placeholder="Payments domain events" />
-        <div class="flex flex-col gap-1.5">
-          <label for="tags" class="text-sm font-medium text-muted">Tags</label>
-          <textarea
-            id="tags"
-            v-model="form.tags"
-            rows="3"
-            placeholder="cost-center=1234"
-            class="rounded-lg border border-border-strong bg-surface px-3 py-2 font-mono text-sm text-foreground placeholder:text-faint"
-          />
-          <p class="text-sm text-faint">One <code>key=value</code> pair per line.</p>
+        <NxInput v-model="form.description" label="Description" placeholder="Provide a description for your domain" />
+        <div class="flex flex-col gap-2">
+          <div v-for="(tag, index) in form.customTags" :key="index" class="flex items-end gap-2">
+            <NxInput
+              v-model="tag.key"
+              :label="index === 0 ? 'Custom tags' : undefined"
+              placeholder="Key"
+              class="flex-1"
+            />
+            <NxInput
+              v-model="tag.value"
+              placeholder="Value"
+              class="flex-1"
+            />
+            <NxButton variant="ghost" size="sm" @click="form.customTags.splice(index, 1)">
+              Remove
+            </NxButton>
+          </div>
+          <div class="flex items-center justify-between">
+            <NxButton v-if="form.customTags.length < MAX_CUSTOM_TAGS" variant="ghost" size="sm" @click="addTag">
+              Add tag
+            </NxButton>
+            <p v-else class="text-sm text-faint">Maximum of {{ MAX_CUSTOM_TAGS }} custom tags.</p>
+            <p v-if="form.customTags.length === 0" class="text-sm text-faint">
+              The platform applies standard tags to every domain; add up to {{ MAX_CUSTOM_TAGS }} of your own.
+            </p>
+          </div>
         </div>
         <div class="mt-2 flex justify-end gap-2">
           <NuxtLink to="/domains"><NxButton variant="secondary">Cancel</NxButton></NuxtLink>
