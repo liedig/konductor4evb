@@ -171,10 +171,10 @@ async function submit() {
         </div>
         <NxInput v-model="form.description" label="Description" placeholder="Provide a description for your domain" />
         <div class="flex flex-col gap-2">
+          <span class="text-sm font-medium text-muted">Custom tags</span>
           <div v-for="(tag, index) in form.customTags" :key="index" class="flex items-end gap-2">
             <NxInput
               v-model="tag.key"
-              :label="index === 0 ? 'Custom tags' : undefined"
               placeholder="Key"
               class="flex-1"
             />
