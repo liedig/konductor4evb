@@ -64,8 +64,13 @@ Globals:
     Timeout: 30
     MemorySize: 256
     Tracing: Active
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: INFO
+      SystemLogLevel: INFO
     Environment:
       Variables:
+        RUST_LOG: info
         ENVIRONMENTS: !Join [",", !Ref Environments]
         ORGANIZATION: !Ref Organization
         NAMESPACE_PATTERN: !Ref NamespacePattern
