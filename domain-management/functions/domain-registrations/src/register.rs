@@ -11,17 +11,17 @@ use konductor_common::models::{DomainStatus, RegisterDomainRequest};
 use konductor_common::principal::TrustedPrincipal;
 
 pub async fn handle(
-    ddb: &aws_sdk_dynamodb::Client,
-    eb: &aws_sdk_eventbridge::Client,
-    sfn: &aws_sdk_sfn::Client,
+    clients: &crate::handler::Clients,
     request: &RegisterDomainRequest,
     principal: &TrustedPrincipal,
     request_id: &str,
 ) -> Result<()> {
+    let crate::handler::Clients { ddb, eb, sfn, ssm } = clients;
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let state_machine_arn =
         env::var("APPROVAL_STATE_MACHINE_ARN").context("APPROVAL_STATE_MACHINE_ARN not set")?;
     let cp_bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
+    let org = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
     let environments_raw = env::var("ENVIRONMENTS").context("ENVIRONMENTS not set")?;
     let environments = parse_environments(&environments_raw).map_err(|e| {
         ControlPlaneError::ValidationException {
@@ -40,6 +40,22 @@ pub async fn handle(
     if let Err(e) = validate_domain_name(&request.domain_name) {
         emit_failed(eb, &cp_bus, request, &e.to_string()).await?;
         return Ok(());
+    }
+
+    let collisions = find_collisions(eb, ssm, &org, &request.domain_name, &environments).await?;
+    if !collisions.is_empty() {
+        let justification = format!("resource name collision: {}", collisions.join(", "));
+        tracing::warn!(domain = %request.domain_name, %justification, "registration preflight rejected");
+        return reject_for_collision(
+            clients,
+            &domains_table,
+            &cp_bus,
+            request,
+            request_id,
+            &environments,
+            &justification,
+        )
+        .await;
     }
 
     let put_domain = build_put_item(ddb, &domains_table, request, request_id, &environments);
@@ -69,6 +85,131 @@ pub async fn handle(
     start_approval_workflow(sfn, &state_machine_arn, request, request_id, &environments).await?;
 
     emit_succeeded(eb, &cp_bus, request, request_id, &environments, &created_at).await
+}
+
+/// Pre-registration guard: the platform-owned resource names a domain will
+/// occupy must be free, or the provisioning saga fails at its first step —
+/// after a human already approved. Platform account only; check errors are
+/// not proof of absence, so they fail the command for queue redrive.
+async fn find_collisions(
+    eb: &aws_sdk_eventbridge::Client,
+    ssm: &aws_sdk_ssm::Client,
+    org: &str,
+    domain: &str,
+    environments: &[String],
+) -> Result<Vec<String>> {
+    let resolver = konductor_common::namespace::NamespaceResolver::default_pattern();
+    let mut collisions = Vec::new();
+
+    for env_name in environments {
+        let bus_name = resolver.event_bus_name(env_name, org, domain);
+        match eb.describe_event_bus().name(&bus_name).send().await {
+            Ok(_) => collisions.push(format!("event bus {bus_name}")),
+            Err(e) => {
+                let service_err = e.into_service_error();
+                if !matches!(
+                    service_err,
+                    aws_sdk_eventbridge::operation::describe_event_bus::DescribeEventBusError::ResourceNotFoundException(_)
+                ) {
+                    return Err(anyhow::anyhow!(
+                        "collision check failed for event bus {bus_name}: {service_err}"
+                    ));
+                }
+            }
+        }
+    }
+
+    let parameter = resolver.namespace_parameter_path(domain);
+    match ssm.get_parameter().name(&parameter).send().await {
+        Ok(_) => collisions.push(format!("SSM parameter {parameter}")),
+        Err(e) => {
+            let service_err = e.into_service_error();
+            if !matches!(
+                service_err,
+                aws_sdk_ssm::operation::get_parameter::GetParameterError::ParameterNotFound(_)
+            ) {
+                return Err(anyhow::anyhow!(
+                    "collision check failed for {parameter}: {service_err}"
+                ));
+            }
+        }
+    }
+
+    Ok(collisions)
+}
+
+/// A colliding request becomes a system rejection: visible to the requester,
+/// non-blocking for the name (the conditional put admits REJECTED records),
+/// and never reaches the approval workflow.
+async fn reject_for_collision(
+    clients: &crate::handler::Clients,
+    domains_table: &str,
+    cp_bus: &str,
+    request: &RegisterDomainRequest,
+    request_id: &str,
+    environments: &[String],
+    justification: &str,
+) -> Result<()> {
+    let crate::handler::Clients { ddb, eb, .. } = clients;
+    let now = chrono::Utc::now().to_rfc3339();
+    let rejected = DomainStatus::Rejected.to_string();
+
+    let mut put = ddb
+        .put_item()
+        .table_name(domains_table)
+        .item("domainName", s(&request.domain_name))
+        .item("requestId", s(request_id))
+        .item("ownerAccountId", s(&request.owner_account_id))
+        .item("status", s(&rejected))
+        .item("ownerEmail", s(&request.owner_email))
+        .item(
+            "secondaryOwnerEmails",
+            AttributeValue::Ss(request.secondary_owner_emails.clone()),
+        )
+        .item("createdAt", s(&now))
+        .item("updatedAt", s(&now))
+        .item("createdBy", s(&request.owner_account_id))
+        .item("decidedBy", s("system"))
+        .item("justification", s(justification))
+        .item("rejectedAt", s(&now))
+        .condition_expression("attribute_not_exists(domainName) OR #status = :rejected")
+        .expression_attribute_names("#status", "status")
+        .expression_attribute_values(":rejected", s(&rejected))
+        .return_values_on_condition_check_failure(ReturnValuesOnConditionCheckFailure::AllOld);
+
+    if let Some(desc) = &request.description {
+        put = put.item("description", s(desc));
+    }
+    if let Some(team) = &request.owning_team {
+        put = put.item("owningTeam", s(team));
+    }
+    if let Some(tags) = &request.tags {
+        put = put.item("tags", string_map_to_attr(tags));
+    }
+    put = put.item(
+        "environments",
+        AttributeValue::L(environments.iter().map(|e| s(e)).collect()),
+    );
+
+    match put.send().await {
+        Ok(_) => {}
+        Err(e) => {
+            let service_err = e.into_service_error();
+            if matches!(
+                service_err,
+                PutItemError::ConditionalCheckFailedException(_)
+            ) {
+                // A live (non-rejected) record won the race — the request is a
+                // duplicate, not a collision rejection.
+                let reason = format!("domain '{}' already exists", request.domain_name);
+                emit_failed(eb, cp_bus, request, &reason).await?;
+                return Ok(());
+            }
+            return Err(ControlPlaneError::DynamoDb(service_err.to_string()).into());
+        }
+    }
+
+    emit_failed(eb, cp_bus, request, justification).await
 }
 
 /// OAuth callers register on behalf of exactly one of their team groups,
@@ -311,6 +452,42 @@ pub(crate) fn validate_domain_name(name: &str) -> Result<(), ControlPlaneError> 
     Ok(())
 }
 
+/// Preflight mock rules shared by the register and dispatcher test suites.
+#[cfg(test)]
+pub(crate) mod test_rules {
+    use aws_smithy_mocks::{mock, Rule};
+
+    /// Every event bus name is absent.
+    pub(crate) fn no_bus_rule() -> Rule {
+        mock!(aws_sdk_eventbridge::Client::describe_event_bus).then_error(|| {
+            aws_sdk_eventbridge::operation::describe_event_bus::DescribeEventBusError::ResourceNotFoundException(
+                aws_sdk_eventbridge::types::error::ResourceNotFoundException::builder()
+                    .message("not found")
+                    .build(),
+            )
+        })
+    }
+
+    /// The namespace parameter does not exist.
+    pub(crate) fn no_param_rule() -> Rule {
+        mock!(aws_sdk_ssm::Client::get_parameter).then_error(|| {
+            aws_sdk_ssm::operation::get_parameter::GetParameterError::ParameterNotFound(
+                aws_sdk_ssm::types::error::ParameterNotFound::builder().build(),
+            )
+        })
+    }
+
+    /// Every event bus name resolves — a full collision set.
+    pub(crate) fn existing_bus_rule() -> Rule {
+        mock!(aws_sdk_eventbridge::Client::describe_event_bus).then_output(|| {
+            aws_sdk_eventbridge::operation::describe_event_bus::DescribeEventBusOutput::builder()
+                .name("acme-dev-billing-event-bus")
+                .arn("arn:aws:events:us-east-1:123:event-bus/acme-dev-billing-event-bus")
+                .build()
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,6 +641,167 @@ mod tests {
             );
             env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
             env::set_var("ENVIRONMENTS", "dev,staging,prod");
+            env::set_var("ORGANIZATION", "acme");
+        }
+
+        use crate::register::test_rules::{existing_bus_rule, no_bus_rule, no_param_rule};
+
+        #[tokio::test]
+        async fn collision_writes_system_rejection_and_skips_approval() {
+            set_env();
+
+            let captured: std::sync::Arc<std::sync::Mutex<Vec<AttributeValue>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured2 = std::sync::Arc::clone(&captured);
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
+                .match_requests(move |req| {
+                    if let Some(status) = req.item().and_then(|i| i.get("status")) {
+                        captured2.lock().unwrap().push(status.clone());
+                    }
+                    true
+                })
+                .then_output(|| PutItemOutput::builder().build());
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
+
+            let bus_exists = existing_bus_rule();
+            let failed_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries()
+                        .iter()
+                        .any(|e| e.detail_type() == Some("RegisterDomainFailed"))
+                })
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&bus_exists, &failed_rule]
+            );
+
+            let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
+                StartExecutionOutput::builder()
+                    .execution_arn("arn:exec")
+                    .start_date(aws_sdk_sfn::primitives::DateTime::from_secs(0))
+                    .build()
+                    .unwrap()
+            });
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
+
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(
+                &clients,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
+
+            assert!(result.is_ok());
+            assert_eq!(sfn_rule.num_calls(), 0, "no approval workflow on collision");
+            assert_eq!(failed_rule.num_calls(), 1, "RegisterDomainFailed emitted");
+            let statuses = captured.lock().unwrap();
+            assert_eq!(
+                statuses.first().and_then(|v| v.as_s().ok()),
+                Some(&"REJECTED".to_string()),
+                "record persisted as REJECTED"
+            );
+        }
+
+        #[tokio::test]
+        async fn collision_rejection_names_colliders_and_marks_system_decision() {
+            set_env();
+
+            let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let captured2 = std::sync::Arc::clone(&captured);
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
+                .match_requests(move |req| {
+                    let item = req.item().cloned().unwrap_or_default();
+                    let decided_by = get_s(&item, "decidedBy").unwrap_or_default();
+                    let justification = get_s(&item, "justification").unwrap_or_default();
+                    captured2
+                        .lock()
+                        .unwrap()
+                        .push(format!("{decided_by}|{justification}"));
+                    true
+                })
+                .then_output(|| PutItemOutput::builder().build());
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
+
+            let bus_exists = existing_bus_rule();
+            let failed_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&bus_exists, &failed_rule]
+            );
+            let sfn = mock_client!(aws_sdk_sfn, &[]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
+
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(
+                &clients,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
+
+            assert!(result.is_ok());
+            let recorded = captured.lock().unwrap();
+            let first = recorded.first().cloned().unwrap_or_default();
+            let (decided_by, justification) = first.split_once('|').unwrap_or(("", ""));
+            assert_eq!(decided_by, "system");
+            assert!(
+                justification.contains("acme-dev-billing-event-bus"),
+                "justification names the colliding resource: {justification}"
+            );
+        }
+
+        #[tokio::test]
+        async fn collision_check_error_fails_the_command_without_writing() {
+            set_env();
+
+            let throttled = mock!(aws_sdk_eventbridge::Client::describe_event_bus).then_error(|| {
+                aws_sdk_eventbridge::operation::describe_event_bus::DescribeEventBusError::unhandled(
+                    "throttled",
+                )
+            });
+            let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
+                .then_output(|| PutItemOutput::builder().build());
+            let ddb = mock_client!(aws_sdk_dynamodb, [&put_rule]);
+            let failed_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .then_output(|| PutEventsOutput::builder().build());
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&throttled, &failed_rule]
+            );
+            let sfn = mock_client!(aws_sdk_sfn, &[]);
+            let ssm = mock_client!(aws_sdk_ssm, &[]);
+
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(
+                &clients,
+                &valid_request(),
+                &TrustedPrincipal::iam("111122223333", None),
+                "msg-1",
+            )
+            .await;
+
+            assert!(result.is_err(), "check errors propagate to queue redrive");
+            assert_eq!(put_rule.num_calls(), 0, "no record written on a guess");
         }
 
         #[tokio::test]
@@ -477,7 +815,12 @@ mod tests {
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
                 StartExecutionOutput::builder()
@@ -487,11 +830,16 @@ mod tests {
                     .unwrap()
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-1",
@@ -524,7 +872,12 @@ mod tests {
                         .any(|e| e.detail_type() == Some("RegisterDomainSucceeded"))
                 })
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
             let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
                 StartExecutionOutput::builder()
                     .execution_arn("arn:exec")
@@ -533,13 +886,18 @@ mod tests {
                     .unwrap()
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
             let mut request = valid_request();
             request.owning_team = Some("team-payments".to_string());
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &request,
                 &oauth(&["team-payments", "team-platform"]),
                 "msg-1",
@@ -564,13 +922,23 @@ mod tests {
                     })
                 })
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
             let sfn = mock_client!(aws_sdk_sfn, &[]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &oauth(&["team-payments"]),
                 "msg-1",
@@ -594,20 +962,24 @@ mod tests {
                             .any(|e| e.detail_type() == Some("RegisterDomainFailed"))
                     })
                     .then_output(|| PutEventsOutput::builder().build());
-                let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+                let no_bus = no_bus_rule();
+                let eb = mock_client!(
+                    aws_sdk_eventbridge,
+                    aws_smithy_mocks::RuleMode::MatchAny,
+                    [&no_bus, &eb_rule]
+                );
                 let sfn = mock_client!(aws_sdk_sfn, &[]);
+                let no_param = no_param_rule();
+                let ssm = mock_client!(
+                    aws_sdk_ssm,
+                    aws_smithy_mocks::RuleMode::MatchAny,
+                    [&no_param]
+                );
 
                 let mut request = valid_request();
                 request.owning_team = Some(owning_team.to_string());
-                let result = handle(
-                    &ddb,
-                    &eb,
-                    &sfn,
-                    &request,
-                    &oauth(&["team-payments"]),
-                    "msg-1",
-                )
-                .await;
+                let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+                let result = handle(&clients, &request, &oauth(&["team-payments"]), "msg-1").await;
 
                 assert!(result.is_ok(), "{owning_team}: denial via failed event");
                 assert_eq!(eb_rule.num_calls(), 1, "{owning_team}");
@@ -641,14 +1013,24 @@ mod tests {
                     })
                 })
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn = mock_client!(aws_sdk_sfn, &[]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-1",
@@ -685,7 +1067,12 @@ mod tests {
                     })
                 })
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
                 StartExecutionOutput::builder()
@@ -695,11 +1082,16 @@ mod tests {
                     .unwrap()
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-1",
@@ -722,7 +1114,12 @@ mod tests {
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_error(|| {
                 aws_sdk_sfn::operation::start_execution::StartExecutionError::ExecutionAlreadyExists(
@@ -730,11 +1127,16 @@ mod tests {
                 )
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-1",
@@ -754,9 +1156,20 @@ mod tests {
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn = mock_client!(aws_sdk_sfn, &[]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
             let request = RegisterDomainRequest {
                 domain_name: "INVALID".to_string(),
@@ -768,10 +1181,9 @@ mod tests {
                 owning_team: None,
             };
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &request,
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-1",
@@ -798,7 +1210,12 @@ mod tests {
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
                 StartExecutionOutput::builder()
@@ -808,6 +1225,12 @@ mod tests {
                     .unwrap()
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
             let request = RegisterDomainRequest {
                 domain_name: "billing".to_string(),
@@ -819,10 +1242,9 @@ mod tests {
                 owning_team: None,
             };
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &request,
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-1",
@@ -857,7 +1279,12 @@ mod tests {
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
                 StartExecutionOutput::builder()
@@ -867,11 +1294,16 @@ mod tests {
                     .unwrap()
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-1",
@@ -906,7 +1338,12 @@ mod tests {
                     })
                 })
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
                 StartExecutionOutput::builder()
@@ -916,11 +1353,16 @@ mod tests {
                     .unwrap()
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-1",
@@ -945,7 +1387,12 @@ mod tests {
 
             let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
                 StartExecutionOutput::builder()
@@ -955,11 +1402,16 @@ mod tests {
                     .unwrap()
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-1",
@@ -988,7 +1440,12 @@ mod tests {
                         .any(|entry| entry.detail_type() == Some("RegisterDomainSucceeded"))
                 })
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
                 StartExecutionOutput::builder()
@@ -998,11 +1455,16 @@ mod tests {
                     .unwrap()
             });
             let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-2",
@@ -1040,14 +1502,24 @@ mod tests {
                         .any(|entry| entry.detail_type() == Some("RegisterDomainFailed"))
                 })
                 .then_output(|| PutEventsOutput::builder().build());
-            let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
 
             let sfn = mock_client!(aws_sdk_sfn, &[]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
 
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
             let result = handle(
-                &ddb,
-                &eb,
-                &sfn,
+                &clients,
                 &valid_request(),
                 &TrustedPrincipal::iam("111122223333", None),
                 "msg-2",

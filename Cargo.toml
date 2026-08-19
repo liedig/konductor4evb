@@ -43,6 +43,7 @@ aws-sdk-eventbridge = { version = "1", features = ["test-util"] }
 aws-sdk-sesv2 = { version = "1", features = ["test-util"] }
 aws-sdk-sfn = { version = "1", features = ["test-util"] }
 aws-sdk-sqs = { version = "1", features = ["test-util"] }
+aws-sdk-ssm = { version = "1", features = ["test-util"] }
 aws-sdk-sts = "1"
 aws-sdk-schemas = { version = "1", features = ["test-util"] }
 sha2 = "0.11"

@@ -13,10 +13,12 @@ async fn main() -> Result<(), Error> {
 
     let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     let ddb = aws_sdk_dynamodb::Client::new(&config);
+    let events = aws_sdk_eventbridge::Client::new(&config);
     let ddb_ref = &ddb;
+    let events_ref = &events;
 
     lambda_runtime::run(service_fn(move |event| async move {
-        handler::handle(ddb_ref, event).await
+        handler::handle(ddb_ref, events_ref, event).await
     }))
     .await
 }

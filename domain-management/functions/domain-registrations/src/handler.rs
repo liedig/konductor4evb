@@ -13,6 +13,7 @@ pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
     pub eb: aws_sdk_eventbridge::Client,
     pub sfn: aws_sdk_sfn::Client,
+    pub ssm: aws_sdk_ssm::Client,
 }
 
 impl Clients {
@@ -21,6 +22,7 @@ impl Clients {
             ddb: aws_sdk_dynamodb::Client::new(config),
             eb: aws_sdk_eventbridge::Client::new(config),
             sfn: aws_sdk_sfn::Client::new(config),
+            ssm: aws_sdk_ssm::Client::new(config),
         }
     }
 }
@@ -70,15 +72,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
         "POST" => {
             let request: RegisterDomainRequest =
                 serde_json::from_str(body_str).context("invalid RegisterDomainRequest")?;
-            register::handle(
-                &clients.ddb,
-                &clients.eb,
-                &clients.sfn,
-                &request,
-                &principal,
-                message_id,
-            )
-            .await
+            register::handle(clients, &request, &principal, message_id).await
         }
         "PUT" => {
             let request: update::UpdateDomainMessage =
@@ -116,6 +110,7 @@ mod tests {
     fn happy_clients() -> Clients {
         let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
             .then_output(|| PutItemOutput::builder().build());
+        let no_bus = crate::register::test_rules::no_bus_rule();
         let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
             .then_output(|| PutEventsOutput::builder().build());
         let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
@@ -125,10 +120,20 @@ mod tests {
                 .build()
                 .unwrap()
         });
+        let no_param = crate::register::test_rules::no_param_rule();
         Clients {
             ddb: mock_client!(aws_sdk_dynamodb, [&put_rule]),
-            eb: mock_client!(aws_sdk_eventbridge, [&eb_rule]),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            ),
             sfn: mock_client!(aws_sdk_sfn, [&sfn_rule]),
+            ssm: mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            ),
         }
     }
 
@@ -223,8 +228,13 @@ mod tests {
             .then_output(|| PutEventsOutput::builder().build());
         let clients = Clients {
             ddb: mock_client!(aws_sdk_dynamodb, []),
-            eb: mock_client!(aws_sdk_eventbridge, [&eb_rule]),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&eb_rule]
+            ),
             sfn: mock_client!(aws_sdk_sfn, []),
+            ssm: mock_client!(aws_sdk_ssm, aws_smithy_mocks::RuleMode::MatchAny, []),
         };
 
         let record = json!({

@@ -1072,8 +1072,8 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/konductor-domain-state"
       RetentionInDays: 30
 
-  # Platform-managed enable/disable (ACTIVE <-> INACTIVE). The shallow
-  # disable leans on every mutation path already requiring ACTIVE.
+  # Platform-managed enable/disable (ACTIVE <-> INACTIVE) plus provisioning
+  # retry for failed domains (re-emits the provisioning trigger event).
   DomainStateFunction:
     Type: AWS::Serverless::Function
     DependsOn: DomainStateLogGroup
@@ -1093,6 +1093,10 @@ Resources:
               Action: [dynamodb:UpdateItem]
               Resource:
                 - !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [events:PutEvents]
+              Resource:
+                - !GetAtt KonductorEventBus.Arn
       Events:
         OAuthApi:
           Type: Api
@@ -1343,6 +1347,12 @@ Resources:
             - Effect: Allow
               Action: [events:RemovePermission]
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
+            - Effect: Allow
+              Action: [events:DescribeEventBus]
+              Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
+            - Effect: Allow
+              Action: [ssm:GetParameter]
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/namespace/*"
             - Effect: Allow
               Action: [states:StartExecution]
               Resource: !Ref ApprovalWorkflow
@@ -2589,6 +2599,17 @@ Resources:
             Pattern:
               detail-type:
                 - DomainRegistrationApproved
+              source:
+                - konductor.domain-management
+            DeadLetterConfig:
+              Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
+        ProvisioningRetryRequested:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref KonductorEventBus
+            Pattern:
+              detail-type:
+                - DomainProvisioningRetryRequested
               source:
                 - konductor.domain-management
             DeadLetterConfig:

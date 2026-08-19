@@ -154,7 +154,11 @@ paths:
               properties:
                 action:
                   type: string
-                  enum: [enable, disable]
+                  enum: [enable, disable, retry-provisioning]
+                  description: >-
+                    `enable`/`disable` toggle ACTIVE/INACTIVE. `retry-provisioning`
+                    re-runs provisioning for a PROVISIONING_FAILED domain by resetting
+                    it to APPROVED and emitting DomainProvisioningRetryRequested.
       responses:
         "200":
           description: Domain state after the transition

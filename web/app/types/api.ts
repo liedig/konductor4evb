@@ -107,7 +107,7 @@ export interface DecideRequest {
   justification?: string
 }
 
-export type DomainStateAction = 'enable' | 'disable'
+export type DomainStateAction = 'enable' | 'disable' | 'retry-provisioning'
 
 export interface DomainStateResponse {
   domainName?: string

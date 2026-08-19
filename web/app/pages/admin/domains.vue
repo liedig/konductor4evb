@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/NxTable.vue'
 import { ApiError } from '~/composables/useApi'
-import type { DomainSummary } from '~/types/api'
+import type { DomainStateAction, DomainSummary } from '~/types/api'
 
 definePageMeta({ middleware: 'persona' })
 
@@ -13,8 +13,14 @@ const nextToken = ref<string | undefined>()
 const pending = ref(true)
 const errorMessage = ref('')
 
-const stateTarget = ref<{ name: string, action: 'enable' | 'disable' } | null>(null)
+const stateTarget = ref<{ name: string, action: DomainStateAction } | null>(null)
 const stateBusy = ref(false)
+
+const ACTION_LABELS: Record<DomainStateAction, string> = {
+  enable: 'Enable',
+  disable: 'Disable',
+  'retry-provisioning': 'Retry provisioning',
+}
 
 const columns: TableColumn[] = [
   { key: 'domainName', label: 'Domain' },
@@ -95,6 +101,14 @@ onMounted(loadMore)
         >
           Enable
         </NxButton>
+        <NxButton
+          v-else-if="item.status === 'PROVISIONING_FAILED'"
+          variant="secondary"
+          size="sm"
+          @click="stateTarget = { name: String(item.domainName), action: 'retry-provisioning' }"
+        >
+          Retry provisioning
+        </NxButton>
       </template>
       <template #empty>
         <NxEmptyState title="No domains" body="No domain has been registered yet." />
@@ -107,8 +121,8 @@ onMounted(loadMore)
 
     <NxConfirm
       :open="stateTarget !== null"
-      :title="stateTarget?.action === 'disable' ? `Disable ${stateTarget?.name}` : `Enable ${stateTarget?.name}`"
-      :confirm-label="stateTarget?.action === 'disable' ? 'Disable' : 'Enable'"
+      :title="stateTarget ? `${ACTION_LABELS[stateTarget.action]} ${stateTarget.name}` : ''"
+      :confirm-label="stateTarget ? ACTION_LABELS[stateTarget.action] : 'Confirm'"
       :danger="stateTarget?.action === 'disable'"
       :busy="stateBusy"
       @confirm="confirmStateChange"
@@ -117,6 +131,10 @@ onMounted(loadMore)
       <template v-if="stateTarget?.action === 'disable'">
         Disabling rejects new publish commands and new subscription activations for this domain.
         Existing subscriptions, entitlements, and infrastructure are retained.
+      </template>
+      <template v-else-if="stateTarget?.action === 'retry-provisioning'">
+        Re-runs the provisioning workflow for this domain. Any resources left behind by the failed
+        run must be cleaned up first, or the retry will collide with them and fail again.
       </template>
       <template v-else>
         Enabling resumes publishing and subscription activation for this domain.
