@@ -121,6 +121,43 @@ async fn full_listing(
     }
 }
 
+/// A team's registration requests awaiting decision (or rejected) stay visible
+/// to that team before any binding exists — bindings only land at approval.
+/// Names resolve via the by-status GSI plus an `owningTeam` match; the
+/// undecided/rejected population is small, so full GSI pages are cheap.
+async fn team_request_names(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    principal: &TrustedPrincipal,
+) -> Result<Vec<String>, Error> {
+    let teams = principal.team_groups();
+    if teams.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for status in ["PENDING_APPROVAL", "REJECTED"] {
+        let mut start_key = None;
+        loop {
+            let page =
+                query_by_index(ddb, table, "by-status", "status", status, 100, start_key).await?;
+            for item in &page.items {
+                let team_matches = get_s(item, "owningTeam")
+                    .is_some_and(|t| teams.iter().any(|group| group == &t));
+                if team_matches {
+                    if let Some(name) = get_s(item, "domainName") {
+                        names.insert(name);
+                    }
+                }
+            }
+            match page.last_key {
+                Some(key) => start_key = Some(key),
+                None => break,
+            }
+        }
+    }
+    Ok(names.into_iter().collect())
+}
+
 /// The team list: only domains the caller's team groups own. Owner bindings
 /// resolve the names; filters then apply within that authorized set, and
 /// pagination is in-memory over the (small) owned set.
@@ -132,7 +169,7 @@ async fn owned_listing(
     payload: &Value,
     principal: &TrustedPrincipal,
 ) -> Result<Value, Error> {
-    let owned = match owned_domain_names(ddb, bindings_table, principal).await {
+    let mut owned = match owned_domain_names(ddb, bindings_table, principal).await {
         Ok(names) => names,
         Err(e) => {
             tracing::error!(error = %e, "owner bindings query failed");
@@ -141,6 +178,20 @@ async fn owned_listing(
             )));
         }
     };
+
+    match team_request_names(ddb, table, principal).await {
+        Ok(names) => {
+            owned.extend(names);
+            owned.sort();
+            owned.dedup();
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "team requests query failed");
+            return Ok(api::from_control_plane_error(&ControlPlaneError::DynamoDb(
+                e.to_string(),
+            )));
+        }
+    }
 
     let owner_filter = api::query_param(payload, "ownerAccountId");
     let status_filter = api::query_param(payload, "status");
@@ -466,6 +517,72 @@ mod tests {
         body["domains"].as_array().unwrap().clone()
     }
 
+    fn team_requested_item(
+        name: &str,
+        status: &str,
+        team: &str,
+    ) -> HashMap<String, AttributeValue> {
+        let mut item = domain_item(name, status, "111122223333");
+        item.insert("owningTeam".to_string(), s(team));
+        item
+    }
+
+    fn status_query_rule(
+        status: &'static str,
+        items: Vec<HashMap<String, AttributeValue>>,
+    ) -> Rule {
+        mock!(aws_sdk_dynamodb::Client::query)
+            .match_requests(move |req| {
+                req.table_name() == Some("domains")
+                    && req.index_name() == Some("by-status")
+                    && req
+                        .expression_attribute_values()
+                        .and_then(|v| v.get(":val"))
+                        .and_then(|v| v.as_s().ok())
+                        == Some(&status.to_string())
+            })
+            .then_output(move || {
+                QueryOutput::builder()
+                    .set_items(Some(items.clone()))
+                    .build()
+            })
+    }
+
+    #[tokio::test]
+    async fn team_caller_sees_their_teams_undecided_and_rejected_requests() {
+        set_env();
+        let bindings = bindings_query_rule(vec![]);
+        let pending = status_query_rule(
+            "PENDING_APPROVAL",
+            vec![
+                team_requested_item("sales", "PENDING_APPROVAL", "team-sales"),
+                team_requested_item("billing", "PENDING_APPROVAL", "team-billing"),
+            ],
+        );
+        let rejected = status_query_rule(
+            "REJECTED",
+            vec![team_requested_item("shipping", "REJECTED", "team-sales")],
+        );
+        let batch = batch_get_rule(vec![
+            team_requested_item("sales", "PENDING_APPROVAL", "team-sales"),
+            team_requested_item("shipping", "REJECTED", "team-sales"),
+        ]);
+        let ddb = mock_client!(aws_sdk_dynamodb, [&bindings, &pending, &rejected, &batch]);
+
+        let resp = handle(
+            &ddb,
+            event_with(oauth_ctx(&[], &["team-sales"]), Value::Null),
+        )
+        .await
+        .unwrap();
+        let listed = body_domains(&resp);
+        let names: Vec<&str> = listed
+            .iter()
+            .filter_map(|d| d["domainName"].as_str())
+            .collect();
+        assert_eq!(names, ["sales", "shipping"], "own team's requests only");
+    }
+
     #[tokio::test]
     async fn team_caller_lists_only_owned_domains() {
         set_env();
@@ -473,11 +590,16 @@ mod tests {
             owner_binding_item("orders", "team-payments"),
             owner_binding_item("payments", "team-payments"),
         ]);
+        let no_pending = status_query_rule("PENDING_APPROVAL", vec![]);
+        let no_rejected = status_query_rule("REJECTED", vec![]);
         let batch = batch_get_rule(vec![
             domain_item("orders", "ACTIVE", "111122223333"),
             domain_item("payments", "ACTIVE", "444455556666"),
         ]);
-        let ddb = mock_client!(aws_sdk_dynamodb, [&bindings, &batch]);
+        let ddb = mock_client!(
+            aws_sdk_dynamodb,
+            [&bindings, &no_pending, &no_rejected, &batch]
+        );
 
         let resp = handle(
             &ddb,
@@ -512,11 +634,16 @@ mod tests {
             owner_binding_item("orders", "team-payments"),
             owner_binding_item("payments", "team-payments"),
         ]);
+        let no_pending = status_query_rule("PENDING_APPROVAL", vec![]);
+        let no_rejected = status_query_rule("REJECTED", vec![]);
         let batch = batch_get_rule(vec![
             domain_item("orders", "ACTIVE", "111122223333"),
             domain_item("payments", "PENDING_APPROVAL", "444455556666"),
         ]);
-        let ddb = mock_client!(aws_sdk_dynamodb, [&bindings, &batch]);
+        let ddb = mock_client!(
+            aws_sdk_dynamodb,
+            [&bindings, &no_pending, &no_rejected, &batch]
+        );
 
         let resp = handle(
             &ddb,

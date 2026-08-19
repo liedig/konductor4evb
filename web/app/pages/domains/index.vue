@@ -37,6 +37,12 @@ function formatDate(iso?: string) {
   return iso ? new Date(iso).toLocaleDateString() : '—'
 }
 
+// Detail pages authorize by owner binding, which only exists once a request
+// is approved — pending and rejected rows render without a link.
+function hasDetail(status?: string) {
+  return status !== 'PENDING_APPROVAL' && status !== 'REJECTED'
+}
+
 onMounted(loadMore)
 </script>
 
@@ -45,7 +51,7 @@ onMounted(loadMore)
     <header class="flex items-center justify-between gap-4">
       <div>
         <h1 class="text-2xl font-semibold">My domains</h1>
-        <p class="mt-1 text-sm text-muted">Domains owned by your team groups.</p>
+        <p class="mt-1 text-sm text-muted">Domains owned by your team groups, and requests awaiting review.</p>
       </div>
       <NuxtLink to="/domains/new">
         <NxButton>Request a domain</NxButton>
@@ -69,9 +75,14 @@ onMounted(loadMore)
     <template v-else>
       <NxTable :columns="columns" :items="(domains as unknown as Record<string, unknown>[])">
         <template #cell-domainName="{ item }">
-          <NuxtLink :to="`/domains/${item.domainName}`" class="font-medium text-accent hover:underline">
+          <NuxtLink
+            v-if="hasDetail(item.status as string | undefined)"
+            :to="`/domains/${item.domainName}`"
+            class="font-medium text-accent hover:underline"
+          >
             {{ item.domainName }}
           </NuxtLink>
+          <span v-else class="font-medium">{{ item.domainName }}</span>
         </template>
         <template #cell-status="{ item }">
           <NxStatusPill :status="String(item.status ?? '')" />

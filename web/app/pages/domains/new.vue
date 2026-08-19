@@ -101,13 +101,13 @@ async function submit() {
       </p>
     </header>
 
-    <NxCard v-if="accepted" title="Request accepted">
+    <NxCard v-if="accepted" title="Request received">
       <p class="text-sm text-muted">
-        {{ accepted.message }} — request <code class="font-mono text-xs">{{ accepted.requestId }}</code>.
-        The domain appears in your list as soon as it is recorded.
+        Your domain request has been submitted for review. The platform team will assess it
+        and approve or reject it — you can track its status in your domains list.
       </p>
       <template #actions>
-        <NuxtLink to="/domains"><NxButton variant="secondary">Back to my domains</NxButton></NuxtLink>
+        <NuxtLink to="/domains"><NxButton variant="secondary">Track in my domains</NxButton></NuxtLink>
       </template>
     </NxCard>
 
