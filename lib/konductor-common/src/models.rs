@@ -121,7 +121,10 @@ pub struct RegisterDomainRequest {
     pub owner_email: String,
     #[serde(deserialize_with = "deserialize_non_empty_vec")]
     pub secondary_owner_emails: Vec<String>,
-    pub tags: Option<std::collections::HashMap<String, String>>,
+    /// The single governed custom tag, propagated to every provisioned
+    /// resource for cost allocation. No other custom tag keys exist.
+    #[serde(default)]
+    pub cost_center: Option<String>,
     /// The Cognito team group that will own the domain. Required for OAuth
     /// callers (must be one of the caller's team groups); IAM callers may
     /// omit it, in which case approval creates no owner binding.
@@ -329,6 +332,32 @@ mod tests {
         });
         let parsed: Result<RegisterDomainRequest, _> = serde_json::from_value(value);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn register_domain_request_rejects_legacy_tags_map() {
+        let value = serde_json::json!({
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com",
+            "secondaryOwnerEmails": ["backup@example.com"],
+            "tags": { "cost-center": "cc-1" }
+        });
+        let parsed: Result<RegisterDomainRequest, _> = serde_json::from_value(value);
+        assert!(parsed.is_err(), "the free-form tags map is gone");
+    }
+
+    #[test]
+    fn register_domain_request_accepts_cost_center() {
+        let value = serde_json::json!({
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com",
+            "secondaryOwnerEmails": ["backup@example.com"],
+            "costCenter": "cc-1234"
+        });
+        let parsed: RegisterDomainRequest = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.cost_center.as_deref(), Some("cc-1234"));
     }
 
     #[test]

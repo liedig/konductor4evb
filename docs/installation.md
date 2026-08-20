@@ -204,7 +204,7 @@ Also note the `ApiEndpoint` output — you will use it in the smoke test.
 
 ## Phase 3 — Onboard a domain account
 
-Deploy the trust stack in each domain account that will own domains. This grants Konductor cross-account access to provision domain resources.
+Deploy the trust stack in each domain account that will own domains. This grants Konductor cross-account access to provision domain resources, including tagging them with the domain's tag set. **Existing installations**: redeploy the trust stack after upgrading past the resource-tagging change — without the added tag permissions, app-side provisioning fails at the tagging step.
 
 Switch your AWS CLI credentials to the domain account, then:
 

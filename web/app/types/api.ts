@@ -49,6 +49,7 @@ export interface DomainDetail {
   status?: DomainStatus
   environments?: string[]
   namespace?: string
+  costCenter?: string
   tags?: Record<string, string>
   resourceArns?: Record<string, PerEnvResourceArns>
   namespaceParameter?: string
@@ -88,13 +89,12 @@ export interface RegisterDomainRequest {
   ownerAccountId: string
   ownerEmail: string
   secondaryOwnerEmails: string[]
-  tags?: Record<string, string>
+  costCenter?: string
   owningTeam: string
 }
 
 export interface UpdateDomainRequest {
   description?: string
-  tags?: Record<string, string>
   ownerEmail?: string
   secondaryOwnerEmails?: string[]
 }

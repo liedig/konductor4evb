@@ -816,6 +816,7 @@ components:
 
     RegisterDomainRequest:
       type: object
+      additionalProperties: false
       required: [domainName, ownerAccountId, ownerEmail, secondaryOwnerEmails]
       properties:
         domainName:
@@ -837,10 +838,10 @@ components:
           items:
             type: string
             format: email
-        tags:
-          type: object
-          additionalProperties:
-            type: string
+        costCenter:
+          type: string
+          maxLength: 256
+          description: Optional governed cost-allocation tag propagated to every provisioned resource. The only accepted custom tag; arbitrary tag maps are rejected.
       example:
         domainName: sales
         ownerAccountId: "111122223333"
@@ -952,14 +953,11 @@ components:
 
     UpdateDomainRequest:
       type: object
+      additionalProperties: false
       properties:
         description:
           type: string
           maxLength: 256
-        tags:
-          type: object
-          additionalProperties:
-            type: string
         ownerEmail:
           type: string
           format: email

@@ -244,6 +244,7 @@ States:
             {% $string({
               "domainName": $registration.domainName,
               "ownerAccountId": $registration.ownerAccountId,
+              "costCenter": $registration.costCenter,
               "ownerEmail": $registration.ownerEmail,
               "secondaryOwnerEmails": $registration.secondaryOwnerEmails,
               "environments": $registration.environments,
@@ -273,6 +274,7 @@ States:
             {% $string({
               "domainName": $registration.domainName,
               "ownerAccountId": $registration.ownerAccountId,
+              "costCenter": $registration.costCenter,
               "ownerEmail": $registration.ownerEmail,
               "secondaryOwnerEmails": $registration.secondaryOwnerEmails,
               "rejectedBy": $rejection.decidedBy,

@@ -3,11 +3,10 @@ use aws_sdk_dynamodb::operation::update_item::UpdateItemError;
 use aws_sdk_dynamodb::types::{AttributeValue, ReturnValue, ReturnValuesOnConditionCheckFailure};
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashMap;
 use std::env;
 
 use konductor_common::domain_scope::is_full_visibility;
-use konductor_common::dynamodb::{get_s, s, string_map_to_attr};
+use konductor_common::dynamodb::{get_s, s};
 use konductor_common::error::ControlPlaneError;
 use konductor_common::grant::ResourceRole;
 use konductor_common::grant_engine;
@@ -52,7 +51,6 @@ pub struct UpdateDomainMessage {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UpdateDomainBody {
     pub description: Option<String>,
-    pub tags: Option<HashMap<String, String>>,
     pub owner_email: Option<String>,
     pub secondary_owner_emails: Option<Vec<String>>,
 }
@@ -80,7 +78,6 @@ pub async fn handle(
     }
 
     if message.body.description.is_none()
-        && message.body.tags.is_none()
         && message.body.owner_email.is_none()
         && message.body.secondary_owner_emails.is_none()
     {
@@ -159,11 +156,6 @@ fn build_update_expression(
         parts.push("description = :desc".into());
         values.push((":desc".to_string(), s(desc)));
         changed.push("description");
-    }
-    if let Some(tags) = &body.tags {
-        parts.push("tags = :tags".into());
-        values.push((":tags".to_string(), string_map_to_attr(tags)));
-        changed.push("tags");
     }
     if let Some(email) = body.owner_email.as_deref() {
         parts.push("ownerEmail = :ownerEmail".into());
@@ -258,7 +250,6 @@ mod tests {
             domain_name: domain_name.to_string(),
             body: UpdateDomainBody {
                 description: description.map(std::string::ToString::to_string),
-                tags: None,
                 owner_email: None,
                 secondary_owner_emails: None,
             },
@@ -477,7 +468,6 @@ mod tests {
             domain_name: "billing".to_string(),
             body: UpdateDomainBody {
                 description: None,
-                tags: None,
                 owner_email: None,
                 secondary_owner_emails: Some(vec![]),
             },

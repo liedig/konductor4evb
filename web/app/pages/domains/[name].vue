@@ -19,7 +19,6 @@ const editForm = reactive({
   description: '',
   ownerEmail: '',
   secondaryOwnerEmails: [''],
-  tags: '',
 })
 
 async function load() {
@@ -40,7 +39,6 @@ function startEdit() {
   editForm.ownerEmail = domain.value.ownerEmail ?? ''
   editForm.secondaryOwnerEmails = [...(domain.value.secondaryOwnerEmails ?? []), ''].slice(0, -1)
   if (editForm.secondaryOwnerEmails.length === 0) editForm.secondaryOwnerEmails = ['']
-  editForm.tags = Object.entries(domain.value.tags ?? {}).map(([k, v]) => `${k}=${v}`).join('\n')
   editing.value = true
 }
 
@@ -48,13 +46,10 @@ async function saveEdit() {
   if (busy.value) return
   busy.value = true
   try {
-    const tags = editForm.tags.split('\n').map(l => l.trim()).filter(Boolean)
-      .map(l => l.split('=')).filter(p => p.length === 2 && p[0] && p[1])
     await domainsApi.update(name, {
       description: editForm.description || undefined,
       ownerEmail: editForm.ownerEmail || undefined,
       secondaryOwnerEmails: editForm.secondaryOwnerEmails.map(e => e.trim()).filter(Boolean),
-      tags: tags.length > 0 ? Object.fromEntries(tags) : undefined,
     })
     toast.success('Update request accepted — changes apply asynchronously')
     editing.value = false
@@ -131,9 +126,15 @@ onMounted(load)
             <dt class="text-muted">Tags</dt>
             <dd class="mt-0.5">
               <span v-if="!domain.tags || Object.keys(domain.tags).length === 0">—</span>
-              <NxBadge v-for="(value, key) in domain.tags" :key="key" tone="neutral" class="mr-1">
-                {{ key }}={{ value }}
-              </NxBadge>
+              <template v-for="(value, key) in domain.tags" :key="key">
+                <NxBadge v-if="String(key).startsWith('konductor:')" tone="neutral" class="mr-1">
+                  {{ key }}={{ value }}
+                </NxBadge>
+                <NxBadge v-else tone="info" class="mr-1" :title="'Custom tag'">
+                  {{ key }}={{ value }}
+                </NxBadge>
+              </template>
+              <p class="mt-1 text-xs text-faint">Standard platform tags plus your cost center, applied to every provisioned resource.</p>
             </dd>
           </div>
           <div>
@@ -222,17 +223,7 @@ onMounted(load)
               </NxButton>
             </div>
           </div>
-          <div class="flex flex-col gap-1.5">
-            <label for="edit-tags" class="text-sm font-medium text-muted">Tags</label>
-            <textarea
-              id="edit-tags"
-              v-model="editForm.tags"
-              rows="3"
-              class="rounded-lg border border-border-strong bg-surface px-3 py-2 font-mono text-sm text-foreground"
-            />
-            <p class="text-sm text-faint">One <code>key=value</code> pair per line.</p>
-          </div>
-          <p class="text-sm text-faint">Name, account, and environments are not editable.</p>
+          <p class="text-sm text-faint">Name, account, environments, and cost center are not editable.</p>
         </div>
         <template #actions>
           <NxButton variant="secondary" :disabled="busy" @click="editing = false">Cancel</NxButton>

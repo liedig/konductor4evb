@@ -19,7 +19,7 @@ const form = reactive({
   ownerEmail: '',
   secondaryOwnerEmails: [''],
   description: '',
-  customTags: [] as { key: string, value: string }[],
+  costCenter: '',
 })
 const fieldErrors = reactive<Record<string, string>>({})
 const busy = ref(false)
@@ -47,21 +47,18 @@ function validate(): boolean {
   fieldErrors.secondaryOwnerEmails = secondaries.length === 0
     ? 'At least one secondary owner email is required.'
     : secondaries.every(e => EMAIL_PATTERN.test(e)) ? '' : 'Every secondary owner email must be valid.'
+  fieldErrors.costCenter = validateCostCenter()
   return Object.values(fieldErrors).every(e => e === '')
 }
 
-const MAX_CUSTOM_TAGS = 3
+const MAX_COST_CENTER = 256
 
-function addTag() {
-  if (form.customTags.length < MAX_CUSTOM_TAGS) form.customTags.push({ key: '', value: '' })
-}
-
-function parseTags(): Record<string, string> | undefined {
-  const entries = form.customTags
-    .map(t => [t.key.trim(), t.value.trim()] as const)
-    .filter(([key, value]) => key !== '' && value !== '')
-  if (entries.length === 0) return undefined
-  return Object.fromEntries(entries)
+function validateCostCenter(): string {
+  const v = form.costCenter.trim()
+  if (v.length > MAX_COST_CENTER) return `At most ${MAX_COST_CENTER} characters.`
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(v)) return 'No control characters.'
+  return ''
 }
 
 async function submit() {
@@ -75,7 +72,7 @@ async function submit() {
       ownerEmail: form.ownerEmail,
       secondaryOwnerEmails: form.secondaryOwnerEmails.map(e => e.trim()).filter(Boolean),
       description: form.description || undefined,
-      tags: parseTags(),
+      costCenter: form.costCenter.trim() || undefined,
     })
     toast.success('Registration request accepted')
   } catch (error) {
@@ -170,33 +167,13 @@ async function submit() {
           </div>
         </div>
         <NxInput v-model="form.description" label="Description" placeholder="Provide a description for your domain" />
-        <div class="flex flex-col gap-2">
-          <span class="text-sm font-medium text-muted">Custom tags</span>
-          <div v-for="(tag, index) in form.customTags" :key="index" class="flex items-end gap-2">
-            <NxInput
-              v-model="tag.key"
-              placeholder="Key"
-              class="flex-1"
-            />
-            <NxInput
-              v-model="tag.value"
-              placeholder="Value"
-              class="flex-1"
-            />
-            <NxButton variant="ghost" size="sm" @click="form.customTags.splice(index, 1)">
-              Remove
-            </NxButton>
-          </div>
-          <div class="flex items-center justify-between">
-            <NxButton v-if="form.customTags.length < MAX_CUSTOM_TAGS" variant="ghost" size="sm" @click="addTag">
-              Add tag
-            </NxButton>
-            <p v-else class="text-sm text-faint">Maximum of {{ MAX_CUSTOM_TAGS }} custom tags.</p>
-            <p v-if="form.customTags.length === 0" class="text-sm text-faint">
-              The platform applies standard tags to every domain; add up to {{ MAX_CUSTOM_TAGS }} of your own.
-            </p>
-          </div>
-        </div>
+        <NxInput
+          v-model="form.costCenter"
+          label="Cost center"
+          placeholder="e.g. cc-1234"
+          hint="Optional. Applied as a cost-center tag on every resource this domain provisions. Set once; cannot be changed later."
+          :error="fieldErrors.costCenter"
+        />
         <div class="mt-2 flex justify-end gap-2">
           <NuxtLink to="/domains"><NxButton variant="secondary">Cancel</NxButton></NuxtLink>
           <NxButton type="submit" :loading="busy">Submit request</NxButton>

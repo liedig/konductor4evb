@@ -156,6 +156,7 @@ async fn retry_provisioning(
         "ownerEmail": get_s(&attrs, "ownerEmail"),
         "secondaryOwnerEmails": konductor_common::dynamodb::get_string_set(&attrs, "secondaryOwnerEmails"),
         "environments": konductor_common::dynamodb::get_string_list(&attrs, "environments").unwrap_or_default(),
+        "costCenter": get_s(&attrs, "costCenter"),
         "retriedBy": retried_by,
         "retriedAt": now,
     });

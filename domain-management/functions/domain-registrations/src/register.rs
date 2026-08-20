@@ -16,7 +16,7 @@ pub async fn handle(
     principal: &TrustedPrincipal,
     request_id: &str,
 ) -> Result<()> {
-    let crate::handler::Clients { ddb, eb, sfn, ssm } = clients;
+    let crate::handler::Clients { ddb, eb, sfn, .. } = clients;
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let state_machine_arn =
         env::var("APPROVAL_STATE_MACHINE_ARN").context("APPROVAL_STATE_MACHINE_ARN not set")?;
@@ -31,7 +31,7 @@ pub async fn handle(
         }
     })?;
 
-    if let Err(reason) = authorize_registration(principal, request) {
+    if let Some(reason) = authorize_registration(principal, request).err() {
         tracing::warn!(action = "domains:Register", domain = %request.domain_name, "registration authorization denied");
         emit_failed(eb, &cp_bus, request, &reason).await?;
         return Ok(());
@@ -42,23 +42,31 @@ pub async fn handle(
         return Ok(());
     }
 
-    let collisions = find_collisions(eb, ssm, &org, &request.domain_name, &environments).await?;
-    if !collisions.is_empty() {
-        let justification = format!("resource name collision: {}", collisions.join(", "));
+    if let Some(justification) = run_preflight(clients, &org, request, &environments).await? {
         tracing::warn!(domain = %request.domain_name, %justification, "registration preflight rejected");
         return reject_for_collision(
             clients,
-            &domains_table,
-            &cp_bus,
-            request,
-            request_id,
-            &environments,
-            &justification,
+            CollisionRejection {
+                table: &domains_table,
+                org: &org,
+                bus: &cp_bus,
+                request,
+                request_id,
+                environments: &environments,
+                justification: &justification,
+            },
         )
         .await;
     }
 
-    let put_domain = build_put_item(ddb, &domains_table, request, request_id, &environments);
+    let put_domain = build_put_item(
+        ddb,
+        &domains_table,
+        &org,
+        request,
+        request_id,
+        &environments,
+    );
     let mut created_at = chrono::Utc::now().to_rfc3339();
 
     match put_domain.send().await {
@@ -85,6 +93,37 @@ pub async fn handle(
     start_approval_workflow(sfn, &state_machine_arn, request, request_id, &environments).await?;
 
     emit_succeeded(eb, &cp_bus, request, request_id, &environments, &created_at).await
+}
+
+/// Validation that runs before the record exists: the governed custom tag is
+/// legal and no platform-owned resource names are taken. Returns the rejection
+/// justification when the request must not proceed.
+async fn run_preflight(
+    clients: &crate::handler::Clients,
+    org: &str,
+    request: &RegisterDomainRequest,
+    environments: &[String],
+) -> Result<Option<String>> {
+    if let Some(cc) = &request.cost_center {
+        if let Err(reason) = konductor_common::tags::validate_cost_center(cc) {
+            return Ok(Some(reason));
+        }
+    }
+    let collisions = find_collisions(
+        &clients.eb,
+        &clients.ssm,
+        org,
+        &request.domain_name,
+        environments,
+    )
+    .await?;
+    if collisions.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "resource name collision: {}",
+        collisions.join(", ")
+    )))
 }
 
 /// Pre-registration guard: the platform-owned resource names a domain will
@@ -141,16 +180,30 @@ async fn find_collisions(
 /// A colliding request becomes a system rejection: visible to the requester,
 /// non-blocking for the name (the conditional put admits REJECTED records),
 /// and never reaches the approval workflow.
+struct CollisionRejection<'a> {
+    table: &'a str,
+    org: &'a str,
+    bus: &'a str,
+    request: &'a RegisterDomainRequest,
+    request_id: &'a str,
+    environments: &'a [String],
+    justification: &'a str,
+}
+
 async fn reject_for_collision(
     clients: &crate::handler::Clients,
-    domains_table: &str,
-    cp_bus: &str,
-    request: &RegisterDomainRequest,
-    request_id: &str,
-    environments: &[String],
-    justification: &str,
+    rejection: CollisionRejection<'_>,
 ) -> Result<()> {
     let crate::handler::Clients { ddb, eb, .. } = clients;
+    let CollisionRejection {
+        table: domains_table,
+        org,
+        bus: cp_bus,
+        request,
+        request_id,
+        environments,
+        justification,
+    } = rejection;
     let now = chrono::Utc::now().to_rfc3339();
     let rejected = DomainStatus::Rejected.to_string();
 
@@ -183,9 +236,19 @@ async fn reject_for_collision(
     if let Some(team) = &request.owning_team {
         put = put.item("owningTeam", s(team));
     }
-    if let Some(tags) = &request.tags {
-        put = put.item("tags", string_map_to_attr(tags));
+    if let Some(cc) = request.cost_center.as_deref().filter(|v| !v.is_empty()) {
+        put = put.item("costCenter", s(cc));
     }
+    let effective: std::collections::HashMap<String, String> =
+        konductor_common::tags::effective_tags(
+            org,
+            &request.domain_name,
+            None,
+            request.cost_center.as_deref(),
+        )
+        .into_iter()
+        .collect();
+    put = put.item("tags", string_map_to_attr(&effective));
     put = put.item(
         "environments",
         AttributeValue::L(environments.iter().map(|e| s(e)).collect()),
@@ -241,6 +304,7 @@ fn authorize_registration(
 fn build_put_item(
     ddb: &aws_sdk_dynamodb::Client,
     table: &str,
+    org: &str,
     request: &RegisterDomainRequest,
     request_id: &str,
     environments: &[String],
@@ -275,9 +339,19 @@ fn build_put_item(
     if let Some(team) = &request.owning_team {
         put = put.item("owningTeam", s(team));
     }
-    if let Some(tags) = &request.tags {
-        put = put.item("tags", string_map_to_attr(tags));
+    if let Some(cc) = request.cost_center.as_deref().filter(|v| !v.is_empty()) {
+        put = put.item("costCenter", s(cc));
     }
+    let effective: std::collections::HashMap<String, String> =
+        konductor_common::tags::effective_tags(
+            org,
+            &request.domain_name,
+            None,
+            request.cost_center.as_deref(),
+        )
+        .into_iter()
+        .collect();
+    put = put.item("tags", string_map_to_attr(&effective));
     put = put.item(
         "environments",
         AttributeValue::L(environments.iter().map(|e| s(e)).collect()),
@@ -299,6 +373,7 @@ async fn start_approval_workflow(
         "ownerEmail": request.owner_email,
         "secondaryOwnerEmails": request.secondary_owner_emails,
         "description": request.description,
+        "costCenter": request.cost_center,
         "environments": environments,
     });
 
@@ -618,7 +693,7 @@ mod tests {
                 owner_account_id: "111122223333".to_string(),
                 owner_email: "owner@example.com".to_string(),
                 secondary_owner_emails: vec!["backup@example.com".to_string()],
-                tags: None,
+                cost_center: None,
                 owning_team: None,
             }
         }
@@ -1177,7 +1252,7 @@ mod tests {
                 owner_account_id: "111122223333".to_string(),
                 owner_email: "owner@example.com".to_string(),
                 secondary_owner_emails: vec!["backup@example.com".to_string()],
-                tags: None,
+                cost_center: None,
                 owning_team: None,
             };
 
@@ -1238,7 +1313,7 @@ mod tests {
                 owner_account_id: "111122223333".to_string(),
                 owner_email: "owner@example.com".to_string(),
                 secondary_owner_emails: vec!["backup@example.com".to_string()],
-                tags: None,
+                cost_center: None,
                 owning_team: None,
             };
 

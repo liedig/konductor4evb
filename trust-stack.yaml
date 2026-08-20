@@ -56,6 +56,8 @@ Resources:
               - events:DescribeEventBus
               - events:PutPermission
               - events:RemovePermission
+              - events:TagResource
+              - events:UntagResource
             Resource:
               - !Sub "arn:${AWS::Partition}:events:*:${AWS::AccountId}:event-bus/${Organization}-*"
 
@@ -75,6 +77,8 @@ Resources:
               - sqs:SetQueueAttributes
               - sqs:GetQueueAttributes
               - sqs:GetQueueUrl
+              - sqs:TagQueue
+              - sqs:UntagQueue
             Resource:
               - !Sub "arn:${AWS::Partition}:sqs:*:${AWS::AccountId}:${Organization}-*"
 

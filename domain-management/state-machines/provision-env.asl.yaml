@@ -17,6 +17,13 @@ States:
         JitterStrategy: FULL
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
+      Tags: |-
+        {% $append([
+          {"Key": "konductor:managed-by", "Value": "konductor"},
+          {"Key": "konductor:domain", "Value": $states.input.domainName},
+          {"Key": "konductor:namespace", "Value": "${Organization}" & "-" & $states.input.domainName},
+          {"Key": "konductor:environment", "Value": $states.input.environment}
+        ], $states.input.costCenter ? [{"Key": "cost-center", "Value": $states.input.costCenter}] : []) %}
     Assign:
       platformBus: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -67,6 +74,14 @@ States:
     Arguments:
       RegistryName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-schema-registry' %}"
       Description: "{% 'Schema registry for domain ' & $states.input.domainName & ' (' & $states.input.environment & ')' %}"
+      Tags: |-
+        {% $merge([
+          {"konductor:managed-by": "konductor"},
+          {"konductor:domain": $states.input.domainName},
+          {"konductor:namespace": "${Organization}" & "-" & $states.input.domainName},
+          {"konductor:environment": $states.input.environment},
+          $states.input.costCenter ? {"cost-center": $states.input.costCenter} : {}
+        ]) %}
     Assign:
       schemaRegistry: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -89,6 +104,14 @@ States:
         JitterStrategy: FULL
     Arguments:
       QueueName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-subscription-dlq' %}"
+      Tags: |-
+        {% $merge([
+          {"konductor:managed-by": "konductor"},
+          {"konductor:domain": $states.input.domainName},
+          {"konductor:namespace": "${Organization}" & "-" & $states.input.domainName},
+          {"konductor:environment": $states.input.environment},
+          $states.input.costCenter ? {"cost-center": $states.input.costCenter} : {}
+        ]) %}
     Assign:
       subscriptionDlq: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -113,6 +136,13 @@ States:
         JitterStrategy: FULL
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
+      Tags: |-
+        {% $append([
+          {"Key": "konductor:managed-by", "Value": "konductor"},
+          {"Key": "konductor:domain", "Value": $states.input.domainName},
+          {"Key": "konductor:namespace", "Value": "${Organization}" & "-" & $states.input.domainName},
+          {"Key": "konductor:environment", "Value": $states.input.environment}
+        ], $states.input.costCenter ? [{"Key": "cost-center", "Value": $states.input.costCenter}] : []) %}
     Credentials:
       RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
     Assign:
@@ -167,6 +197,14 @@ States:
         JitterStrategy: FULL
     Arguments:
       QueueName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-integration-dlq' %}"
+      Tags: |-
+        {% $merge([
+          {"konductor:managed-by": "konductor"},
+          {"konductor:domain": $states.input.domainName},
+          {"konductor:namespace": "${Organization}" & "-" & $states.input.domainName},
+          {"konductor:environment": $states.input.environment},
+          $states.input.costCenter ? {"cost-center": $states.input.costCenter} : {}
+        ]) %}
     Credentials:
       RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
     Assign:
@@ -248,13 +286,44 @@ States:
     Assign:
       dashboard: "{% $states.result %}"
     Output: "{% $states.input %}"
-    Next: CreateFailedInvocationsAlarm
+    Next: TagDashboard
     Catch:
       - ErrorEquals:
           - States.ALL
         Next: StartCompensation
         Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'CreateDashboard' } }]) %}"
 
+  # putDashboard accepts no tags at creation — tag as an explicit step so a
+  # tagging failure compensates the environment like any other step.
+  TagDashboard:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:cloudwatch:tagResource"
+    Retry:
+      - ErrorEquals:
+          - CloudWatch.Throttling
+          - CloudWatch.ThrottlingException
+          - CloudWatch.InternalServiceFault
+          - CloudWatch.CloudWatchException
+        IntervalSeconds: 2
+        MaxAttempts: 5
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Arguments:
+      ResourceARN: "{% 'arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-dashboard' %}"
+      Tags: |-
+        {% $append([
+          {"Key": "konductor:managed-by", "Value": "konductor"},
+          {"Key": "konductor:domain", "Value": $states.input.domainName},
+          {"Key": "konductor:namespace", "Value": "${Organization}" & "-" & $states.input.domainName},
+          {"Key": "konductor:environment", "Value": $states.input.environment}
+        ], $states.input.costCenter ? [{"Key": "cost-center", "Value": $states.input.costCenter}] : []) %}
+    Output: "{% $states.input %}"
+    Next: CreateFailedInvocationsAlarm
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: StartCompensation
+        Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'TagDashboard' } }]) %}"
   CreateFailedInvocationsAlarm:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:cloudwatch:putMetricAlarm"
@@ -282,6 +351,13 @@ States:
       EvaluationPeriods: 3
       Threshold: 5
       ComparisonOperator: GreaterThanOrEqualToThreshold
+      Tags: |-
+        {% $append([
+          {"Key": "konductor:managed-by", "Value": "konductor"},
+          {"Key": "konductor:domain", "Value": $states.input.domainName},
+          {"Key": "konductor:namespace", "Value": "${Organization}" & "-" & $states.input.domainName},
+          {"Key": "konductor:environment", "Value": $states.input.environment}
+        ], $states.input.costCenter ? [{"Key": "cost-center", "Value": $states.input.costCenter}] : []) %}
       TreatMissingData: notBreaching
     Assign:
       failedInvocAlarm: true
@@ -320,6 +396,13 @@ States:
       EvaluationPeriods: 2
       Threshold: 10
       ComparisonOperator: GreaterThanOrEqualToThreshold
+      Tags: |-
+        {% $append([
+          {"Key": "konductor:managed-by", "Value": "konductor"},
+          {"Key": "konductor:domain", "Value": $states.input.domainName},
+          {"Key": "konductor:namespace", "Value": "${Organization}" & "-" & $states.input.domainName},
+          {"Key": "konductor:environment", "Value": $states.input.environment}
+        ], $states.input.costCenter ? [{"Key": "cost-center", "Value": $states.input.costCenter}] : []) %}
       TreatMissingData: notBreaching
     Assign:
       dlqDepthAlarm: true

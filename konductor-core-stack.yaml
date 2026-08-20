@@ -2472,6 +2472,8 @@ Resources:
               - events:PutPermission
               - events:RemovePermission
               - events:PutEvents
+              - events:TagResource
+              - events:UntagResource
             Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
           - Effect: Allow
             Action:
@@ -2482,6 +2484,8 @@ Resources:
               - schemas:CreateRegistry
               - schemas:DeleteRegistry
               - schemas:PutResourcePolicy
+              - schemas:TagResource
+              - schemas:UntagResource
             Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
           - Effect: Allow
             Action:
@@ -2490,16 +2494,22 @@ Resources:
               - sqs:SetQueueAttributes
               - sqs:GetQueueAttributes
               - sqs:GetQueueUrl
+              - sqs:TagQueue
+              - sqs:UntagQueue
             Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Organization}-*"
           - Effect: Allow
             Action:
               - cloudwatch:PutDashboard
               - cloudwatch:DeleteDashboards
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
             Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Organization}-*"
           - Effect: Allow
             Action:
               - cloudwatch:PutMetricAlarm
               - cloudwatch:DeleteAlarms
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
             Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Organization}-*"
           - Effect: Allow
             Action:

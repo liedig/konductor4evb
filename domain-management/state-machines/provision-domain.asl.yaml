@@ -81,13 +81,43 @@ States:
       Tier: Advanced
       Overwrite: true
     Output: "{% $states.input %}"
-    Next: EnsureRAMResourceShare
+    Next: TagNamespaceParameter
     Catch:
       - ErrorEquals:
           - States.ALL
         Next: EmitProvisioningFailedDomainLevel
         Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'CreateNamespaceParameter', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
 
+  # SSM PutParameter cannot combine Tags with Overwrite — tagging is an
+  # explicit step (AddTagsToResource upserts tag values, safe on re-runs).
+  TagNamespaceParameter:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ssm:addTagsToResource"
+    Retry:
+      - ErrorEquals:
+          - Ssm.TooManyUpdatesException
+          - Ssm.InternalServerError
+          - Ssm.SsmException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Arguments:
+      ResourceType: Parameter
+      ResourceId: "{% '/namespace/' & $states.input.detail.domainName %}"
+      Tags: |-
+        {% $append([
+          {"Key": "konductor:managed-by", "Value": "konductor"},
+          {"Key": "konductor:domain", "Value": $states.input.detail.domainName},
+          {"Key": "konductor:namespace", "Value": "${Organization}" & "-" & $states.input.detail.domainName}
+        ], $states.input.detail.costCenter ? [{"Key": "cost-center", "Value": $states.input.detail.costCenter}] : []) %}
+    Output: "{% $states.input %}"
+    Next: EnsureRAMResourceShare
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitProvisioningFailedDomainLevel
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'TagNamespaceParameter', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
   EnsureRAMResourceShare:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:ram:getResourceShares"
@@ -184,6 +214,7 @@ States:
       environment: "{% $states.context.Map.Item.Value %}"
       domainName: "{% $states.input.detail.domainName %}"
       ownerAccountId: "{% $states.input.detail.ownerAccountId %}"
+      costCenter: "{% $states.input.detail.costCenter %}"
     ItemProcessor:
       ProcessorConfig:
         Mode: INLINE
