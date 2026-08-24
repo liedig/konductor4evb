@@ -42,6 +42,7 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
             },
         ),
         ControlPlaneError::DomainAlreadyExists { .. }
+        | ControlPlaneError::DomainLimitExceeded { .. }
         | ControlPlaneError::BindingConflict { .. }
         | ControlPlaneError::EntitlementConflict { .. }
         | ControlPlaneError::SchemaAlreadyExists { .. } => error_response(
@@ -209,6 +210,16 @@ mod tests {
         assert_eq!(resp["statusCode"], 409);
         let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
         assert_eq!(body["code"], "ConflictException");
+    }
+
+    #[test]
+    fn error_mapping_domain_limit_exceeded_returns_409() {
+        let err = ControlPlaneError::DomainLimitExceeded { cap: 1000 };
+        let resp = from_control_plane_error(&err);
+        assert_eq!(resp["statusCode"], 409);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["code"], "ConflictException");
+        assert!(body["message"].as_str().unwrap().contains("1000"));
     }
 
     #[test]

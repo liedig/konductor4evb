@@ -1144,6 +1144,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "domain-count-reporter"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-smithy-mocks",
+ "konductor-common",
+ "lambda_runtime",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "domain-registrations"
 version = "0.1.0"
 dependencies = [

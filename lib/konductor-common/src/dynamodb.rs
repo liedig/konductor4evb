@@ -7,6 +7,42 @@ pub fn s(val: &str) -> AttributeValue {
     AttributeValue::S(val.to_string())
 }
 
+pub fn n(val: i64) -> AttributeValue {
+    AttributeValue::N(val.to_string())
+}
+
+/// Hard ceiling on domains per deployment. Fixed by design: quota planning,
+/// monitoring bounds, and blast radius all hang off this number.
+pub const DOMAIN_COUNT_CAP: i64 = 1000;
+
+/// Partition key of the domain-count counter item. Domain names are lowercase
+/// alphanumerics and hyphens only, so this key can never collide with one.
+pub const DOMAIN_COUNT_COUNTER_KEY: &str = "META#domain-count";
+
+/// Transact-write item that atomically increments the domain-count counter,
+/// conditioned below the cap. Pair it with a domain-row `Put` conditioned on
+/// the name being absent so a new row and its slot commit or abort together.
+/// The counter self-seeds from zero on the first registration of a fresh
+/// deployment; pre-existing deployments must seed it (see deployment docs).
+pub fn domain_count_increment(
+    table: &str,
+) -> Result<aws_sdk_dynamodb::types::Update, aws_sdk_dynamodb::error::BuildError> {
+    aws_sdk_dynamodb::types::Update::builder()
+        .table_name(table)
+        .key("domainName", s(DOMAIN_COUNT_COUNTER_KEY))
+        .update_expression(
+            "SET #count = if_not_exists(#count, :zero) + :one, #itemType = :itemType",
+        )
+        .condition_expression("attribute_not_exists(domainName) OR #count < :cap")
+        .expression_attribute_names("#count", "count")
+        .expression_attribute_names("#itemType", "itemType")
+        .expression_attribute_values(":zero", n(0))
+        .expression_attribute_values(":one", n(1))
+        .expression_attribute_values(":cap", n(DOMAIN_COUNT_CAP))
+        .expression_attribute_values(":itemType", s("DomainCount"))
+        .build()
+}
+
 pub fn get_s(item: &HashMap<String, AttributeValue>, key: &str) -> Option<String> {
     item.get(key).and_then(|v| v.as_s().ok()).cloned()
 }
@@ -138,6 +174,56 @@ mod tests {
     fn s_creates_string_attribute() {
         let attr = s("hello");
         assert_eq!(attr.as_s().unwrap(), "hello");
+    }
+
+    #[test]
+    fn n_creates_number_attribute() {
+        let attr = n(42);
+        assert_eq!(attr.as_n().unwrap(), "42");
+    }
+
+    #[test]
+    fn counter_key_is_outside_the_domain_name_keyspace() {
+        for c in DOMAIN_COUNT_COUNTER_KEY.chars() {
+            assert!(
+                c.is_ascii_lowercase()
+                    || c.is_ascii_digit()
+                    || c == '-'
+                    || c.is_ascii_uppercase()
+                    || c == '#',
+                "unexpected character in counter key"
+            );
+        }
+        assert!(
+            DOMAIN_COUNT_COUNTER_KEY
+                .chars()
+                .any(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')),
+            "counter key must be unrepresentable as a domain name"
+        );
+    }
+
+    #[test]
+    fn counter_increment_is_conditional_below_the_cap() {
+        let update = domain_count_increment("domains").unwrap();
+
+        assert_eq!(update.table_name(), "domains");
+        assert_eq!(
+            update.key().get("domainName").unwrap().as_s().unwrap(),
+            DOMAIN_COUNT_COUNTER_KEY
+        );
+        assert_eq!(
+            update.condition_expression().unwrap(),
+            "attribute_not_exists(domainName) OR #count < :cap"
+        );
+        assert!(update.update_expression().contains("if_not_exists"));
+
+        let values = update.expression_attribute_values().unwrap();
+        assert_eq!(values.get(":cap").unwrap().as_n().unwrap(), "1000");
+        assert_eq!(values.get(":one").unwrap().as_n().unwrap(), "1");
+        assert_eq!(values.get(":zero").unwrap().as_n().unwrap(), "0");
+
+        let names = update.expression_attribute_names().unwrap();
+        assert_eq!(names.get("#count").unwrap().as_str(), "count");
     }
 
     #[test]

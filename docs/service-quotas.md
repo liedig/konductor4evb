@@ -19,6 +19,68 @@ All quota values below are AWS defaults as of July 2026, per account per region.
 
 ---
 
+## The 1,000-domain ceiling
+
+The platform enforces a hard ceiling of **1,000 rows** in the domains table (`konductor-domains`), enforced atomically at registration: every row-creating write (a new `PENDING_APPROVAL` registration, or a collision-preflight `REJECTED` row) increments a counter item (`domainName = "META#domain-count"`, attribute `count`) in the same DynamoDB transaction, conditioned below the cap. Re-registration of an existing rejected domain overwrites its row without charging the counter. At the cap, registration fails deterministically with `RegisterDomainFailed` (reason: domain limit exceeded) — no approval workflow starts.
+
+Two properties shape operations:
+
+- **The counter never decrements.** There is no domain-deletion capability yet, so the ceiling bounds the table's *lifetime* registrations, including rejected rows. Retiring stale or rejected domains before a future pruning capability lands requires deleting their rows and decrementing the counter by the same amount (see reconciliation below).
+- **Capacity alarm.** The hourly `konductor-domain-count-reporter` function publishes the counter as the `DomainCount` metric (namespace `Konductor/DomainManagement`); `konductor-domain-count-capacity-alarm` fires at **800** (80%). When it fires, reconcile the counter, clean up stale rows, and confirm quota headroom before the next onboarding wave.
+
+Quota consequence: the ceiling caps N at 1,000, so with E environments the most you will ever need is **1,000 × E registries** (`schemas` / `L-85663EFB`) and **1,000 × E + 2 event buses** (`events` / `L-658A4FD9`) — 3,000 and 3,002 at the default E = 3. Request only for the N you actually plan to onboard (checklist below); the ceiling guarantees quota requests above 1,000 × E are never needed.
+
+### Seeding the counter on existing deployments
+
+Fresh deployments self-seed: the first registration creates the counter at zero and increments it in one transaction. Deployments that already had domains **before** the ceiling shipped must seed the counter once, immediately after upgrading the stack, or the pre-existing rows consume headroom the counter cannot see:
+
+```bash
+export DOMAINS_TABLE=konductor-domains   # adjust if you renamed the table
+
+# 1. Count existing domain rows (paginated; excludes the counter item itself)
+TOTAL=0; TOKEN=""
+while :; do
+  ARGS=(--table-name "$DOMAINS_TABLE" --select COUNT
+        --filter-expression "domainName <> :counter"
+        --expression-attribute-values '{":counter":{"S":"META#domain-count"}}')
+  [ -n "$TOKEN" ] && ARGS+=(--starting-token "$TOKEN")
+  PAGE=$(aws dynamodb scan "${ARGS[@]}" --output json)
+  TOTAL=$((TOTAL + $(jq -r '.Count' <<<"$PAGE")))
+  TOKEN=$(jq -r '.NextToken // empty' <<<"$PAGE")
+  [ -z "$TOKEN" ] && break
+done
+echo "rows: $TOTAL"
+
+# 2. Seed the counter — fails if it already exists, so re-running is safe
+aws dynamodb put-item --table-name "$DOMAINS_TABLE" \
+  --item '{"domainName":{"S":"META#domain-count"},"count":{"N":"'"$TOTAL"'"}}' \
+  --condition-expression "attribute_not_exists(domainName)"
+```
+
+### Reconciliation: counter versus row count
+
+Because rows are never deleted, the counter must always equal the row count. Investigate drift (rows created out-of-band, manual edits, a partially seeded counter) with:
+
+```bash
+# Row count: the paginated scan from step 1 above
+# Counter value:
+aws dynamodb get-item --table-name "$DOMAINS_TABLE" \
+  --key '{"domainName":{"S":"META#domain-count"}}' \
+  --consistent-read --query 'Item.count.N'
+```
+
+If they differ, repair during a quiet window (an in-flight registration increments the counter between your scan and your write, so pause onboarding first), setting the counter to the true row count:
+
+```bash
+aws dynamodb update-item --table-name "$DOMAINS_TABLE" \
+  --key '{"domainName":{"S":"META#domain-count"}}' \
+  --update-expression "SET #c = :v" \
+  --expression-attribute-names '{"#c":"count"}' \
+  --expression-attribute-values '{":v":{"N":"'"$TOTAL"'"}}'
+```
+
+---
+
 ## Resource consumption model
 
 Domains are provisioned once per environment in the platform-configured
@@ -146,6 +208,7 @@ Increases are per region — request them in the region where `konductor-core` i
 
 Before an onboarding wave that takes you to **N** total domains (E = envs in the `Environments` parameter):
 
+- [ ] N ≤ 1,000 (the platform ceiling) with headroom — check the `DomainCount` metric or `konductor-domain-count-capacity-alarm` state
 - [ ] Schema Registries quota ≥ N × E × 1.2 (`schemas` / `L-85663EFB`)
 - [ ] Event buses quota ≥ (N × E + 2) × 1.2 (`events` / `L-658A4FD9`)
 - [ ] Rules-per-bus quota reviewed for any producer expecting > ~250 subscriptions (`events` / `L-244521F2`)

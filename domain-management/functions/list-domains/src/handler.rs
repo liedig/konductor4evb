@@ -6,6 +6,7 @@ use konductor_common::domain_scope::{
 };
 use konductor_common::dynamodb::{
     deserialize_pagination_token, get_s, get_string_set, s, serialize_pagination_token,
+    DOMAIN_COUNT_COUNTER_KEY,
 };
 use konductor_common::error::ControlPlaneError;
 use konductor_common::principal::TrustedPrincipal;
@@ -275,11 +276,14 @@ async fn directory_listing(
         .as_deref()
         .and_then(deserialize_pagination_token);
 
+    // The domain-count counter item shares the table but is not a domain.
     let mut scan = ddb
         .scan()
         .table_name(table)
         .projection_expression("domainName, description, #s")
         .expression_attribute_names("#s", "status")
+        .filter_expression("domainName <> :counter")
+        .expression_attribute_values(":counter", s(DOMAIN_COUNT_COUNTER_KEY))
         .limit(max_results);
     if let Some(key) = start_key {
         for (k, v) in key {
@@ -394,7 +398,13 @@ async fn scan_all(
     limit: i32,
     start_key: Option<HashMap<String, AttributeValue>>,
 ) -> Result<QueryResult> {
-    let mut scan = ddb.scan().table_name(table).limit(limit);
+    // The domain-count counter item shares the table but is not a domain.
+    let mut scan = ddb
+        .scan()
+        .table_name(table)
+        .limit(limit)
+        .filter_expression("domainName <> :counter")
+        .expression_attribute_values(":counter", s(DOMAIN_COUNT_COUNTER_KEY));
     if let Some(key) = start_key {
         for (k, v) in key {
             scan = scan.exclusive_start_key(k, v);

@@ -25,6 +25,9 @@ pub enum ControlPlaneError {
     #[error("domain already exists: {domain_name}")]
     DomainAlreadyExists { domain_name: String },
 
+    #[error("domain limit exceeded: deployment cap of {cap} domains reached")]
+    DomainLimitExceeded { cap: u32 },
+
     #[error("{message}")]
     ValidationException {
         message: String,

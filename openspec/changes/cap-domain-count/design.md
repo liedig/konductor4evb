@@ -1,6 +1,6 @@
 ## Context
 
-See proposal.md - Why. Registration today is a conditional put on the domains table (`attribute_not_exists(domainName) OR status = REJECTED`) followed by the approval workflow start and outcome emission. DynamoDB offers no COUNT, and a scan-count at registration time would be both expensive and racy. The deployment serves a single organization, so per-deployment and per-organization are the same ceiling today; multi-organization hosting would revisit the scoping.
+See proposal.md - Why. Registration today is a conditional put on the domains table (`attribute_not_exists(domainName) OR status = REJECTED`) followed by the approval workflow start and outcome emission. Since the collision preflight landed (`provisioning-resilience`), registration has a second row-creating conditional put with the same condition, persisting a system-`REJECTED` row when platform-owned resource names collide; both write paths are in scope for the counter. DynamoDB offers no COUNT, and a scan-count at registration time would be both expensive and racy. The deployment serves a single organization, so per-deployment and per-organization are the same ceiling today; multi-organization hosting would revisit the scoping.
 
 ## Goals / Non-Goals
 
@@ -20,13 +20,13 @@ See proposal.md - Why. Registration today is a conditional put on the domains ta
 
 ### A counter item in the domains table, mutated in the registration transaction
 
-A single counter item (distinct key outside the domain-name keyspace) is incremented by one in the same `TransactWriteItems` that creates a new domain row, with a condition that the count stays below the ceiling alongside the existing not-exists-or-rejected condition. Re-registration of a rejected domain overwrites its row without touching the counter. Concurrent registrations serialize on the counter item's condition, so exactly one transaction can commit the final slot. Rejected rows consume slots until domain deletion exists; that is acceptable because the cap is a blast-radius bound, not a billing meter.
+A single counter item (distinct key outside the domain-name keyspace) is incremented by one in the same `TransactWriteItems` that creates a new domain row, with a condition that the count stays below the ceiling alongside the existing not-exists-or-rejected condition. Both row-creating writes — the registration put and the collision-preflight put — carry the increment, because the counter must equal the row count for the reconciliation runbook to mean anything. Re-registration of a rejected domain (either rejection kind) overwrites its row without touching the counter. Concurrent registrations serialize on the counter item's condition, so exactly one transaction can commit the final slot. Rejected rows consume slots until domain deletion exists; that is acceptable because the cap is a blast-radius bound, not a billing meter.
 
 Alternatives rejected: scan-count at registration (racy without a transaction and expensive at any table size), a separate counter table (same single-item contention with extra operational surface), and a handler-side check before the write (a classic check-then-act race under concurrency).
 
 ### The failure uses the established deterministic path
 
-A cap breach maps to `409 Conflict` with a limit-exceeded reason and a `RegisterDomainFailed` outcome event carrying that reason, consistent with validation and duplicate-name failures: no workflow start, no retry (retrying cannot change the outcome), and the SQS message acknowledged.
+A cap breach follows the same deterministic failure path as validation and duplicate-name failures: no domain row, no workflow start, a `RegisterDomainFailed` outcome event carrying the limit reason, and the SQS message acknowledged — no retry, because retrying cannot change the outcome. Registration is asynchronous (API Gateway enqueues the command and returns 202), so the outcome event is the limit contract; a `DomainLimitExceeded` variant mapped to `409 Conflict` is added to the shared error model for any synchronous surface that encounters it.
 
 ### Operations treat the cap as a capacity boundary
 

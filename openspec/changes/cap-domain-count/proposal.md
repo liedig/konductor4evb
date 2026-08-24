@@ -6,7 +6,7 @@ The platform's scale target is corrected from "tens of thousands of domains" to 
 
 - Enforce a domain-count ceiling of 1,000 at registration: creating a new domain beyond the cap fails with `409 Conflict` and a limit-exceeded reason; no domain row is created, no approval workflow starts, and the failure follows the established deterministic outcome-event path.
 - Enforcement is atomic with domain creation: a counter item in the domains table is incremented in the same transaction as the domain row, conditioned below the cap, so concurrent registrations cannot race past it.
-- Re-registering a rejected domain and updating existing domains never count against the cap; rejected domains consume slots until domain deletion exists (accepted trade-off).
+- Re-registering a rejected domain and updating existing domains never count against the cap; rejected domains — including system-rejected rows recorded by the collision preflight — consume slots until domain deletion exists (accepted trade-off).
 - Add a one-time counter seeding path for existing deployments, an 80%-of-cap capacity alarm, and EventBridge quota-headroom validation against the cap.
 
 ## Capabilities

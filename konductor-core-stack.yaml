@@ -1333,7 +1333,7 @@ Resources:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
-              Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:Query]
+              Action: [dynamodb:PutItem, dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:Query, dynamodb:TransactWriteItems]
               Resource:
                 - !GetAtt DomainsTable.Arn
                 - !Sub "${DomainsTable.Arn}/index/*"
@@ -1367,6 +1367,69 @@ Resources:
             BatchSize: 1
             FunctionResponseTypes:
               - ReportBatchItemFailures
+
+  # ---- Domain-count capacity reporting ----
+  # The registration ceiling counter is a DynamoDB item with no native
+  # CloudWatch metric, so an hourly reporter logs the current count; the
+  # metric filter and alarm below page at 80% of the 1,000-domain cap.
+  DomainCountReporterLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-domain-count-reporter"
+      RetentionInDays: 30
+
+  DomainCountReporterFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: DomainCountReporterLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-domain-count-reporter"
+      CodeUri: ./domain-management/functions/domain-count-reporter
+      Handler: bootstrap
+      Environment:
+        Variables:
+          DOMAINS_TABLE: !Ref DomainsTable
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource:
+                - !GetAtt DomainsTable.Arn
+      Events:
+        HourlyReport:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 hour)
+            Name: !Sub "konductor-domain-count-reporter"
+            Description: Publishes the domain-count counter for the capacity alarm
+
+  DomainCountMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref DomainCountReporterLogGroup
+      FilterPattern: '{ $.fields.message = "domain count report" }'
+      MetricTransformations:
+        - MetricName: DomainCount
+          MetricNamespace: Konductor/DomainManagement
+          MetricValue: "$.fields.count"
+
+  DomainCountCapacityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-domain-count-capacity-alarm"
+      AlarmDescription: Domain count above 80% of the 1,000-domain registration ceiling — clean up stale domains and confirm EventBridge schema/bus quota headroom before the next onboarding wave
+      Namespace: Konductor/DomainManagement
+      MetricName: DomainCount
+      Statistic: Maximum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 800
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
 
   SubscriptionsLogGroup:
     Type: AWS::Logs::LogGroup

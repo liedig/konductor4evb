@@ -91,7 +91,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_sdk_dynamodb::operation::put_item::PutItemOutput;
+    use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsOutput;
     use aws_sdk_eventbridge::operation::put_events::PutEventsOutput;
     use aws_sdk_sfn::operation::start_execution::StartExecutionOutput;
     use aws_smithy_mocks::{mock, mock_client};
@@ -108,8 +108,8 @@ mod tests {
     }
 
     fn happy_clients() -> Clients {
-        let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
-            .then_output(|| PutItemOutput::builder().build());
+        let tx_rule = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+            .then_output(|| TransactWriteItemsOutput::builder().build());
         let no_bus = crate::register::test_rules::no_bus_rule();
         let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
             .then_output(|| PutEventsOutput::builder().build());
@@ -122,7 +122,7 @@ mod tests {
         });
         let no_param = crate::register::test_rules::no_param_rule();
         Clients {
-            ddb: mock_client!(aws_sdk_dynamodb, [&put_rule]),
+            ddb: mock_client!(aws_sdk_dynamodb, [&tx_rule]),
             eb: mock_client!(
                 aws_sdk_eventbridge,
                 aws_smithy_mocks::RuleMode::MatchAny,
@@ -221,9 +221,9 @@ mod tests {
     #[tokio::test]
     async fn oauth_register_without_owning_team_is_denied_without_mutation() {
         set_env();
-        // Only the EventBridge outcome is mocked; any DynamoDB put_item or Step
-        // Functions start_execution call would fail the mocked client, proving
-        // a denied OAuth command performs no mutation.
+        // Only the EventBridge outcome is mocked; any DynamoDB transact_write_items
+        // or Step Functions start_execution call would fail the mocked client,
+        // proving a denied OAuth command performs no mutation.
         let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
             .then_output(|| PutEventsOutput::builder().build());
         let clients = Clients {
