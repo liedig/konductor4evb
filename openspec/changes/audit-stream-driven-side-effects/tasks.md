@@ -1,7 +1,7 @@
 ## 1. Inventory
 
 - [ ] 1.1 Mechanically enumerate every DynamoDB write call site (`put_item`, `update_item`, `transact_write_items`) across the control-plane, domain-management, event-streams, and notifications function crates, crossed with EventBridge (`put_events`), SQS (`send_message`), SNS (`publish`), and Step Functions (`start_execution`) calls in the same handler path
-- [ ] 1.2 Manually trace each candidate handler to confirm the write/side-effect graph and document the existing recovery mechanism (hand-rolled idempotent continuation, queue redrive, or none); known starting points: `register.rs`, `update.rs`, `subscriptions/outcome.rs`, the approval decide path, schema administration, notification triggers, and the publish path
+- [ ] 1.2 Manually trace each candidate handler to confirm the write/side-effect graph and document the existing recovery mechanism (hand-rolled idempotent continuation, queue redrive, or none); known starting points: `register.rs` (including the collision-preflight write), `update.rs`, `domain-state`, `finalize-approval` (the approval decide path), `subscriptions` subscribe/unsubscribe and `subscriptions/outcome.rs`, schema administration, notification triggers, the publish path, and the control-plane entitlement handlers (`entitlement-admin`, `binding-admin`, `entitlement-revocation-worker`, `entitlement-coverage-sweep`)
 
 ## 2. Classification
 

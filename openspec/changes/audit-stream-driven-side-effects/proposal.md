@@ -4,7 +4,7 @@ Control-plane handlers perform multi-step writes — a DynamoDB commit followed 
 
 ## What Changes
 
-- Inventory every handler that commits a DynamoDB write and performs additional side effects in the same code path (domain registration and update, approval decision handling, subscription command outcomes, notification triggers, schema administration, and any others found).
+- Inventory every handler that commits a DynamoDB write and performs additional side effects in the same code path (domain registration and update, approval decision handling, subscription command outcomes, notification triggers, schema administration, the control-plane entitlement handlers — grant administration, binding administration, the revocation worker, the coverage sweep — and any others found).
 - Classify each call site against the stream-driven side-effects constraints from the `add-subscriber-entitlements` design: whether the item carries everything a consumer needs, whether the side effect has a committed state transition to hang on, idempotency on stream event ids, tolerance for stream latency, 24-hour retention and shard-blocking operational needs, and whether an inbound command envelope already provides durability.
 - Classify each emitted artifact as a change record (mechanical reaction, stays internal) or a business event (domain fact worthy of the control-plane bus, business-level audit, and future broader sharing).
 - Record a per-handler decision — migrate to stream-driven, remain handler-driven with stated reasons, or already envelope-driven — in `docs/development/decisions.md`, spawning migration follow-ups as separate changes where approved.

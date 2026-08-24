@@ -1,6 +1,6 @@
 ## Context
 
-See proposal.md - Why. The classification rubric is the stream-driven side-effects principle and constraints established in `add-subscriber-entitlements` (design.md, "Stream-driven side effects (first application)"); this change applies that rubric to the existing codebase rather than restating it. Current state: no DynamoDB streams exist in the project yet. Known multi-step handlers from a preliminary scan: `domain-registrations/register.rs` (conditional put, then Step Functions start, then EventBridge emission, with hand-rolled idempotent continuation), `domain-registrations/update.rs` (write plus lifecycle event), and `event-streams/subscriptions/outcome.rs` (outcome events after workflow results). The publish path is already envelope-driven (inbound SQS command is the durable envelope).
+See proposal.md - Why. The classification rubric is the stream-driven side-effects principle and constraints established in `add-subscriber-entitlements` (design.md, "Stream-driven side effects (first application)"); this change applies that rubric to the existing codebase rather than restating it. Current state: one DynamoDB stream exists — the entitlements table stream feeding `entitlement-stream-consumer`, the rubric's first application; every other write path is handler-driven. Known multi-step handlers from a preliminary scan: `domain-registrations/register.rs` (two conditional puts — registration and collision preflight — then Step Functions start, then EventBridge emission, with hand-rolled idempotent continuation), `domain-registrations/update.rs` (write plus lifecycle event), `domain-state` (update plus lifecycle event), `finalize-approval` (transactional write on decision), `event-streams/subscriptions` subscribe/unsubscribe (write, then Step Functions start and EventBridge emission), `event-streams/subscriptions/outcome.rs` (outcome events after workflow results), and the control-plane admin handlers (`entitlement-admin`, `binding-admin`, `entitlement-revocation-worker`, `entitlement-coverage-sweep`) added after this audit was drafted. The publish path is already envelope-driven (inbound SQS command is the durable envelope).
 
 ## Goals / Non-Goals
 
@@ -9,6 +9,7 @@ See proposal.md - Why. The classification rubric is the stream-driven side-effec
 - A complete inventory of handler code paths that commit a DynamoDB write and perform additional side effects.
 - A consistent per-handler classification against the rubric, including a failure-mode walk of each multi-step path.
 - A recorded decision per handler in `docs/development/decisions.md`, durable enough that future readers understand why each handler looks the way it does.
+- The entitlement-family handlers beyond the already-stream-driven revocation path (grant administration, binding administration, the revocation worker, the coverage sweep) are audit subjects like any other write path; only the revocation path is exempt as the rubric's first application.
 
 **Non-Goals:**
 

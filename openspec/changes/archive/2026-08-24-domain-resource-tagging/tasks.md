@@ -16,8 +16,8 @@
 
 ## 3. Trust stack
 
-- [ ] 3.1 `konductor-trust-role` policy gains scoped `events:TagResource`/`UntagResource` and `sqs:TagQueue`/`UntagQueue` on `{org}-*`
-- [ ] 3.2 Operator docs note the trust-stack redeploy requirement
+- [x] 3.1 `konductor-trust-role` policy gains scoped `events:TagResource`/`UntagResource` and `sqs:TagQueue`/`UntagQueue` on `{org}-*`
+- [x] 3.2 Operator docs note the trust-stack redeploy requirement
 
 ## 4. Console
 
