@@ -18,4 +18,5 @@
 - [ ] `cargo fmt --check` passes
 - [ ] `cargo clippy --workspace -- -D warnings` passes
 - [ ] `cargo test --workspace` passes
+- [ ] New handler write paths classified against the side-effects checklist (AGENTS.md, "Side Effects and Durability")
 - [ ] Docs updated (if applicable)

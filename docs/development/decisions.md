@@ -34,12 +34,209 @@ This document tracks architectural decisions, implemented changes, and deferred 
 | 2026-08-05 | add-publisher-apis | Event Streams | Publisher APIs: environment-named stages, store-and-forward publish, append-only schema management — first grant-engine consumers | **Environment-named stages**: both API surfaces replaced the static `v1` stage with `dev`/`staging`/`prod` stages sharing one deployment; the stage is the environment selector, so publishers never name an environment, registry, or bus. **Flat verb endpoints**: `POST /publish`, `POST /schemas`, `POST /schemas/versions` take the domain in the body — no nested resource paths, matching the binding-admin precedent. **Store-and-forward publish**: API Gateway validates the flat `{domain, eventName, data, idempotencyKey?}` body and queues it with the trusted-principal envelope, `Environment` (from `$context.stage`), and `IdempotencyKey` (caller key or `$context.requestId`) as message attributes; the `publish-events` consumer authorizes `schema:publish` via `DynamoGrantEngine` before any resource access, requires an ACTIVE domain, resolves the latest schema version in the stage-selected registry, builds the canonical envelope, and calls `PutEvents` on the domain bus. Deterministic denials are acknowledged; everything else retries via partial batch responses (batch 10) with immutable attributes. **Envelope metadata immutability**: `publishedAt` derives from the SQS `SentTimestamp` (retries keep the original publish time) and `idempotencyKey` from the message attribute; the consumer validates the generated envelope (positive version, non-empty identity, serializable, ≤256KB) before delivery — invalid generated envelopes are processing failures, never partial deliveries. **Schema management mimics the EventBridge Schemas API**: synchronous proxy endpoints (the created version must return to the caller) mapping `CreateSchema` → 201 version 1 / 409 duplicate and `UpdateSchema` → 201 next version / 404 missing; append-only — no delete, retire, replace, or version deletion, and no registry administration permissions. **Auth engine separation**: this change consumes the `ResourceAuthorizer` decision interface only; binding persistence and administration stay with `add-grant-engine`, and both publisher functions read bindings through the reserved `konductor-bindings-table-read` managed policy. **Event-name feasibility**: schema writes validate the event name against EventBridge rule-name constraints (`rule_name`) before any service call. **Duplicate-create mapping**: the Schemas service model has no `ConflictException` for `CreateSchema`, so a duplicate's `BadRequestException` ("already exists") maps to 409 with a `code()` fallback for a future conflict code. |
 
 | 2026-08-11 | add-subscriber-entitlements | Authorization / Event Streams | Subscriber entitlement store, coverage-gated subscriptions, revocation pipeline, entitlement-expanded catalog | **Entitlements complete the two-store model**: `konductor-authorization-entitlements` (PK consumer domain, SK `producerDomain#scopePattern`, `by-producer` GSI, by-entitlement GSI, TTL) is the subscriber half of the `add-grant-engine` split. Entitlements are environment-agnostic durable intent; `ExpiresAt` drives TTL removal at most ~4 days after expiry (DynamoDB deletes in its own window) and expiry is also evaluated logically at read time. **Scope-pattern grammar**: one additive grammar serves coverage, subscription authorization, and catalog expansion — `*` covers a whole producer domain including future schemas, an exact detail type covers all versions of one schema including future versions, and a `*` suffix covers a prefix family including future members. Patterns deliberately share by naming convention: prefixes like `Order`/`OrderItem` overlap, so name producer schemas with hygiene and treat an unintended match as one entitlement delete away — no separate catalog-language. **Entitlements are control-plane intent; EventBridge rules are compiled enforcement**: administration only writes table rows; the activation workflow compiles intent into a rule per environment, so intent travel is never blocked by enforcement failure and enforcement carries no per-subscription authorization state. **Composite resource grammar**: `subscription:environment:{id}:{env}` resources make the engine evaluate create/enable under binding *and* coverage but disable/delete under binding alone — a lapsed entitlement can never wedge an existing subscription in an unmanageable state. **OAuth-only administration with producer self-service**: create and revoke are authorized by the `platform-admin` global role *or* a `publisher` binding on the entitlement's producer domain (so producer teams share their own schemas without platform involvement); consumer-scoped lists additionally admit a `subscriber` binding. The IAM surface exposes no entitlement routes in this capability version — administration that changes other domains' access is an interactive, auditable act. **Stream-driven side-effect transport**: the entitlements DynamoDB stream carries change records — small self-describing control messages routed by record type (audit events to `konductor-bus`, revocation messages to SQS) — never business events; the two planes never mix, so control throughput, ordering, and retention tune independently of event traffic. **Revocation is reconciliation-bounded**: revoke is durable at the transaction commit and effective at the next decision immediately; the worker pipeline (stream → queue → disablement) converges existing subscriptions with idempotent writes, marker-claimed stream records (replay = no-op), and per-record partial batch failure; the hourly sweep scans every stream, re-evaluates coverage fail-closed, and disables uncovered ACTIVE subscriptions — drift windows are observable via alarms, never silent. **403-over-404**: uncovered schema targets and unauthorized subscription commands answer `403 Forbidden` with a generic body — the denial is deterministic and never oracles the existence of producer schemas or other callers' subscriptions. **`IamOnlyAuthorizer` retention**: platform-operated paths that never represent a domain owner keep the IAM guard rather than being force-migrated onto bindings they would tautologically satisfy. |
+| 2026-08-12 | rename-to-konductor | Cross-cutting | Product renamed to "Konductor for Amazon EventBridge"; repo renamed to `konductor4evb` | **Why**: the former name (see git history) collided with an internal EventBridge feature code name and wrongly implied the platform is an EventBridge product. **Strategy**: flag day — nothing deployed was worth keeping, so every identifier was renamed in one pass (crate `konductor-common`, stack `konductor-core`, bus `konductor-bus`, event sources `konductor.domain-management`/`konductor.event-streams`, trust role `{org}-konductor-trust-role`, env vars `KONDUKTOR_*`) with no compatibility shims or migration; the dev stacks were deleted and redeployed, and the full request → approve → provision round-trip was re-verified live. A follow-up sweep removed the old name absolutely everywhere, including archived OpenSpec change history. |
 | 2026-08-24 | cap-domain-count | Domain Management | Hard 1,000-domain ceiling enforced by a transaction-charged counter item | **Why a ceiling**: the domains table is unbounded while every domain provisions real quota-bound resources (registries, buses, alarms); a hard cap turns silent quota exhaustion into a deterministic, observable failure. **Counter item, not ScanCount**: registration writes moved to `TransactWriteItems` that create the row and increment a counter item (`META#domain-count`) atomically, conditioned below the cap — exact under concurrency with O(1) cost, versus a scan that is both racy and increasingly expensive. **Rejected rows consume slots**: collision-preflight REJECTED rows are real rows, so they charge the counter; re-registering a rejected name overwrites in place without a second charge. Rows are never deleted (no domain deletion yet), so the ceiling bounds *lifetime* registrations — pruning and counter decrement arrive with a future domain-deletion capability. **Failure is async and deterministic**: at the cap, registration emits `RegisterDomainFailed` (limit reason) with no approval workflow and no retry; the `DomainLimitExceeded` → 409 mapping exists in the shared error model for any future synchronous registration surface. **Observability**: an hourly `domain-count-reporter` Lambda publishes the counter via log metric filter (`Konductor/DomainManagement` `DomainCount`); an alarm fires at 800 (80%), and `docs/service-quotas.md` carries the seeding and reconciliation runbook plus quota headroom sized against the cap. |
+| 2026-08-25 | audit-stream-driven-side-effects | Cross-cutting | Audited every DynamoDB write path against the stream-driven side-effects rubric; 3 MIGRATE, 1 idempotency fix, rest STAY/ENVELOPE-DRIVEN | Full per-handler records in the audit section below. Three migrations named (`stream-driven-domain-registration`, `stream-domain-lifecycle-events`, `stream-subscription-outcomes`) plus one small fix (`fix-unsubscribe-execution-idempotency`). The rubric becomes an authoring-time checklist in AGENTS.md. |
 
 ---
 
-## Deferred Decisions
-| 2026-08-12 | rename-to-konductor | Cross-cutting | Product renamed to "Konductor for Amazon EventBridge"; repo renamed to `konductor4evb` | **Why**: the former name (see git history) collided with an internal EventBridge feature code name and wrongly implied the platform is an EventBridge product. **Strategy**: flag day — nothing deployed was worth keeping, so every identifier was renamed in one pass (crate `konductor-common`, stack `konductor-core`, bus `konductor-bus`, event sources `konductor.domain-management`/`konductor.event-streams`, trust role `{org}-konductor-trust-role`, env vars `KONDUKTOR_*`) with no compatibility shims or migration; the dev stacks were deleted and redeployed, and the full request → approve → provision round-trip was re-verified live. A follow-up sweep removed the old name absolutely everywhere, including archived OpenSpec change history. |
+## Stream-Driven Side-Effects Audit (2026-08-25, `audit-stream-driven-side-effects`)
+
+Every handler code path that commits a DynamoDB write or performs side effects, audited against the stream-driven side-effects rubric from `add-subscriber-entitlements` (one synchronous commit; every other side effect driven by the table stream or already covered by an inbound durable envelope). Rubric questions, abbreviated per entry: (1) the written item carries everything a stream consumer needs; (2) every side effect hangs on a committed state transition; (3) the side effect can be idempotent on a stream event id; (4) the side effect tolerates seconds of stream latency; (5) a consumer can meet the 24h-retention / shard-blocking operational bar; (6) durability already comes from an inbound command envelope.
+
+### Decision index
+
+| Call site | Decision | Follow-up |
+|---|---|---|
+| `register.rs` — registration path | MIGRATE | `stream-driven-domain-registration` |
+| `register.rs` — collision-preflight path | MIGRATE | `stream-driven-domain-registration` |
+| `update.rs` | MIGRATE | `stream-domain-lifecycle-events` |
+| `domain-state` — retry-provisioning | MIGRATE | `stream-domain-lifecycle-events` |
+| `domain-state` — enable/disable | STAY | — |
+| `finalize-approval` | STAY | — |
+| `decide-registration` | STAY | — |
+| `send-approval-request-notification` | STAY | — (risk noted) |
+| Outcome/notification email handlers (5) | ENVELOPE-DRIVEN | — |
+| `subscriptions/subscribe.rs` | MIGRATE | `stream-subscription-outcomes` |
+| `subscriptions/update_state.rs` | STAY | — |
+| `subscriptions/unsubscribe.rs` | STAY | `fix-unsubscribe-execution-idempotency` |
+| `publish-events` | ENVELOPE-DRIVEN | — |
+| `schema-admin` | STAY | — |
+| `entitlement-admin` | STAY | — |
+| `binding-admin` | STAY | — |
+| `entitlement-stream-consumer` | Reference (exempt) | — |
+| `entitlement-revocation-worker` | ENVELOPE-DRIVEN | — |
+| `entitlement-coverage-sweep` | STAY | — |
+| `grant-benchmark` | STAY (non-production) | — |
+
+### `domain-registrations/register.rs` — registration path
+
+- **Committed write(s):** `TransactWriteItems` — put `PENDING_APPROVAL` row conditioned `attribute_not_exists(domainName)` + domain-count counter increment below the cap; on name-taken-by-REJECTED, a second transaction overwrites the row without charging the counter.
+- **Side effect(s):** `start_execution` (approval workflow, name `approval-{requestId}`), then `RegisterDomainSucceeded` on the control-plane bus. Denial paths (authorization, validation, duplicate, at-cap) emit `RegisterDomainFailed` with no committed write.
+- **Rubric:** (1) yes — the registration item carries every field the workflow input and both events need (requestId, owners, description, costCenter, environments, createdAt); (2) mixed — the workflow start and `RegisterDomainSucceeded` hang on the `PENDING_APPROVAL` commit, but the four denial emissions never commit a row and stay on an explicit emission path by design; (3) yes — marker-claim on stream event id, per the entitlements consumer pattern; (4) yes — registration is already fully asynchronous (API→SQS, 202); (5) requires a new domains-table stream consumer with bisect/retry/DLQ/IteratorAge alarms — established pattern, and the stream consumer must filter the `META#domain-count` counter item; (6) partially — the inbound SQS command is a durable envelope and the hand-rolled requestId continuation covers every crash window *while redelivery lasts*, but a message that exhausts redrive leaves a committed `PENDING_APPROVAL` row with no workflow and no event, recoverable only by manual DLQ redrive.
+- **Failure walk:** crash between commit and workflow start, or between start and event emission → SQS redrive replays with the same requestId, the name-taken transaction returns the existing row, requestId match classifies it as our own earlier delivery, and the remaining steps re-run (execution name idempotent, event re-emitted). Crash after a successful emission → duplicate `RegisterDomainSucceeded` (unmitigated today). Redrive exhaustion → stranded row (uncovered).
+- **Decision:** MIGRATE.
+- **Rationale:** the item satisfies the rubric fully, the path dual-writes across three systems with hand-rolled continuation to compensate, and a stream makes the workflow start and outcome event crash-independent by construction — including the DLQ-terminal case the current recovery cannot cover. The stream record is a change record; the consumer translates it into the existing `RegisterDomainSucceeded`/collision-`RegisterDomainFailed` business events, so event contracts are unchanged.
+- **Follow-up:** `stream-driven-domain-registration` (introduces the domains-table stream + consumer; must filter the counter item; carries the collision-preflight path below).
+
+### `domain-registrations/register.rs` — collision-preflight path
+
+- **Committed write(s):** same two-phase transaction writing a `REJECTED` row (with `justification`) and charging the counter.
+- **Side effect(s):** `RegisterDomainFailed` carrying the collision justification after the commit; duplicate/limit races reclassify and emit their own failure reasons.
+- **Rubric:** (1) yes — the rejected row persists the justification, so the failure event is fully derivable from the record; (2) yes — here the rejection IS the committed transition; (3)–(5) as above; (6) as above.
+- **Failure walk:** commit → crash before emission → redrive reclassifies (requestId match) and re-emits; covered while redelivery lasts, same DLQ-terminal residue as the registration path.
+- **Decision:** MIGRATE.
+- **Rationale:** identical mechanics to the registration path; the rejected-row insert is exactly the "committed state transition a rejection can hang on" the rubric asks for.
+- **Follow-up:** `stream-driven-domain-registration`.
+
+### `domain-registrations/update.rs`
+
+- **Committed write(s):** conditional `UpdateItem` (`attribute_exists` + `status = ACTIVE`, `SET` metadata fields + fresh `updatedAt`).
+- **Side effect(s):** `UpdateDomainSucceeded` after the commit; `UpdateDomainFailed` for denials/not-found/not-active (no committed write).
+- **Rubric:** (1) mostly — the written item carries the new values and `updatedAt`; `changedFields` is derivable only by diffing stream images, so the consumer needs old+new images; (2) mixed — success event hangs on the commit, failure events do not and stay explicit; (3) yes; (4) yes — SQS-async; (5) same domains-table consumer as registration; (6) partially — the SQS envelope drives retry, but the conditional write succeeds on every retry, so each redelivery re-bumps `updatedAt` and re-emits.
+- **Failure walk:** commit → crash before emission → retry re-updates (new `updatedAt`) and emits; duplicate `UpdateDomainSucceeded` with differing `updatedAt` — uncovered today, and a naive stream port would reproduce it (each retry's `updatedAt` bump is itself a MODIFY record). The migration must make the write value-idempotent (skip the write when nothing changed) or the consumer content-aware.
+- **Decision:** MIGRATE.
+- **Rationale:** the duplicate-emission window is real and unmitigated; the stream gives one record per actual change, which is the correct event granularity. Failure events remain handler-emitted (no committed transition).
+- **Follow-up:** `stream-domain-lifecycle-events` (shares the domains-table stream with `stream-driven-domain-registration`; whichever lands first builds the consumer infrastructure, the other adds translations).
+
+### `domain-state` — retry-provisioning
+
+- **Committed write(s):** conditional `UpdateItem` (`PROVISIONING_FAILED` → `APPROVED`, removes `errorDetail`).
+- **Side effect(s):** `DomainProvisioningRetryRequested` (carries item fields + `retriedBy`, `retriedAt`), which triggers the provisioning saga. Enable/disable transitions emit nothing.
+- **Rubric:** (1) no — `retriedBy` is handler-local and never persisted; a stream consumer loses actor attribution (migration must add it to the item); (2) yes — the event hangs on a committed transition; (3) yes; (4) yes — provisioning takes minutes; (5) as above; (6) **no** — this is a synchronous API path with no inbound envelope at all.
+- **Failure walk:** commit → emission fails → the caller's natural retry 409s (status no longer `PROVISIONING_FAILED`) and the event never goes out: the domain sits in `APPROVED` with no provisioning execution, permanently wedged without manual intervention. **Uncovered today — the worst gap in the audit.**
+- **Decision:** MIGRATE.
+- **Rationale:** the only handler with an uncovered partial state *and* no durable envelope; the rubric's question 6 fails outright. Migration closes the wedge by construction.
+- **Follow-up:** `stream-domain-lifecycle-events`.
+
+### `domain-state` — enable/disable
+
+- **Committed write(s):** single conditional `UpdateItem` per transition.
+- **Side effect(s):** none (deliberately shallow).
+- **Rubric:** trivially satisfied — one commit, zero side effects; nothing to migrate.
+- **Decision:** STAY. **Rationale:** already the rubric's shape.
+
+### `finalize-approval`
+
+- **Committed write(s):** one `TransactWriteItems`: domain `PENDING_APPROVAL` → `APPROVED` (with `decidedBy`, `justification`, `approvedAt`) + up to 3 conditional binding puts + 3 audit-record puts.
+- **Side effect(s):** none — outcome events (`DomainRegistrationApproved` etc.) are emitted by the enclosing approval state machine, which is also what starts provisioning.
+- **Rubric:** (1)–(5) moot — nothing to move; (6) the Step Functions execution context is the durable envelope.
+- **Failure walk:** crash before commit → SFN task retry; crash after commit → retry cancels on the `PENDING_APPROVAL` condition and maps to already-finalized success. Atomic, covered.
+- **Decision:** STAY. **Rationale:** one atomic commit, no handler-emitted side effects; the workflow owns downstream effects.
+
+### `decide-registration`
+
+- **Committed write(s):** none — no DynamoDB client in the handler.
+- **Side effect(s):** exactly one `send_task_success`/`send_task_failure` per request.
+- **Failure walk:** crash after the callback → caller retry gets `TaskDoesNotExist` → 409 AlreadyProcessed. Covered.
+- **Decision:** STAY. **Rationale:** not a write path; the single-use task token is the idempotency mechanism.
+
+### `send-approval-request-notification`
+
+- **Committed write(s):** conditional `UpdateItem` persisting the Step Functions `taskToken` onto the domain record.
+- **Side effect(s):** SES email to the platform operator, sent after the write; body derives from the workflow payload plus an `is_new_account` GSI query.
+- **Rubric:** (1) no — the email content comes from the workflow payload, not the item, and streaming the bearer task token to a consumer would widen its exposure for no gain; (2) no — the token write is plumbing, not a business transition; (4) yes; (6) the invoking state machine is the durable envelope (task retry + Catch routing).
+- **Failure walk:** crash between write and send → SFN retry re-writes the same token (idempotent) and re-sends; crash after send → duplicate operator email (tolerated). **Noted risk, orthogonal to streams:** on a *permanent* SES failure the handler deliberately returns success, so the workflow waits the full 7-day timeout for a decision that can never arrive, and only then routes to `APPROVAL_NOTIFICATION_FAILED`. Consider a shorter "token persisted but no decision" alarm.
+- **Decision:** STAY. **Rationale:** the state machine orchestrates this step and owns its recovery; the write exists only to serve the workflow's callback contract.
+
+### Outcome/notification email handlers (send-approval-outcome, send-rejection-outcome, send-registration-failed, send-provisioning-failed, send-provisioning-succeeded, send-registration-delayed)
+
+- **Committed write(s):** none (GetItem reads at most, for recipient resolution).
+- **Side effect(s):** one SES email per invocation; permanent SES failures are deliberately acknowledged (log-only) rather than retried.
+- **Rubric:** (6) yes — the triggering EventBridge business event is the durable envelope, with the rule target's DLQ as the terminal backstop.
+- **Failure walk:** the only window is send-then-crash → duplicate email on redelivery; tolerated (no sent-state tracking anywhere). Swallowed permanent failures never reach the DLQ — observable in logs only; a standing trade-off, not a stream concern.
+- **Decision:** ENVELOPE-DRIVEN. **Rationale:** these are already the "consumer reacts to a business event" shape the rubric wants; nothing commits locally.
+
+### `subscriptions/subscribe.rs`
+
+- **Committed write(s):** unconditional `PutItem` of the stream record (`PENDING`, per-env entries, `requestId = SQS messageId`), guarded only by a non-atomic read-before-write idempotency check.
+- **Side effect(s):** `start_execution` of the activation workflow (name `activate-{messageId}`, idempotent per message), then `SubscribeSucceeded` (`idempotent: true` variant on replay). Denials emit `SubscribeFailed` with no committed write.
+- **Rubric:** (1) yes — the record carries every field of the workflow input except `consumerAccountId`, which a consumer may read from the durable domain record; (2) mixed, as with registration — success hangs on the `PENDING` commit, failures stay explicit; (3) yes; (4) yes — SQS-async; (5) needs an event-streams-table stream consumer (the table has TTL'd rows; the stream sees them, which is fine — inserts/MODIFYs are what matter); (6) partially — the envelope exists and execution names dedupe same-message redeliveries, but see the failure walk.
+- **Failure walk:** commit → crash before `start_execution` → redelivery hits the idempotency check, sees `PENDING`, emits an idempotent success and acks **without ever starting the workflow** — the subscription is stranded with no rule created, uncovered. Two concurrent subscribes can both pass the check-then-put (last-writer-wins on the item, two executions against one record). Post-start crash → covered (replay emits idempotent success).
+- **Decision:** MIGRATE.
+- **Rationale:** the stranded-PENDING window is an uncovered partial state produced by conflating "record exists" with "workflow started"; a stream consumer starting the workflow from the committed record removes the ordering dependency entirely, and the migration naturally replaces the non-atomic check-then-put with a conditional put. `SubscribeSucceeded` remains a business event translated from the committed change record; `SubscribeFailed` stays handler-emitted.
+- **Follow-up:** `stream-subscription-outcomes`.
+
+### `subscriptions/update_state.rs`
+
+- **Committed write(s):** per requested environment: EventBridge `EnableRule`/`DisableRule` followed by unconditional `UpdateItem` (`environments.{env}.enabled`), looped sequentially.
+- **Side effect(s):** one aggregate `UpdateSubscriptionSucceeded` after the loop; `UpdateSubscriptionFailed` for denials.
+- **Rubric:** (1) no — the success payload is the *requested* enabled map (handler-local), and the loop commits N independent per-env transitions, so no single stream record corresponds to the aggregate outcome; (2) no — the aggregate event hangs on no single committed transition; (3)–(4) fine; (6) yes — SQS envelope, and every step is idempotent-by-value.
+- **Failure walk:** die anywhere mid-loop → redelivery replays the whole loop; rule flips and updates converge by value. All windows covered.
+- **Decision:** STAY. **Rationale:** recovery already converges under the existing envelope, and the rubric's first two questions fail — a stream would emit N MODIFY records with no way to reconstruct the one business event.
+
+### `subscriptions/unsubscribe.rs`
+
+- **Committed write(s):** none in the handler (the removal workflow marks the record `REMOVED` with a 90-day TTL).
+- **Side effect(s):** `start_execution` of the removal workflow, then `UnsubscribeSucceeded`; denials emit `UnsubscribeFailed`.
+- **Failure walk:** crash between start and event → redelivery re-reads the record (not yet `REMOVED` — the workflow just started) and starts a **second** execution: the execution name embeds a unix timestamp (`remove-{id}-{ts}`), defeating Step Functions name idempotency. Duplicate removal executions are possible; whether the workflow tolerates them is unverified.
+- **Decision:** STAY.
+- **Rationale:** there is no committed write in this handler for a stream to carry — the fix is not a migration but restoring the established execution-name idempotency convention.
+- **Follow-up:** `fix-unsubscribe-execution-idempotency` (deterministic name, e.g. `remove-{subscriptionId}` or the SQS messageId; verify the removal workflow's reentrancy).
+
+### `publish-events`
+
+- **Committed write(s):** none to DynamoDB — the EventBridge `PutEvents` to the domain bus is the only commit.
+- **Side effect(s):** the PutEvents itself; envelope metadata derives from the immutable SQS message attributes (`IdempotencyKey`, `SentTimestamp`) plus live reads (domain status, latest schema version).
+- **Rubric:** (6) yes, by design — the inbound SQS command is the durable envelope; this is the rubric's "side effect is the purpose" case.
+- **Failure walk:** crash after a successful PutEvents → redelivery publishes a duplicate; consumers dedupe on the carried `idempotencyKey`. Accepted at-least-once semantics.
+- **Decision:** ENVELOPE-DRIVEN. **Rationale:** already the target shape.
+
+### `schema-admin`
+
+- **Committed write(s):** none to DynamoDB — `CreateSchema`/`UpdateSchema` against the schemas service is the only mutation.
+- **Side effect(s):** none; the synchronous 201 response is the outcome.
+- **Rubric:** (4) no — synchronous read-your-write paths are exempt by the rubric's own terms.
+- **Failure walk:** client retry after an unacknowledged create → 409 (safe); retry of an update appends a duplicate version — accepted, schemas are append-only.
+- **Decision:** STAY. **Rationale:** single atomic service call after read-only gates; nothing to stream.
+
+### `entitlement-admin`
+
+- **Committed write(s):** one `TransactWriteItems` per route — conditional entitlement put + audit record (create), or conditional delete + audit record (revoke).
+- **Side effect(s):** none in the handler; revocation fan-out rides the entitlements-table stream (the rubric's first application).
+- **Decision:** STAY. **Rationale:** already satisfies the principle — the commit is the only synchronous step, and the stream carries the rest.
+
+### `binding-admin`
+
+- **Committed write(s):** one `TransactWriteItems` per route — conditional binding put/delete + audit record.
+- **Side effect(s):** none; bindings gate nothing materialized, so no revocation machinery exists to migrate (that arrives with any future binding-gated materialization).
+- **Decision:** STAY. **Rationale:** one atomic commit, zero side effects.
+
+### `entitlement-stream-consumer`
+
+- **Committed write(s):** conditional marker-item put (idempotency claim on the stream event id, 7-day TTL); best-effort marker delete on forward failure.
+- **Side effect(s):** SQS revocation message + `EntitlementRevoked` business event, both built entirely from the stream record's old image.
+- **Failure walk:** crash after claim before both sends → retry skips (marker held); the hourly sweep converges the missed disablement, but a crash between the SQS send and the event emission loses `EntitlementRevoked` permanently (the audit record committed with the delete remains the durable history). Accepted in the original design ("a lost revocation is worse than a duplicate").
+- **Decision:** reference implementation — exempt from judgment per this audit's charter. Recorded for completeness.
+
+### `entitlement-revocation-worker`
+
+- **Committed write(s):** per candidate, per enabled environment: `DisableRule` then `UpdateItem` (`enabled = false`); no transaction across the pair.
+- **Side effect(s):** the rule disablement itself; no events.
+- **Rubric:** (6) yes — the revocation SQS queue is the durable envelope; coverage is re-evaluated at consume time, so redelivery after a new grant legitimately cancels the disable.
+- **Failure walk:** crash between disable and update → desired state says enabled while the rule is disabled; redrive/sweep converges. Covered.
+- **Decision:** ENVELOPE-DRIVEN. **Rationale:** queue durability + idempotent-by-value writes + sweep backstop is the established command pattern.
+
+### `entitlement-coverage-sweep`
+
+- **Committed write(s):** same disable path as the worker, driven by a full-table scan.
+- **Side effect(s):** none beyond disablement.
+- **Decision:** STAY. **Rationale:** the sweep *is* the reconciliation backstop other decisions rely on; there is no upstream envelope or transition to hang its work on.
+
+### `grant-benchmark`
+
+- Non-production latency harness: unconditional fixture put/delete on the bindings table, no events. STAY — benchmark scaffolding, not a production write path; noted so the inventory is complete.
+
+### Out of taxonomy (documented for inventory completeness)
+
+- **`domain-count-reporter`** (added by `cap-domain-count` after this audit was drafted): no writes; hourly GetItem + structured log line feeding a metric filter. Schedule-driven; nothing to migrate.
+- **Read-only handlers** (`describe-domain`, `list-domains`, `pending-registrations`, `list/describe-subscription`, `list/describe-schema`, `oauth-authorizer`): no writes, no emissions.
+- **Step Functions state machines**: workflow-owned SDK task states write status directly — `approval.asl.yaml` (3 `updateItem` states for approval-path status transitions), `activate-subscription.asl.yaml` (2 stream-status updates), `remove-subscription.asl.yaml` (marks the record `REMOVED` + TTL). The execution context is their durable envelope (workflow-owned events are a standing decision from `domain-management-redesign`); they are orchestrators, not handler dual-writes, and were outside the mechanical handler inventory. Completeness note from the second pass: the `konductor-common` helper `streams_db::mark_stream_removed` has no callers — the removal workflow performs that update from ASL. Dead code; remove it in whichever subscription change lands next.
+- **Crate census (second pass):** all 28 function crates plus `konductor-common` are accounted for above; `api/` holds OpenAPI specs only, and the web console is TypeScript calling the APIs (no direct writes).
+
+### Rubric placement (task 3.3)
+
+The audit caught authoring-time gaps in 5 of 14 classified call sites (two uncovered wedges, one stranded state, one defeated idempotency key, one duplicate-emission window) — all introduced before the rubric existed. The rubric therefore lands as an **authoring-time checklist in AGENTS.md** ("Side Effects and Durability"), the repo's single source of truth for conventions, with a single pointer line in the PR template checklist as the review gate.
 
 ---
 

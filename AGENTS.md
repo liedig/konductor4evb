@@ -11,6 +11,19 @@
 - No `unwrap()`/`expect()` in handler code paths — handle the `Option`/`Result`; panicking is acceptable only in tests
 - No `unsafe`. If a future need arises, it requires a `// SAFETY:` comment and review sign-off
 
+## Side Effects and Durability
+
+Classify every new handler write path at authoring time against the stream-driven side-effects rubric (per-handler records: `docs/development/decisions.md`, "Stream-Driven Side-Effects Audit"). When a handler commits a DynamoDB write and performs any other side effect (EventBridge, SQS, SNS, Step Functions, SES, rule mutations), answer:
+
+1. Does the written item carry everything a stream consumer would need?
+2. Does every side effect hang on a committed state transition? (Rejections that never commit stay on an explicit emission path.)
+3. Can the side effect be made idempotent on a stream event id?
+4. Does the side effect tolerate seconds of stream latency?
+5. Can a consumer meet the 24-hour stream retention / shard-blocking operational bar?
+6. Is durability already provided by an inbound command envelope (SQS command, triggering event, or Step Functions execution context)?
+
+A handler performs exactly one synchronous commit; drive everything else from the table's stream. If a handler-driven path stays (e.g., synchronous read-your-write), record the reason in `docs/development/decisions.md`. Step Functions execution names are idempotency keys: deterministic per unit of work, never timestamped.
+
 ## Testing Strategy
 
 - Write tests for critical paths only, not every function
