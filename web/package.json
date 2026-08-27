@@ -2,6 +2,7 @@
   "name": "konductor-web",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.20.0",
   "scripts": {
     "dev": "nuxi dev --port 3000",
     "build": "nuxi generate && node scripts/externalize-inline-scripts.mjs",
