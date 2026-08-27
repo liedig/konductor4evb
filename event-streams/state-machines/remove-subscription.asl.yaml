@@ -100,8 +100,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.event-streams
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.event-streams
           DetailType: SubscriptionRemoved
           Detail: >-
             {% $string({

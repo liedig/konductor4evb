@@ -6,7 +6,7 @@ Two lifecycle outcomes currently vanish into the void: `DomainProvisioningSuccee
 
 ## What Changes
 
-- **New platform operator notification channel via SNS.** A `nexus-platform-notifications` SNS topic with an email subscription for `PlatformOperatorEmail`, fed by a single EventBridge rule on the nexus bus matching all lifecycle events (`source` prefix `nexus.`), with an input transformer producing readable plain-text messages. Zero new Lambdas for the operator path. SNS is the deliberate extensibility seam: future channel adapters (Slack, Outlook/SMTP, webhooks) become additional topic subscribers in separate changes.
+- **New platform operator notification channel via SNS.** A `konductor-platform-notifications` SNS topic with an email subscription for `PlatformOperatorEmail`, fed by a single EventBridge rule on the konductor bus matching all lifecycle events (`source` prefix `konductor.`), with an input transformer producing readable plain-text messages. Zero new Lambdas for the operator path. SNS is the deliberate extensibility seam: future channel adapters (Slack, Outlook/SMTP, webhooks) become additional topic subscribers in separate changes.
 - **New owner notification: domain is live.** A `send-provisioning-succeeded-notification` Lambda triggered by an EventBridge rule on `DomainProvisioningSucceeded`, emailing the owner that their domain is provisioned and active (following the existing one-Lambda-per-event SES pattern with recipient resolution via DynamoDB lookup).
 - **New owner notification: registration delayed.** A Lambda triggered by `DomainApprovalNotificationFailed`, emailing the owner that their registration is delayed and the platform team has been notified. Owner and operator messages flow independently — a failure on one path does not suppress the other.
 - **Secondary owners included in all owner-facing notifications.** Every owner-facing notification Lambda (approval outcome, rejection outcome, provisioning failed, registration failed, plus the two new ones) sends to `ownerEmail` and `secondaryOwnerEmails` in a single SES send.
@@ -18,7 +18,7 @@ Explicitly deferred (future changes): notification channel adapter implementatio
 
 ### New Capabilities
 
-- `platform-operator-notifications`: Operator-facing notification channel — the SNS topic, its operator email subscription, the all-lifecycle-events EventBridge rule with input transformer, and the conditional deployment behavior. Distinct from owner notifications: different audience, different channel (SNS vs SES), source-agnostic (covers `nexus.domain-management` and `nexus.event-streams` events alike).
+- `platform-operator-notifications`: Operator-facing notification channel — the SNS topic, its operator email subscription, the all-lifecycle-events EventBridge rule with input transformer, and the conditional deployment behavior. Distinct from owner notifications: different audience, different channel (SNS vs SES), source-agnostic (covers `konductor.domain-management` and `konductor.event-streams` events alike).
 
 ### Modified Capabilities
 
@@ -26,7 +26,7 @@ Explicitly deferred (future changes): notification channel adapter implementatio
 
 ## Impact
 
-- **Infrastructure (`nexus-core-stack.yaml`)**: new SNS topic, topic policy (EventBridge publish), email subscription, one EventBridge rule with input transformer; two new Lambda functions with log groups, rules, permissions, and DLQ wiring — all gated by the existing `NotificationsEnabled` condition.
+- **Infrastructure (`konductor-core-stack.yaml`)**: new SNS topic, topic policy (EventBridge publish), email subscription, one EventBridge rule with input transformer; two new Lambda functions with log groups, rules, permissions, and DLQ wiring — all gated by the existing `NotificationsEnabled` condition.
 - **Code**: two new Rust Lambda crates under `domain-management/functions/`; recipient-list changes in four existing notification Lambdas (approval outcome, rejection outcome, provisioning failed, registration failed).
 - **Operations**: SNS email subscriptions require a one-time confirmation click by the operator after deployment (unlike SES identities). Operator emails are plain text; owner emails remain HTML via SES.
 - **One additive event payload change**: `RegisterDomainFailed` detail now includes `secondaryOwnerEmails` from the registration request (no domain record exists for failed registrations, so the event is the only recipient source). Non-breaking: existing consumers ignore unknown fields. No other workflow ASL or emitted event contracts change.

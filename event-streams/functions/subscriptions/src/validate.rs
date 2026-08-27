@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use std::env;
 
-use nexus_common::dynamodb::{get_s, s};
-use nexus_common::models::DomainStatus;
+use konductor_common::dynamodb::{get_s, s};
+use konductor_common::models::DomainStatus;
 
+#[derive(Debug)]
 pub struct DomainRecord {
     pub owner_account_id: String,
     pub environments: Vec<String>,
@@ -38,7 +39,7 @@ pub async fn lookup_active_domain(
     }
 
     let environments =
-        nexus_common::dynamodb::get_string_list(&item, "environments").unwrap_or_default();
+        konductor_common::dynamodb::get_string_list(&item, "environments").unwrap_or_default();
 
     Ok(DomainLookup::Found(DomainRecord {
         owner_account_id: get_s(&item, "ownerAccountId").unwrap_or_default(),
@@ -46,36 +47,28 @@ pub async fn lookup_active_domain(
     }))
 }
 
-/// The caller's AWS account must own the consumer domain — subscribing and
-/// unsubscribing are consumer-side actions.
-pub fn caller_owns_consumer(caller_account_id: &str, consumer: &DomainRecord) -> bool {
-    caller_account_id == consumer.owner_account_id
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
+    use aws_smithy_mocks::{mock, mock_client};
+    use std::env;
 
-    fn record(owner: &str) -> DomainRecord {
-        DomainRecord {
-            owner_account_id: owner.to_string(),
-            environments: vec!["dev".to_string()],
+    #[tokio::test]
+    async fn inactive_domain_is_not_usable_for_subscriptions() {
+        env::set_var("DOMAINS_TABLE", "domains");
+        let rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            GetItemOutput::builder()
+                .item("domainName", s("orders"))
+                .item("status", s("INACTIVE"))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&rule]);
+
+        match lookup_active_domain(&ddb, "orders").await.unwrap() {
+            DomainLookup::NotActive(status) => assert_eq!(status, "INACTIVE"),
+            DomainLookup::Found(_) => panic!("INACTIVE domain must not validate as usable"),
+            DomainLookup::NotFound => panic!("INACTIVE domain must not look missing"),
         }
-    }
-
-    #[test]
-    fn caller_matching_owner_passes() {
-        assert!(caller_owns_consumer(
-            "111122223333",
-            &record("111122223333")
-        ));
-    }
-
-    #[test]
-    fn caller_mismatch_fails() {
-        assert!(!caller_owns_consumer(
-            "999988887777",
-            &record("111122223333")
-        ));
     }
 }

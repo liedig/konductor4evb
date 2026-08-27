@@ -2,6 +2,13 @@
 # End-to-end subscription smoke test. Requires two ACTIVE domains (producer
 # and consumer) — run `make smoke` twice or register them manually first.
 #
+# Authorization prerequisites (subscribe is grant-gated): the IAM account
+# running this script needs a `subscriber` binding on CONSUMER_DOMAIN, and
+# CONSUMER_DOMAIN needs an entitlement covering PRODUCER_DOMAIN's
+# SmokeTestEvent (e.g. scope pattern "SmokeTestEvent" or "*"). Seed both via
+# `make seed-bindings` and `make seed-entitlements` with a platform-admin
+# token before running.
+#
 # Flow: register schema in producer registry -> subscribe -> publish a
 # conforming event to the producer platform bus -> assert rule matched ->
 # negative checks (mis-stamped event, duplicate subscribe) -> unsubscribe ->
@@ -27,14 +34,15 @@ REGISTRY="${ORGANIZATION}-${ENV_NAME}-${PRODUCER_DOMAIN}-schema-registry"
 BUS="${ORGANIZATION}-${ENV_NAME}-${PRODUCER_DOMAIN}-event-bus"
 
 API_URL=$(aws cloudformation describe-stacks \
-  --stack-name nexus-core \
-  --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" \
+  --stack-name konductor-core \
+  --query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
   --output text --region "${AWS_REGION}")
+[ -n "${API_URL}" ] && [ "${API_URL}" != "None" ] || { echo "konductor-core stack has no IamApiEndpoint output — deploy first" >&2; exit 1; }
 echo "API endpoint: ${API_URL}"
 
 echo ""
 echo "(1/8) Register schema ${SCHEMA_NAME} in every environment's registry"
-for REG_ENV in $(aws dynamodb get-item --table-name nexus-domains \
+for REG_ENV in $(aws dynamodb get-item --table-name konductor-domains \
   --key "{\"domainName\":{\"S\":\"${PRODUCER_DOMAIN}\"}}" \
   --region "${AWS_REGION}" --output json | jq -r '.Item.environments.L[].S'); do
   aws schemas create-schema \
@@ -96,17 +104,17 @@ DUP=$(awscurl -X POST "${API_URL}/subscriptions" \
 echo "  ${DUP} (accepted; handler treats existing ACTIVE stream as no-op)"
 
 echo "(7/8) Disable ${ENV_NAME}, assert rule DISABLED, re-enable"
-awscurl -X PATCH "${API_URL}/subscriptions/${SUBSCRIPTION_ID}" \
+awscurl -X POST "${API_URL}/subscriptions/state" \
   --region "${AWS_REGION}" -H "Content-Type: application/json" \
-  -d "{\"environments\":{\"${ENV_NAME}\":{\"enabled\":false}}}" >/dev/null
+  -d "{\"id\":\"${SUBSCRIPTION_ID}\",\"environments\":{\"${ENV_NAME}\":{\"enabled\":false}}}" >/dev/null
 sleep 10
 RULE_STATE=$(aws events describe-rule --name "${RULE_NAME}" --event-bus-name "${BUS}" \
   --region "${AWS_REGION}" --query State --output text)
-[ "${RULE_STATE}" = "DISABLED" ] || { echo "ERROR: rule not DISABLED after PATCH (state=${RULE_STATE})"; exit 1; }
+[ "${RULE_STATE}" = "DISABLED" ] || { echo "ERROR: rule not DISABLED after state update (state=${RULE_STATE})"; exit 1; }
 echo "  rule state: ${RULE_STATE} ✓"
-awscurl -X PATCH "${API_URL}/subscriptions/${SUBSCRIPTION_ID}" \
+awscurl -X POST "${API_URL}/subscriptions/state" \
   --region "${AWS_REGION}" -H "Content-Type: application/json" \
-  -d "{\"environments\":{\"${ENV_NAME}\":{\"enabled\":true}}}" >/dev/null
+  -d "{\"id\":\"${SUBSCRIPTION_ID}\",\"environments\":{\"${ENV_NAME}\":{\"enabled\":true}}}" >/dev/null
 
 echo "(8/8) Unsubscribe, assert rule removed and record REMOVED"
 awscurl -X DELETE "${API_URL}/subscriptions/${SUBSCRIPTION_ID}" --region "${AWS_REGION}" >/dev/null
@@ -125,7 +133,7 @@ echo "  record REMOVED, rule gone ✓"
 
 echo ""
 echo "(9/9) Clean up schema ${SCHEMA_NAME} from every environment's registry"
-for REG_ENV in $(aws dynamodb get-item --table-name nexus-domains \
+for REG_ENV in $(aws dynamodb get-item --table-name konductor-domains \
   --key "{\"domainName\":{\"S\":\"${PRODUCER_DOMAIN}\"}}" \
   --region "${AWS_REGION}" --output json | jq -r '.Item.environments.L[].S'); do
   aws schemas delete-schema \

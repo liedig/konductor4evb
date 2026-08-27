@@ -11,7 +11,7 @@ Constraints:
 - ASL is YAML + JSONata (`QueryLanguage: JSONata` per repo convention); no Lambda shims for logic that JSONata can express.
 - The decide Lambda's contract is already correct (`SendTaskFailure` with error `RegistrationRejected`, cause = JSON `{approved, decidedBy, justification}`) — the workflow must consume it, not change it.
 - The domain status model (`domain-management` spec) allows only enumerated transitions; any new failure outcome must fit or extend that model explicitly.
-- `nexus-core` is pre-production; no live executions need migration, but stuck records from past crashes exist in the dev deployment.
+- `konductor-core` is pre-production; no live executions need migration, but stuck records from past crashes exist in the dev deployment.
 
 ## Goals / Non-Goals
 
@@ -90,7 +90,7 @@ Retried error names: the service throttle exceptions (`Schemas.TooManyRequestsEx
 
 ### D6: Verification is forced-failure scenarios against the dev stack, not unit tests
 
-ASL logic has no local test harness in this repo. Each historical failure shape is reproduced deliberately: (1) zero-env success — temporarily point `provision-env` at an env with the schemas quota exhausted (or a artificially low applied quota); (2) partial failure with clean rollback — poison one env's input; (3) rejection via the real decide API; (4) notification failure — deploy with an unverified `ApprovalFromEmail`; (5) timeout — not feasible at 7 days; validated by ASL review plus a temporary `TimeoutSeconds` override in a dev-only deploy. Each scenario asserts: terminal DDB status, exactly one lifecycle event on `nexus-bus` (observed via a temporary catch-all rule → CloudWatch Logs), and zero `QueryEvaluationError` in the execution history.
+ASL logic has no local test harness in this repo. Each historical failure shape is reproduced deliberately: (1) zero-env success — temporarily point `provision-env` at an env with the schemas quota exhausted (or a artificially low applied quota); (2) partial failure with clean rollback — poison one env's input; (3) rejection via the real decide API; (4) notification failure — deploy with an unverified `ApprovalFromEmail`; (5) timeout — not feasible at 7 days; validated by ASL review plus a temporary `TimeoutSeconds` override in a dev-only deploy. Each scenario asserts: terminal DDB status, exactly one lifecycle event on `konductor-bus` (observed via a temporary catch-all rule → CloudWatch Logs), and zero `QueryEvaluationError` in the execution history.
 
 ## Risks / Trade-offs
 
@@ -102,7 +102,7 @@ ASL logic has no local test harness in this repo. Each historical failure shape 
 
 ## Migration Plan
 
-1. Deploy updated `nexus-core` stack (state-machine definitions only; no resource replacement).
+1. Deploy updated `konductor-core` stack (state-machine definitions only; no resource replacement).
 2. One-time cleanup: list domains stuck in `PROVISIONING` (or `PENDING_APPROVAL` with a dead task token) from historical crashes; delete or re-register in dev. Document the query in the runbook section of `docs/domain-management.md` troubleshooting.
 3. Update `docs/service-quotas.md`: remove the "no Retry blocks / approve one at a time" caveat, keep the PutMetricAlarm quota note as advisory.
 4. Rollback: redeploy prior template — state machine definition changes are versionless and instant; no data migration in either direction.

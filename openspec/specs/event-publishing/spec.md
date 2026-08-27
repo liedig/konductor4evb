@@ -49,7 +49,7 @@ The publish and schema write APIs SHALL infer the target environment from the AP
 
 ### Requirement: Publisher resource authorization
 
-Before accessing domain or schema metadata or publishing, Nexus SHALL submit the normalized principal, publisher action, and target domain to the DynamoDB-backed grant engine. A `publisher` resource-role binding MAY bind an issuer-qualified Cognito team group or AWS-account principal to a domain, and a principal MAY have bindings for one or more domains. The `publisher` role SHALL NOT be interpreted as a global Cognito role, and a binding for one domain SHALL NOT authorize another domain.
+Before accessing domain or schema metadata or publishing, Konductor SHALL submit the normalized principal, publisher action, and target domain to the DynamoDB-backed grant engine. A `publisher` resource-role binding MAY bind an issuer-qualified Cognito team group or AWS-account principal to a domain, and a principal MAY have bindings for one or more domains. The `publisher` role SHALL NOT be interpreted as a global Cognito role, and a binding for one domain SHALL NOT authorize another domain.
 
 #### Scenario: Team group binding authorizes its domain
 
@@ -69,7 +69,7 @@ Before accessing domain or schema metadata or publishing, Nexus SHALL submit the
 
 #### Scenario: Global publisher claim does not confer access
 
-- **WHEN** a caller has a Cognito claim or group name containing `publisher` but no Nexus `publisher` binding for the target domain
+- **WHEN** a caller has a Cognito claim or group name containing `publisher` but no Konductor `publisher` binding for the target domain
 - **THEN** the consumer SHALL deny authorization
 
 ### Requirement: Latest stage-selected-environment schema resolution
@@ -92,7 +92,7 @@ For every publish request, the consumer Lambda SHALL derive the canonical schema
 
 - **WHEN** a publish request attempts to supply a schema name or schema version
 - **THEN** the API SHALL reject the unsupported field
-- **AND THEN** Nexus SHALL resolve identity and version from platform state
+- **AND THEN** Konductor SHALL resolve identity and version from platform state
 
 ### Requirement: Publisher permissions exclude platform administration
 
@@ -101,4 +101,4 @@ The `publisher` role SHALL authorize only publisher schema operations and event 
 #### Scenario: Publisher attempts an administrative operation
 
 - **WHEN** a caller has only a `publisher` binding for the target domain
-- **THEN** Nexus SHALL deny registry, bus, policy, rule, subscriber-grant, and authorization-administration operations
+- **THEN** Konductor SHALL deny registry, bus, policy, rule, subscriber-grant, and authorization-administration operations

@@ -7,7 +7,7 @@
 
 ## Task Group 2: Rust Models
 
-- [x] 2.1 Add `secondary_owner_emails: Vec<String>` to `RegisterDomainRequest` in `lib/nexus-common/src/models.rs`
+- [x] 2.1 Add `secondary_owner_emails: Vec<String>` to `RegisterDomainRequest` in `lib/konductor-common/src/models.rs`
 - [x] 2.2 Add `secondary_owner_emails: Option<Vec<String>>` to `Domain` struct
 - [x] 2.3 Add `secondary_owner_emails: Option<Vec<String>>` and `owner_email: Option<String>` to `UpdateDomainMessage` struct in `domain-management/functions/domain-registrations/src/update.rs` (or equivalent update request type)
 - [x] 2.4 Add a test verifying `RegisterDomainRequest` rejects an empty `secondaryOwnerEmails` array

@@ -1,19 +1,19 @@
 ## 1. Binding Storage
 
-- [x] 1.1 Add `nexus-authorization-bindings` DynamoDB table to the core stack with the RoleBinding/AuditRecord key schema, admin GSI (`DOMAIN#{domain}` → `ROLE#{role}#PRINCIPAL#{principal}`), and deletion/retention policy matching existing tables
-- [x] 1.2 Add typed binding models in `nexus-common`: typed principal (issuer-qualified Cognito team group or twelve-digit AWS account), role (`publisher`/`subscriber`), domain scope, state, creation metadata, trusted actor; reject global (domain-less) bindings at the model level
-- [x] 1.3 Add grant-table access helpers in `nexus-common` (key construction, get/put/delete, conditional expressions, GSI query) with unit tests against the documented key patterns
+- [x] 1.1 Add `konductor-authorization-bindings` DynamoDB table to the core stack with the RoleBinding/AuditRecord key schema, admin GSI (`DOMAIN#{domain}` → `ROLE#{role}#PRINCIPAL#{principal}`), and deletion/retention policy matching existing tables
+- [x] 1.2 Add typed binding models in `konductor-common`: typed principal (issuer-qualified Cognito team group or twelve-digit AWS account), role (`publisher`/`subscriber`), domain scope, state, creation metadata, trusted actor; reject global (domain-less) bindings at the model level
+- [x] 1.3 Add grant-table access helpers in `konductor-common` (key construction, get/put/delete, conditional expressions, GSI query) with unit tests against the documented key patterns
 
 ## 2. Grant Engine
 
 - [x] 2.1 Add decision-parity test fixtures seeded from the spike's frozen fixture manifest (`evaluate-authorization-engine/evidence/fixture-manifest.json`), covering OAuth group binding, AWS-account binding, cross-domain denial, additive overlapping bindings, malformed principal context, and default denial
 - [x] 2.2 Implement `InMemoryGrantEngine` behind `ResourceAuthorizer` with fixture-fed bindings; prove the parity suite passes
 - [x] 2.3 Implement `DynamoGrantEngine` behind `ResourceAuthorizer` with strongly consistent reads, fail-closed error mapping, and structured internal deny-reason logging (no tokens, claims, or payloads in logs); prove the parity suite passes identically against a DynamoDB-backed test harness
-- [x] 2.4 Add centralized action-string constants in `nexus-common` for the actions the engine recognizes, so call-site typos surface in tests
+- [x] 2.4 Add centralized action-string constants in `konductor-common` for the actions the engine recognizes, so call-site typos surface in tests
 
 ## 3. Authorizer Renames
 
-- [x] 3.1 Rename `FailClosedAuthorizer` → `DenyAllAuthorizer` and `FoundationAuthorizer` → `IamOnlyAuthorizer` in `nexus-common` and all consumers; behavior and trait signatures unchanged
+- [x] 3.1 Rename `FailClosedAuthorizer` → `DenyAllAuthorizer` and `FoundationAuthorizer` → `IamOnlyAuthorizer` in `konductor-common` and all consumers; behavior and trait signatures unchanged
 - [x] 3.2 Update doc comments to describe behavior and the bridge nature of `IamOnlyAuthorizer` (deleted when subscribe paths move to the engine)
 
 ## 4. Binding Administration API

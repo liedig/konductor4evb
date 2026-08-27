@@ -2,14 +2,14 @@
 
 ## Context
 
-Lifecycle events on the nexus bus drive notifications through a consistent pattern: one narrow Lambda per detail-type, an EventBridge rule gated by the `NotificationsEnabled` condition, SES for delivery, DLQs on both the rule target and the Lambda. Two events have no consumers (`DomainProvisioningSucceeded`, `DomainApprovalNotificationFailed`), owner-facing notifications ignore `secondaryOwnerEmails`, and platform operators receive approval requests but no lifecycle outcomes at all.
+Lifecycle events on the konductor bus drive notifications through a consistent pattern: one narrow Lambda per detail-type, an EventBridge rule gated by the `NotificationsEnabled` condition, SES for delivery, DLQs on both the rule target and the Lambda. Two events have no consumers (`DomainProvisioningSucceeded`, `DomainApprovalNotificationFailed`), owner-facing notifications ignore `secondaryOwnerEmails`, and platform operators receive approval requests but no lifecycle outcomes at all.
 
 `PlatformOperatorEmail` already exists as a core-stack parameter and is SES-verified by the notifications stack. Recipient resolution today uses two styles: from the event detail (approval outcome, rejection outcome, registration failed) and from a DynamoDB lookup by `domainName` (provisioning failed).
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Operators receive every lifecycle event on the nexus bus through a single subscription point.
+- Operators receive every lifecycle event on the konductor bus through a single subscription point.
 - Owners learn when their domain goes live, and when their registration is delayed by a notification-infrastructure failure.
 - Secondary owners receive every owner-facing notification.
 - Leave a clean extensibility seam for future notification channels without committing to any adapter now.
@@ -23,13 +23,13 @@ Lifecycle events on the nexus bus drive notifications through a consistent patte
 
 ### D1: Operator channel is an SNS topic fed by one EventBridge rule — no Lambda
 
-A `nexus-platform-notifications` SNS topic with an email subscription for `PlatformOperatorEmail`. One rule on the nexus bus with pattern `{"source": [{"prefix": "nexus."}]}` targets the topic, covering `nexus.domain-management` and `nexus.event-streams` events alike, and any future `nexus.*` source, with zero code. A topic policy grants `events.amazonaws.com` publish scoped to the rule ARN. The rule target carries a `DeadLetterConfig` on the existing `EventBridgeRuleFailureDlq`.
+A `konductor-platform-notifications` SNS topic with an email subscription for `PlatformOperatorEmail`. One rule on the konductor bus with pattern `{"source": [{"prefix": "konductor."}]}` targets the topic, covering `konductor.domain-management` and `konductor.event-streams` events alike, and any future `konductor.*` source, with zero code. A topic policy grants `events.amazonaws.com` publish scoped to the rule ARN. The rule target carries a `DeadLetterConfig` on the existing `EventBridgeRuleFailureDlq`.
 
 Alternative rejected: per-event operator Lambdas formatting SES emails — more code and SES coupling for an audience that needs signal, not polish. SNS also decouples the operator path from SES entirely, which matters for `DomainApprovalNotificationFailed` (the event that fires precisely when SES delivery failed).
 
 ### D2: Input transformer produces a compact JSON message, not prose
 
-The rule uses an `InputTransformer` with `InputPathsMap` capturing `detail-type`, `source`, `time`, and `$.detail`, rendering `{"event": <detailType>, "source": <source>, "time": <time>, "detail": <detail>}`. Rationale: every captured path is guaranteed present on every EventBridge event (no per-detail-type path that could fail transformation on heterogeneous events), and the full detail payload is preserved for diagnosis. EventBridge cannot set a per-message SNS email subject; the topic `DisplayName` (`Nexus Platform`) identifies the sender instead.
+The rule uses an `InputTransformer` with `InputPathsMap` capturing `detail-type`, `source`, `time`, and `$.detail`, rendering `{"event": <detailType>, "source": <source>, "time": <time>, "detail": <detail>}`. Rationale: every captured path is guaranteed present on every EventBridge event (no per-detail-type path that could fail transformation on heterogeneous events), and the full detail payload is preserved for diagnosis. EventBridge cannot set a per-message SNS email subject; the topic `DisplayName` (`Konductor Platform`) identifies the sender instead.
 
 Alternative rejected: prose template with per-event fields — any `InputPathsMap` path missing from a given event fails delivery for that event; the union of fields across all lifecycle events shares only the envelope.
 
@@ -45,7 +45,7 @@ The registration-failed path is the one case where a DynamoDB record may not exi
 
 Owner + secondary owners go in one `SendEmail` call. Trade-off accepted: a permanently rejected address (e.g. unverified in sandbox) drops the whole send for that event — logged at ERROR by the existing permanent-failure classification, invocation acknowledged. Independent per-recipient sends were considered and rejected as complexity ahead of need; the notification architecture revisit will reopen delivery semantics anyway.
 
-Recipient assembly is duplicated across six Lambdas, so a small shared helper goes in `nexus-common` (extract owner + secondaries from an event detail `Value`, and from a DynamoDB item), keeping the six call sites one line each.
+Recipient assembly is duplicated across six Lambdas, so a small shared helper goes in `konductor-common` (extract owner + secondaries from an event detail `Value`, and from a DynamoDB item), keeping the six call sites one line each.
 
 ### D6: Owner and operator paths are fully independent
 

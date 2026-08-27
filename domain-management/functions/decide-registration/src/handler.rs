@@ -1,10 +1,10 @@
 use anyhow::Result;
 use aws_sdk_sfn::operation::send_task_failure::SendTaskFailureError;
 use aws_sdk_sfn::operation::send_task_success::SendTaskSuccessError;
+use konductor_common::api;
+use konductor_common::models::{ApiError, DecideRequest, Decision};
+use konductor_common::principal_context::log_principal;
 use lambda_runtime::{Error, LambdaEvent};
-use nexus_common::api;
-use nexus_common::models::{ApiError, DecideRequest, Decision};
-use nexus_common::principal_context::log_principal;
 use serde_json::{json, Value};
 
 pub async fn handle(sfn: &aws_sdk_sfn::Client, event: LambdaEvent<Value>) -> Result<Value, Error> {
@@ -76,7 +76,7 @@ pub async fn handle(sfn: &aws_sdk_sfn::Client, event: LambdaEvent<Value>) -> Res
                 },
             ),
             DecisionOutcome::Failed(msg) => {
-                tracing::error!(error = %msg, "nexus-domain-approval decision call failed");
+                tracing::error!(error = %msg, "konductor-domain-approval decision call failed");
                 api::error_response(
                     500,
                     ApiError {

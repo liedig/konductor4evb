@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use aws_sdk_sesv2::error::ProvideErrorMetadata;
 use aws_sdk_sesv2::types::{Body, Content, Destination, EmailContent, Message};
+use konductor_common::html::escape;
 use lambda_runtime::{Error, LambdaEvent};
-use nexus_common::html::escape;
 use serde_json::Value;
 use std::env;
 
@@ -20,7 +20,7 @@ pub async fn handle(ses: &aws_sdk_sesv2::Client, event: LambdaEvent<Value>) -> R
         .and_then(|v| v.as_str())
         .context("missing domainName in detail")?;
 
-    let recipients = nexus_common::ses::recipients_from_detail(detail)
+    let recipients = konductor_common::ses::recipients_from_detail(detail)
         .context("missing ownerEmail in detail")?;
 
     let environments: Vec<String> = detail
@@ -72,7 +72,7 @@ pub async fn handle(ses: &aws_sdk_sesv2::Client, event: LambdaEvent<Value>) -> R
     {
         if e.as_service_error()
             .and_then(ProvideErrorMetadata::code)
-            .is_some_and(nexus_common::ses::is_permanent_failure)
+            .is_some_and(konductor_common::ses::is_permanent_failure)
         {
             tracing::error!(error = %e, "permanent SES failure, acknowledging without retry");
             return Ok(());

@@ -1,6 +1,6 @@
 ## Context
 
-Nexus uses a UUID v4 (`domainId`) as the DynamoDB partition key for the `nexus-domains` table. The domain name is enforced globally unique via a pre-write query against the `by-name` GSI. API paths use the UUID (`/domains/{domainId}`), and all event payloads include both `domainId` and `domainName`. The register endpoint is asynchronous (API Gateway → SQS → Lambda), so consumers receive an SQS message ID rather than the domain identifier, forcing them to poll by name to discover the UUID.
+Konductor uses a UUID v4 (`domainId`) as the DynamoDB partition key for the `konductor-domains` table. The domain name is enforced globally unique via a pre-write query against the `by-name` GSI. API paths use the UUID (`/domains/{domainId}`), and all event payloads include both `domainId` and `domainName`. The register endpoint is asynchronous (API Gateway → SQS → Lambda), so consumers receive an SQS message ID rather than the domain identifier, forcing them to poll by name to discover the UUID.
 
 The system is pre-production with a single smoke-test domain deployed across two AWS accounts. The account-per-domain strategy is the current design principle: one AWS account hosts one domain's application-side resources, with a trust stack per account. Primary and secondary owners are co-managers of the same account; the secondary acts as backup decision-maker. Resources always live in the primary owner's account.
 
@@ -61,7 +61,7 @@ The current `ownerAccountId` field represents the primary owner. The data model 
 
 - **[Risk] DynamoDB table recreation required** -> Changing the partition key is not an in-place update; CloudFormation replaces the table. Since the table has `DeletionPolicy: Delete` and the system is pre-production with one smoke-test domain, this is a clean cutover. The core stack redeploy handles it automatically.
 
-- **[Risk] Breaking change for event consumers** -> Any system subscribing to Nexus events that keys off `domainId` will break. Since Nexus is pre-production with no external consumers, this is acceptable. The `RegisterDomainFailed` event already does not include `domainId` (it only has `domainName`), so the pattern of using `domainName` as the identifier already exists partially.
+- **[Risk] Breaking change for event consumers** -> Any system subscribing to Konductor events that keys off `domainId` will break. Since Konductor is pre-production with no external consumers, this is acceptable. The `RegisterDomainFailed` event already does not include `domainId` (it only has `domainName`), so the pattern of using `domainName` as the identifier already exists partially.
 
 - **[Risk] Conditional PutItem error handling** -> When a duplicate domain name is submitted, DynamoDB returns a `ConditionalCheckFailedException`. The register handler must catch this and emit `RegisterDomainFailed` with a clear "domain already exists" message, replacing the current pre-write GSI query + manual check. The error handling path changes but the observable behavior (failed event with reason) remains the same.
 

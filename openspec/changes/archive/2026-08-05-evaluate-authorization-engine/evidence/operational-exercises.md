@@ -115,7 +115,7 @@
 - **Finding**: the absence of implicit inheritance is a deliberate simplification that makes
   authorization outcomes predictable and audit-friendly (every allow is traceable to an explicit
   grant). It shifts expressive power to the grant model (which roles/domains/schemas to bind) rather
-  than a permission hierarchy. This is adequate for Nexus's domain-pairing authorization needs and
+  than a permission hierarchy. This is adequate for Konductor's domain-pairing authorization needs and
   avoids the surprise-access and combinatorial-review problems of hierarchical RBAC. If a future
   requirement needs hierarchy, it would be modeled as explicit grants at each level (no engine
   change) or trigger the AVP reevaluation (see `design.md`).

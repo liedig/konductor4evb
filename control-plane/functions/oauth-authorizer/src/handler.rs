@@ -2,7 +2,7 @@ use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
 use lambda_runtime::Error;
 use serde_json::Value;
 
-use nexus_common::principal::TrustedPrincipal;
+use konductor_common::principal::TrustedPrincipal;
 
 use crate::claims::AccessTokenClaims;
 use crate::error::AuthorizerError;
@@ -84,19 +84,14 @@ async fn authorize<R: KeyResolver>(
     claims.assert_for_client(&config.client_id)?;
 
     let (roles, team_groups) = claims.roles_and_team_groups();
-    let principal = TrustedPrincipal::oauth(
-        claims.sub,
-        claims.iss,
-        claims.client_id,
-        roles.clone(),
-        team_groups,
-    );
-
-    let effect = if route_allowed(&method, &roles) {
+    let effect = if route_allowed(&method, &roles, &team_groups) {
         Effect::Allow
     } else {
         Effect::Deny
     };
+    let principal =
+        TrustedPrincipal::oauth(claims.sub, claims.iss, claims.client_id, roles, team_groups);
+
     let output = build_output(&principal, method_arn, effect);
     Ok(match effect {
         Effect::Allow => AuthFlow::Allow(output),
@@ -266,9 +261,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn principal_without_global_role_is_forbidden() {
+    async fn team_caller_is_allowed_through_to_resource_authorization() {
         let key = generate_key("kid-1");
-        let token = sign(&key, &valid_claims(&["team-only"]));
+        let token = sign(&key, &valid_claims(&["team-payments"]));
+        let resolver = StaticResolver::with_keys(&[&key]);
+
+        let read = handle(&resolver, &config(), event(GET_ARN, &token))
+            .await
+            .unwrap();
+        assert_eq!(read["policyDocument"]["Statement"][0]["Effect"], "Allow");
+        assert_eq!(read["context"]["teamGroups"], "[\"team-payments\"]");
+
+        let write = handle(&resolver, &config(), event(POST_ARN, &token))
+            .await
+            .unwrap();
+        assert_eq!(write["policyDocument"]["Statement"][0]["Effect"], "Allow");
+    }
+
+    #[tokio::test]
+    async fn principal_without_any_group_is_forbidden() {
+        let key = generate_key("kid-1");
+        let token = sign(&key, &valid_claims(&[]));
         let resolver = StaticResolver::with_keys(&[&key]);
         let out = handle(&resolver, &config(), event(GET_ARN, &token))
             .await

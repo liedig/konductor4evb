@@ -1,88 +1,111 @@
+use std::env;
+use std::str::FromStr;
+
 use anyhow::{Context, Result};
-use aws_sdk_dynamodb::types::AttributeValue;
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::env;
 
-use nexus_common::api;
-use nexus_common::dynamodb::{deserialize_pagination_token, serialize_pagination_token};
-use nexus_common::error::ControlPlaneError;
-use nexus_common::principal_context::log_principal;
-use nexus_common::streams::{EventStream, StreamStatus};
-use nexus_common::streams_db;
+use konductor_common::api;
+use konductor_common::error::{ControlPlaneError, ValidationExceptionReason};
+use konductor_common::grant::ResourceRole;
+use konductor_common::grant_engine::has_role_binding;
+use konductor_common::grant_store::BindingStore;
+use konductor_common::principal::{GlobalRole, TrustedPrincipal};
+use konductor_common::principal_context::log_principal;
+use konductor_common::streams::{EventStream, StreamStatus};
+use konductor_common::streams_db;
 
-const DEFAULT_MAX_RESULTS: i32 = 100;
+/// Which side of the subscription relationship the caller is listing from.
+/// Inbound is the consumer view (a `subscriber` binding on the domain);
+/// outbound is the producer view (a `publisher` binding), with full consumer
+/// topology because producer teams need it for notifications and version
+/// migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Direction {
+    Inbound,
+    Outbound,
+}
+
+impl FromStr for Direction {
+    type Err = ControlPlaneError;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "inbound" => Ok(Direction::Inbound),
+            "outbound" => Ok(Direction::Outbound),
+            other => Err(ControlPlaneError::ValidationException {
+                message: format!("direction must be 'inbound' or 'outbound', got '{other}'"),
+                reason: ValidationExceptionReason::FieldValidationFailed,
+                field_list: None,
+            }),
+        }
+    }
+}
+
+impl Direction {
+    fn required_role(self) -> ResourceRole {
+        match self {
+            Direction::Inbound => ResourceRole::Subscriber,
+            Direction::Outbound => ResourceRole::Publisher,
+        }
+    }
+}
+
+/// Platform roles read either side without a domain binding (operations and
+/// audit); everyone else needs the direction's binding on the domain.
+fn is_platform(principal: &TrustedPrincipal) -> bool {
+    principal.is_platform_admin()
+        || principal
+            .global_roles()
+            .contains(&GlobalRole::PlatformAuditor)
+}
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
     let table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
-    let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
+    let bindings_table = env::var("BINDINGS_TABLE").context("BINDINGS_TABLE not set")?;
 
     let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
-    let principal = log_principal(request_context);
-
-    let Some(caller_account_id) = principal
-        .ok()
-        .and_then(|p| p.iam_account_id().map(String::from))
-    else {
-        return Ok(api::from_control_plane_error(&api::validation_error(
-            "missing caller identity",
-        )));
+    let principal = match log_principal(request_context) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "list subscriptions: deny (no trusted principal)");
+            return Ok(api::from_control_plane_error(
+                &ControlPlaneError::AccessDenied,
+            ));
+        }
     };
 
-    let consumer = api::query_param(&event.payload, "consumer");
-    let producer = api::query_param(&event.payload, "producer");
-    let schema = api::query_param(&event.payload, "schema");
-    let version = api::query_param(&event.payload, "version").and_then(|v| v.parse::<i64>().ok());
-    let status =
-        api::query_param(&event.payload, "status").and_then(|v| v.parse::<StreamStatus>().ok());
-    let max_results = api::query_param(&event.payload, "maxResults")
-        .and_then(|v| v.parse::<i32>().ok())
-        .filter(|v| *v > 0 && *v <= DEFAULT_MAX_RESULTS)
-        .unwrap_or(DEFAULT_MAX_RESULTS);
-    let next_token = api::query_param(&event.payload, "nextToken");
+    let query = match parse_query(&event.payload) {
+        Ok(q) => q,
+        Err(e) => return Ok(api::from_control_plane_error(&e)),
+    };
 
-    let result = fetch_streams(
-        ddb,
-        &table,
-        &consumer,
-        &producer,
-        &schema,
-        max_results,
-        &next_token,
-    )
-    .await;
+    if !authorize_direction(ddb, &bindings_table, &principal, &query).await {
+        return Ok(api::from_control_plane_error(
+            &ControlPlaneError::AccessDenied,
+        ));
+    }
+
+    let result = match query.direction {
+        Direction::Inbound => {
+            streams_db::query_streams_by_consumer(ddb, &table, &query.domain).await
+        }
+        Direction::Outbound => {
+            streams_db::query_streams_by_producer(ddb, &table, &query.domain).await
+        }
+    };
 
     match result {
-        Ok((streams, next_page_key)) => {
-            let mut owner_cache: HashMap<String, Option<String>> = HashMap::new();
-            let mut items = Vec::new();
-            for stream in &streams {
-                if !matches_filters(stream, &consumer, &schema, &version, &status) {
-                    continue;
-                }
-                if !caller_may_view(
-                    ddb,
-                    &domains_table,
-                    &caller_account_id,
-                    stream,
-                    &mut owner_cache,
-                )
-                .await
-                .unwrap_or(false)
-                {
-                    continue;
-                }
-                items.push(stream_summary(stream));
-            }
-            let next_token = next_page_key.map(|k| serialize_pagination_token(&k));
-            Ok(api::success_response(
-                200,
-                &json!({ "items": items, "nextToken": next_token }),
-            ))
+        Ok(streams) => {
+            let items: Vec<Value> = streams
+                .iter()
+                .filter(|s| matches_filters(s, &query.schema, &query.version, &query.status))
+                .map(stream_summary)
+                .collect();
+            Ok(api::success_response(200, &json!({ "items": items })))
         }
         Err(e) => {
             tracing::error!(error = %e, "event streams query failed");
@@ -93,94 +116,69 @@ pub async fn handle(
     }
 }
 
-/// A subscription is a relationship between two domains; either party — the
-/// consumer that subscribed or the producer whose contract it pinned — has a
-/// legitimate interest in seeing it, but a third party does not.
-///
-/// `owner_cache` is invocation-scoped: the same producer/consumer domain
-/// tends to repeat across a result page, so this avoids a GetItem per row.
-async fn caller_may_view(
-    ddb: &aws_sdk_dynamodb::Client,
-    domains_table: &str,
-    caller_account_id: &str,
-    stream: &EventStream,
-    owner_cache: &mut HashMap<String, Option<String>>,
-) -> Result<bool> {
-    for domain in [&stream.consumer_domain, &stream.producer_domain] {
-        let owner = match owner_cache.get(domain) {
-            Some(cached) => cached.clone(),
-            None => {
-                let owner = lookup_owner_account_id(ddb, domains_table, domain).await?;
-                owner_cache.insert(domain.clone(), owner.clone());
-                owner
-            }
-        };
-        if owner.as_deref() == Some(caller_account_id) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+struct ListQuery {
+    domain: String,
+    direction: Direction,
+    schema: Option<String>,
+    version: Option<i64>,
+    status: Option<StreamStatus>,
 }
 
-async fn lookup_owner_account_id(
+/// Platform roles read either side unbound; everyone else needs the
+/// direction's binding on the listed domain.
+async fn authorize_direction(
     ddb: &aws_sdk_dynamodb::Client,
-    domains_table: &str,
-    domain_name: &str,
-) -> Result<Option<String>> {
-    let output = ddb
-        .get_item()
-        .table_name(domains_table)
-        .key("domainName", nexus_common::dynamodb::s(domain_name))
-        .send()
-        .await
-        .context("failed to get domain record for ownership check")?;
-    Ok(output
-        .item
-        .as_ref()
-        .and_then(|item| nexus_common::dynamodb::get_s(item, "ownerAccountId")))
+    bindings_table: &str,
+    principal: &TrustedPrincipal,
+    query: &ListQuery,
+) -> bool {
+    if is_platform(principal) {
+        return true;
+    }
+    let role = query.direction.required_role();
+    let allowed = has_role_binding(
+        &BindingStore::new(ddb.clone(), bindings_table),
+        principal,
+        role,
+        &query.domain,
+    )
+    .await;
+    if !allowed {
+        tracing::warn!(
+            domain = query.domain,
+            "list subscriptions: deny (no {} binding)",
+            role.as_str()
+        );
+    }
+    allowed
 }
 
-async fn fetch_streams(
-    ddb: &aws_sdk_dynamodb::Client,
-    table: &str,
-    consumer: &Option<String>,
-    producer: &Option<String>,
-    schema: &Option<String>,
-    max_results: i32,
-    next_token: &Option<String>,
-) -> Result<(Vec<EventStream>, Option<HashMap<String, AttributeValue>>)> {
-    match (producer, schema, consumer) {
-        (Some(producer), Some(schema), _) => Ok((
-            streams_db::query_streams_by_schema(ddb, table, producer, schema).await?,
-            None,
-        )),
-        (Some(producer), None, _) => Ok((
-            streams_db::query_streams_by_producer(ddb, table, producer).await?,
-            None,
-        )),
-        (None, _, Some(consumer)) => Ok((
-            streams_db::query_streams_by_consumer(ddb, table, consumer).await?,
-            None,
-        )),
-        (None, _, None) => {
-            let start_key = next_token.as_deref().and_then(deserialize_pagination_token);
-            streams_db::scan_streams_page(ddb, table, max_results, start_key).await
+fn parse_query(payload: &Value) -> Result<ListQuery, ControlPlaneError> {
+    let domain = api::query_param(payload, "domain")
+        .ok_or_else(|| api::validation_error("domain query parameter is required"))?;
+    let direction = match api::query_param(payload, "direction") {
+        Some(raw) => Direction::from_str(&raw)?,
+        None => {
+            return Err(api::validation_error(
+                "direction query parameter is required (inbound or outbound)",
+            ))
         }
-    }
+    };
+    Ok(ListQuery {
+        domain,
+        direction,
+        schema: api::query_param(payload, "schema"),
+        version: api::query_param(payload, "version").and_then(|v| v.parse::<i64>().ok()),
+        status: api::query_param(payload, "status").and_then(|v| v.parse::<StreamStatus>().ok()),
+    })
 }
 
 fn matches_filters(
     stream: &EventStream,
-    consumer: &Option<String>,
     schema: &Option<String>,
     version: &Option<i64>,
     status: &Option<StreamStatus>,
 ) -> bool {
-    if let Some(consumer) = consumer {
-        if &stream.consumer_domain != consumer {
-            return false;
-        }
-    }
     if let Some(schema) = schema {
         if &stream.schema_name != schema {
             return false;
@@ -218,16 +216,64 @@ fn stream_summary(stream: &EventStream) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use nexus_common::streams::EnvStream;
+    use std::collections::HashMap;
 
-    fn stream_with(consumer: &str, status: StreamStatus, prod_version: i64) -> EventStream {
+    use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
+    use aws_sdk_dynamodb::operation::query::QueryOutput;
+    use aws_sdk_dynamodb::types::AttributeValue;
+    use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
+    use chrono::Utc;
+    use lambda_runtime::Context as LambdaContext;
+
+    use konductor_common::grant::{BindingPrincipal, RoleBinding};
+    use konductor_common::grant_store::binding_to_item;
+    use konductor_common::streams::EnvStream;
+    use konductor_common::streams_db::stream_to_item;
+
+    fn set_env() {
+        std::env::set_var("EVENT_STREAMS_TABLE", "streams");
+        std::env::set_var("BINDINGS_TABLE", "bindings");
+    }
+
+    fn oauth_request_context(team_groups: &[&str], global_roles: &[&str]) -> Value {
+        json!({
+            "authorizer": {
+                "authenticationMechanism": "oauth",
+                "principalId": "user-1",
+                "issuer": "https://idp.example.com",
+                "clientId": "client-1",
+                "globalRoles": serde_json::to_string(global_roles).unwrap(),
+                "teamGroups": serde_json::to_string(team_groups).unwrap(),
+            }
+        })
+    }
+
+    fn iam_request_context(account_id: &str) -> Value {
+        json!({
+            "identity": {
+                "accountId": account_id,
+                "userArn": format!("arn:aws:iam::{account_id}:role/operator"),
+            }
+        })
+    }
+
+    fn request(context: Value, params: Value) -> LambdaEvent<Value> {
+        LambdaEvent::new(
+            json!({
+                "requestContext": context,
+                "queryStringParameters": params,
+            }),
+            LambdaContext::default(),
+        )
+    }
+
+    fn stream(consumer: &str, detail_type: &str, status: StreamStatus, pinned: i64) -> EventStream {
         let mut environments = HashMap::new();
         environments.insert(
             "prod".to_string(),
             EnvStream {
-                pinned_version: Some(prod_version),
-                rule_name: format!("{consumer}-OrderNotification"),
+                pinned_version: Some(pinned),
+                rule_name: format!("{consumer}-{detail_type}"),
                 rule_arn: None,
                 enabled: true,
                 status: StreamStatus::Active,
@@ -237,8 +283,8 @@ mod tests {
             producer_domain: "orders".to_string(),
             consumer_domain: consumer.to_string(),
             source: "acme-orders".to_string(),
-            detail_type: "OrderNotification".to_string(),
-            schema_name: "acme-orders@OrderNotification".to_string(),
+            detail_type: detail_type.to_string(),
+            schema_name: format!("acme-orders@{detail_type}"),
             status,
             environments,
             request_id: None,
@@ -249,194 +295,247 @@ mod tests {
         }
     }
 
-    #[test]
-    fn version_filter_matches_any_environment_pin() {
-        let stream = stream_with("checkout", StreamStatus::Active, 3);
-        assert!(matches_filters(&stream, &None, &None, &Some(3), &None));
-        assert!(!matches_filters(&stream, &None, &None, &Some(4), &None));
-    }
-
-    #[test]
-    fn status_filter_excludes_other_statuses() {
-        let stream = stream_with("checkout", StreamStatus::Removed, 3);
-        assert!(matches_filters(
-            &stream,
-            &None,
-            &None,
-            &None,
-            &Some(StreamStatus::Removed)
-        ));
-        assert!(!matches_filters(
-            &stream,
-            &None,
-            &None,
-            &None,
-            &Some(StreamStatus::Active)
-        ));
-    }
-
-    #[test]
-    fn consumer_filter_applies_after_producer_query() {
-        let stream = stream_with("checkout", StreamStatus::Active, 3);
-        assert!(matches_filters(
-            &stream,
-            &Some("checkout".to_string()),
-            &None,
-            &None,
-            &None
-        ));
-        assert!(!matches_filters(
-            &stream,
-            &Some("billing".to_string()),
-            &None,
-            &None,
-            &None
-        ));
-    }
-
-    #[test]
-    fn schema_filter_excludes_unrelated_schemas() {
-        let stream = stream_with("checkout", StreamStatus::Active, 3);
-        assert!(matches_filters(
-            &stream,
-            &None,
-            &Some("acme-orders@OrderNotification".to_string()),
-            &None,
-            &None
-        ));
-        assert!(!matches_filters(
-            &stream,
-            &None,
-            &Some("acme-orders@OrderCancelled".to_string()),
-            &None,
-            &None
-        ));
-    }
-
-    #[test]
-    fn schema_filter_combines_with_consumer_filter() {
-        let stream = stream_with("checkout", StreamStatus::Active, 3);
-        // Regression: previously the schema filter was silently ignored
-        // whenever `producer` was absent, so consumer+schema queries
-        // returned every schema for that consumer.
-        assert!(!matches_filters(
-            &stream,
-            &Some("checkout".to_string()),
-            &Some("acme-orders@OrderCancelled".to_string()),
-            &None,
-            &None
-        ));
-    }
-
-    #[test]
-    fn summary_exposes_subscription_id() {
-        let stream = stream_with("checkout", StreamStatus::Active, 3);
-        let summary = stream_summary(&stream);
-        assert_eq!(
-            summary["subscriptionId"],
-            "checkout.orders.OrderNotification"
-        );
-        assert_eq!(summary["environments"]["prod"]["pinnedVersion"], 3);
-    }
-
-    fn domain_owner_client(owners: Vec<(&'static str, &'static str)>) -> aws_sdk_dynamodb::Client {
-        use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
-        use aws_smithy_mocks::{mock, mock_client, RuleMode};
-
-        let rules: Vec<_> = owners
-            .into_iter()
-            .map(|(domain, owner)| {
-                mock!(aws_sdk_dynamodb::Client::get_item)
-                    .match_requests(move |req| {
-                        req.key()
-                            .unwrap()
-                            .get("domainName")
-                            .and_then(|v| v.as_s().ok())
-                            .map(|v| v == domain)
-                            .unwrap_or(false)
-                    })
-                    .then_output(move || {
-                        GetItemOutput::builder()
-                            .item("domainName", nexus_common::dynamodb::s(domain))
-                            .item("ownerAccountId", nexus_common::dynamodb::s(owner))
-                            .build()
-                    })
+    fn binding_rule(principal: BindingPrincipal, role: ResourceRole, domain: &str) -> Rule {
+        let binding = RoleBinding::new("b-1", principal, role, domain, Utc::now(), "test").unwrap();
+        let item = binding_to_item(&binding);
+        let expected = item.clone();
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                let key = req.key().unwrap();
+                key.get("PK").and_then(|v| v.as_s().ok())
+                    == expected.get("PK").and_then(|v| v.as_s().ok())
+                    && key.get("SK").and_then(|v| v.as_s().ok())
+                        == expected.get("SK").and_then(|v| v.as_s().ok())
             })
-            .collect();
-        let rule_refs: Vec<_> = rules.iter().collect();
-        mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, rule_refs)
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .set_item(Some(item.clone()))
+                    .build()
+            })
+    }
+
+    /// Streams query whose items are the given streams; matches by whichever
+    /// direction key the handler chose (consumer GSI or producer partition).
+    fn streams_rule(
+        key_name: &'static str,
+        key_value: &'static str,
+        streams: Vec<EventStream>,
+    ) -> Rule {
+        let items: Vec<HashMap<String, AttributeValue>> =
+            streams.iter().map(stream_to_item).collect();
+        mock!(aws_sdk_dynamodb::Client::query)
+            .match_requests(move |req| {
+                req.expression_attribute_values()
+                    .and_then(|v| v.get(key_name))
+                    .and_then(|v| v.as_s().ok())
+                    .map(|v| v == key_value)
+                    .unwrap_or(false)
+            })
+            .then_output(move || {
+                QueryOutput::builder()
+                    .set_items(Some(items.clone()))
+                    .build()
+            })
+    }
+
+    fn ddb_client(rules: &[&Rule]) -> aws_sdk_dynamodb::Client {
+        mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, rules)
+    }
+
+    fn body(response: &Value) -> Value {
+        serde_json::from_str(response["body"].as_str().unwrap()).unwrap()
     }
 
     #[tokio::test]
-    async fn caller_may_view_true_for_consumer_owner() {
-        let ddb = domain_owner_client(vec![
-            ("checkout", "111122223333"),
-            ("orders", "444455556666"),
-        ]);
-        let stream = stream_with("checkout", StreamStatus::Active, 3);
-        let mut cache = HashMap::new();
-        assert!(
-            caller_may_view(&ddb, "domains", "111122223333", &stream, &mut cache)
-                .await
-                .unwrap()
+    async fn oauth_inbound_lists_the_consumer_domains_subscriptions() {
+        set_env();
+        let binding = binding_rule(
+            BindingPrincipal::cognito_group("https://idp.example.com", "team-checkout").unwrap(),
+            ResourceRole::Subscriber,
+            "checkout",
         );
+        let streams = streams_rule(
+            ":consumer",
+            "checkout",
+            vec![stream(
+                "checkout",
+                "OrderNotification",
+                StreamStatus::Active,
+                3,
+            )],
+        );
+        let ddb = ddb_client(&[&binding, &streams]);
+
+        let resp = handle(
+            &ddb,
+            request(
+                oauth_request_context(&["team-checkout"], &[]),
+                json!({ "domain": "checkout", "direction": "inbound" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let items = body(&resp)["items"].clone();
+        assert_eq!(items.as_array().unwrap().len(), 1);
+        assert_eq!(items[0]["consumerDomain"], "checkout");
     }
 
     #[tokio::test]
-    async fn caller_may_view_true_for_producer_owner() {
-        let ddb = domain_owner_client(vec![
-            ("checkout", "111122223333"),
-            ("orders", "444455556666"),
-        ]);
-        let stream = stream_with("checkout", StreamStatus::Active, 3);
-        let mut cache = HashMap::new();
-        assert!(
-            caller_may_view(&ddb, "domains", "444455556666", &stream, &mut cache)
-                .await
-                .unwrap()
+    async fn iam_outbound_lists_the_producers_full_consumer_topology() {
+        set_env();
+        let binding = binding_rule(
+            BindingPrincipal::aws_account("111122223333").unwrap(),
+            ResourceRole::Publisher,
+            "orders",
         );
+        let streams = streams_rule(
+            ":producer",
+            "orders",
+            vec![
+                stream("checkout", "OrderNotification", StreamStatus::Active, 3),
+                stream("billing", "OrderNotification", StreamStatus::Active, 2),
+            ],
+        );
+        let ddb = ddb_client(&[&binding, &streams]);
+
+        let resp = handle(
+            &ddb,
+            request(
+                iam_request_context("111122223333"),
+                json!({ "domain": "orders", "direction": "outbound" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let items = body(&resp)["items"].clone();
+        assert_eq!(items.as_array().unwrap().len(), 2);
     }
 
     #[tokio::test]
-    async fn caller_may_view_false_for_third_party() {
-        let ddb = domain_owner_client(vec![
-            ("checkout", "111122223333"),
-            ("orders", "444455556666"),
-        ]);
-        let stream = stream_with("checkout", StreamStatus::Active, 3);
-        let mut cache = HashMap::new();
-        assert!(
-            !caller_may_view(&ddb, "domains", "999900001111", &stream, &mut cache)
-                .await
-                .unwrap()
+    async fn platform_auditor_reads_without_a_binding() {
+        set_env();
+        let streams = streams_rule(
+            ":producer",
+            "orders",
+            vec![stream(
+                "checkout",
+                "OrderNotification",
+                StreamStatus::Active,
+                3,
+            )],
         );
+        // No binding rule: an unexpected binding lookup fails the mock client.
+        let ddb = ddb_client(&[&streams]);
+
+        let resp = handle(
+            &ddb,
+            request(
+                oauth_request_context(&[], &["platform-auditor"]),
+                json!({ "domain": "orders", "direction": "outbound" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(body(&resp)["items"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
-    async fn caller_may_view_caches_owner_lookups_across_calls() {
-        // The mock has exactly one rule per domain with no call-count limit,
-        // so this doesn't prove caching directly, but it does prove the
-        // cache is populated and reused without behavior changing across
-        // repeated lookups of the same stream (the case caching optimizes).
-        let ddb = domain_owner_client(vec![
-            ("checkout", "111122223333"),
-            ("orders", "444455556666"),
-        ]);
-        let stream = stream_with("checkout", StreamStatus::Active, 3);
-        let mut cache = HashMap::new();
-        assert!(
-            caller_may_view(&ddb, "domains", "111122223333", &stream, &mut cache)
-                .await
-                .unwrap()
+    async fn missing_direction_is_a_validation_error() {
+        set_env();
+        let ddb = ddb_client(&[]);
+        let resp = handle(
+            &ddb,
+            request(
+                iam_request_context("111122223333"),
+                json!({ "domain": "checkout" }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp["statusCode"], 400);
+        assert_eq!(body(&resp)["code"], "ValidationException");
+    }
+
+    #[tokio::test]
+    async fn invalid_direction_is_a_validation_error() {
+        set_env();
+        let ddb = ddb_client(&[]);
+        let resp = handle(
+            &ddb,
+            request(
+                iam_request_context("111122223333"),
+                json!({ "domain": "checkout", "direction": "sideways" }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp["statusCode"], 400);
+    }
+
+    #[tokio::test]
+    async fn no_binding_is_forbidden_not_hidden() {
+        set_env();
+        let no_binding = mock!(aws_sdk_dynamodb::Client::get_item)
+            .then_output(|| GetItemOutput::builder().build());
+        let ddb = ddb_client(&[&no_binding]);
+
+        let resp = handle(
+            &ddb,
+            request(
+                iam_request_context("999900001111"),
+                json!({ "domain": "checkout", "direction": "inbound" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 403);
+        assert_eq!(body(&resp)["code"], "AccessDeniedException");
+    }
+
+    #[tokio::test]
+    async fn schema_version_and_status_filters_narrow_results() {
+        set_env();
+        let binding = binding_rule(
+            BindingPrincipal::aws_account("111122223333").unwrap(),
+            ResourceRole::Subscriber,
+            "checkout",
         );
-        assert_eq!(
-            cache.get("checkout").cloned().flatten(),
-            Some("111122223333".to_string())
+        let streams = streams_rule(
+            ":consumer",
+            "checkout",
+            vec![
+                stream("checkout", "OrderNotification", StreamStatus::Active, 3),
+                stream("checkout", "OrderRefunded", StreamStatus::Active, 1),
+                stream("checkout", "OrderDisputed", StreamStatus::Removed, 3),
+            ],
         );
-        assert!(
-            caller_may_view(&ddb, "domains", "111122223333", &stream, &mut cache)
-                .await
-                .unwrap()
-        );
+        let ddb = ddb_client(&[&binding, &streams]);
+
+        let resp = handle(
+            &ddb,
+            request(
+                iam_request_context("111122223333"),
+                json!({
+                    "domain": "checkout",
+                    "direction": "inbound",
+                    "schema": "acme-orders@OrderNotification",
+                    "version": "3",
+                    "status": "ACTIVE",
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        let items = body(&resp)["items"].clone();
+        assert_eq!(items.as_array().unwrap().len(), 1);
+        assert_eq!(items[0]["schemaName"], "acme-orders@OrderNotification");
     }
 }

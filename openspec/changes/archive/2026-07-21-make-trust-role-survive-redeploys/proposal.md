@@ -9,7 +9,7 @@ The trust role's assume-role policy names the platform roles by ARN, which IAM r
 - Rewrite the trust role's `AssumeRolePolicyDocument` in `trust-stack.yaml`: principal becomes the platform account root, constrained to the exact platform role ARNs via an `ArnEquals` condition on `aws:PrincipalArn`. Conditions are string-matched per request (never snapshotted to unique IDs), so trust survives role recreation.
 - The platform account id is derived from the role ARN parameters the template already receives; the `make deploy-trust` interface is unchanged.
 - Update `docs/trust-stack-deployment.md` to explain the trust model and remove the need for teardown/redeploy choreography after platform redeploys.
-- No change to who can assume: exactly `nexus-function-role` and `nexus-provisioning-workflow-role` (both fixed-name, so their ARN strings are stable across redeploys).
+- No change to who can assume: exactly `konductor-function-role` and `konductor-provisioning-workflow-role` (both fixed-name, so their ARN strings are stable across redeploys).
 
 ## Capabilities
 

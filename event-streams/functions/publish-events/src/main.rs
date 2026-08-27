@@ -15,8 +15,14 @@ async fn main() -> Result<(), Error> {
     let clients = handler::Clients::new(&config);
 
     let bindings_table = std::env::var("BINDINGS_TABLE").expect("BINDINGS_TABLE not set");
-    let authorizer = nexus_common::grant_engine::DynamoGrantEngine::new(
-        nexus_common::grant_store::BindingStore::new(clients.ddb.clone(), bindings_table),
+    let entitlements_table =
+        std::env::var("ENTITLEMENTS_TABLE").expect("ENTITLEMENTS_TABLE not set");
+    let authorizer = konductor_common::grant_engine::DynamoGrantEngine::new(
+        konductor_common::grant_store::BindingStore::new(clients.ddb.clone(), bindings_table),
+        konductor_common::entitlement_store::EntitlementStore::new(
+            clients.ddb.clone(),
+            entitlements_table,
+        ),
     );
 
     let clients_ref = &clients;

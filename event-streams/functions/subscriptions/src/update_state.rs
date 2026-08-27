@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use aws_sdk_dynamodb::types::AttributeValue;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
@@ -8,22 +7,24 @@ use std::env;
 use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
-use nexus_common::dynamodb::s;
-use nexus_common::principal::{IamOnlyAuthorizer, ResourceAuthorizer, TrustedPrincipal};
-use nexus_common::streams::{EventStream, StreamStatus, SubscriptionId};
-use nexus_common::streams_db;
+use konductor_common::entitlement_store::EntitlementStore;
+use konductor_common::grant_engine::{actions, covers};
+use konductor_common::principal::{ResourceAuthorizer, TrustedPrincipal};
+use konductor_common::streams::{EventStream, StreamStatus, SubscriptionId};
+use konductor_common::streams_db;
+use konductor_common::subscription_resource::SubscriptionResource;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStateMessage {
-    pub subscription_id: String,
-    pub caller_account_id: String,
     pub body: UpdateStateBody,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateStateBody {
+    pub subscription_id: String,
+    pub consumer_domain: String,
     pub environments: HashMap<String, EnvDesiredState>,
 }
 
@@ -32,9 +33,6 @@ pub struct EnvDesiredState {
     pub enabled: bool,
 }
 
-const OAUTH_MUTATIONS_DISABLED: &str =
-    "unauthorized: interactive OAuth mutations are not yet enabled";
-
 enum StreamLookup {
     Ready(Box<EventStream>),
     Failed(String),
@@ -42,12 +40,18 @@ enum StreamLookup {
 
 pub async fn handle(
     clients: &Clients,
+    authorizer: &impl ResourceAuthorizer,
     message: &UpdateStateMessage,
     principal: &TrustedPrincipal,
 ) -> Result<()> {
-    let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
+    let cp_bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
     let streams_table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
+    let entitlements_table =
+        env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
+
+    let body = &message.body;
+    let subscription_id = body.subscription_id.clone();
 
     let emit_failed = |reason: String| {
         outcome::emit(
@@ -55,34 +59,53 @@ pub async fn handle(
             &cp_bus,
             "UpdateSubscriptionFailed",
             json!({
-                "subscriptionId": message.subscription_id,
+                "subscriptionId": subscription_id,
                 "reason": reason,
                 "failedAt": chrono::Utc::now().to_rfc3339(),
             }),
         )
     };
 
-    let decision = IamOnlyAuthorizer
-        .authorize(
-            principal,
-            "subscriptions:UpdateState",
-            &message.subscription_id,
-        )
+    let id = match SubscriptionId::parse(&body.subscription_id) {
+        Ok(id) => id,
+        Err(e) => return emit_failed(e.to_string()).await,
+    };
+    if id.consumer_domain != body.consumer_domain {
+        return emit_failed(format!(
+            "consumerDomain '{}' does not match subscription id consumer '{}'",
+            body.consumer_domain, id.consumer_domain
+        ))
         .await;
-    if !decision.is_allowed() {
-        tracing::warn!(action = "subscriptions:UpdateState", subscription_id = %message.subscription_id, "consumer authorization denied");
-        return emit_failed(OAUTH_MUTATIONS_DISABLED.to_string()).await;
+    }
+
+    // Authorization precedes every existence check so a denied caller learns
+    // nothing about the subscription.
+    if let Err(reason) = authorize_transitions(authorizer, principal, body, &id).await {
+        return emit_failed(reason).await;
     }
 
     let stream =
-        match load_validated_stream(clients, message, &streams_table, &organization).await? {
+        match load_validated_stream(clients, body, &id, &streams_table, &organization).await? {
             StreamLookup::Ready(stream) => stream,
             StreamLookup::Failed(reason) => return emit_failed(reason).await,
         };
 
-    for (env_name, desired) in &message.body.environments {
+    if let Err(reason) =
+        recheck_coverage_before_enable(clients, &entitlements_table, body, &id).await
+    {
+        return emit_failed(reason).await;
+    }
+
+    for (env_name, desired) in &body.environments {
         apply_rule_state(clients, &organization, env_name, &stream, desired.enabled).await?;
-        persist_env_enabled(clients, &streams_table, &stream, env_name, desired.enabled).await?;
+        streams_db::set_stream_env_enabled(
+            &clients.ddb,
+            &streams_table,
+            &stream,
+            env_name,
+            desired.enabled,
+        )
+        .await?;
     }
 
     outcome::emit(
@@ -90,8 +113,8 @@ pub async fn handle(
         &cp_bus,
         "UpdateSubscriptionSucceeded",
         json!({
-            "subscriptionId": message.subscription_id,
-            "environments": message.body.environments.iter()
+            "subscriptionId": body.subscription_id,
+            "environments": body.environments.iter()
                 .map(|(env, d)| (env.clone(), json!({ "enabled": d.enabled })))
                 .collect::<serde_json::Map<_, _>>(),
         }),
@@ -99,19 +122,105 @@ pub async fn handle(
     .await
 }
 
+async fn allowed(
+    authorizer: &impl ResourceAuthorizer,
+    principal: &TrustedPrincipal,
+    action: &str,
+    resource: &str,
+) -> bool {
+    let decision = authorizer.authorize(principal, action, resource).await;
+    if !decision.is_allowed() {
+        tracing::warn!(
+            action,
+            resource,
+            "subscription state-change authorization denied"
+        );
+    }
+    decision.is_allowed()
+}
+
+/// Enabling any environment requires `subscription:enable` (binding plus
+/// covering entitlement, engine-side); disabling requires
+/// `subscription:disable` (binding only).
+async fn authorize_transitions(
+    authorizer: &impl ResourceAuthorizer,
+    principal: &TrustedPrincipal,
+    body: &UpdateStateBody,
+    id: &SubscriptionId,
+) -> std::result::Result<(), String> {
+    let resource =
+        SubscriptionResource::new(&id.consumer_domain, &id.producer_domain, &id.detail_type)
+            .map_err(|e| e.to_string())?
+            .to_string();
+
+    let enabling = body.environments.values().any(|d| d.enabled);
+    let disabling = body.environments.values().any(|d| !d.enabled);
+
+    if enabling
+        && !allowed(
+            authorizer,
+            principal,
+            actions::SUBSCRIPTION_ENABLE,
+            &resource,
+        )
+        .await
+    {
+        return Err("unauthorized".to_string());
+    }
+    if disabling
+        && !allowed(
+            authorizer,
+            principal,
+            actions::SUBSCRIPTION_DISABLE,
+            &resource,
+        )
+        .await
+    {
+        return Err("unauthorized".to_string());
+    }
+    Ok(())
+}
+
+/// Final coverage re-check immediately before any rule flips to ENABLED:
+/// narrows the revoke-between-authorize-and-enable race. Fail-closed on store
+/// errors. Self-subscriptions need no entitlement and skip the check.
+async fn recheck_coverage_before_enable(
+    clients: &Clients,
+    entitlements_table: &str,
+    body: &UpdateStateBody,
+    id: &SubscriptionId,
+) -> std::result::Result<(), String> {
+    let enabling = body.environments.values().any(|d| d.enabled);
+    if !enabling || id.consumer_domain == id.producer_domain {
+        return Ok(());
+    }
+    let store = EntitlementStore::new(clients.ddb.clone(), entitlements_table);
+    let covered = match store.entitlements_for_consumer(&id.consumer_domain).await {
+        Ok(current) => covers(&current, &id.producer_domain, &id.detail_type),
+        Err(e) => {
+            tracing::warn!(error = %e, "entitlement re-check failed closed");
+            false
+        }
+    };
+    if covered {
+        Ok(())
+    } else {
+        Err(format!(
+            "no covering entitlement for consumer '{}' on '{}'",
+            id.consumer_domain, id.detail_type
+        ))
+    }
+}
+
 async fn load_validated_stream(
     clients: &Clients,
-    message: &UpdateStateMessage,
+    body: &UpdateStateBody,
+    id: &SubscriptionId,
     streams_table: &str,
     organization: &str,
 ) -> Result<StreamLookup> {
-    let id = match SubscriptionId::parse(&message.subscription_id) {
-        Ok(id) => id,
-        Err(e) => return Ok(StreamLookup::Failed(e.to_string())),
-    };
-
-    let consumer = match validate::lookup_active_domain(&clients.ddb, &id.consumer_domain).await? {
-        DomainLookup::Found(record) => record,
+    match validate::lookup_active_domain(&clients.ddb, &id.consumer_domain).await? {
+        DomainLookup::Found(_) => {}
         DomainLookup::NotFound => {
             return Ok(StreamLookup::Failed(format!(
                 "consumer domain '{}' not found",
@@ -124,13 +233,6 @@ async fn load_validated_stream(
                 id.consumer_domain
             )))
         }
-    };
-
-    if !validate::caller_owns_consumer(&message.caller_account_id, &consumer) {
-        return Ok(StreamLookup::Failed(format!(
-            "caller account {} does not own consumer domain '{}'",
-            message.caller_account_id, id.consumer_domain
-        )));
     }
 
     let schema_name = format!("{organization}-{}@{}", id.producer_domain, id.detail_type);
@@ -145,22 +247,22 @@ async fn load_validated_stream(
     else {
         return Ok(StreamLookup::Failed(format!(
             "subscription '{}' not found",
-            message.subscription_id
+            body.subscription_id
         )));
     };
 
     if stream.status != StreamStatus::Active {
         return Ok(StreamLookup::Failed(format!(
             "subscription '{}' is {}, not ACTIVE — only active streams can change state",
-            message.subscription_id, stream.status
+            body.subscription_id, stream.status
         )));
     }
 
-    for env_name in message.body.environments.keys() {
+    for env_name in body.environments.keys() {
         if !stream.environments.contains_key(env_name) {
             return Ok(StreamLookup::Failed(format!(
                 "unknown environment '{env_name}' for subscription '{}'",
-                message.subscription_id
+                body.subscription_id
             )));
         }
     }
@@ -207,34 +309,29 @@ async fn apply_rule_state(
             .map_err(|e| e.into_service_error().to_string())
     };
 
-    result.map_err(|e| nexus_common::error::ControlPlaneError::EventBridge(e).into())
+    result.map_err(|e| konductor_common::error::ControlPlaneError::EventBridge(e).into())
 }
 
-async fn persist_env_enabled(
-    clients: &Clients,
-    table: &str,
-    stream: &EventStream,
-    env_name: &str,
-    enabled: bool,
-) -> Result<()> {
-    clients
-        .ddb
-        .update_item()
-        .table_name(table)
-        .key(streams_db::PK, s(&stream.producer_domain))
-        .key(
-            streams_db::SK,
-            s(&EventStream::sort_key(
-                &stream.schema_name,
-                &stream.consumer_domain,
-            )),
-        )
-        .update_expression("SET environments.#env.enabled = :enabled, updatedAt = :now")
-        .expression_attribute_names("#env", env_name)
-        .expression_attribute_values(":enabled", AttributeValue::Bool(enabled))
-        .expression_attribute_values(":now", s(&chrono::Utc::now().to_rfc3339()))
-        .send()
-        .await
-        .context("failed to persist env enabled state")?;
-    Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_deserializes_flat_verb_body() {
+        let message: UpdateStateMessage = serde_json::from_value(json!({
+            "body": {
+                "subscriptionId": "checkout.orders.OrderNotification",
+                "consumerDomain": "checkout",
+                "environments": { "prod": { "enabled": true } }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            message.body.subscription_id,
+            "checkout.orders.OrderNotification"
+        );
+        assert_eq!(message.body.consumer_domain, "checkout");
+        assert!(message.body.environments["prod"].enabled);
+    }
 }

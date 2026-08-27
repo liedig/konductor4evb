@@ -1,6 +1,6 @@
 # Spike Evaluation Methodology
 
-> **Spike methodology.** Every value in this document is a spike evaluation parameter, not a settled Nexus production requirement. Targets exist only to bound the readiness rubric; they are not committed SLOs. Production SLOs are recommended from observed evidence in the readiness decision (task 7.1).
+> **Spike methodology.** Every value in this document is a spike evaluation parameter, not a settled Konductor production requirement. Targets exist only to bound the readiness rubric; they are not committed SLOs. Production SLOs are recommended from observed evidence in the readiness decision (task 7.1).
 
 ## 1. Frozen fixtures
 
@@ -85,7 +85,7 @@ These targets bound the readiness rubric; they are not committed SLOs. The readi
 |---|---|
 | AWS Region | `ap-southeast-2` (matches the provisioned sandbox account profiles; the Cognito issuer in the frozen manifest is a placeholder string, not a real user pool) |
 | Spike time box | 5 working days from sandbox readiness |
-| Sandbox isolation | Dedicated AWS account (or isolated OU) with all resources tagged `nexus-spike=evaluate-authorization-engine` |
+| Sandbox isolation | Dedicated AWS account (or isolated OU) with all resources tagged `konductor-spike=evaluate-authorization-engine` |
 
 ## 7. Client settings
 

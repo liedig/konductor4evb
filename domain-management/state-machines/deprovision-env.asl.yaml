@@ -37,7 +37,7 @@ States:
     Arguments:
       QueueUrl: "{% $states.input.resourceArns.integrationDlqArn %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: DeleteAppEventBus
     Catch:
@@ -68,7 +68,7 @@ States:
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-nexus-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: DeleteDlqDepthAlarm
     Catch:

@@ -1,6 +1,6 @@
 # Publishing Events
 
-How producers publish events to a Nexus domain: get authorized, register a schema, then publish with store-and-forward durability. You never name an environment, registry, or event bus — the API stage selects the environment and Nexus derives everything else.
+How producers publish events to a Konductor domain: get authorized, register a schema, then publish with store-and-forward durability. You never name an environment, registry, or event bus — the API stage selects the environment and Konductor derives everything else.
 
 This guide assumes your domain is `ACTIVE` (see [Domain Management Guide](domain-management.md)) and uses `awscurl` against the IAM surface, as the [Domain Management Guide](domain-management.md) does. The OAuth surface exposes the same operations with the same semantics for interactive callers (see [OAuth Authentication Guide](development/oauth-authentication-guide.md)).
 
@@ -14,11 +14,11 @@ POST /{stage}/publish   { "domain", "eventName", "data", "idempotencyKey"? }
         ▼  202 Accepted (requestId = queue message ID)
    SQS queue  ── durable before anything can fail ──
         ▼
-   Nexus consumer: authorize → resolve latest schema version →
+   Konductor consumer: authorize → resolve latest schema version →
    stamp canonical envelope → PutEvents to the domain's event bus
 ```
 
-You hand Nexus a domain, an event name, and your business data. Nexus authorizes the call against your domain's publisher bindings, derives the canonical event identity, resolves the latest schema version in the target environment, stamps the envelope metadata, and delivers to the domain's bus. `202 Accepted` means the event is durably queued — delivery and retries are the platform's problem from that point.
+You hand Konductor a domain, an event name, and your business data. Konductor authorizes the call against your domain's publisher bindings, derives the canonical event identity, resolves the latest schema version in the target environment, stamps the envelope metadata, and delivers to the domain's bus. `202 Accepted` means the event is durably queued — delivery and retries are the platform's problem from that point.
 
 ## Before you can publish: publisher bindings
 
@@ -61,7 +61,7 @@ awscurl -X POST "${API_URL}/schemas" --region ${AWS_REGION} \
 
 Key things to know:
 
-- **Nexus owns the schema name.** It is always `{org}-{domain}@{eventName}`, derived from the domain's registered namespace identity. You never supply a schema name, version, or registry.
+- **Konductor owns the schema name.** It is always `{org}-{domain}@{eventName}`, derived from the domain's registered namespace identity. You never supply a schema name, version, or registry.
 - **Event names are validated up front.** Characters are limited to `[A-Za-z0-9._-]`, and the name must be able to form a valid subscription rule name within EventBridge's 64-character limit. Invalid names fail with `400` before anything is written.
 - **Duplicates are rejected, never replaced.** Creating an existing schema returns `409 Conflict`; the existing schema and all its versions remain unchanged.
 - **The domain must be `ACTIVE`.** Otherwise `404 Not Found`, and no registry write occurs.
@@ -93,7 +93,7 @@ awscurl -X POST "${API_URL}/publish" --region ${AWS_REGION} \
 { "requestId": "493f4be1-...", "message": "Request accepted" }
 ```
 
-The body accepts exactly `domain`, `eventName`, `data`, and an optional `idempotencyKey` — anything else is rejected. Nexus derives the rest and delivers this envelope to the domain's bus:
+The body accepts exactly `domain`, `eventName`, `data`, and an optional `idempotencyKey` — anything else is rejected. Konductor derives the rest and delivers this envelope to the domain's bus:
 
 ```json
 {
@@ -115,7 +115,7 @@ The body accepts exactly `domain`, `eventName`, `data`, and an optional `idempot
 - `metadata.idempotencyKey` is your key, or the API Gateway request ID if you omit it.
 - `metadata.publishedAt` is when the platform accepted the event (the queue timestamp), not when it was delivered.
 
-Nexus validates the envelope it generates (identity, numeric version, structure, EventBridge size limits) but **never validates your `data` against the schema content** — schema conformance is a contract between you and your consumers.
+Konductor validates the envelope it generates (identity, numeric version, structure, EventBridge size limits) but **never validates your `data` against the schema content** — schema conformance is a contract between you and your consumers.
 
 ## Durability, retries, and idempotency
 
@@ -134,11 +134,11 @@ Nexus validates the envelope it generates (identity, numeric version, structure,
 | `403` (schema writes) | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
 | `404` (schema writes) | Domain missing/inactive, or appending a version to a schema that does not exist | Check domain status; create the schema first |
 | `409` (create schema) | Schema already exists in this environment | Append a version instead |
-| `202` then nothing arrives | Publish denied (no binding), schema missing in that environment, or delivery failing | Confirm your binding; check the schema exists (`GET /schemas?domain=...`); the platform's publish DLQ holds exhausted messages |
+| `202` then nothing arrives | Publish denied (no binding), schema missing in that environment, or delivery failing | Confirm your binding; check the schema exists (`GET /schemas/{schemaName}?domain=...` — any caller with a binding on a covered consumer domain, or a platform role, can describe); the platform's publish DLQ holds exhausted messages |
 
 ## Discovering schemas
 
-`GET /schemas?domain={domain}` lists a domain's schemas with the latest version per environment, and `GET /schemas/{schemaName}?domain={domain}` returns detail including content. Use it to confirm your schema landed in the right environment, or to browse another domain's contract before subscribing. Discovery is currently open to any authenticated caller; see [Domain Management Guide — Discovering schemas](domain-management.md#discovering-schemas).
+`GET /schemas?consumerDomain={domain}` is the subscriber catalog: it expands that consumer domain's entitlements into the covered schemas with the latest version per environment — every listed entry is currently subscribable. `GET /schemas/{schemaName}?consumerDomain={domain}&domain={producer}` returns detail including content; uncovered targets answer `403`. Platform roles omit `consumerDomain` for the platform-wide view. See [Domain Management Guide — Discovering schemas](domain-management.md#discovering-schemas).
 
 ## Deep dive
 

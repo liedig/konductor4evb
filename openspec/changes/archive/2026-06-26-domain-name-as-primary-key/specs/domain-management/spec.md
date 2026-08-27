@@ -2,7 +2,7 @@
 
 ### Requirement: Domain name as primary identifier
 
-The domain name SHALL be the sole identifier for a domain throughout the system. Domain names SHALL be globally unique within the Nexus installation. This uniqueness is an intentional governance feature that forces domain owners to make explicit bounded-context decisions, aligning with DDD and EDA principles. The system SHALL NOT generate or use a surrogate identifier (e.g., UUID) for domains. API paths, event payloads, DynamoDB keys, and Step Functions inputs SHALL all use the domain name as the domain identifier.
+The domain name SHALL be the sole identifier for a domain throughout the system. Domain names SHALL be globally unique within the Konductor installation. This uniqueness is an intentional governance feature that forces domain owners to make explicit bounded-context decisions, aligning with DDD and EDA principles. The system SHALL NOT generate or use a surrogate identifier (e.g., UUID) for domains. API paths, event payloads, DynamoDB keys, and Step Functions inputs SHALL all use the domain name as the domain identifier.
 
 #### Scenario: Domain name used in API paths
 
@@ -27,7 +27,7 @@ The system SHALL assume one AWS account per domain for application-side resource
 
 - **WHEN** a domain is registered with an `ownerAccountId`
 - **THEN** all application-side resources for all environments of that domain SHALL be provisioned in that account
-- **AND THEN** the trust stack in that account SHALL grant the Nexus cross-account access to manage those resources
+- **AND THEN** the trust stack in that account SHALL grant the Konductor cross-account access to manage those resources
 
 ### Requirement: Primary and secondary owner model
 
@@ -113,7 +113,7 @@ The domain management capability SHALL emit the following events. Each event SHA
 
 Domain management is an administrative function of the control plane. Domain owners SHALL be able to request registration of a new domain by submitting a command that is processed asynchronously. The API SHALL accept the command and return immediately with a request ID (SQS message ID) and a descriptive message. Each request SHALL go through an approval process; only after approval SHALL the provisioning workflow be triggered. All domain details SHALL be stored in the single domains DynamoDB table. The domain name SHALL be used as the DynamoDB partition key. Uniqueness SHALL be enforced atomically via a conditional `PutItem` with `attribute_not_exists(domainName)` — the system SHALL NOT perform a pre-write query to check for duplicates.
 
-The set of environments a domain is provisioned into SHALL be determined by the **platform team**, not the requester. The Nexus platform SHALL hold a single configured environment list (default `["dev", "staging", "prod"]`), and every approved domain SHALL be provisioned into the full list. The registration API SHALL NOT accept an `environments` field. All environments of a given domain SHALL be provisioned into the same `ownerAccountId`.
+The set of environments a domain is provisioned into SHALL be determined by the **platform team**, not the requester. The Konductor platform SHALL hold a single configured environment list (default `["dev", "staging", "prod"]`), and every approved domain SHALL be provisioned into the full list. The registration API SHALL NOT accept an `environments` field. All environments of a given domain SHALL be provisioned into the same `ownerAccountId`.
 
 #### Scenario: Registration command accepted and enqueued
 

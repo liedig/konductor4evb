@@ -1,18 +1,18 @@
 # OAuth Authentication Guide
 
-This guide explains how the Cognito user pool is provisioned, what claims the Nexus authorizer validates, and how to obtain an access token and call the OAuth API surface using API testing tools such as Insomnia, Postman, or curl.
+This guide explains how the Cognito user pool is provisioned, what claims the Konductor authorizer validates, and how to obtain an access token and call the OAuth API surface using API testing tools such as Insomnia, Postman, or curl.
 
 ---
 
-## What Nexus Provisions
+## What Konductor Provisions
 
 When you deploy the core stack (`make deploy-core`), SAM creates the following Cognito resources automatically:
 
 | Resource | Purpose |
 |----------|---------|
-| **User Pool** (`{org}-nexus-users`) | Stores user accounts. Email is the username attribute. Admin-created users only (no self-registration). Password policy: 12+ chars, mixed case, numbers. |
-| **User Pool Domain** (`{org}-nexus-{account-id}`) | Hosted UI domain for the OAuth authorization-code flow. |
-| **App Client** (`{org}-nexus-control-plane`) | OAuth client using the authorization-code flow with `openid`, `email`, and `profile` scopes. No client secret (public client). Access token validity is configurable (default 60 minutes). |
+| **User Pool** (`{org}-konductor-users`) | Stores user accounts. Email is the username attribute. Admin-created users only (no self-registration). Password policy: 12+ chars, mixed case, numbers. |
+| **User Pool Domain** (`{org}-konductor-{account-id}`) | Hosted UI domain for the OAuth authorization-code flow. |
+| **App Client** (`{org}-konductor-control-plane`) | OAuth client using the authorization-code flow with `openid`, `email`, and `profile` scopes. No client secret (public client). Access token validity is configurable (default 60 minutes). |
 | **Group: `platform-admin`** | Maps to the `PlatformAdmin` global role. Can access all API methods including POST (writes) and the approval endpoint. |
 | **Group: `platform-auditor`** | Maps to the `PlatformAuditor` global role. Can only access GET (read) endpoints. Cannot mutate or approve. |
 
@@ -33,7 +33,7 @@ Retrieve them with:
 
 ```bash
 aws cloudformation describe-stacks \
-  --stack-name nexus-core \
+  --stack-name konductor-core \
   --query 'Stacks[0].Outputs[?starts_with(OutputKey, `Cognito`) || OutputKey==`OAuthApiEndpoint`].[OutputKey,OutputValue]' \
   --output table
 ```
@@ -41,6 +41,21 @@ aws cloudformation describe-stacks \
 ---
 
 ## Setting Up Users
+
+### 0. Shortcut: seed the development personas
+
+`make seed-users` (or `./scripts/seed-users.sh`) creates the two standard
+test personas with permanent passwords, creating the team group if absent:
+
+```bash
+ALICE_PASSWORD='...' BOB_PASSWORD='...' make seed-users
+```
+
+- `alice@example.com` → `platform-admin` (approvals inbox, enable/disable, full reads)
+- `bob@example.com` → `team-payments` (team caller: registers and owns domains, scoped reads)
+
+The script is idempotent — re-running re-asserts passwords and membership.
+The steps below show the equivalent manual flow.
 
 ### 1. Create a user
 
@@ -88,7 +103,7 @@ aws cognito-idp admin-set-user-password \
 
 ## Required Access-Token Claims
 
-The Nexus OAuth authorizer validates the following claims on every request. An access token that fails any check is rejected with `401 Unauthorized`.
+The Konductor OAuth authorizer validates the following claims on every request. An access token that fails any check is rejected with `401 Unauthorized`.
 
 | Claim | Required Value | Verified By |
 |-------|---------------|-------------|
@@ -104,9 +119,9 @@ The Nexus OAuth authorizer validates the following claims on every request. An a
 
 | Cognito Group | Global Role | API Access |
 |---------------|------------|------------|
-| `platform-admin` | `PlatformAdmin` | All methods (GET, POST, PUT, PATCH, DELETE) on all OAuth endpoints |
+| `platform-admin` | `PlatformAdmin` | All methods on all OAuth endpoints |
 | `platform-auditor` | `PlatformAuditor` | GET-only on read endpoints; all write and approve endpoints return `403` |
-| Any other group (e.g. `team-payments`) | No global role (opaque team-group) | No API access by itself; team-group identifiers are carried in the trusted-principal context for the future authorization engine |
+| Any other group (e.g. `team-payments`) | No global role (opaque team-group) | No API access by itself; team-group identifiers are carried in the trusted-principal context for grant-engine role-binding evaluation |
 
 ### What the Authorizer Does NOT Do
 
@@ -119,7 +134,7 @@ The Nexus OAuth authorizer validates the following claims on every request. An a
 
 ## Obtaining an Access Token
 
-Nexus uses the OAuth 2.0 **authorization-code** flow. The app client does not have a client secret (public client), so the token exchange does not require one.
+Konductor uses the OAuth 2.0 **authorization-code** flow. The app client does not have a client secret (public client), so the token exchange does not require one.
 
 ### Option A: Hosted UI (Browser)
 
@@ -191,6 +206,16 @@ https://<OAUTH_DOMAIN>/login?
 
 After login, the browser redirects to `http://localhost?code=XXXX`. Copy the code and exchange it as shown in Option A.
 
+### Option D: Custom Login (SRP, no Hosted UI)
+
+First-party consoles (for example the Konductor web UI) sign users in with the
+SRP flow instead of redirecting to the hosted UI. The user-pool client allows
+`ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH`; raw-password
+authentication stays disabled, so credentials never traverse the client.
+AWS's Amplify Auth (`signIn`/`fetchAuthSession`) implements the SRP
+handshake for browser apps; store tokens in `sessionStorage`, not
+`localStorage`.
+
 ---
 
 ## Calling the API
@@ -199,21 +224,29 @@ After login, the browser redirects to `http://localhost?code=XXXX`. Copy the cod
 
 | Method | Path | Required Role | Description |
 |--------|------|--------------|-------------|
-| GET | `/domains` | admin or auditor | List domains (paginated, filterable) |
-| POST | `/domains` | admin | Register a new domain (async, 202) |
-| GET | `/domains/{domainName}` | admin or auditor | Describe a single domain |
-| PUT | `/domains/{domainName}` | admin | Update domain metadata (async, 202) |
+| GET | `/domains` | admin or auditor (unscoped); team callers see owned domains | List domains (paginated, filterable) |
+| GET | `/domains?view=directory` | any authenticated caller | Names-only directory projection (name, namespace, description, status) for pickers |
+| POST | `/domains` | any authenticated caller with a team group | Register a new domain owned by `owningTeam` (async, 202) |
+| GET | `/domains/{domainName}` | admin or auditor; owning team | Describe a single domain (404 for other teams, same as missing) |
+| PUT | `/domains/{domainName}` | owning team or admin | Update domain metadata — description, emails, tags (async, 202) |
+| GET | `/domains/registrations/pending` | admin | Approvals inbox: pending registrations with `taskToken` and owning team |
 | POST | `/domains/registrations/decide` | admin | Approve or reject a registration |
-| GET | `/subscriptions` | admin or auditor | List subscriptions (filtered by caller account) |
+| POST | `/domains/{domainName}/state` | admin | Enable/disable a domain (`{"action": "enable"\|"disable"}`); shallow: existing estate is retained |
+| GET | `/subscriptions?domain=…&direction=…` | admin or auditor | List subscriptions (inbound/outbound, binding-scoped) |
 | POST | `/subscriptions` | admin | Subscribe to a producer schema (async, 202) |
+| POST | `/subscriptions/state` | admin | Enable/disable per environment (async, 202) |
 | GET | `/subscriptions/{subscriptionId}` | admin or auditor | Describe a subscription |
-| PATCH | `/subscriptions/{subscriptionId}` | admin | Enable/disable per environment (async, 202) |
 | DELETE | `/subscriptions/{subscriptionId}` | admin | Unsubscribe (async, 202) |
-| GET | `/schemas` | admin or auditor | List schemas for a domain |
-| GET | `/schemas/{schemaName}` | admin or auditor | Describe a schema (latest versions per env) |
-| POST | `/bindings` | admin | Create a role binding (idempotent) |
+| GET | `/schemas?consumerDomain=…` | admin or auditor; subscriber binding | Subscriber catalog (entitlement-expanded; omit consumerDomain for the platform-wide view) |
+| GET | `/schemas?domain=…` | publisher binding on the domain | Producer scope: the publisher's own catalog without self-entitlements |
+| GET | `/schemas/{schemaName}?consumerDomain=…&domain=…` | admin or auditor | Describe a schema (latest versions per env; 403 when uncovered) |
+| GET | `/schemas/{schemaName}?domain=…` | publisher binding on the domain | Describe an own-domain schema without a consumer context |
+| POST | `/bindings` | admin | Create a role binding (idempotent); `owner` bindings transfer domain ownership |
 | GET | `/bindings?domain=…` | admin | List role bindings for a domain |
 | DELETE | `/bindings/{bindingId}` | admin | Revoke a role binding (durable) |
+| POST | `/entitlements` | admin | Create a subscriber entitlement (deterministic key, idempotent) |
+| GET | `/entitlements?consumerDomain=…` | admin | List entitlements by consumer or producer domain |
+| DELETE | `/entitlements/{entitlementId}` | admin | Revoke an entitlement (converges subscriptions via the revocation pipeline) |
 
 ### Using curl
 
@@ -224,14 +257,16 @@ TOKEN="<ACCESS_TOKEN>"
 # List domains
 curl -s -H "Authorization: Bearer $TOKEN" "$API_URL/domains" | jq .
 
-# Register a domain
+# Register a domain (owningTeam must be one of your team groups; platform
+# groups are never team groups, so platform teams cannot own domains)
 curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "domainName": "billing",
     "ownerAccountId": "111122223333",
     "ownerEmail": "owner@example.com",
-    "secondaryOwnerEmails": ["backup@example.com"]
+    "secondaryOwnerEmails": ["backup@example.com"],
+    "owningTeam": "team-payments"
   }' \
   "$API_URL/domains" | jq .
 
@@ -313,7 +348,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 
 ## Bootstrapping Role Bindings
 
-Resource authorization decisions are answered by the grant engine from the `nexus-authorization-bindings` table: a principal (a Cognito team group, issuer-qualified, or an AWS account) holds a role (`publisher` or `subscriber`) on a domain. Until a binding exists, every resource-scoped action by that principal is denied.
+Resource authorization decisions are answered by the grant engine from the `konductor-authorization-bindings` table: a principal (a Cognito team group, issuer-qualified, or an AWS account) holds a role (`publisher` or `subscriber`) on a domain. Until a binding exists, every resource-scoped action by that principal is denied.
 
 Binding administration cannot deadlock against an empty table: the `platform-admin` global role resolves from the controlled Cognito group (`platform-admin`), never from the grant table. Any platform-admin access token can always create the first bindings.
 
@@ -338,6 +373,21 @@ Notes:
 - AWS-account bindings apply to every principal in the account (IAM role, user, or session); there is no per-ARN granularity.
 - Server-assigned fields (`bindingId`, `state`, `createdAt`, `createdBy`) are rejected if supplied in a create body.
 - Revocation is a durable delete that takes effect on the next authorization decision; list bindings with `GET /bindings?domain=<domain>` to find the `bindingId` to revoke.
+
+### Seeding entitlements (migration path)
+
+Consumer domains retain event access through **entitlements**. Seed them the same way — through the admin API, idempotent on re-run:
+
+```bash
+TOKEN="<platform-admin access token>" \
+ENTITLEMENTS='[
+  {"consumerDomain":"checkout","producerDomain":"orders","scopePattern":"*"},
+  {"consumerDomain":"billing","producerDomain":"orders","scopePattern":"Order*"}
+]' \
+make seed-entitlements
+```
+
+Migration order matters: seed the `subscriber` **bindings first** (`make seed-bindings`), then the entitlements, then let the revocation worker and hourly sweep re-evaluate any existing subscriptions — subscriptions whose coverage lapsed are disabled, never deleted, and nothing re-enables them automatically. The scope grammar: `*` covers the producer's whole domain including future schemas, an exact event name covers all its versions including future ones, and a trailing `*` covers a name family.
 
 ## Decoding and Inspecting a Token
 
@@ -380,7 +430,8 @@ Key things to verify:
 | `403` on decide endpoint | Principal is IAM (not OAuth), or missing `platform-admin` role | The decide endpoint is OAuth-only; use an access token from a `platform-admin` user |
 | `400` with `decidedBy` error | Request body contains a `decidedBy` field | Remove `decidedBy` from the body; it is derived from the token's `sub` claim |
 | `400 ValidationException` on decide | Missing `taskToken` in the body, or missing `justification` on a REJECT | Include `taskToken` (from the approval email) and `justification` when rejecting |
-| Token works but writes return `SubscribeFailed` / `RegistrationFailed` | OAuth mutations are not yet enabled on these paths (`IamOnlyAuthorizer` bridge denies OAuth writes) | This is expected until those paths migrate to the grant engine. IAM-authenticated callers (AWS CLI with SigV4) can still write. |
+| Writes return `RegistrationFailed` / `UpdateDomainFailed` with an `unauthorized` reason | Caller lacks the required role: registration needs `owningTeam` ∈ the caller's team groups; update needs an `owner` binding on the domain or `platform-admin` | Join the owning team group, or ask a platform admin to grant an `owner` binding via `POST /bindings` |
+| `403` on list/describe for a domain your team owns | Missing `owner` binding (domains registered before ownership-at-approval) | Backfill with `DOMAIN_TEAMS='{"<domain>": "<team-group>"}' make backfill-owner-bindings` (dry-run with `DRY_RUN=1`) |
 
 ---
 

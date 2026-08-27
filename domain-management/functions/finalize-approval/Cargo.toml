@@ -1,0 +1,28 @@
+[package]
+name = "finalize-approval"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+aws-config = { workspace = true }
+aws-sdk-dynamodb = { workspace = true }
+chrono = { workspace = true }
+konductor-common = { path = "../../../lib/konductor-common" }
+lambda_runtime = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+aws-smithy-mocks = { workspace = true }
+
+[lints]
+workspace = true

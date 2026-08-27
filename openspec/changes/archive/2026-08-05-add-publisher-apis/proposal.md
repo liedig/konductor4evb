@@ -4,7 +4,7 @@ The PRFAQ promises simple `publish`, `subscribe`, and `unsubscribe` API operatio
 
 ## What Changes
 
-- Add `POST /publish` flat verb endpoint with store-and-forward durability via SQS. The caller provides domain, event name, and business data; Nexus resolves the schema, constructs the canonical envelope, and publishes to the domain's event bus for the stage-selected environment.
+- Add `POST /publish` flat verb endpoint with store-and-forward durability via SQS. The caller provides domain, event name, and business data; Konductor resolves the schema, constructs the canonical envelope, and publishes to the domain's event bus for the stage-selected environment.
 - Add schema management endpoints (`POST /schemas`, `POST /schemas/versions`) that mimic the EventBridge schema API. Publishers create schemas and append versions in platform-managed registries.
 - Use environment-named API stages (`dev`, `staging`, `prod`) instead of a static `v1` stage. Publish and schema operations infer the target environment from `$context.stage`; the publish consumer reads it from SQS message attributes.
 - Extend the canonical envelope `detail.metadata` with `idempotencyKey` (caller-optional, else generated at API Gateway time) and `publishedAt` (SQS `SentTimestamp`, immutable from queue time). Both survive EventBridge replays.

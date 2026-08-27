@@ -7,11 +7,11 @@ template_file = "benchmark-stack.yaml"
 template_file = "benchmark-stack.yaml"
 
 [default.deploy.parameters]
-stack_name = "nexus-grant-benchmark"
+stack_name = "konductor-grant-benchmark"
 resolve_s3 = true
 capabilities = "CAPABILITY_IAM"
 confirm_changeset = false
-tags = "Application=nexus Component=benchmark auto-delete=yes"
+tags = "Application=konductor Component=benchmark auto-delete=yes"
 
 [default.delete.parameters]
-stack_name = "nexus-grant-benchmark"
+stack_name = "konductor-grant-benchmark"

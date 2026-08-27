@@ -27,7 +27,7 @@ The schema-management capability SHALL NOT provide schema registration, mutation
 
 #### Scenario: No write operations exposed
 
-- **WHEN** a caller attempts to create, update, or delete a schema through the Nexus API
+- **WHEN** a caller attempts to create, update, or delete a schema through the Konductor API
 - **THEN** no such endpoint SHALL exist in the OpenAPI contract
 
 #### Scenario: Discovery open to authenticated callers

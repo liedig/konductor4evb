@@ -2,7 +2,7 @@
 
 ### Requirement: Installation guide
 
-The project SHALL provide a complete, runnable installation guide at `docs/installation.md` that walks a first-time operator through deploying Nexus into their own AWS environment from scratch.
+The project SHALL provide a complete, runnable installation guide at `docs/installation.md` that walks a first-time operator through deploying Konductor into their own AWS environment from scratch.
 
 #### Scenario: First-time operator completes installation
 
@@ -43,7 +43,7 @@ The installation guide SHALL include a troubleshooting section covering common f
 
 The installation guide SHALL include an uninstall section that walks the operator through removing all deployed resources.
 
-#### Scenario: Operator removes Nexus installation
+#### Scenario: Operator removes Konductor installation
 
 - **WHEN** an operator follows the uninstall section
 - **THEN** the guide SHALL describe deleting all domains first (waiting for DELETED status)

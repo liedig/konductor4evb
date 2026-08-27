@@ -2,13 +2,13 @@
 
 ## Purpose
 
-How Nexus decides whether a trusted principal may act on a domain: typed-principal role bindings in a dedicated bindings table, additive grant evaluation with default denial, strongly consistent decision reads, conditional mutation writes with atomic token-free audit, an in-memory evaluator with fixture parity for tests and local development, and platform-admin binding administration on the OAuth control-plane surface.
+How Konductor decides whether a trusted principal may act on a domain: typed-principal role bindings in a dedicated bindings table, additive grant evaluation with default denial, strongly consistent decision reads, conditional mutation writes with atomic token-free audit, an in-memory evaluator with fixture parity for tests and local development, and platform-admin binding administration on the OAuth control-plane surface.
 
 ## Requirements
 
 ### Requirement: Binding storage holds typed principal role bindings
 
-Nexus SHALL store role bindings in a dedicated bindings table keyed by typed principal and domain. A binding principal SHALL be exactly one of an issuer-qualified Cognito team group or a twelve-digit AWS account. A binding SHALL grant exactly one resource role (`publisher` or `subscriber`) on exactly one domain. The store SHALL NOT represent a global (domain-less) resource-role binding. Every binding SHALL carry a stable binding identifier, state, creation metadata, and the trusted actor that created it.
+Konductor SHALL store role bindings in a dedicated bindings table keyed by typed principal and domain. A binding principal SHALL be exactly one of an issuer-qualified Cognito team group or a twelve-digit AWS account. A binding SHALL grant exactly one resource role (`publisher` or `subscriber`) on exactly one domain. The store SHALL NOT represent a global (domain-less) resource-role binding. Every binding SHALL carry a stable binding identifier, state, creation metadata, and the trusted actor that created it.
 
 #### Scenario: Cognito team-group binding is stored
 
@@ -98,7 +98,7 @@ Binding mutations SHALL use conditional writes: creates SHALL be idempotent for 
 
 ### Requirement: In-memory evaluator parity
 
-Nexus SHALL provide an in-memory engine implementing the same `ResourceAuthorizer` contract for tests and local development. A shared fixture suite, seeded from the authorization-engine spike's frozen fixture manifest, SHALL prove identical decisions between the in-memory and DynamoDB implementations.
+Konductor SHALL provide an in-memory engine implementing the same `ResourceAuthorizer` contract for tests and local development. A shared fixture suite, seeded from the authorization-engine spike's frozen fixture manifest, SHALL prove identical decisions between the in-memory and DynamoDB implementations.
 
 #### Scenario: Fixture suite passes on both engines
 

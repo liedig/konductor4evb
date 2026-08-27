@@ -1,11 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "lib/nexus-common",
+    "lib/konductor-common",
     "domain-management/functions/decide-registration",
     "domain-management/functions/describe-domain",
+    "domain-management/functions/domain-count-reporter",
     "domain-management/functions/domain-registrations",
+    "domain-management/functions/domain-state",
+    "domain-management/functions/finalize-approval",
     "domain-management/functions/list-domains",
+    "domain-management/functions/pending-registrations",
     "domain-management/functions/send-approval-outcome-notification",
     "domain-management/functions/send-approval-request-notification",
     "domain-management/functions/send-provisioning-failed-notification",
@@ -22,6 +26,10 @@ members = [
     "event-streams/functions/describe-schema",
     "control-plane/functions/oauth-authorizer",
     "control-plane/functions/binding-admin",
+    "control-plane/functions/entitlement-admin",
+    "control-plane/functions/entitlement-coverage-sweep",
+    "control-plane/functions/entitlement-revocation-worker",
+    "control-plane/functions/entitlement-stream-consumer",
     "control-plane/functions/grant-benchmark",
 ]
 
@@ -35,9 +43,11 @@ aws-sdk-dynamodb = { version = "1", features = ["test-util"] }
 aws-sdk-eventbridge = { version = "1", features = ["test-util"] }
 aws-sdk-sesv2 = { version = "1", features = ["test-util"] }
 aws-sdk-sfn = { version = "1", features = ["test-util"] }
-aws-sdk-sqs = "1"
+aws-sdk-sqs = { version = "1", features = ["test-util"] }
+aws-sdk-ssm = { version = "1", features = ["test-util"] }
 aws-sdk-sts = "1"
 aws-sdk-schemas = { version = "1", features = ["test-util"] }
+sha2 = "0.11"
 aws-sdk-cloudwatch = "1"
 jsonwebtoken = "9"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
@@ -50,7 +60,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 aws-smithy-mocks = "0.2"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"

@@ -1,18 +1,18 @@
 version = 0.1
 
 [default.build.parameters]
-template_file = "nexus-core-stack.yaml"
+template_file = "konductor-core-stack.yaml"
 
 [default.sync.parameters]
-template_file = "nexus-core-stack.yaml"
+template_file = "konductor-core-stack.yaml"
 
 [default.validate.parameters]
-template_file = "nexus-core-stack.yaml"
+template_file = "konductor-core-stack.yaml"
 
 [default.deploy.parameters]
-stack_name = "nexus-core"
+stack_name = "konductor-core"
 resolve_s3 = true
 capabilities = "CAPABILITY_NAMED_IAM"
 confirm_changeset = false
-parameter_overrides = "Organization=acme AwsOrganizationArn=arn:aws:organizations::444433332222:organization/o-lipnxj8tgf NotificationSenderEmail=sliedig+nexus@example.com PlatformOperatorEmail=sliedig+nexus@example.com"
-tags = "Application=nexus Component=core auto-delete=no"
+parameter_overrides = "Organization=acme AwsOrganizationArn=arn:aws:organizations::444433332222:organization/o-lipnxj8tgf NotificationSenderEmail=sliedig+konductor@example.com PlatformOperatorEmail=sliedig+konductor@example.com"
+tags = "Application=konductor Component=core auto-delete=no"

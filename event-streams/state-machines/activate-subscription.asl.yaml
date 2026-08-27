@@ -36,12 +36,61 @@ States:
           Assign:
             pinnedVersion: "{% $number($states.result.SchemaVersion) %}"
           Output: "{% $states.input %}"
-          Next: CreateSubscriptionRule
+          Next: GateCoverageCheck
           Catch:
             - ErrorEquals:
                 - States.ALL
               Next: FailEnvActivation
               Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'ResolveLatestSchemaVersion' } }]) %}"
+
+        # Final coverage check: an entitlement revoked between the subscribe
+        # command and this activation must stop the rule going ENABLED.
+        # Rules created DISABLED and self-subscriptions skip the check.
+        GateCoverageCheck:
+          Type: Choice
+          Choices:
+            - Condition: "{% $states.input.enabled = false %}"
+              Next: CreateSubscriptionRule
+            - Condition: "{% $states.input.consumerDomain = $states.input.producerDomain %}"
+              Next: CreateSubscriptionRule
+          Default: QueryCoveringEntitlements
+
+        # Same additive rule the grant engine applies: any current entitlement
+        # for the consumer whose producer matches and whose scope pattern
+        # covers the detail type. Uncovered or unreadable both fail closed.
+        QueryCoveringEntitlements:
+          Type: Task
+          # Query has no optimized integration (get/put/update/delete only);
+          # it must go through the SDK prefix like every other Query in the repo.
+          Resource: "arn:aws:states:::aws-sdk:dynamodb:query"
+          Arguments:
+            TableName: "${EntitlementsTable}"
+            ConsistentRead: true
+            KeyConditionExpression: "PK = :pk"
+            ExpressionAttributeValues:
+              ":pk":
+                S: "{% 'CONSUMER#' & $states.input.consumerDomain %}"
+          Assign:
+            covered: "{% $count($states.result.Items[ producerDomain.S = $states.input.producerDomain and ( scopePattern.S = '*' or scopePattern.S = $states.input.detailType or ( $substring(scopePattern.S, -1) = '*' and $substring($states.input.detailType, 0, $length(scopePattern.S) - 1) = $substring(scopePattern.S, 0, $length(scopePattern.S) - 1) ) ) ]) > 0 %}"
+          Output: "{% $states.input %}"
+          Next: CoverageGate
+          Catch:
+            - ErrorEquals:
+                - States.ALL
+              Next: FailEnvActivation
+              Output: "{% $merge([$states.input, { 'error': { 'Error': $states.errorOutput.Error, 'Cause': $states.errorOutput.Cause, 'FailedStep': 'EntitlementCoverage' } }]) %}"
+
+        CoverageGate:
+          Type: Choice
+          Choices:
+            - Condition: "{% $covered %}"
+              Next: CreateSubscriptionRule
+          Default: FailEntitlementCoverage
+
+        FailEntitlementCoverage:
+          Type: Pass
+          Output: "{% $merge([$states.input, { 'error': { 'Error': 'EntitlementCoverage', 'Cause': 'no covering entitlement for consumer ' & $states.input.consumerDomain & ' on ' & $states.input.schemaName, 'FailedStep': 'EntitlementCoverage' } }]) %}"
+          Next: FailEnvActivation
 
         # Version-agnostic name; version pinned in the pattern. PutRule is an
         # upsert, so retries and future version migrations are the same call.
@@ -199,8 +248,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.event-streams
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.event-streams
           DetailType: SubscriptionActivated
           Detail: >-
             {% $string({
@@ -309,8 +358,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.event-streams
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.event-streams
           DetailType: SubscriptionActivationFailed
           Detail: >-
             {% $string({

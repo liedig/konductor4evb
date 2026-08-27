@@ -41,7 +41,7 @@ The approval ASL (`approval.asl.yaml`) includes `secondaryOwnerEmails` in the `N
 
 ### 6. Smoke test email pattern
 
-The Makefile smoke test currently uses `OWNER_EMAIL` for the domain owner, which in practice was set to the same value as `PlatformOperatorEmail` (`sliedig+nexus@example.com`). The fix:
+The Makefile smoke test currently uses `OWNER_EMAIL` for the domain owner, which in practice was set to the same value as `PlatformOperatorEmail` (`sliedig+konductor@example.com`). The fix:
 
 - `OWNER_EMAIL` defaults to `sliedig+$(APP_ACCOUNT_ID)+primary@example.com` pattern in documentation
 - A new `SECONDARY_OWNER_EMAIL` make variable is required for the smoke test, defaulting to `sliedig+$(APP_ACCOUNT_ID)+secondary@example.com` pattern in documentation

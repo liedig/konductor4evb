@@ -19,7 +19,7 @@ The smoke test email issue compounds this: when the domain owner email matches t
 - **Secondary owner emails are informational only** — no notification emails are sent to secondary owners in this change. The primary `ownerEmail` remains the sole notification target for approval, rejection, and provisioning-failure emails.
 - **No DynamoDB schema migration** — DynamoDB is schemaless; new records will include the `secondaryOwnerEmails` attribute. Existing records (smoke-test domain) will not have the field until re-registered.
 - **Event payloads include `secondaryOwnerEmails`** — the field is included in `RegisterDomainSucceeded`, `DomainRegistrationApproved`, and `DomainRegistrationRejected` event payloads for audit and downstream visibility.
-- **Smoke test uses distinct emails** — primary owner: `sliedig+demo+primary@example.com`, secondary owner: `sliedig+demo+secondary@example.com`, platform team: `sliedig+nexus@example.com` (unchanged).
+- **Smoke test uses distinct emails** — primary owner: `sliedig+demo+primary@example.com`, secondary owner: `sliedig+demo+secondary@example.com`, platform team: `sliedig+konductor@example.com` (unchanged).
 
 ## Affected Areas
 

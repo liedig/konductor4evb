@@ -8,7 +8,7 @@
 
 ## 1. Decision
 
-**DynamoDB-backed grants are conditionally ready as Nexus's initial authorization engine.**
+**DynamoDB-backed grants are conditionally ready as Konductor's initial authorization engine.**
 
 The design satisfies mandatory correctness and non-disclosure behavior in-cloud, is cheap, scales,
 and is operationally simple. The single condition is **in-region latency validation**: the spike
@@ -55,7 +55,7 @@ From `slo-recommendations.md` (in-region, per evaluator instance):
 Amazon Verified Permissions was evaluated and **rejected as the initial engine** (captured in
 `design.md` and the explore-phase decision). Rationale:
 
-- Nexus authorization is domain-pairing grants (consumer/producer/schema coverage), not a rich
+- Konductor authorization is domain-pairing grants (consumer/producer/schema coverage), not a rich
   Cedar policy hierarchy; a dedicated policy engine adds learning/cost/latency surface without
   matching expressive need at this stage.
 - DynamoDB-backed grants reuse the team's existing DynamoDB skills and infrastructure, keep the
@@ -95,9 +95,9 @@ authorization contract or the frozen scenarios.
 
 - [x] **6.4** Two-reviewer qualitative verification — closed by operator direction (2026-07-28).
 - [x] **7.3** Independent review — closed by operator direction (2026-07-28).
-- [x] **7.4** Destroy tagged sandbox resources (completed 2026-07-28: `nexus-spike-auth-grant`
-      and `nexus-spike-auth-sub` deleted from `ap-southeast-2`, account `444433332222`;
-      `describe-table` returns `ResourceNotFoundException` for both; no `nexus-spike` tables
+- [x] **7.4** Destroy tagged sandbox resources (completed 2026-07-28: `konductor-spike-auth-grant`
+      and `konductor-spike-auth-sub` deleted from `ap-southeast-2`, account `444433332222`;
+      `describe-table` returns `ResourceNotFoundException` for both; no `konductor-spike` tables
       remain). Sanitized evidence retained under `evidence/`.
 - **Accepted residual uncertainty**: in-region latency re-measurement (EC2/Lambda in the production
   Region) was not pursued this spike (operator decision, 2026-07-28). The latency verdict remains

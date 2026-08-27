@@ -19,7 +19,7 @@
 #   ]' \
 #   ./scripts/seed-bindings.sh
 #
-# API_URL defaults to the OAuthApiEndpoint output of the nexus-core stack
+# API_URL defaults to the OAuthApiEndpoint output of the konductor-core stack
 # (requires AWS_REGION and credentials with cloudformation:DescribeStacks).
 set -euo pipefail
 
@@ -29,10 +29,15 @@ set -euo pipefail
 if [ -z "${API_URL:-}" ]; then
   : "${AWS_REGION:?AWS_REGION is required when API_URL is not set}"
   API_URL=$(aws cloudformation describe-stacks \
-    --stack-name nexus-core \
+    --stack-name konductor-core \
     --query "Stacks[0].Outputs[?OutputKey=='OAuthApiEndpoint'].OutputValue" \
     --output text \
     --region "${AWS_REGION}")
+fi
+
+if [ -z "${API_URL}" ] || [ "${API_URL}" = "None" ]; then
+  echo "konductor-core stack has no OAuthApiEndpoint output — deploy first with 'make deploy-core'" >&2
+  exit 1
 fi
 
 echo "${BINDINGS}" | jq -e 'type == "array" and length > 0' >/dev/null || {

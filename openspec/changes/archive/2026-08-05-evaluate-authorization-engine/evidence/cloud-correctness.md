@@ -8,8 +8,8 @@
 ## 1. Execution environment
 
 - Adapter: `DynamoGrantAdapter` (real DynamoDB, `ap-southeast-2`, sandbox account `444433332222`, default profile)
-- Tables: `nexus-spike-auth-grant` (pk/sk + `grant_id-index` GSI), `nexus-spike-auth-sub` (subscription_id)
-- Billing: on-demand (`PAY_PER_REQUEST`); tagged `nexus-spike=evaluate-authorization-engine`, `managed-by=droid-spike`
+- Tables: `konductor-spike-auth-grant` (pk/sk + `grant_id-index` GSI), `konductor-spike-auth-sub` (subscription_id)
+- Billing: on-demand (`PAY_PER_REQUEST`); tagged `konductor-spike=evaluate-authorization-engine`, `managed-by=droid-spike`
 - Read consistency: `StronglyConsistent` on every decision path; GSI used for revocation candidate lookup only
 - Runner: `ScenarioRunner` over `DynamoGrantAdapter`; per-scenario `seed()` clears both tables before seeding (parity with the in-memory adapter's reset semantics)
 - Frozen manifest SHA-256: `ec4efb25c034159aafb041bc50061961dc0140c10380ab794ce9067547b441b0`

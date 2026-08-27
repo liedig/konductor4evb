@@ -6,7 +6,7 @@
 
 ## 2. Publish API Contract and SQS Integration
 
-- [x] 2.1 Add `PublishRequest` model (`domain`, `eventName`, `data`, optional `idempotencyKey`) to nexus-common with validation and tests rejecting caller-supplied identity, version, registry, bus, or envelope fields
+- [x] 2.1 Add `PublishRequest` model (`domain`, `eventName`, `data`, optional `idempotencyKey`) to konductor-common with validation and tests rejecting caller-supplied identity, version, registry, bus, or envelope fields
 - [x] 2.2 Add `POST /publish` route to both OAuth and IAM OpenAPI contracts with SQS integration and `202 Accepted` response returning `requestId`
 - [x] 2.3 Write VTL mapping template for publish: inject `Environment` from `$context.stage`, inject `IdempotencyKey` (caller-supplied or `$context.requestId`), inject trusted-principal envelope attributes, push caller body to SQS
 - [x] 2.4 Add contract tests proving OAuth and IAM publish routes have identical request/response semantics and that credentials are not interchangeable
@@ -31,7 +31,7 @@
 
 ## 5. Envelope Model Extension
 
-- [x] 5.1 Add `idempotencyKey` and `publishedAt` fields to the envelope `metadata` model in nexus-common with serde and validation
+- [x] 5.1 Add `idempotencyKey` and `publishedAt` fields to the envelope `metadata` model in konductor-common with serde and validation
 - [x] 5.2 Add envelope construction tests proving `metadata` contains exactly `schemaVersion`, `idempotencyKey`, `publishedAt` and `data` contains the caller payload
 - [x] 5.3 Add envelope validation tests for numeric positive schema version, non-empty idempotency key, valid ISO 8601 timestamp, JSON serialization, and EventBridge entry limits
 
@@ -44,8 +44,8 @@
 ## 7. Infrastructure and Least Privilege
 
 - [x] 7.1 Register the publish consumer Lambda crate in the Rust workspace and add SAM resources (Lambda, SQS event source, API Gateway integrations, IAM role)
-- [x] 7.2 Grant publish consumer only domain-state read, authorization-decision (attach the reserved `nexus-bindings-table-read` managed policy from `add-grant-engine`), Schemas read, and EventBridge `PutEvents` scoped to Nexus-managed resource patterns
-- [x] 7.3 Grant schema handlers only domain-state read, authorization-decision (the reserved `nexus-bindings-table-read` managed policy), and Schemas write scoped to Nexus-managed registry patterns
+- [x] 7.2 Grant publish consumer only domain-state read, authorization-decision (attach the reserved `konductor-bindings-table-read` managed policy from `add-grant-engine`), Schemas read, and EventBridge `PutEvents` scoped to Konductor-managed resource patterns
+- [x] 7.3 Grant schema handlers only domain-state read, authorization-decision (the reserved `konductor-bindings-table-read` managed policy), and Schemas write scoped to Konductor-managed registry patterns
 - [x] 7.4 Add infrastructure assertions for OAuth/IAM route parity, distinct authorizers, stage naming, SQS integration, and absence of publisher administration permissions
 
 ## 8. Verification and Documentation

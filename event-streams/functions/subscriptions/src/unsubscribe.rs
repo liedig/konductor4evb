@@ -5,30 +5,37 @@ use std::env;
 
 use crate::handler::Clients;
 use crate::outcome;
-use crate::validate::{self, DomainLookup};
-use nexus_common::principal::{IamOnlyAuthorizer, ResourceAuthorizer, TrustedPrincipal};
-use nexus_common::streams::{StreamStatus, SubscriptionId};
-use nexus_common::streams_db;
+use konductor_common::grant_engine::actions;
+use konductor_common::principal::{ResourceAuthorizer, TrustedPrincipal};
+use konductor_common::streams::{EventStream, StreamStatus, SubscriptionId};
+use konductor_common::streams_db;
+use konductor_common::subscription_resource::SubscriptionResource;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnsubscribeMessage {
-    pub subscription_id: String,
-    pub caller_account_id: String,
+    pub body: UnsubscribeBody,
 }
 
-const OAUTH_MUTATIONS_DISABLED: &str =
-    "unauthorized: interactive OAuth mutations are not yet enabled";
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnsubscribeBody {
+    pub subscription_id: String,
+}
 
 pub async fn handle(
     clients: &Clients,
+    authorizer: &impl ResourceAuthorizer,
     message: &UnsubscribeMessage,
     principal: &TrustedPrincipal,
 ) -> Result<()> {
-    let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
+    let cp_bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
     let streams_table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
+    let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
     let state_machine_arn = env::var("REMOVE_SUBSCRIPTION_STATE_MACHINE_ARN")
         .context("REMOVE_SUBSCRIPTION_STATE_MACHINE_ARN not set")?;
+
+    let subscription_id = message.body.subscription_id.clone();
 
     let emit_failed = |reason: String| {
         outcome::emit(
@@ -36,57 +43,39 @@ pub async fn handle(
             &cp_bus,
             "UnsubscribeFailed",
             json!({
-                "subscriptionId": message.subscription_id,
+                "subscriptionId": subscription_id,
                 "reason": reason,
                 "failedAt": chrono::Utc::now().to_rfc3339(),
             }),
         )
     };
 
-    let decision = IamOnlyAuthorizer
-        .authorize(
-            principal,
-            "subscriptions:Unsubscribe",
-            &message.subscription_id,
-        )
-        .await;
-    if !decision.is_allowed() {
-        tracing::warn!(action = "subscriptions:Unsubscribe", subscription_id = %message.subscription_id, "consumer authorization denied");
-        return emit_failed(OAUTH_MUTATIONS_DISABLED.to_string()).await;
-    }
-
-    let id = match SubscriptionId::parse(&message.subscription_id) {
+    let id = match SubscriptionId::parse(&subscription_id) {
         Ok(id) => id,
         Err(e) => return emit_failed(e.to_string()).await,
     };
 
-    let consumer = match validate::lookup_active_domain(&clients.ddb, &id.consumer_domain).await? {
-        DomainLookup::Found(record) => record,
-        DomainLookup::NotFound => {
-            return emit_failed(format!(
-                "consumer domain '{}' not found",
-                id.consumer_domain
-            ))
-            .await
-        }
-        DomainLookup::NotActive(status) => {
-            return emit_failed(format!(
-                "consumer domain '{}' is {status}, not ACTIVE",
-                id.consumer_domain
-            ))
-            .await
-        }
+    let resource = match SubscriptionResource::new(
+        &id.consumer_domain,
+        &id.producer_domain,
+        &id.detail_type,
+    ) {
+        Ok(resource) => resource.to_string(),
+        Err(e) => return emit_failed(e.to_string()).await,
     };
 
-    if !validate::caller_owns_consumer(&message.caller_account_id, &consumer) {
-        return emit_failed(format!(
-            "caller account {} does not own consumer domain '{}'",
-            message.caller_account_id, id.consumer_domain
-        ))
+    let decision = authorizer
+        .authorize(principal, actions::SUBSCRIPTION_DELETE, &resource)
         .await;
+    if !decision.is_allowed() {
+        tracing::warn!(
+            action = actions::SUBSCRIPTION_DELETE,
+            subscription_id,
+            "unsubscribe authorization denied"
+        );
+        return emit_failed("unauthorized".to_string()).await;
     }
 
-    let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
     let schema_name = format!("{organization}-{}@{}", id.producer_domain, id.detail_type);
     let Some(stream) = streams_db::get_stream(
         &clients.ddb,
@@ -97,42 +86,32 @@ pub async fn handle(
     )
     .await?
     else {
-        return emit_failed(format!(
-            "subscription '{}' not found",
-            message.subscription_id
-        ))
-        .await;
+        return emit_failed(format!("subscription '{subscription_id}' not found")).await;
     };
 
     if stream.status == StreamStatus::Removed {
         tracing::info!(
-            subscription_id = message.subscription_id,
+            subscription_id,
             "subscription already removed; idempotent no-op"
         );
         return outcome::emit(
             &clients.eb,
             &cp_bus,
             "UnsubscribeSucceeded",
-            json!({"subscriptionId": message.subscription_id, "idempotent": true}),
+            json!({"subscriptionId": subscription_id, "idempotent": true}),
         )
         .await;
     }
 
-    start_removal_workflow(
-        clients,
-        &state_machine_arn,
-        &stream,
-        &message.subscription_id,
-    )
-    .await?;
+    start_removal_workflow(clients, &state_machine_arn, &stream, &subscription_id).await?;
 
-    outcome::emit(&clients.eb, &cp_bus, "UnsubscribeSucceeded", json!({"subscriptionId": message.subscription_id, "producerDomain": stream.producer_domain, "consumerDomain": stream.consumer_domain, "schemaName": stream.schema_name})).await
+    outcome::emit(&clients.eb, &cp_bus, "UnsubscribeSucceeded", json!({"subscriptionId": subscription_id, "producerDomain": stream.producer_domain, "consumerDomain": stream.consumer_domain, "schemaName": stream.schema_name})).await
 }
 
 async fn start_removal_workflow(
     clients: &Clients,
     state_machine_arn: &str,
-    stream: &nexus_common::streams::EventStream,
+    stream: &EventStream,
     subscription_id: &str,
 ) -> Result<()> {
     let rule_name = stream
@@ -164,7 +143,7 @@ async fn start_removal_workflow(
         .send()
         .await
         .map_err(|e| {
-            nexus_common::error::ControlPlaneError::StepFunctions(
+            konductor_common::error::ControlPlaneError::StepFunctions(
                 e.into_service_error().to_string(),
             )
         })?;

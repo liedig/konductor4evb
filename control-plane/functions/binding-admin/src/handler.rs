@@ -4,15 +4,15 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use nexus_common::api;
-use nexus_common::error::ControlPlaneError;
-use nexus_common::grant::{
+use konductor_common::api;
+use konductor_common::error::ControlPlaneError;
+use konductor_common::grant::{
     AuditMutation, AuditRecord, BindingSummary, BindingView, CreateBindingRequest,
     ListBindingsResponse, RoleBinding,
 };
-use nexus_common::grant_store::{BindingStore, GrantStoreError};
-use nexus_common::principal::{AuthenticationMechanism, TrustedPrincipal};
-use nexus_common::principal_context::log_principal;
+use konductor_common::grant_store::{BindingStore, GrantStoreError};
+use konductor_common::principal::{AuthenticationMechanism, TrustedPrincipal};
+use konductor_common::principal_context::log_principal;
 
 pub async fn handle(
     ddb: &aws_sdk_dynamodb::Client,
@@ -202,9 +202,9 @@ mod tests {
     use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsInput;
     use aws_sdk_dynamodb::types::AttributeValue;
     use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
-    use nexus_common::dynamodb::get_s;
-    use nexus_common::grant::{BindingPrincipal, ResourceRole};
-    use nexus_common::grant_store::binding_to_item;
+    use konductor_common::dynamodb::get_s;
+    use konductor_common::grant::{BindingPrincipal, ResourceRole};
+    use konductor_common::grant_store::binding_to_item;
     use std::sync::{Arc, Mutex};
 
     const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";

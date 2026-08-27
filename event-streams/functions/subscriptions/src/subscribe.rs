@@ -7,15 +7,16 @@ use std::env;
 use crate::handler::Clients;
 use crate::outcome;
 use crate::validate::{self, DomainLookup};
-use nexus_common::envelope::{rule_name, SchemaName};
-use nexus_common::principal::{IamOnlyAuthorizer, ResourceAuthorizer, TrustedPrincipal};
-use nexus_common::streams::{EnvStream, EventStream, StreamStatus};
-use nexus_common::streams_db;
+use konductor_common::envelope::{rule_name, SchemaName};
+use konductor_common::grant_engine::actions;
+use konductor_common::principal::{ResourceAuthorizer, TrustedPrincipal};
+use konductor_common::streams::{EnvStream, EventStream, StreamStatus};
+use konductor_common::streams_db;
+use konductor_common::subscription_resource::SubscriptionResource;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscribeMessage {
-    pub caller_account_id: String,
     pub body: SubscribeBody,
 }
 
@@ -34,16 +35,14 @@ pub struct EnvDesiredState {
     pub enabled: bool,
 }
 
-const OAUTH_MUTATIONS_DISABLED: &str =
-    "unauthorized: interactive OAuth mutations are not yet enabled";
-
 pub async fn handle(
     clients: &Clients,
+    authorizer: &impl ResourceAuthorizer,
     message: &SubscribeMessage,
     principal: &TrustedPrincipal,
     request_id: &str,
 ) -> Result<()> {
-    let cp_bus = env::var("NEXUS_EVENT_BUS").context("NEXUS_EVENT_BUS not set")?;
+    let cp_bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
     let streams_table = env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
     let state_machine_arn = env::var("ACTIVATE_SUBSCRIPTION_STATE_MACHINE_ARN")
@@ -57,23 +56,49 @@ pub async fn handle(
         schema_detail_type(&body.schema_name)
     );
 
-    let decision = IamOnlyAuthorizer
-        .authorize(principal, "subscriptions:Subscribe", &subscription_id)
+    let emit_failed = |reason: String| {
+        outcome::emit(
+            &clients.eb,
+            &cp_bus,
+            "SubscribeFailed",
+            json!({
+                "subscriptionId": subscription_id,
+                "consumerDomain": body.consumer_domain,
+                "producerDomain": body.producer_domain,
+                "schemaName": body.schema_name,
+                "reason": reason,
+                "failedAt": chrono::Utc::now().to_rfc3339(),
+            }),
+        )
+    };
+
+    // Authorization precedes validation so a denied caller learns nothing
+    // about domain or schema existence (403-equivalent deterministic outcome).
+    let resource = match SubscriptionResource::new(
+        &body.consumer_domain,
+        &body.producer_domain,
+        schema_detail_type(&body.schema_name),
+    ) {
+        Ok(resource) => resource.to_string(),
+        Err(e) => return emit_failed(e.to_string()).await,
+    };
+    let decision = authorizer
+        .authorize(principal, actions::SUBSCRIPTION_CREATE, &resource)
         .await;
     if !decision.is_allowed() {
         tracing::warn!(
-            action = "subscriptions:Subscribe",
+            action = actions::SUBSCRIPTION_CREATE,
             subscription_id,
-            "consumer authorization denied"
+            "subscribe authorization denied"
         );
-        return outcome::emit(&clients.eb, &cp_bus, "SubscribeFailed", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "reason": OAUTH_MUTATIONS_DISABLED, "failedAt": chrono::Utc::now().to_rfc3339()})).await;
+        return emit_failed("unauthorized".to_string()).await;
     }
 
-    let validated = match validate_request(clients, message, &organization).await? {
+    let validated = match validate_request(clients, body, &organization).await? {
         Ok(validated) => validated,
         Err(reason) => {
             tracing::warn!(subscription_id, reason, "subscribe rejected by validation");
-            return outcome::emit(&clients.eb, &cp_bus, "SubscribeFailed", json!({"subscriptionId": subscription_id, "consumerDomain": body.consumer_domain, "producerDomain": body.producer_domain, "schemaName": body.schema_name, "reason": reason, "failedAt": chrono::Utc::now().to_rfc3339()})).await;
+            return emit_failed(reason).await;
         }
     };
     let Validated {
@@ -216,7 +241,7 @@ async fn start_activation_workflow(
         .send()
         .await
         .map_err(|e| {
-            nexus_common::error::ControlPlaneError::StepFunctions(
+            konductor_common::error::ControlPlaneError::StepFunctions(
                 e.into_service_error().to_string(),
             )
         })?;
@@ -224,6 +249,7 @@ async fn start_activation_workflow(
     Ok(())
 }
 
+#[derive(Debug)]
 struct Validated {
     producer: validate::DomainRecord,
     consumer: validate::DomainRecord,
@@ -231,24 +257,13 @@ struct Validated {
     rule_name: String,
 }
 
-impl std::fmt::Debug for Validated {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Validated")
-            .field("schema", &self.schema)
-            .field("rule_name", &self.rule_name)
-            .finish_non_exhaustive()
-    }
-}
-
 /// Deterministic business validation. `Ok(Err(reason))` means the command is
 /// rejected — the caller emits `SubscribeFailed` and acknowledges the message.
 async fn validate_request(
     clients: &Clients,
-    message: &SubscribeMessage,
+    body: &SubscribeBody,
     organization: &str,
 ) -> Result<std::result::Result<Validated, String>> {
-    let body = &message.body;
-
     let schema = match SchemaName::parse(&body.schema_name) {
         Ok(schema) => schema,
         Err(e) => return Ok(Err(e.to_string())),
@@ -301,13 +316,6 @@ async fn validate_request(
         }
     };
 
-    if !validate::caller_owns_consumer(&message.caller_account_id, &consumer) {
-        return Ok(Err(format!(
-            "caller account {} does not own consumer domain '{}'",
-            message.caller_account_id, body.consumer_domain
-        )));
-    }
-
     for env_name in body.environments.keys() {
         if !producer.environments.contains(env_name) {
             return Ok(Err(format!(
@@ -338,12 +346,12 @@ mod tests {
     use aws_sdk_dynamodb::operation::get_item::GetItemOutput;
     use aws_sdk_dynamodb::types::AttributeValue;
     use aws_smithy_mocks::{mock, mock_client, RuleMode};
-    use nexus_common::dynamodb::s;
+    use konductor_common::dynamodb::s;
 
     fn set_env() {
         std::env::set_var("DOMAINS_TABLE", "domains");
         std::env::set_var("EVENT_STREAMS_TABLE", "streams");
-        std::env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
         std::env::set_var("ORGANIZATION", "acme");
         std::env::set_var(
             "ACTIVATE_SUBSCRIPTION_STATE_MACHINE_ARN",
@@ -360,15 +368,12 @@ mod tests {
             .build()
     }
 
-    fn message(consumer: &str, producer: &str, schema: &str, caller: &str) -> SubscribeMessage {
-        SubscribeMessage {
-            caller_account_id: caller.to_string(),
-            body: SubscribeBody {
-                consumer_domain: consumer.to_string(),
-                producer_domain: producer.to_string(),
-                schema_name: schema.to_string(),
-                environments: HashMap::new(),
-            },
+    fn body(consumer: &str, producer: &str, schema: &str) -> SubscribeBody {
+        SubscribeBody {
+            consumer_domain: consumer.to_string(),
+            producer_domain: producer.to_string(),
+            schema_name: schema.to_string(),
+            environments: HashMap::new(),
         }
     }
 
@@ -400,35 +405,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn caller_not_owning_consumer_is_rejected() {
+    async fn active_domains_pass_validation() {
         set_env();
         let clients = clients_with_domains("111122223333", "444455556666");
-        let msg = message(
-            "checkout",
-            "orders",
-            "acme-orders@OrderNotification",
-            "999999999999",
-        );
+        let body = body("checkout", "orders", "acme-orders@OrderNotification");
 
-        let verdict = validate_request(&clients, &msg, "acme").await.unwrap();
-
-        assert!(verdict
-            .unwrap_err()
-            .contains("does not own consumer domain"));
-    }
-
-    #[tokio::test]
-    async fn caller_owning_consumer_passes_ownership_check() {
-        set_env();
-        let clients = clients_with_domains("111122223333", "444455556666");
-        let msg = message(
-            "checkout",
-            "orders",
-            "acme-orders@OrderNotification",
-            "444455556666",
-        );
-
-        let verdict = validate_request(&clients, &msg, "acme").await.unwrap();
+        let verdict = validate_request(&clients, &body, "acme").await.unwrap();
 
         assert!(verdict.is_ok());
     }
@@ -444,9 +426,9 @@ mod tests {
             eb: mock_client!(aws_sdk_eventbridge, []),
             sfn: mock_client!(aws_sdk_sfn, []),
         };
-        let msg = message("checkout", "checkout", "acme-checkout@CartAbandoned", owner);
+        let body = body("checkout", "checkout", "acme-checkout@CartAbandoned");
 
-        let verdict = validate_request(&clients, &msg, "acme").await.unwrap();
+        let verdict = validate_request(&clients, &body, "acme").await.unwrap();
 
         assert!(verdict.is_ok());
     }
@@ -455,14 +437,9 @@ mod tests {
     async fn schema_source_mismatching_producer_identity_is_rejected() {
         set_env();
         let clients = clients_with_domains("111122223333", "444455556666");
-        let msg = message(
-            "checkout",
-            "orders",
-            "acme-billing@OrderNotification",
-            "444455556666",
-        );
+        let body = body("checkout", "orders", "acme-billing@OrderNotification");
 
-        let verdict = validate_request(&clients, &msg, "acme").await.unwrap();
+        let verdict = validate_request(&clients, &body, "acme").await.unwrap();
 
         assert!(verdict
             .unwrap_err()
@@ -473,9 +450,9 @@ mod tests {
     async fn malformed_schema_name_is_rejected() {
         set_env();
         let clients = clients_with_domains("111122223333", "444455556666");
-        let msg = message("checkout", "orders", "no-at-sign", "444455556666");
+        let body = body("checkout", "orders", "no-at-sign");
 
-        let verdict = validate_request(&clients, &msg, "acme").await.unwrap();
+        let verdict = validate_request(&clients, &body, "acme").await.unwrap();
 
         assert!(verdict.unwrap_err().contains("must be"));
     }
@@ -485,14 +462,9 @@ mod tests {
         set_env();
         let clients = clients_with_domains("111122223333", "444455556666");
         let long_event = "E".repeat(80);
-        let msg = message(
-            "checkout",
-            "orders",
-            &format!("acme-orders@{long_event}"),
-            "444455556666",
-        );
+        let body = body("checkout", "orders", &format!("acme-orders@{long_event}"));
 
-        let verdict = validate_request(&clients, &msg, "acme").await.unwrap();
+        let verdict = validate_request(&clients, &body, "acme").await.unwrap();
 
         assert!(verdict.unwrap_err().contains("at most 64"));
     }
@@ -501,17 +473,11 @@ mod tests {
     async fn unknown_environment_override_is_rejected() {
         set_env();
         let clients = clients_with_domains("111122223333", "444455556666");
-        let mut msg = message(
-            "checkout",
-            "orders",
-            "acme-orders@OrderNotification",
-            "444455556666",
-        );
-        msg.body
-            .environments
+        let mut body = body("checkout", "orders", "acme-orders@OrderNotification");
+        body.environments
             .insert("qa".to_string(), EnvDesiredState { enabled: false });
 
-        let verdict = validate_request(&clients, &msg, "acme").await.unwrap();
+        let verdict = validate_request(&clients, &body, "acme").await.unwrap();
 
         assert!(verdict.unwrap_err().contains("unknown environment 'qa'"));
     }

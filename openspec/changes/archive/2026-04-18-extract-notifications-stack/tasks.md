@@ -2,7 +2,7 @@
 
 - [x] 1.1 Create `notifications-stack.yaml` with Parameters (Organization, Environment, FromEmail, ToEmail), `AWS::SES::EmailIdentity` for From and To, and Outputs (FromEmail, ToEmail)
 - [x] 1.2 Add same-region constraint to the template Description and parameter help text
-- [x] 1.3 Add `samconfig.toml` profile for notifications stack deploy (`acme-dev-nexus-notifications`)
+- [x] 1.3 Add `samconfig.toml` profile for notifications stack deploy (`acme-dev-konductor-notifications`)
 
 ## 2. Core Template Conditional Notifications
 
@@ -16,14 +16,14 @@
 
 ## 3. Samconfig Naming Alignment
 
-- [x] 3.1 Update `samconfig.toml` default and dev profile `stack_name` to `acme-dev-nexus`
+- [x] 3.1 Update `samconfig.toml` default and dev profile `stack_name` to `acme-dev-konductor`
 - [x] 3.2 Verify the dev profile `parameter_overrides` still matches the new optional parameter defaults
 
 ## 4. Trust Stack Doc Fix
 
-- [x] 4.1 Fix `docs/trust-stack-deployment.md` parameter names to match `trust-stack.yaml` (`NexusRoleArn` not `ControlPlaneRoleArn`)
-- [x] 4.2 Fix stack name examples in trust-stack doc to `{org}-{env}-nexus-trust` pattern
-- [x] 4.3 Fix trust role name references to `${Organization}-${Environment}-nexus-trust-role`
+- [x] 4.1 Fix `docs/trust-stack-deployment.md` parameter names to match `trust-stack.yaml` (`KonductorRoleArn` not `ControlPlaneRoleArn`)
+- [x] 4.2 Fix stack name examples in trust-stack doc to `{org}-{env}-konductor-trust` pattern
+- [x] 4.3 Fix trust role name references to `${Organization}-${Environment}-konductor-trust-role`
 
 ## 5. Documentation Updates
 

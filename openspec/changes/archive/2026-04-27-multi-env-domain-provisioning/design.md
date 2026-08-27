@@ -2,9 +2,9 @@
 
 ## Context
 
-The existing provisioning workflow creates one set of resources per approved domain. Which environment those resources belong to is decided at Nexus deploy time via a SAM parameter. With the `nexus-platform-drop-environment` change, Nexus becomes an org-wide singleton — which forces the environment concept to move to where it always belonged: the domain.
+The existing provisioning workflow creates one set of resources per approved domain. Which environment those resources belong to is decided at Konductor deploy time via a SAM parameter. With the `konductor-platform-drop-environment` change, Konductor becomes an org-wide singleton — which forces the environment concept to move to where it always belonged: the domain.
 
-The feature: when a domain like `sales` is approved, Nexus provisions a complete resource set for each environment the requester asked for, defaulting to `[dev, staging, prod]`, all within the domain owner's account.
+The feature: when a domain like `sales` is approved, Konductor provisions a complete resource set for each environment the requester asked for, defaulting to `[dev, staging, prod]`, all within the domain owner's account.
 
 ## Decisions
 
@@ -22,14 +22,14 @@ The feature: when a domain like `sales` is approved, Nexus provisions a complete
   │   acme-prod-sales-domain-bus                  │
   │   (+ integration DLQs per env)                │
   │                                               │
-  │   acme-nexus-trust-role  ◄── single role      │
+  │   acme-konductor-trust-role  ◄── single role      │
   │                              for all envs     │
   └───────────────────────────────────────────────┘
 ```
 
 **Rationale**: keeps the API and mental model simple. The common case — a team's domain provisioned into the same account they already own — is made trivial. Organisations that want dev/prod in separate accounts can still model this by registering two domains (`sales-dev`, `sales-prod`) in the accounts they own; this is ugly, but it's a known escape hatch we can document.
 
-**Trust role implication**: a single application account must host resources for all envs of a domain. The trust role in that account cannot itself be env-scoped or there would be three roles per domain-owner account for one domain. The role is renamed from `${Organization}-${Environment}-nexus-trust-role` to `${Organization}-nexus-trust-role` as part of this change. Its inline IAM policies still scope resources by `{org}-{env}-*` so it can manage per-env domain resources — only the role name loses its env segment. (This rename was originally scoped into `nexus-platform-drop-environment`; pulled forward because multi-env provisioning hard-depends on it.)
+**Trust role implication**: a single application account must host resources for all envs of a domain. The trust role in that account cannot itself be env-scoped or there would be three roles per domain-owner account for one domain. The role is renamed from `${Organization}-${Environment}-konductor-trust-role` to `${Organization}-konductor-trust-role` as part of this change. Its inline IAM policies still scope resources by `{org}-{env}-*` so it can manage per-env domain resources — only the role name loses its env segment. (This rename was originally scoped into `konductor-platform-drop-environment`; pulled forward because multi-env provisioning hard-depends on it.)
 
 **Rejected alternatives**:
 
@@ -108,7 +108,7 @@ The platform team — not the domain requester — decides which environments ex
 
 **Mechanism**:
 
-- Nexus core SAM template declares an `Environments` parameter (type `CommaDelimitedList`, default `dev,staging,prod`). Each entry SHALL match `^[a-z0-9][a-z0-9-]{0,31}$`. Validation happens once at stack deploy via SAM's parameter constraints.
+- Konductor core SAM template declares an `Environments` parameter (type `CommaDelimitedList`, default `dev,staging,prod`). Each entry SHALL match `^[a-z0-9][a-z0-9-]{0,31}$`. Validation happens once at stack deploy via SAM's parameter constraints.
 - The domain command handler Lambda receives the list via an `ENVIRONMENTS` environment variable and parses it at cold start.
 - On registration, the handler snapshots the current list onto the domain record's `environments` field.
 - `RegisterDomainRequest` has NO `environments` field. The API schema is unchanged for requesters.

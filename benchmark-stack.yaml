@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >-
-  Throwaway in-region latency benchmark for the Nexus grant engine
+  Throwaway in-region latency benchmark for the Konductor grant engine
   (add-grant-engine task 6.1). Deploy, invoke, tear down — this stack is not
   part of the platform. The function seeds its own fixture bindings into the
-  deployed nexus-authorization-bindings table and removes them after each run.
+  deployed konductor-authorization-bindings table and removes them after each run.
 
 Globals:
   Function:
@@ -19,7 +19,7 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      LogGroupName: !Sub "/aws/lambda/nexus-grant-benchmark"
+      LogGroupName: !Sub "/aws/lambda/konductor-grant-benchmark"
       RetentionInDays: 7
 
   GrantBenchmarkFunction:
@@ -28,12 +28,12 @@ Resources:
     Metadata:
       BuildMethod: rust-cargolambda
     Properties:
-      FunctionName: !Sub "nexus-grant-benchmark"
+      FunctionName: !Sub "konductor-grant-benchmark"
       CodeUri: ./control-plane/functions/grant-benchmark
       Handler: bootstrap
       Environment:
         Variables:
-          BINDINGS_TABLE: nexus-authorization-bindings
+          BINDINGS_TABLE: konductor-authorization-bindings
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -42,7 +42,7 @@ Resources:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
                 - dynamodb:DeleteItem
-              Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/nexus-authorization-bindings"
+              Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/konductor-authorization-bindings"
 
 Outputs:
   GrantBenchmarkFunctionName:

@@ -1,5 +1,7 @@
+mod catalog;
 mod discovery;
 mod handler;
+mod sources;
 
 use aws_config::BehaviorVersion;
 use lambda_runtime::{service_fn, Error};

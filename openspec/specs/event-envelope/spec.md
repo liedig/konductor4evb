@@ -8,7 +8,7 @@ The canonical envelope every domain event carries: platform-derived `source` ide
 
 ### Requirement: Canonical event identity
 
-Every event flowing through Nexus domain buses SHALL carry a canonical identity: `source` SHALL be the producing domain's environment-independent namespace identity `{org}-{domain}` (e.g., `prezzee-orders`), and `detail-type` SHALL be the event name. The `source` value SHALL be derived by the platform from the domain's registered namespace identity — it SHALL NOT be free-typed by producers. The identity SHALL be identical across environments; only resource names (buses, registries) carry the environment segment.
+Every event flowing through Konductor domain buses SHALL carry a canonical identity: `source` SHALL be the producing domain's environment-independent namespace identity `{org}-{domain}` (e.g., `prezzee-orders`), and `detail-type` SHALL be the event name. The `source` value SHALL be derived by the platform from the domain's registered namespace identity — it SHALL NOT be free-typed by producers. The identity SHALL be identical across environments; only resource names (buses, registries) carry the environment segment.
 
 #### Scenario: Source derived from namespace identity
 

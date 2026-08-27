@@ -13,10 +13,11 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use nexus_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
-use nexus_common::grant_engine::{actions, DynamoGrantEngine};
-use nexus_common::grant_store::{binding_to_item, BindingStore};
-use nexus_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
+use konductor_common::entitlement_store::EntitlementStore;
+use konductor_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
+use konductor_common::grant_engine::{actions, DynamoGrantEngine};
+use konductor_common::grant_store::{binding_to_item, BindingStore};
+use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
 
 const BENCH_DOMAIN: &str = "benchmark-domain";
 const BENCH_ISSUER: &str = "https://benchmark.invalid";
@@ -56,7 +57,12 @@ pub async fn handle(
         .and_then(Value::as_u64)
         .unwrap_or(20) as usize;
 
-    let engine = DynamoGrantEngine::new(BindingStore::new(ddb.clone(), table.clone()));
+    let entitlements_table =
+        std::env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
+    let engine = DynamoGrantEngine::new(
+        BindingStore::new(ddb.clone(), table.clone()),
+        EntitlementStore::new(ddb.clone(), entitlements_table),
+    );
 
     let fixtures = fixture_bindings();
     seed_fixtures(ddb, &table, &fixtures).await?;
@@ -222,8 +228,8 @@ async fn cleanup_fixtures(
     for binding in fixtures {
         ddb.delete_item()
             .table_name(table)
-            .key("PK", nexus_common::dynamodb::s(&binding.pk()))
-            .key("SK", nexus_common::dynamodb::s(&binding.sk()))
+            .key("PK", konductor_common::dynamodb::s(&binding.pk()))
+            .key("SK", konductor_common::dynamodb::s(&binding.sk()))
             .send()
             .await
             .context("remove fixture binding")?;

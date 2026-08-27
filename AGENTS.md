@@ -2,14 +2,27 @@
 
 ## Code Style
 
-- No inline `//` comments explaining *what* code does — write self-explanatory code with clear, intention-revealing names. Exceptions: `///` doc comments on `nexus-common` public items, and brief *why*-comments for non-obvious decisions
-- Import grouping: external crates first, then `nexus_common`/local modules, separated by a blank line; ordering within groups is rustfmt's job (`make check`)
+- No inline `//` comments explaining *what* code does — write self-explanatory code with clear, intention-revealing names. Exceptions: `///` doc comments on `konductor-common` public items, and brief *why*-comments for non-obvious decisions
+- Import grouping: external crates first, then `konductor_common`/local modules, separated by a blank line; ordering within groups is rustfmt's job (`make check`)
 - Files under 300 production lines, excluding `#[cfg(test)]` modules; split when it improves clarity
 - Make invalid states unrepresentable: enums over stringly-typed values (`DomainStatus`, `Decision`), narrow purpose-built types over primitives
 - Separation of concerns without over-engineering; start simple, add complexity only when clearly required
-- Errors: typed variants via `thiserror` in `nexus-common` (`ControlPlaneError`) for control flow; `anyhow` with specific `.context()` only at Lambda binary edges
+- Errors: typed variants via `thiserror` in `konductor-common` (`ControlPlaneError`) for control flow; `anyhow` with specific `.context()` only at Lambda binary edges
 - No `unwrap()`/`expect()` in handler code paths — handle the `Option`/`Result`; panicking is acceptable only in tests
 - No `unsafe`. If a future need arises, it requires a `// SAFETY:` comment and review sign-off
+
+## Side Effects and Durability
+
+Classify every new handler write path at authoring time against the stream-driven side-effects rubric (per-handler records: `docs/development/decisions.md`, "Stream-Driven Side-Effects Audit"). When a handler commits a DynamoDB write and performs any other side effect (EventBridge, SQS, SNS, Step Functions, SES, rule mutations), answer:
+
+1. Does the written item carry everything a stream consumer would need?
+2. Does every side effect hang on a committed state transition? (Rejections that never commit stay on an explicit emission path.)
+3. Can the side effect be made idempotent on a stream event id?
+4. Does the side effect tolerate seconds of stream latency?
+5. Can a consumer meet the 24-hour stream retention / shard-blocking operational bar?
+6. Is durability already provided by an inbound command envelope (SQS command, triggering event, or Step Functions execution context)?
+
+A handler performs exactly one synchronous commit; drive everything else from the table's stream. If a handler-driven path stays (e.g., synchronous read-your-write), record the reason in `docs/development/decisions.md`. Step Functions execution names are idempotency keys: deterministic per unit of work, never timestamped.
 
 ## Testing Strategy
 
@@ -28,11 +41,11 @@
 
 ## Product Naming
 
-- The product is called **EventBridge Nexus** (short form: **Nexus**)
+- The product is called **Konductor for Amazon EventBridge** (short form: **Konductor**)
 - Resource namespace convention: `{org}-{env}-{domain}` (e.g., `acme-prod-payments`)
-- Trust role: `nexus-trust-role`
-- Event source: `nexus.domain-management`
-- Lifecycle event bus: `nexus-bus`
+- Trust role: `konductor-trust-role`
+- Event source: `konductor.domain-management`
+- Lifecycle event bus: `konductor-bus`
 
 ## Git Workflow
 

@@ -8,11 +8,11 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 ### Requirement: Platform account domain resources
 
-When a domain is provisioned, EventBridge Nexus SHALL create the following resources in the platform account **for each environment** in the domain's `environments` list: a domain event bus, a PutEvent policy restricting publishing to the domain's owning domain account, a schema registry with access policies, a subscription rule DLQ (SQS queue), and CloudWatch observability resources (dashboard, alarms, metrics configuration).
+When a domain is provisioned, Konductor for Amazon EventBridge SHALL create the following resources in the platform account **for each environment** in the domain's `environments` list: a domain event bus, a PutEvent policy restricting publishing to the domain's owning domain account, a schema registry with access policies, a subscription rule DLQ (SQS queue), and CloudWatch observability resources (dashboard, alarms, metrics configuration).
 
 Each environment SHALL produce a disjoint set of resources identifiable by its env segment in the name. A single domain registration request with `environments: ["dev", "staging", "prod"]` SHALL produce three full sets of resources in the platform account.
 
-The Nexus platform itself SHALL separately own control-plane resources that are NOT per-domain and NOT env-scoped: the Nexus event bus (`{org}-nexus-bus`), the domains DynamoDB table, the Nexus API, command queues, execution roles, and supporting infrastructure. These platform resources are created once at installation, not per-domain.
+The Konductor platform itself SHALL separately own control-plane resources that are NOT per-domain and NOT env-scoped: the Konductor event bus (`{org}-konductor-bus`), the domains DynamoDB table, the Konductor API, command queues, execution roles, and supporting infrastructure. These platform resources are created once at installation, not per-domain.
 
 #### Scenario: Platform resources created per environment
 
@@ -23,62 +23,62 @@ The Nexus platform itself SHALL separately own control-plane resources that are 
 
 - **WHEN** the provisioning workflow creates the domain event bus in the platform account for a given environment
 - **THEN** the bus SHALL be named according to the `{org}-{env}-{domain}-event-bus` convention using that environment's value
-- **AND THEN** the bus SHALL exist in the platform account where EventBridge Nexus operates
+- **AND THEN** the bus SHALL exist in the platform account where Konductor for Amazon EventBridge operates
 
 #### Scenario: PutEvent policy restricts publishing to domain owner
 
 - **WHEN** the domain event bus is created in the platform account
-- **THEN** Nexus SHALL attach a resource policy to the bus that permits `events:PutEvents` only from the domain's owning domain account
+- **THEN** Konductor SHALL attach a resource policy to the bus that permits `events:PutEvents` only from the domain's owning domain account
 - **AND THEN** the policy SHALL be identical across environments — all environments of the domain share the same owner account
 
 #### Scenario: Schema registry created per domain-environment
 
 - **WHEN** the domain is provisioned for a given environment
-- **THEN** Nexus SHALL create a schema registry in the platform account named `{org}-{env}-{domain}-schema-registry`
+- **THEN** Konductor SHALL create a schema registry in the platform account named `{org}-{env}-{domain}-schema-registry`
 - **AND THEN** the registry SHALL have access policies granting write access to the domain owner and read access to authorised consumers
 
 #### Scenario: Subscription rule DLQ created in platform account
 
 - **WHEN** the domain is provisioned for a given environment
-- **THEN** Nexus SHALL create an SQS queue in the platform account named `{org}-{env}-{domain}-subscription-dlq` to serve as the dead-letter queue for subscription rules on the domain event bus
+- **THEN** Konductor SHALL create an SQS queue in the platform account named `{org}-{env}-{domain}-subscription-dlq` to serve as the dead-letter queue for subscription rules on the domain event bus
 - **AND THEN** failed deliveries from subscription rules (domain bus to subscriber bus) SHALL be routed to this DLQ
 
 #### Scenario: Observability resources created per domain-environment
 
 - **WHEN** the domain is provisioned for a given environment
-- **THEN** Nexus SHALL create a CloudWatch dashboard, alarms, and metrics configuration for the domain event bus in the platform account
+- **THEN** Konductor SHALL create a CloudWatch dashboard, alarms, and metrics configuration for the domain event bus in the platform account
 - **AND THEN** each environment SHALL have its own dashboard and alarm set
 
 #### Scenario: Platform control-plane resources are singletons
 
-- **WHEN** the Nexus platform stack is deployed
-- **THEN** the Nexus event bus, domains table, Nexus API, command queues, and platform IAM roles SHALL be created once, named `{org}-nexus-*`, and SHALL NOT be duplicated per environment or per domain
+- **WHEN** the Konductor platform stack is deployed
+- **THEN** the Konductor event bus, domains table, Konductor API, command queues, and platform IAM roles SHALL be created once, named `{org}-konductor-*`, and SHALL NOT be duplicated per environment or per domain
 
 ### Requirement: Domain account domain resources
 
-When a domain is provisioned, EventBridge Nexus SHALL create the following resources in the domain's owning domain account **for each environment** in the domain's `environments` list: a domain event bus (where the app receives routed events) and an integration rule DLQ (SQS queue). All environments of a given domain SHALL be provisioned into the same domain account (the `ownerAccountId` on the domain record).
+When a domain is provisioned, Konductor for Amazon EventBridge SHALL create the following resources in the domain's owning domain account **for each environment** in the domain's `environments` list: a domain event bus (where the app receives routed events) and an integration rule DLQ (SQS queue). All environments of a given domain SHALL be provisioned into the same domain account (the `ownerAccountId` on the domain record).
 
 #### Scenario: Application resources created per environment
 
 - **WHEN** the provisioning workflow runs for a domain with `environments: ["dev", "staging", "prod"]` and `ownerAccountId: "111122223333"`
 - **THEN** account `111122223333` SHALL contain three domain event buses and three integration DLQs, one per environment, all named according to `{org}-{env}-{domain}-*`
-- **AND THEN** account `111122223333` SHALL have exactly one trust role (`{org}-nexus-trust-role`) serving all three environments
+- **AND THEN** account `111122223333` SHALL have exactly one trust role (`{org}-konductor-trust-role`) serving all three environments
 
 #### Scenario: Domain event bus created in domain account
 
 - **WHEN** the provisioning workflow runs for a given environment
-- **THEN** Nexus SHALL create a domain event bus in the owning domain account, named `{org}-{env}-{domain}-event-bus`
+- **THEN** Konductor SHALL create a domain event bus in the owning domain account, named `{org}-{env}-{domain}-event-bus`
 - **AND THEN** this bus SHALL be the target for subscription rules that route events from the platform domain bus to the domain account
 
 #### Scenario: Integration rule DLQ created in domain account
 
 - **WHEN** the provisioning workflow runs for a given environment
-- **THEN** Nexus SHALL create an SQS queue in the domain account named `{org}-{env}-{domain}-integration-dlq` to serve as the dead-letter queue for integration rules
+- **THEN** Konductor SHALL create an SQS queue in the domain account named `{org}-{env}-{domain}-integration-dlq` to serve as the dead-letter queue for integration rules
 - **AND THEN** failed deliveries from integration rules SHALL be routed to this DLQ
 
 ### Requirement: Subscription rules on platform domain buses
 
-Subscription rules SHALL live on the producer's platform-side domain event bus, one rule per subscription per environment, named `{consumerDomain}-{detailType}`. Rule patterns SHALL filter on the canonical envelope (`source`, `detail-type`, numeric `detail.metadata.schemaVersion` pinned per environment). Only the Nexus SHALL manage these rules. The `nexus-event-streams` DynamoDB table SHALL be the authoritative registry of subscription topology; the rules are its materialization.
+Subscription rules SHALL live on the producer's platform-side domain event bus, one rule per subscription per environment, named `{consumerDomain}-{detailType}`. Rule patterns SHALL filter on the canonical envelope (`source`, `detail-type`, numeric `detail.metadata.schemaVersion` pinned per environment). Only Konductor SHALL manage these rules. The `konductor-event-streams` DynamoDB table SHALL be the authoritative registry of subscription topology; the rules are its materialization.
 
 #### Scenario: Rule placement and naming
 
@@ -88,7 +88,7 @@ Subscription rules SHALL live on the producer's platform-side domain event bus, 
 #### Scenario: Topology queried from the table, not from AWS resources
 
 - **WHEN** any process needs the set of active event streams (per producer, per consumer, or per schema version)
-- **THEN** it SHALL query the `nexus-event-streams` table
+- **THEN** it SHALL query the `konductor-event-streams` table
 - **AND THEN** it SHALL NOT enumerate EventBridge rules across buses to derive topology
 
 ### Requirement: One domain bus per subscribing domain account
@@ -115,13 +115,13 @@ Application teams SHALL only interact with the domain event bus in their own acc
 
 - **WHEN** events are delivered to the domain event bus in the domain account
 - **THEN** the application team SHALL create EventBridge rules on their own domain bus to route events to their consuming applications
-- **AND THEN** the Nexus SHALL NOT manage or interfere with integration rules created by the application team
+- **AND THEN** the Konductor SHALL NOT manage or interfere with integration rules created by the application team
 
 #### Scenario: Application team cannot access platform domain bus
 
 - **WHEN** an application team attempts to create rules or modify the domain event bus in the platform account
 - **THEN** IAM policies SHALL deny the operation
-- **AND THEN** only the Nexus SHALL have permission to manage rules and policies on the platform domain bus
+- **AND THEN** only the Konductor SHALL have permission to manage rules and policies on the platform domain bus
 
 ### Requirement: Event flow path
 
@@ -156,7 +156,7 @@ Events SHALL flow through a three-stage path: (1) the publishing application cal
 
 Domain resources SHALL be named according to a configurable pattern defaulting to `{org}-{env}-{domain}` (e.g., `acme-dev-billing`). Platform teams SHALL be able to configure this naming pattern. The convention SHALL support multiple environments (dev, staging, prod) to allow resource isolation per environment at the domain layer. The domain namespace (environment-independent identity) SHALL be `{org}-{domain}`.
 
-Nexus platform resources — the control plane itself — SHALL NOT use this convention. Platform resources follow the fixed `{org}-nexus-*` pattern (see system-architecture spec) because Nexus is a singleton per organisation and has no environment concept at the platform layer.
+Konductor platform resources — the control plane itself — SHALL NOT use this convention. Platform resources follow the fixed `{org}-konductor-*` pattern (see system-architecture spec) because Konductor is a singleton per organisation and has no environment concept at the platform layer.
 
 #### Scenario: Default namespace applied to domain resources
 
@@ -169,7 +169,7 @@ Nexus platform resources — the control plane itself — SHALL NOT use this con
 - **WHEN** a platform team specifies a custom namespace convention
 - **THEN** all subsequently provisioned domain resources SHALL use the custom convention for naming
 - **AND THEN** existing resources SHALL NOT be renamed (convention changes are forward-only)
-- **AND THEN** custom conventions SHALL apply only to domain resources; Nexus platform resources SHALL remain named `{org}-nexus-*`
+- **AND THEN** custom conventions SHALL apply only to domain resources; Konductor platform resources SHALL remain named `{org}-konductor-*`
 
 #### Scenario: Environment isolation between domain resources
 

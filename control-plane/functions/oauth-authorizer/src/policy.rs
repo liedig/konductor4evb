@@ -3,19 +3,25 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use nexus_common::principal::{GlobalRole, TrustedPrincipal};
+use konductor_common::principal::{GlobalRole, TrustedPrincipal};
 
 /// Coarse route gate for the OAuth surface.
 ///
 /// `platform-admin` may access every route. `platform-auditor` may access only
-/// read (GET) routes and cannot mutate or approve. A principal with no global
-/// role is denied (fail closed). Resource-level authorization is a downstream
-/// responsibility and is intentionally not evaluated here.
-pub fn route_allowed(http_method: &str, roles: &[GlobalRole]) -> bool {
+/// read (GET) routes and cannot mutate or approve, even when team groups are
+/// present. Team callers (no global role, at least one team group) pass the
+/// gate so the domain-management surface can serve them; every route enforces
+/// its resource-level authorization (owner/publisher bindings, platform
+/// roles) fail-closed downstream. A principal with no global role and no team
+/// groups is denied here (fail closed).
+pub fn route_allowed(http_method: &str, roles: &[GlobalRole], team_groups: &[String]) -> bool {
     if roles.contains(&GlobalRole::PlatformAdmin) {
         return true;
     }
-    http_method.eq_ignore_ascii_case("GET") && roles.contains(&GlobalRole::PlatformAuditor)
+    if roles.contains(&GlobalRole::PlatformAuditor) {
+        return http_method.eq_ignore_ascii_case("GET");
+    }
+    !team_groups.is_empty()
 }
 
 /// The effect of an execute-api policy statement.
@@ -97,7 +103,7 @@ pub fn http_method_from_arn(method_arn: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexus_common::principal::GlobalRole;
+    use konductor_common::principal::GlobalRole;
 
     fn principal(roles: Vec<GlobalRole>) -> TrustedPrincipal {
         TrustedPrincipal::oauth(
@@ -112,25 +118,38 @@ mod tests {
     #[test]
     fn admin_can_access_any_method() {
         let roles = vec![GlobalRole::PlatformAdmin];
-        assert!(route_allowed("GET", &roles));
-        assert!(route_allowed("POST", &roles));
-        assert!(route_allowed("DELETE", &roles));
+        assert!(route_allowed("GET", &roles, &[]));
+        assert!(route_allowed("POST", &roles, &[]));
+        assert!(route_allowed("DELETE", &roles, &[]));
     }
 
     #[test]
     fn auditor_can_read_but_not_mutate() {
         let roles = vec![GlobalRole::PlatformAuditor];
-        assert!(route_allowed("GET", &roles));
-        assert!(route_allowed("get", &roles));
-        assert!(!route_allowed("POST", &roles));
-        assert!(!route_allowed("PUT", &roles));
-        assert!(!route_allowed("DELETE", &roles));
+        assert!(route_allowed("GET", &roles, &[]));
+        assert!(route_allowed("get", &roles, &[]));
+        assert!(!route_allowed("POST", &roles, &[]));
+        assert!(!route_allowed("PUT", &roles, &[]));
+        assert!(!route_allowed("DELETE", &roles, &[]));
     }
 
     #[test]
-    fn no_role_is_denied() {
-        assert!(!route_allowed("GET", &[]));
-        assert!(!route_allowed("POST", &[]));
+    fn team_caller_passes_to_downstream_authorization() {
+        assert!(route_allowed("GET", &[], &["team-a".to_string()]));
+        assert!(route_allowed("POST", &[], &["team-a".to_string()]));
+    }
+
+    #[test]
+    fn auditor_with_team_groups_stays_read_only() {
+        let roles = vec![GlobalRole::PlatformAuditor];
+        assert!(route_allowed("GET", &roles, &["team-a".to_string()]));
+        assert!(!route_allowed("POST", &roles, &["team-a".to_string()]));
+    }
+
+    #[test]
+    fn principal_without_any_group_is_denied() {
+        assert!(!route_allowed("GET", &[], &[]));
+        assert!(!route_allowed("POST", &[], &[]));
     }
 
     #[test]

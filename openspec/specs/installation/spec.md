@@ -2,13 +2,13 @@
 
 ## Purpose
 
-TBD
+How a first-time operator deploys Konductor into their own AWS environment: a single runnable installation guide covering the three-stack deploy model (notifications, core, trust), prerequisites, smoke-test walkthrough, troubleshooting, and uninstall.
 
 ## Requirements
 
 ### Requirement: Installation guide
 
-The project SHALL provide a complete, runnable installation guide at `docs/installation.md` that walks a first-time operator through deploying Nexus into their own AWS environment from scratch. The guide SHALL reflect that Nexus is deployed once per organisation into a dedicated platform account, and SHALL NOT suggest deploying Nexus per environment (the environment concept belongs to domains Nexus provisions, not to Nexus itself).
+The project SHALL provide a complete, runnable installation guide at `docs/installation.md` that walks a first-time operator through deploying Konductor into their own AWS environment from scratch. The guide SHALL reflect that Konductor is deployed once per organisation into a dedicated platform account, and SHALL NOT suggest deploying Konductor per environment (the environment concept belongs to domains Konductor provisions, not to Konductor itself).
 
 #### Scenario: First-time operator completes installation
 
@@ -16,7 +16,7 @@ The project SHALL provide a complete, runnable installation guide at `docs/insta
 - **THEN** they SHALL have the notifications stack, core stack, and trust stack deployed
 - **AND THEN** they SHALL be able to register a domain, approve it, and verify it reaches ACTIVE status
 
-#### Scenario: Installation parameters do not include Environment for Nexus stacks
+#### Scenario: Installation parameters do not include Environment for Konductor stacks
 
 - **WHEN** the operator deploys the notifications stack, core stack, or trust stack
 - **THEN** the documented parameter tables SHALL NOT include an `Environment` parameter
@@ -58,7 +58,7 @@ The installation guide SHALL include a troubleshooting section covering common f
 
 The installation guide SHALL include an uninstall section that walks the operator through removing all deployed resources.
 
-#### Scenario: Operator removes Nexus installation
+#### Scenario: Operator removes Konductor installation
 
 - **WHEN** an operator follows the uninstall section
 - **THEN** the guide SHALL describe deleting all domains first (waiting for DELETED status)
@@ -67,21 +67,21 @@ The installation guide SHALL include an uninstall section that walks the operato
 
 ### Requirement: Makefile trust stack deployment target
 
-The project SHALL provide a `deploy-trust` Makefile target that deploys `trust-stack.yaml` to a domain account using `aws cloudformation deploy`. The target SHALL accept `APP_PROFILE` (required, the AWS CLI profile for the target domain account) and `ORGANIZATION` (optional, defaults to `acme`) as make variables. The target SHALL automatically resolve `NexusFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from the deployed `nexus-core` stack outputs using the platform account credentials, eliminating manual copy-paste of role ARNs. The target SHALL use `--capabilities CAPABILITY_NAMED_IAM` and tag the stack with `Application=nexus Component=trust`.
+The project SHALL provide a `deploy-trust` Makefile target that deploys `trust-stack.yaml` to a domain account using `aws cloudformation deploy`. The target SHALL accept `APP_PROFILE` (required, the AWS CLI profile for the target domain account) and `ORGANIZATION` (optional, defaults to `acme`) as make variables. The target SHALL automatically resolve `KonductorFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from the deployed `konductor-core` stack outputs using the platform account credentials, eliminating manual copy-paste of role ARNs. The target SHALL use `--capabilities CAPABILITY_NAMED_IAM` and tag the stack with `Application=konductor Component=trust`.
 
 #### Scenario: Operator deploys trust stack with valid profile
 
 - **WHEN** the operator runs `make deploy-trust APP_PROFILE=demo` after the core stack is deployed
-- **THEN** the target SHALL fetch `NexusFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from the `nexus-core` stack outputs
+- **THEN** the target SHALL fetch `KonductorFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from the `konductor-core` stack outputs
 - **AND THEN** the target SHALL deploy `trust-stack.yaml` to the domain account identified by `APP_PROFILE`
-- **AND THEN** the deployed stack SHALL be named `nexus-trust`
-- **AND THEN** the stack SHALL have tags `Application=nexus` and `Component=trust`
+- **AND THEN** the deployed stack SHALL be named `konductor-trust`
+- **AND THEN** the stack SHALL have tags `Application=konductor` and `Component=trust`
 
 #### Scenario: Operator deploys trust stack with custom organization
 
 - **WHEN** the operator runs `make deploy-trust APP_PROFILE=demo ORGANIZATION=myorg`
 - **THEN** the `Organization` parameter passed to the trust stack SHALL be `myorg`
-- **AND THEN** the trust role created SHALL be named `myorg-nexus-trust-role`
+- **AND THEN** the trust role created SHALL be named `myorg-konductor-trust-role`
 
 #### Scenario: Operator runs deploy-trust without APP_PROFILE
 
@@ -90,18 +90,18 @@ The project SHALL provide a `deploy-trust` Makefile target that deploys `trust-s
 
 #### Scenario: Operator runs deploy-trust before core stack is deployed
 
-- **WHEN** the operator runs `make deploy-trust APP_PROFILE=demo` and the `nexus-core` stack does not exist
+- **WHEN** the operator runs `make deploy-trust APP_PROFILE=demo` and the `konductor-core` stack does not exist
 - **THEN** the target SHALL fail when attempting to fetch stack outputs
-- **AND THEN** the error SHALL indicate the `nexus-core` stack was not found
+- **AND THEN** the error SHALL indicate the `konductor-core` stack was not found
 
 ### Requirement: Makefile trust stack teardown target
 
-The project SHALL provide a `teardown-trust` Makefile target that deletes the `nexus-trust` stack from a domain account. The target SHALL accept `APP_PROFILE` (required) as a make variable and use `AWS_REGION` for the region.
+The project SHALL provide a `teardown-trust` Makefile target that deletes the `konductor-trust` stack from a domain account. The target SHALL accept `APP_PROFILE` (required) as a make variable and use `AWS_REGION` for the region.
 
 #### Scenario: Operator removes trust stack from domain account
 
 - **WHEN** the operator runs `make teardown-trust APP_PROFILE=demo`
-- **THEN** the target SHALL delete the `nexus-trust` stack from the domain account identified by `APP_PROFILE`
+- **THEN** the target SHALL delete the `konductor-trust` stack from the domain account identified by `APP_PROFILE`
 
 #### Scenario: Operator runs teardown-trust without APP_PROFILE
 

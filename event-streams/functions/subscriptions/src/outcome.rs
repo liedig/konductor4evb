@@ -1,9 +1,9 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use nexus_common::error::ControlPlaneError;
+use konductor_common::error::ControlPlaneError;
 
-pub const EVENT_SOURCE: &str = "nexus.event-streams";
+pub const EVENT_SOURCE: &str = "konductor.event-streams";
 
 /// Emits a `{Operation}Succeeded|Failed` outcome event on the control-plane
 /// bus. Deterministic validation failures are reported this way and the SQS

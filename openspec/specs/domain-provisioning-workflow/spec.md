@@ -222,17 +222,17 @@ A standalone Step Functions workflow (`deprovision-env`) SHALL idempotently dele
 
 ### Requirement: Provisioning workflow lifecycle events
 
-The provisioning workflow SHALL emit lifecycle events to the Nexus event bus for provisioning outcomes only. No intermediate events SHALL be emitted (neither per-step within an env nor per-env completion). The outer workflow SHALL be the sole emitter of `DomainProvisioningSucceeded` and `DomainProvisioningFailed`. The event source SHALL be `nexus.domain-management`. Event payloads SHALL identify the domain by `domainName` and SHALL NOT include a `domainId` field.
+The provisioning workflow SHALL emit lifecycle events to the Konductor event bus for provisioning outcomes only. No intermediate events SHALL be emitted (neither per-step within an env nor per-env completion). The outer workflow SHALL be the sole emitter of `DomainProvisioningSucceeded` and `DomainProvisioningFailed`. The event source SHALL be `konductor.domain-management`. Event payloads SHALL identify the domain by `domainName` and SHALL NOT include a `domainId` field.
 
 #### Scenario: Provisioning succeeded event
 
 - **WHEN** the outer provisioning workflow completes all environments successfully
-- **THEN** it SHALL emit a `DomainProvisioningSucceeded` event with source `nexus.domain-management`, `domainName`, `workflowExecutionId`, `completedAt`, `environments`, `resourceArns` (map keyed by environment), `namespaceParameter` (SSM parameter path), and `isNewAccount` flag
+- **THEN** it SHALL emit a `DomainProvisioningSucceeded` event with source `konductor.domain-management`, `domainName`, `workflowExecutionId`, `completedAt`, `environments`, `resourceArns` (map keyed by environment), `namespaceParameter` (SSM parameter path), and `isNewAccount` flag
 
 #### Scenario: Provisioning failed event
 
 - **WHEN** the outer provisioning workflow fails at any environment
-- **THEN** it SHALL emit a `DomainProvisioningFailed` event with source `nexus.domain-management`, `domainName`, `workflowExecutionId`, `failedAt`, `failedEnvironment` (the first environment observed to fail), `failedStep` (step within that environment), `errorCode`, `errorMessage`, and `compensationErrors` (aggregate across inner and outer compensation)
+- **THEN** it SHALL emit a `DomainProvisioningFailed` event with source `konductor.domain-management`, `domainName`, `workflowExecutionId`, `failedAt`, `failedEnvironment` (the first environment observed to fail), `failedStep` (step within that environment), `errorCode`, `errorMessage`, and `compensationErrors` (aggregate across inner and outer compensation)
 
 ### Requirement: New account detection
 
@@ -273,14 +273,14 @@ The provisioning workflow SHALL create an SSM Parameter Store Advanced parameter
 - **THEN** the workflow SHALL treat this as a successful no-op
 - **AND THEN** provisioning SHALL continue to the next step
 
-### Requirement: Provisioning uses platform-layer names for Nexus-internal resources
+### Requirement: Provisioning uses platform-layer names for Konductor-internal resources
 
-The provisioning workflow SHALL reference Nexus platform resources (the Nexus event bus, execution roles, log groups, DynamoDB tables) using the fixed `{org}-nexus-*` pattern with no environment segment. Domain-resource names (per-env buses, registries, DLQs, dashboards, alarms) are unaffected by this change — they continue to follow the `{org}-{env}-{domain}-*` pattern established by `multi-env-domain-provisioning`.
+The provisioning workflow SHALL reference Konductor platform resources (the Konductor event bus, execution roles, log groups, DynamoDB tables) using the fixed `{org}-konductor-*` pattern with no environment segment. Domain-resource names (per-env buses, registries, DLQs, dashboards, alarms) are unaffected by this change — they continue to follow the `{org}-{env}-{domain}-*` pattern established by `multi-env-domain-provisioning`.
 
-#### Scenario: Provisioning emits events on the Nexus platform bus
+#### Scenario: Provisioning emits events on the Konductor platform bus
 
 - **WHEN** the provisioning workflow emits `DomainProvisioningSucceeded` or `DomainProvisioningFailed` events
-- **THEN** the target event bus SHALL be `{org}-nexus-bus`
+- **THEN** the target event bus SHALL be `{org}-konductor-bus`
 
 #### Scenario: Provisioning workflow definition substitutions exclude `Environment`
 
@@ -308,3 +308,22 @@ The provisioning workflow SHALL ensure that a RAM resource share exists for doma
 
 - **WHEN** the provisioning workflow attempts to associate a namespace parameter that is already in the RAM share
 - **THEN** the association SHALL be treated as a successful no-op
+
+### Requirement: Tagging at provisioning
+
+Provisioning SHALL tag every resource it creates with the domain's effective tag set. Per-environment resources (platform event bus, app event bus, schema registry, subscription DLQ, integration DLQ, dashboard, alarms) SHALL carry `konductor:managed-by`, `konductor:domain`, `konductor:environment`, and `konductor:namespace`, plus `cost-center` when the domain record carries one. The domain-level namespace SSM parameter SHALL carry the same set minus `konductor:environment`. Tags SHALL be supplied at resource creation wherever the service supports it; tag application SHALL be part of the saga's tracked steps so a tagging failure fails (and compensates) the environment exactly like any other resource failure.
+
+#### Scenario: Provisioned bus carries the effective tags
+
+- **WHEN** a domain with `cost-center=cc-1234` is provisioned into `dev`
+- **THEN** `acme-dev-<domain>-event-bus` in both accounts SHALL be tagged `konductor:managed-by=konductor`, `konductor:domain=<domain>`, `konductor:environment=dev`, `konductor:namespace=<org>-<domain>`, and `cost-center=cc-1234`
+
+#### Scenario: Namespace parameter tagged without environment
+
+- **WHEN** the domain-level namespace parameter is created
+- **THEN** it SHALL carry `konductor:managed-by`, `konductor:domain`, and `konductor:namespace`, and SHALL NOT carry `konductor:environment`
+
+#### Scenario: Tag failure fails the environment
+
+- **WHEN** a tagging call fails during provisioning of an environment
+- **THEN** that environment SHALL fail and compensate exactly as for any other resource-creation failure

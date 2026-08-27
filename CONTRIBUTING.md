@@ -1,4 +1,4 @@
-# Contributing to EventBridge Nexus
+# Contributing to Konductor for Amazon EventBridge
 
 ## License
 

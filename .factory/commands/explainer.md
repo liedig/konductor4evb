@@ -1,5 +1,5 @@
 ---
-description: Create a standalone interactive HTML explainer in the EventBridge Nexus editorial style
+description: Create a standalone interactive HTML explainer in the Konductor for Amazon EventBridge editorial style
 argument-hint: '[topic, source files, or output path]'
 ---
 

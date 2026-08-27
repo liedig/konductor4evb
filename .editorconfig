@@ -23,3 +23,7 @@ indent_style = tab
 [*.{sh}]
 indent_style = space
 indent_size = 2
+
+[*.{js,ts,vue,mjs,json,css}]
+indent_style = space
+indent_size = 2

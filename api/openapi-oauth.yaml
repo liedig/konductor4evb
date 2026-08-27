@@ -1,8 +1,8 @@
 openapi: "3.0.1"
 info:
-  title: EventBridge Nexus API
+  title: EventBridge Konductor API
   version: "1.0.0"
-  description: EventBridge Nexus — central integration platform for managing AWS EventBridge domains, subscriptions, and cross-account event routing.
+  description: EventBridge Konductor — central integration platform for managing AWS EventBridge domains, subscriptions, and cross-account event routing.
 
 # The stage is the environment selector: publish and schema write operations
 # infer the target environment from $context.stage. Environment-agnostic
@@ -54,7 +54,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainRegistrationsQueue.QueueName}"
         requestParameters:
@@ -74,6 +74,17 @@ paths:
       operationId: ListDomains
       summary: List domains
       parameters:
+        - name: view
+          in: query
+          description: >-
+            `directory` returns the names-only projection (domainName,
+            domainNamespace, description, status) available to any
+            authenticated caller; omit for the management list, which is
+            scoped to owned domains for team callers and unscoped for
+            platform roles.
+          schema:
+            type: string
+            enum: [directory]
         - name: ownerAccountId
           in: query
           schema:
@@ -116,6 +127,119 @@ paths:
         httpMethod: POST
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ListDomainsFunction.Arn}/invocations"
+
+  /domains/{domainName}/state:
+    post:
+      operationId: SetDomainState
+      summary: Enable or disable a domain (platform-admin only)
+      description: >-
+        Platform-managed lifecycle: `disable` moves an ACTIVE domain to
+        INACTIVE (publishing and new subscription activations are rejected;
+        existing subscriptions, entitlements, and provisioned infrastructure
+        are retained), `enable` moves it back to ACTIVE.
+      parameters:
+        - name: domainName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              additionalProperties: false
+              properties:
+                action:
+                  type: string
+                  enum: [enable, disable, retry-provisioning]
+                  description: >-
+                    `enable`/`disable` toggle ACTIVE/INACTIVE. `retry-provisioning`
+                    re-runs provisioning for a PROVISIONING_FAILED domain by resetting
+                    it to APPROVED and emitting DomainProvisioningRetryRequested.
+      responses:
+        "200":
+          description: Domain state after the transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DomainStateResponse"
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (platform-admin only)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Invalid status transition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DomainStateFunction.Arn}/invocations"
+
+  /domains/registrations/pending:
+    get:
+      operationId: ListPendingRegistrations
+      summary: Pending registration inbox (platform-admin only)
+      description: >-
+        Returns domains awaiting approval, including the workflow taskToken
+        and owning team, so platform administrators can decide from the
+        console. Restricted to platform-admin callers; the route exists only
+        on the OAuth API.
+      parameters:
+        - name: nextToken
+          in: query
+          schema:
+            type: string
+        - name: maxResults
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 100
+      responses:
+        "200":
+          description: Pending registrations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PendingRegistrationsResponse"
+        "403":
+          description: Access denied (platform-admin only)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${PendingRegistrationsFunction.Arn}/invocations"
 
   /domains/{domainName}:
     get:
@@ -196,7 +320,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${DomainRegistrationsQueue.QueueName}"
         requestParameters:
@@ -254,7 +378,7 @@ paths:
       summary: Publish an event to a domain (store-and-forward)
       description: >
         Flat publish: the caller provides the domain, event name, and business
-        data; Nexus resolves the latest schema version, builds the canonical
+        data; Konductor resolves the latest schema version, builds the canonical
         envelope, and publishes to the domain's event bus for the
         stage-selected environment. The request is durably queued before
         processing; the 202 response carries the queue message ID.
@@ -288,7 +412,7 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${PublishQueue.QueueName}"
         requestParameters:
@@ -343,13 +467,13 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"callerAccountId\":\"$context.identity.accountId\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody={\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String&MessageAttribute.9.Name=Resource&MessageAttribute.9.Value.StringValue=$context.resourcePath&MessageAttribute.9.Value.DataType=String"
         responses:
           default:
             statusCode: "202"
@@ -362,22 +486,35 @@ paths:
     get:
       operationId: ListSubscriptions
       summary: List event subscriptions
-      description: Results are scoped to subscriptions where the caller's account owns the consumer domain, the producer domain, or both — a caller with no relationship to either side of a subscription will never see it, regardless of filters.
+      description: >
+        Lists subscriptions from one side of the relationship. `direction=inbound`
+        lists the given consumer domain's subscriptions and requires a `subscriber`
+        binding on it; `direction=outbound` lists the subscriptions consuming the
+        given producer domain's schemas and requires a `publisher` binding, with
+        full consumer-topology visibility for notifications and version migration.
+        Platform roles may read either side. Callers without the required binding
+        receive 403 rather than a filtered-empty result.
       parameters:
-        - name: consumer
+        - name: domain
           in: query
+          required: true
+          description: The domain to list from — the consumer domain for `inbound`, the producer domain for `outbound`.
           schema:
             type: string
-        - name: producer
+        - name: direction
           in: query
+          required: true
+          description: Which side of the relationship to list.
           schema:
             type: string
+            enum: [inbound, outbound]
         - name: schema
           in: query
           schema:
             type: string
         - name: version
           in: query
+          description: Only subscriptions with this schema version pinned in at least one environment.
           schema:
             type: integer
         - name: status
@@ -385,16 +522,6 @@ paths:
           schema:
             type: string
             enum: [PENDING, ACTIVE, FAILED, REMOVED]
-        - name: nextToken
-          in: query
-          schema:
-            type: string
-        - name: maxResults
-          in: query
-          schema:
-            type: integer
-            default: 100
-            maximum: 100
       responses:
         "200":
           description: List of subscriptions
@@ -403,7 +530,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/ListSubscriptionsResponse"
         "400":
-          description: Validation error
+          description: Validation error (missing or invalid domain/direction)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller lacks the binding the requested direction requires
           content:
             application/json:
               schema:
@@ -438,8 +571,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SubscriptionDetail"
+        "403":
+          description: Caller is bound to neither the consumer nor the producer side, and holds no platform role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
-          description: Subscription not found, or the caller's account owns neither the consumer nor the producer domain (returned rather than 403 so unauthorized callers cannot use this endpoint to confirm a subscription's existence)
+          description: Subscription not found
           content:
             application/json:
               schema:
@@ -455,61 +594,6 @@ paths:
         httpMethod: POST
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSubscriptionFunction.Arn}/invocations"
-    patch:
-      operationId: UpdateSubscription
-      summary: Update per-environment desired state (enable/disable)
-      x-amazon-apigateway-request-validator: validate-body
-      parameters:
-        - name: subscriptionId
-          in: path
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/UpdateSubscriptionRequest"
-      responses:
-        "202":
-          description: Command accepted
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CommandAccepted"
-        "400":
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-        "403":
-          description: Access denied
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-      x-amazon-apigateway-integration:
-        type: aws
-        httpMethod: POST
-        credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
-        uri:
-          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
-        requestParameters:
-          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
-        requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\",\"callerAccountId\":\"$context.identity.accountId\",\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String"
-        responses:
-          default:
-            statusCode: "202"
-            responseTemplates:
-              application/json: |
-                #set($body = $input.path('$'))
-                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
-                {"requestId":"$messageId","message":"Request accepted"}
-        passthroughBehavior: never
     delete:
       operationId: Unsubscribe
       summary: Remove a subscription (event stream)
@@ -546,13 +630,65 @@ paths:
         type: aws
         httpMethod: POST
         credentials:
-          Fn::GetAtt: [NexusApiSqsRole, Arn]
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
         requestParameters:
           integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
         requestTemplates:
-          application/json: "Action=SendMessage&MessageBody={\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\",\"callerAccountId\":\"$context.identity.accountId\"}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String"
+          application/json: "Action=SendMessage&MessageBody={\"body\":{\"subscriptionId\":\"$util.urlEncode($input.params('subscriptionId'))\"}}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String&MessageAttribute.9.Name=Resource&MessageAttribute.9.Value.StringValue=$context.resourcePath&MessageAttribute.9.Value.DataType=String"
+        responses:
+          default:
+            statusCode: "202"
+            responseTemplates:
+              application/json: |
+                #set($body = $input.path('$'))
+                #set($messageId = $body.SendMessageResponse.SendMessageResult.MessageId)
+                {"requestId":"$messageId","message":"Request accepted"}
+        passthroughBehavior: never
+
+  /subscriptions/state:
+    post:
+      operationId: UpdateSubscriptionState
+      summary: Update per-environment desired state (enable/disable)
+      description: Flat-verb state change; the subscription id travels in the body alongside the consumer domain, which must match the id's consumer segment.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSubscriptionStateRequest"
+      responses:
+        "202":
+          description: Command accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandAccepted"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws
+        httpMethod: POST
+        credentials:
+          Fn::GetAtt: [KonductorApiSqsRole, Arn]
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${SubscriptionsQueue.QueueName}"
+        requestParameters:
+          integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+        requestTemplates:
+          application/json: "Action=SendMessage&MessageBody={\"body\":$util.urlEncode($input.json('$'))}&MessageAttribute.1.Name=HttpMethod&MessageAttribute.1.Value.StringValue=$context.httpMethod&MessageAttribute.1.Value.DataType=String&MessageAttribute.2.Name=PrincipalVersion&MessageAttribute.2.Value.StringValue=1&MessageAttribute.2.Value.DataType=String&MessageAttribute.3.Name=AuthMechanism&MessageAttribute.3.Value.StringValue=oauth&MessageAttribute.3.Value.DataType=String&MessageAttribute.4.Name=PrincipalId&MessageAttribute.4.Value.StringValue=$util.urlEncode($context.authorizer.principalId)&MessageAttribute.4.Value.DataType=String&MessageAttribute.5.Name=Issuer&MessageAttribute.5.Value.StringValue=$util.urlEncode($context.authorizer.issuer)&MessageAttribute.5.Value.DataType=String&MessageAttribute.6.Name=ClientId&MessageAttribute.6.Value.StringValue=$util.urlEncode($context.authorizer.clientId)&MessageAttribute.6.Value.DataType=String&MessageAttribute.7.Name=GlobalRoles&MessageAttribute.7.Value.StringValue=$util.urlEncode($context.authorizer.globalRoles)&MessageAttribute.7.Value.DataType=String&MessageAttribute.8.Name=TeamGroups&MessageAttribute.8.Value.StringValue=$util.urlEncode($context.authorizer.teamGroups)&MessageAttribute.8.Value.DataType=String&MessageAttribute.9.Name=Resource&MessageAttribute.9.Value.StringValue=$context.resourcePath&MessageAttribute.9.Value.DataType=String"
         responses:
           default:
             statusCode: "202"
@@ -566,16 +702,30 @@ paths:
   /schemas:
     get:
       operationId: ListSchemas
-      summary: Discover event schemas offered by a producer domain
+      summary: Discover the schemas a consumer domain is entitled to
       description: >
-        Read-only schema discovery. Lists schemas from the producer's
-        per-environment registries. When no environment is specified, returns
-        all environments; when an environment is specified, returns only that
-        environment's registry and schemas.
+        The subscriber catalog: exactly the schemas covered by the given
+        consumer domain's current entitlements, expanded from the producers'
+        per-environment registries (the source of truth), deduplicated across
+        overlapping grants, with the latest version per environment so skew is
+        visible before subscribing. Requires a `subscriber` binding on the
+        consumer domain. `platform-admin` and `platform-auditor` callers may
+        omit `consumerDomain` to inspect the platform-wide catalog. A consumer
+        domain with no entitlements receives an empty list — enumeration
+        reveals nothing about what exists. Pagination uses an opaque
+        continuation token bound to the request's filter set; authorization is
+        re-evaluated on every page.
       parameters:
+        - name: consumerDomain
+          in: query
+          required: false
+          description: The consumer domain whose entitlements expand into the catalog. Omit only as a platform role.
+          schema:
+            type: string
         - name: domain
           in: query
-          required: true
+          required: false
+          description: Narrow the catalog to one producer domain. A producer that does not exist or is not ACTIVE yields an empty list.
           schema:
             type: string
         - name: environment
@@ -584,15 +734,33 @@ paths:
           schema:
             type: string
           description: Filter to a single environment (e.g., dev, staging, prod).
+        - name: maxResults
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 50
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
       responses:
         "200":
-          description: Schemas offered by the domain
+          description: The entitlement-covered catalog page
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ListSchemasResponse"
-        "404":
-          description: Domain not found or not active
+        "400":
+          description: Validation error (malformed or filter-mismatched continuation token)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: No subscriber binding on the consumer domain, or the platform-wide catalog was requested without a platform role
           content:
             application/json:
               schema:
@@ -612,7 +780,7 @@ paths:
       operationId: CreateSchema
       summary: Create an event schema (publisher)
       description: >
-        Flat schema creation mirroring EventBridge CreateSchema. Nexus derives
+        Flat schema creation mirroring EventBridge CreateSchema. Konductor derives
         the canonical schema name {namespaceIdentity}@{eventName}, targets the
         stage-selected environment's registry, and creates version 1. Requires
         a publisher binding for the domain. Schemas are append-only.
@@ -710,6 +878,12 @@ paths:
     get:
       operationId: DescribeSchema
       summary: Describe a schema including per-environment latest versions
+      description: >
+        Full schema detail under the same coverage check as the catalog: a
+        `subscriber` binding on the consumer domain plus a current covering
+        entitlement. Platform roles may omit `consumerDomain` to inspect any
+        schema. Uncovered targets receive 403; a schema absent from every
+        environment receives 404.
       parameters:
         - name: schemaName
           in: path
@@ -720,6 +894,13 @@ paths:
         - name: domain
           in: query
           required: true
+          description: The producer domain.
+          schema:
+            type: string
+        - name: consumerDomain
+          in: query
+          required: false
+          description: The consumer domain whose coverage authorizes the read. Omit only as a platform role.
           schema:
             type: string
       responses:
@@ -729,6 +910,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SchemaDetail"
+        "403":
+          description: No subscriber binding or no covering entitlement, or consumerDomain omitted without a platform role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Domain or schema not found
           content:
@@ -841,6 +1028,154 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BindingAdminFunction.Arn}/invocations"
 
+  /entitlements:
+    post:
+      operationId: CreateEntitlement
+      summary: Grant a consumer domain coverage over a producer domain's schemas
+      description: Creates a coverage entitlement. Authorized for platform-admins and for callers holding a publisher binding on the producer domain (producer self-service). The scope pattern is `*` (whole producer domain, including future schemas), an exact schema name (all versions, including future versions), or a name prefix with a single trailing `*` (a family, including future members). Identical re-creates are idempotent. Server-assigned fields (entitlementId, createdAt, createdBy) are rejected if supplied.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEntitlementRequest"
+      responses:
+        "200":
+          description: An identical entitlement already existed (idempotent re-create)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entitlement"
+        "201":
+          description: Entitlement created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Entitlement"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (caller is neither a platform-admin nor a publisher on the producer domain)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: The entitlement changed concurrently; retry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EntitlementAdminFunction.Arn}/invocations"
+    get:
+      operationId: ListEntitlements
+      summary: List entitlements by consumer or producer domain
+      description: Exactly one of consumerDomain or producerDomain is required. Consumer lists authorize platform-admins, publishers on any producer domain, and subscribers on the queried consumer domain; producer lists authorize platform-admins and publishers on the queried producer domain.
+      parameters:
+        - name: consumerDomain
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: producerDomain
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Entitlements matching the filter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListEntitlementsResponse"
+        "400":
+          description: Validation error (missing or ambiguous filter)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EntitlementAdminFunction.Arn}/invocations"
+
+  /entitlements/{entitlementId}:
+    delete:
+      operationId: RevokeEntitlement
+      summary: Revoke an entitlement
+      description: Durable conditional delete that commits with its audit record in one transaction; new subscribe and enable decisions deny uncovered targets immediately. Active subscriptions the entitlement covered are disabled asynchronously by the revocation worker, with a scheduled sweep as backstop. Authorized for platform-admins and for callers holding a publisher binding on the entitlement's producer domain.
+      parameters:
+        - name: entitlementId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Entitlement revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entitlementId:
+                    type: string
+                  state:
+                    type: string
+                    enum: [revoked]
+        "403":
+          description: Access denied (caller is neither a platform-admin nor a publisher on the entitlement's producer domain)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Entitlement not found (unknown or already revoked)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EntitlementAdminFunction.Arn}/invocations"
+
   /bindings/{bindingId}:
     delete:
       operationId: RevokeBinding
@@ -934,7 +1269,8 @@ components:
           description: Domain the binding scopes to; global bindings are not representable
         role:
           type: string
-          enum: [publisher, subscriber]
+          enum: [publisher, subscriber, owner]
+          description: Role granted on the domain; `owner` authorizes domain management and is platform-administered
         principal:
           $ref: "#/components/schemas/BindingPrincipal"
       example:
@@ -953,7 +1289,7 @@ components:
           type: string
         role:
           type: string
-          enum: [publisher, subscriber]
+          enum: [publisher, subscriber, owner]
         principal:
           $ref: "#/components/schemas/BindingPrincipal"
         createdAt:
@@ -963,6 +1299,49 @@ components:
           type: string
           description: Trusted principal identifier of the administrator who created the binding
 
+    CreateEntitlementRequest:
+      type: object
+      required: [consumerDomain, producerDomain, scopePattern]
+      additionalProperties: false
+      properties:
+        consumerDomain:
+          type: string
+          minLength: 1
+          description: Consumer domain the entitlement covers
+        producerDomain:
+          type: string
+          minLength: 1
+          description: Producer domain granting the coverage
+        scopePattern:
+          type: string
+          minLength: 1
+          description: "`*` (whole producer domain including future schemas), an exact schema name (all versions including future versions), or a name prefix with a single trailing `*` (a family including future members)"
+      example:
+        consumerDomain: checkout
+        producerDomain: orders
+        scopePattern: "Order*"
+    Entitlement:
+      type: object
+      properties:
+        entitlementId:
+          type: string
+        consumerDomain:
+          type: string
+        producerDomain:
+          type: string
+        scopePattern:
+          type: string
+        createdAt:
+          type: string
+        createdBy:
+          type: string
+    ListEntitlementsResponse:
+      type: object
+      properties:
+        entitlements:
+          type: array
+          items:
+            $ref: "#/components/schemas/Entitlement"
     ListBindingsResponse:
       type: object
       properties:
@@ -982,6 +1361,7 @@ components:
 
     RegisterDomainRequest:
       type: object
+      additionalProperties: false
       required: [domainName, ownerAccountId, ownerEmail, secondaryOwnerEmails]
       properties:
         domainName:
@@ -1003,10 +1383,13 @@ components:
           items:
             type: string
             format: email
-        tags:
-          type: object
-          additionalProperties:
-            type: string
+        costCenter:
+          type: string
+          maxLength: 256
+          description: Optional governed cost-allocation tag propagated to every provisioned resource. The only accepted custom tag; arbitrary tag maps are rejected.
+        owningTeam:
+          type: string
+          description: Cognito team group that will own the domain; required for OAuth callers and must be one of the caller's team groups. IAM callers may omit it (approval then creates no owner binding).
       example:
         domainName: sales
         ownerAccountId: "111122223333"
@@ -1118,14 +1501,11 @@ components:
 
     UpdateDomainRequest:
       type: object
+      additionalProperties: false
       properties:
         description:
           type: string
           maxLength: 256
-        tags:
-          type: object
-          additionalProperties:
-            type: string
         ownerEmail:
           type: string
           format: email
@@ -1143,6 +1523,54 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DomainSummary"
+        nextToken:
+          type: string
+
+    DomainStateResponse:
+      type: object
+      properties:
+        domainName:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        updatedAt:
+          type: string
+          format: date-time
+
+    PendingRegistration:
+      type: object
+      properties:
+        domainName:
+          type: string
+        description:
+          type: string
+        ownerAccountId:
+          type: string
+        ownerEmail:
+          type: string
+        secondaryOwnerEmails:
+          type: array
+          items:
+            type: string
+            format: email
+        owningTeam:
+          type: string
+          description: Cognito team group that will own the domain once approved.
+        createdAt:
+          type: string
+          format: date-time
+        taskToken:
+          type: string
+          description: Approval workflow task token for the decide call.
+
+    PendingRegistrationsResponse:
+      type: object
+      properties:
+        registrations:
+          type: array
+          items:
+            $ref: "#/components/schemas/PendingRegistration"
         nextToken:
           type: string
 
@@ -1289,17 +1717,26 @@ components:
         enabled:
           type: boolean
 
-    UpdateSubscriptionRequest:
+    UpdateSubscriptionStateRequest:
       type: object
-      required: [environments]
+      required: [subscriptionId, consumerDomain, environments]
       additionalProperties: false
       properties:
+        subscriptionId:
+          type: string
+          description: "Format: {consumerDomain}.{producerDomain}.{detailType}; its consumer segment must equal consumerDomain"
+        consumerDomain:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$"
+          maxLength: 64
         environments:
           type: object
           minProperties: 1
           additionalProperties:
             $ref: "#/components/schemas/EnvDesiredState"
       example:
+        subscriptionId: checkout.orders.OrderNotification
+        consumerDomain: checkout
         environments:
           prod:
             enabled: true
@@ -1367,8 +1804,6 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/SubscriptionSummary"
-        nextToken:
-          type: string
 
     SchemaSummary:
       type: object
@@ -1376,6 +1811,9 @@ components:
         schemaName:
           type: string
           example: acme-orders@OrderNotification
+        producerDomain:
+          type: string
+          description: The producer domain the schema was expanded from.
         source:
           type: string
         detailType:
@@ -1402,43 +1840,22 @@ components:
     ListSchemasResponse:
       type: object
       properties:
-        domain:
-          type: string
-        environments:
-          type: object
-          additionalProperties:
-            $ref: "#/components/schemas/EnvironmentSchemas"
-          example:
-            dev:
-              registry: acme-dev-sales-schema-registry
-              schemas:
-                - schemaName: acme-sales@InvoiceCreated
-                  source: acme-sales
-                  detailType: InvoiceCreated
-                  version: 1
-
-    EnvironmentSchemas:
-      type: object
-      properties:
-        registry:
-          type: string
-        schemas:
+        items:
           type: array
           items:
-            $ref: "#/components/schemas/SchemaVersionEntry"
-
-    SchemaVersionEntry:
-      type: object
-      properties:
-        schemaName:
+            $ref: "#/components/schemas/SchemaSummary"
+        nextToken:
           type: string
-          example: acme-orders@OrderNotification
-        source:
-          type: string
-        detailType:
-          type: string
-        version:
-          type: integer
+          description: Opaque watermark cursor, bound to the request's filter set.
+      example:
+        items:
+          - schemaName: acme-orders@OrderNotification
+            producerDomain: orders
+            source: acme-orders
+            detailType: OrderNotification
+            latestVersions:
+              dev: 5
+              prod: 3
 
     ErrorResponse:
       type: object

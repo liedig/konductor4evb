@@ -2,22 +2,22 @@
 
 ## 1. Shared recipient helper
 
-- [x] 1.1 Add owner-recipient helpers to `nexus-common` (extract `ownerEmail` + `secondaryOwnerEmails` from an event detail `Value` and from a DynamoDB item; empty/missing secondaries degrade to owner-only), with unit tests
+- [x] 1.1 Add owner-recipient helpers to `konductor-common` (extract `ownerEmail` + `secondaryOwnerEmails` from an event detail `Value` and from a DynamoDB item; empty/missing secondaries degrade to owner-only), with unit tests
 
 ## 2. Operator SNS channel
 
-- [x] 2.1 Add `nexus-platform-notifications` SNS topic (DisplayName `Nexus Platform`), topic policy for `events.amazonaws.com` scoped to the forwarding rule, and email subscription for `PlatformOperatorEmail` to `nexus-core-stack.yaml`, gated by `NotificationsEnabled`
-- [x] 2.2 Add the lifecycle-forwarding EventBridge rule on the nexus bus (`source` prefix `nexus.`) with input transformer (JSON message: detail-type, source, time, detail) and `DeadLetterConfig` on `EventBridgeRuleFailureDlq`
+- [x] 2.1 Add `konductor-platform-notifications` SNS topic (DisplayName `Konductor Platform`), topic policy for `events.amazonaws.com` scoped to the forwarding rule, and email subscription for `PlatformOperatorEmail` to `konductor-core-stack.yaml`, gated by `NotificationsEnabled`
+- [x] 2.2 Add the lifecycle-forwarding EventBridge rule on the konductor bus (`source` prefix `konductor.`) with input transformer (JSON message: detail-type, source, time, detail) and `DeadLetterConfig` on `EventBridgeRuleFailureDlq`
 
 ## 3. Provisioning-succeeded owner notification
 
 - [x] 3.1 Create `send-provisioning-succeeded-notification` crate (DDB lookup by `domainName`, owner + secondary recipients, HTML "domain is live" email, permanent-failure classification), following the provisioning-failed sibling; add to workspace members; include body/recipient unit tests
-- [x] 3.2 Wire function, log group, EventBridge rule on `DomainProvisioningSucceeded`, Lambda permission, and DLQ config into `nexus-core-stack.yaml` under `NotificationsEnabled`
+- [x] 3.2 Wire function, log group, EventBridge rule on `DomainProvisioningSucceeded`, Lambda permission, and DLQ config into `konductor-core-stack.yaml` under `NotificationsEnabled`
 
 ## 4. Registration-delayed owner notification
 
 - [x] 4.1 Create `send-registration-delayed-notification` crate (DDB lookup by `domainName`, owner + secondary recipients, HTML "registration delayed, platform team notified" email with no technical detail, permanent-failure classification); add to workspace members; include body/recipient unit tests
-- [x] 4.2 Wire function, log group, EventBridge rule on `DomainApprovalNotificationFailed`, Lambda permission, and DLQ config into `nexus-core-stack.yaml` under `NotificationsEnabled`
+- [x] 4.2 Wire function, log group, EventBridge rule on `DomainApprovalNotificationFailed`, Lambda permission, and DLQ config into `konductor-core-stack.yaml` under `NotificationsEnabled`
 
 ## 5. Secondary owners in existing notifications
 

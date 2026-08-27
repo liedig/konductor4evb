@@ -1,6 +1,6 @@
 ## 1. Makefile targets
 
-- [x] 1.1 Add `deploy-trust` target with `APP_PROFILE` required guard, `ORGANIZATION` defaulting to `acme`, auto-fetch of `NexusFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from `nexus-core` stack outputs, and `aws cloudformation deploy` call with `CAPABILITY_NAMED_IAM` and tags
+- [x] 1.1 Add `deploy-trust` target with `APP_PROFILE` required guard, `ORGANIZATION` defaulting to `acme`, auto-fetch of `KonductorFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from `konductor-core` stack outputs, and `aws cloudformation deploy` call with `CAPABILITY_NAMED_IAM` and tags
 - [x] 1.2 Add `teardown-trust` target with `APP_PROFILE` required guard and `aws cloudformation delete-stack` call
 - [x] 1.3 Update `.PHONY` to include `deploy-trust teardown-trust`
 - [x] 1.4 Update `help` target to list `deploy-trust` and `teardown-trust` under Deploy and Teardown sections

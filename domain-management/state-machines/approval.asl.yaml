@@ -60,45 +60,32 @@ States:
     Type: Choice
     Choices:
       - Condition: "{% $states.input.approved = true %}"
-        Next: UpdateStatusApproved
+        Next: FinalizeApproval
     Default: PrepareCallbackRejection
 
-  UpdateStatusApproved:
+  # Finalizing an approval is a transaction (domain status + owner binding +
+  # audit record), which ASL service integrations cannot express — a Lambda
+  # owns the commit. Its payload echoes the decide fields downstream states
+  # need, so Output unwraps the invoke envelope to that payload.
+  FinalizeApproval:
     Type: Task
-    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Resource: "arn:aws:states:::lambda:invoke"
     Arguments:
-      TableName: "${DomainsTable}"
-      Key:
-        domainName:
-          S: "{% $registration.domainName %}"
-      UpdateExpression: "SET #s = :status, decidedBy = :decidedBy, justification = :justification, approvedAt = :approvedAt, updatedAt = :updatedAt"
-      ExpressionAttributeNames:
-        "#s": status
-      ExpressionAttributeValues:
-        ":status":
-          S: APPROVED
-        ":decidedBy":
-          S: "{% $states.input.decidedBy %}"
-        ":justification":
-          S: "{% $states.input.justification ? $states.input.justification : '' %}"
-        ":approvedAt":
-          S: "{% $states.context.State.EnteredTime %}"
-        ":updatedAt":
-          S: "{% $states.context.State.EnteredTime %}"
+      FunctionName: "${FinalizeApprovalFunction}"
+      Payload:
+        domainName: "{% $registration.domainName %}"
+        decidedBy: "{% $states.input.decidedBy %}"
+        justification: "{% $states.input.justification ? $states.input.justification : '' %}"
     Retry:
       - ErrorEquals:
-          - DynamoDB.ThrottlingException
-          - DynamoDB.ProvisionedThroughputExceededException
-          - DynamoDB.InternalServerError
-          - DynamoDB.RequestLimitExceeded
+          - Lambda.ServiceException
+          - Lambda.TooManyRequestsException
+          - Lambda.AWSLambdaException
         IntervalSeconds: 1
         MaxAttempts: 3
         BackoffRate: 2.0
         JitterStrategy: FULL
-    # Pass the decide payload through; the default Task output is the
-    # DynamoDB response, which would drop decidedBy/justification from the
-    # approved event.
-    Output: "{% $states.input %}"
+    Output: "{% $states.result.Payload %}"
     Next: EmitApprovedEvent
 
   # The rejection cause is JSON authored by the decide Lambda. $parse on a
@@ -250,13 +237,14 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.domain-management
           DetailType: DomainRegistrationApproved
           Detail: >-
             {% $string({
               "domainName": $registration.domainName,
               "ownerAccountId": $registration.ownerAccountId,
+              "costCenter": $registration.costCenter,
               "ownerEmail": $registration.ownerEmail,
               "secondaryOwnerEmails": $registration.secondaryOwnerEmails,
               "environments": $registration.environments,
@@ -279,13 +267,14 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.domain-management
           DetailType: DomainRegistrationRejected
           Detail: >-
             {% $string({
               "domainName": $registration.domainName,
               "ownerAccountId": $registration.ownerAccountId,
+              "costCenter": $registration.costCenter,
               "ownerEmail": $registration.ownerEmail,
               "secondaryOwnerEmails": $registration.secondaryOwnerEmails,
               "rejectedBy": $rejection.decidedBy,
@@ -309,8 +298,8 @@ States:
     Resource: "arn:aws:states:::events:putEvents"
     Arguments:
       Entries:
-        - EventBusName: "${NexusEventBus}"
-          Source: nexus.domain-management
+        - EventBusName: "${KonductorEventBus}"
+          Source: konductor.domain-management
           DetailType: DomainApprovalNotificationFailed
           Detail: >-
             {% $string({

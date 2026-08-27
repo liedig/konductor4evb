@@ -4,15 +4,16 @@ use serde_json::{json, Value};
 
 use crate::register;
 use crate::update;
-use nexus_common::error::ControlPlaneError;
-use nexus_common::models::RegisterDomainRequest;
-use nexus_common::principal::TrustedPrincipal;
-use nexus_common::principal_context::sqs_attribute_map;
+use konductor_common::error::ControlPlaneError;
+use konductor_common::models::RegisterDomainRequest;
+use konductor_common::principal::TrustedPrincipal;
+use konductor_common::principal_context::sqs_attribute_map;
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
     pub eb: aws_sdk_eventbridge::Client,
     pub sfn: aws_sdk_sfn::Client,
+    pub ssm: aws_sdk_ssm::Client,
 }
 
 impl Clients {
@@ -21,6 +22,7 @@ impl Clients {
             ddb: aws_sdk_dynamodb::Client::new(config),
             eb: aws_sdk_eventbridge::Client::new(config),
             sfn: aws_sdk_sfn::Client::new(config),
+            ssm: aws_sdk_ssm::Client::new(config),
         }
     }
 }
@@ -70,15 +72,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
         "POST" => {
             let request: RegisterDomainRequest =
                 serde_json::from_str(body_str).context("invalid RegisterDomainRequest")?;
-            register::handle(
-                &clients.ddb,
-                &clients.eb,
-                &clients.sfn,
-                &request,
-                &principal,
-                message_id,
-            )
-            .await
+            register::handle(clients, &request, &principal, message_id).await
         }
         "PUT" => {
             let request: update::UpdateDomainMessage =
@@ -87,7 +81,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
         }
         other => Err(ControlPlaneError::ValidationException {
             message: format!("unrecognised HttpMethod: {other}"),
-            reason: nexus_common::error::ValidationExceptionReason::UnknownOperation,
+            reason: konductor_common::error::ValidationExceptionReason::UnknownOperation,
             field_list: None,
         }
         .into()),
@@ -97,7 +91,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_sdk_dynamodb::operation::put_item::PutItemOutput;
+    use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsOutput;
     use aws_sdk_eventbridge::operation::put_events::PutEventsOutput;
     use aws_sdk_sfn::operation::start_execution::StartExecutionOutput;
     use aws_smithy_mocks::{mock, mock_client};
@@ -109,13 +103,15 @@ mod tests {
             "APPROVAL_STATE_MACHINE_ARN",
             "arn:aws:states:us-east-1:123:stateMachine:approval",
         );
-        std::env::set_var("NEXUS_EVENT_BUS", "nexus-bus");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
         std::env::set_var("ENVIRONMENTS", "dev,staging,prod");
+        std::env::set_var("ORGANIZATION", "acme");
     }
 
     fn happy_clients() -> Clients {
-        let put_rule = mock!(aws_sdk_dynamodb::Client::put_item)
-            .then_output(|| PutItemOutput::builder().build());
+        let tx_rule = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+            .then_output(|| TransactWriteItemsOutput::builder().build());
+        let no_bus = crate::register::test_rules::no_bus_rule();
         let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
             .then_output(|| PutEventsOutput::builder().build());
         let sfn_rule = mock!(aws_sdk_sfn::Client::start_execution).then_output(|| {
@@ -125,10 +121,20 @@ mod tests {
                 .build()
                 .unwrap()
         });
+        let no_param = crate::register::test_rules::no_param_rule();
         Clients {
-            ddb: mock_client!(aws_sdk_dynamodb, [&put_rule]),
-            eb: mock_client!(aws_sdk_eventbridge, [&eb_rule]),
+            ddb: mock_client!(aws_sdk_dynamodb, [&tx_rule]),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            ),
             sfn: mock_client!(aws_sdk_sfn, [&sfn_rule]),
+            ssm: mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            ),
         }
     }
 
@@ -214,17 +220,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_register_is_denied_without_mutation() {
+    async fn oauth_register_without_owning_team_is_denied_without_mutation() {
         set_env();
-        // Only the EventBridge outcome is mocked; any DynamoDB put_item or Step
-        // Functions start_execution call would fail the mocked client, proving
-        // a denied OAuth command performs no mutation.
+        // Only the EventBridge outcome is mocked; any DynamoDB transact_write_items
+        // or Step Functions start_execution call would fail the mocked client,
+        // proving a denied OAuth command performs no mutation.
         let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
             .then_output(|| PutEventsOutput::builder().build());
         let clients = Clients {
             ddb: mock_client!(aws_sdk_dynamodb, []),
-            eb: mock_client!(aws_sdk_eventbridge, [&eb_rule]),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&eb_rule]
+            ),
             sfn: mock_client!(aws_sdk_sfn, []),
+            ssm: mock_client!(aws_sdk_ssm, aws_smithy_mocks::RuleMode::MatchAny, []),
         };
 
         let record = json!({

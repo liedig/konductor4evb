@@ -30,7 +30,7 @@ The domain name is the natural identity of a bounded context in DDD/EDA terms, y
 
 ## Impact
 
-- **DynamoDB**: Table schema change (partition key `domainId` → `domainName`, remove `by-name` GSI). Requires table recreation — acceptable since Nexus is pre-production.
+- **DynamoDB**: Table schema change (partition key `domainId` → `domainName`, remove `by-name` GSI). Requires table recreation — acceptable since Konductor is pre-production.
 - **Lambda functions**: `register.rs` (stop UUID generation, use domainName as key), `describe-domain` (query by domainName), `update.rs` (query by domainName), `list-domains` (response shape), `decide-registration` (no domainId in workflow callbacks).
 - **OpenAPI spec**: Path parameter rename on `/domains/{domainName}` endpoints.
 - **Step Functions**: All four state machine definitions (approval, provision-domain, provision-env, deprovision-env) update workflow inputs to use `domainName`.

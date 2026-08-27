@@ -1,11 +1,11 @@
 ## 0. Trust-role rename (prerequisite)
 
-Brought forward from `nexus-platform-drop-environment` because the multi-env provisioning workflow cannot target a single application account with three env-scoped role names. See design D2.
+Brought forward from `konductor-platform-drop-environment` because the multi-env provisioning workflow cannot target a single application account with three env-scoped role names. See design D2.
 
-- [x] 0.1 Rename the trust role in `trust-stack.yaml` from `${Organization}-${Environment}-nexus-trust-role` to `${Organization}-nexus-trust-role`
+- [x] 0.1 Rename the trust role in `trust-stack.yaml` from `${Organization}-${Environment}-konductor-trust-role` to `${Organization}-konductor-trust-role`
 - [x] 0.2 Remove the `Environment` parameter from `trust-stack.yaml`
 - [x] 0.3 In `trust-stack.yaml`, replace every `${Organization}-${Environment}-` prefix inside the inline IAM policy `Resource` blocks with `${Organization}-` (keeping the trailing wildcard) so one role can manage `{org}-dev-*`, `{org}-staging-*`, and `{org}-prod-*` resources across all envs
-- [x] 0.4 Update the trust-role ARN in every location of `domain-management/state-machines/provisioning.asl.yaml` (AssumeRole task, each compensation step's `Credentials` block) from `'${Organization}-${Environment}-nexus-trust-role'` to `'${Organization}-nexus-trust-role'`
+- [x] 0.4 Update the trust-role ARN in every location of `domain-management/state-machines/provisioning.asl.yaml` (AssumeRole task, each compensation step's `Credentials` block) from `'${Organization}-${Environment}-konductor-trust-role'` to `'${Organization}-konductor-trust-role'`
 - [x] 0.5 Update `docs/trust-stack-deployment.md` to reflect the new role name and the removal of the `Environment` parameter
 - [x] 0.6 Update `docs/installation.md` trust-stack deployment section to reflect the new role name and drop the `Environment` parameter
 - [x] 0.7 Run `cfn-lint trust-stack.yaml` and fix any violations
@@ -29,7 +29,7 @@ Brought forward from `nexus-platform-drop-environment` because the multi-env pro
 - [x] 3.2 On register-domain, stamp the parsed env list onto the domain record's `environments` field before persisting
 - [x] 3.3 Include the stamped `environments` list in the `RegisterDomainSucceeded` event payload
 
-## 4. Data model (`nexus-common`)
+## 4. Data model (`konductor-common`)
 
 - [x] 4.1 Add `environments: Vec<String>` to the domain entity struct
 - [x] 4.2 Restructure `resource_arns` from flat to `HashMap<String, PerEnvResourceArns>` (keyed by env name); the inner type holds what the current flat struct holds
@@ -58,7 +58,7 @@ Brought forward from `nexus-platform-drop-environment` because the multi-env pro
 - [x] 7.4 Update execution role IAM so inner workflows have the resource-creation permissions they need (carry over from the current provisioning role; split between inner/outer as appropriate)
 - [x] 7.5 Confirm Lambda environment variables are unchanged (namespace resolver is already per-env)
 - [x] 7.6 Run `sam validate --lint` and `cfn-lint template.yaml`; fix any violations
-- [x] 7.7 Rename the `OrganizationArn` SAM parameter to `AwsOrganizationArn` to disambiguate it from the `Organization` identifier used in resource naming. Update `template.yaml`, `provision-domain.asl.yaml`'s `DefinitionSubstitutions`, `docs/installation.md`, and the downstream `nexus-platform-drop-environment` artefacts that referenced the old name
+- [x] 7.7 Rename the `OrganizationArn` SAM parameter to `AwsOrganizationArn` to disambiguate it from the `Organization` identifier used in resource naming. Update `template.yaml`, `provision-domain.asl.yaml`'s `DefinitionSubstitutions`, `docs/installation.md`, and the downstream `konductor-platform-drop-environment` artefacts that referenced the old name
 
 ## 8. Notifications
 
@@ -86,7 +86,7 @@ Follow-up from an implementation review. Establishes two personas (Platform Oper
 - [x] 10a.2 Rename Lambda directories for persona clarity: `send-approval-notification` → `send-approval-request-notification` (platform team inbox, request to act); `send-rejection-notification` → `send-rejection-outcome-notification` (domain owner, outcome of their request). Update workspace `Cargo.toml` members, per-crate `Cargo.toml` `name` fields, `template.yaml` CodeUri/FunctionName/LogGroup/IAM ARN references, and the `SendApprovalNotificationFunction` → `SendApprovalRequestNotificationFunction` substitution used by `approval.asl.yaml`.
 - [x] 10a.3 Add unauthenticated `GET /domains/registrations/decide?decision={approve|reject}&token={taskToken}` endpoint alongside the existing IAM-authed POST. Extend the existing `decide-registration` Lambda to branch on `httpMethod` and respond with an HTML confirmation page on GET. Idempotent: `TaskDoesNotExist`/`TaskTimedOut` render a friendly "already processed" page rather than a 500. OpenAPI updated with `x-amazon-apigateway-auth: NONE` on the GET route.
 - [x] 10a.4 New `send-approval-outcome-notification` Lambda, triggered by `DomainRegistrationApproved` via its own EventBridge rule (`DomainRegistrationApprovedNotificationRule`). Emails the Domain Owner that their registration was approved and provisioning is starting across the configured environments.
-- [x] 10a.5 Wire approve/reject links into the request email. Pass `DECIDE_ENDPOINT_URL` (built from `NexusApi` + stage + resource path) into `send-approval-request-notification`. Email body includes two styled button links with URL-encoded task tokens (`+ / =` in SFN tokens are percent-encoded).
+- [x] 10a.5 Wire approve/reject links into the request email. Pass `DECIDE_ENDPOINT_URL` (built from `KonductorApi` + stage + resource path) into `send-approval-request-notification`. Email body includes two styled button links with URL-encoded task tokens (`+ / =` in SFN tokens are percent-encoded).
 
 ## 11. Verification
 
