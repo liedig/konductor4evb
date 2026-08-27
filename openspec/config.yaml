@@ -1,9 +1,28 @@
 schema: spec-driven
 
 context: |
+  ## Tech Stack — Konductor backend
+  - Rust AWS Lambda functions on Amazon Linux 2023 (arm64), built with cargo-lambda, deployed via AWS SAM/CloudFormation templates
+  - lambda_runtime, tokio, serde/serde_json, tracing (JSON logs)
+  - Errors: thiserror typed errors in konductor-common, anyhow with .context() at Lambda edges
+  - AWS SDK for Rust: DynamoDB, EventBridge, SES, Step Functions, SQS, SSM, STS, Schemas, CloudWatch
+  - jsonwebtoken + reqwest for the Cognito JWT/JWKS OAuth authorizer; uuid, chrono, sha2
+  - Testing: aws-smithy-mocks (mock!/mock_client! rules), per-binary integration-style tests
+  - Lint gates: cargo fmt, clippy -D warnings (workspace lints: cognitive_complexity, too_many_lines, type_complexity)
+  - Architecture: Step Functions ASL state machines, DynamoDB single-table design, EventBridge buses/rules, SQS queues, SES email, Cognito, CloudWatch log metric filters + alarms, API Gateway defined by OpenAPI specs in api/
+
+  ## Tech Stack — Web frontend
+  - Nuxt + Vue SPA (no SSR), statically generated, served from S3 + CloudFront
+  - Pinia for state, vue-router, aws-amplify for Cognito auth
+  - Tailwind CSS via Vite plugin
+  - TypeScript + vue-tsc (nuxi typecheck), ESLint
+  - pnpm (pinned via packageManager field in web/package.json)
+
   For architecture overview: read docs/development/architecture.md
   For testing patterns: read docs/development/testing.md
   For past decisions: read docs/development/decisions.md
+  For Vue conventions: read docs/development/vue.md
+  For TypeScript conventions: read docs/development/typescript.md
 
   ## Scale Targets
   - Up to 1,000 domains per platform deployment (realistic usage in the low hundreds; the cap bounds quota planning and blast radius) and billions of events per month across cross-account scenarios
