@@ -105,6 +105,7 @@ mod tests {
         );
         std::env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
         std::env::set_var("ENVIRONMENTS", "dev,staging,prod");
+        std::env::set_var("ORGANIZATION", "acme");
     }
 
     fn happy_clients() -> Clients {
