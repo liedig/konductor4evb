@@ -35,6 +35,11 @@ if [ -z "${API_URL:-}" ]; then
     --region "${AWS_REGION}")
 fi
 
+if [ -z "${API_URL}" ] || [ "${API_URL}" = "None" ]; then
+  echo "konductor-core stack has no OAuthApiEndpoint output — deploy first with 'make deploy-core'" >&2
+  exit 1
+fi
+
 echo "${BINDINGS}" | jq -e 'type == "array" and length > 0' >/dev/null || {
   echo "BINDINGS must be a non-empty JSON array" >&2
   exit 1

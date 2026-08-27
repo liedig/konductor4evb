@@ -37,7 +37,7 @@ API_URL=$(aws cloudformation describe-stacks \
   --stack-name konductor-core \
   --query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
   --output text --region "${AWS_REGION}")
-[ -n "${API_URL}" ] || { echo "konductor-core stack has no IamApiEndpoint output — deploy first" >&2; exit 1; }
+[ -n "${API_URL}" ] && [ "${API_URL}" != "None" ] || { echo "konductor-core stack has no IamApiEndpoint output — deploy first" >&2; exit 1; }
 echo "API endpoint: ${API_URL}"
 
 echo ""

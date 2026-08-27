@@ -153,6 +153,9 @@ endif
 ifndef SECONDARY_OWNER_EMAIL
 	$(error SECONDARY_OWNER_EMAIL is required — at least one secondary owner email for the domain)
 endif
+ifndef TOKEN
+	$(error TOKEN is required — a platform-admin access token for the approval step, which is OAuth-only; see docs/development/oauth-authentication-guide.md)
+endif
 	@set -euo pipefail; \
 	DOMAIN_NAME="$(DOMAIN_NAME)"; \
 	echo "$(BOLD)$(CYAN)=== Smoke test: $${DOMAIN_NAME} ===$(RESET)"; \
@@ -161,7 +164,13 @@ endif
 		--query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
 		--output text \
 		--region $(AWS_REGION)); \
-	[ -n "$${API_URL}" ] || { echo "konductor-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
+	[ -n "$${API_URL}" ] && [ "$${API_URL}" != "None" ] || { echo "konductor-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
+	OAUTH_URL=$$(aws cloudformation describe-stacks \
+		--stack-name konductor-core \
+		--query "Stacks[0].Outputs[?OutputKey=='OAuthApiEndpoint'].OutputValue" \
+		--output text \
+		--region $(AWS_REGION)); \
+	[ -n "$${OAUTH_URL}" ] && [ "$${OAUTH_URL}" != "None" ] || { echo "konductor-core stack not found or has no OAuthApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
 	echo "  API endpoint: $${API_URL}"; \
 	echo ""; \
 	echo "$(BOLD)(1/4) Register domain$(RESET)"; \
@@ -192,11 +201,11 @@ endif
 	echo "  domainName=$${DOMAIN_NAME}"; \
 	echo "  taskToken=$${TASK_TOKEN:0:24}... (truncated)"; \
 	echo ""; \
-	echo "$(BOLD)(3/4) Approve$(RESET)"; \
-	DECIDE_RESPONSE=$$(awscurl -X POST "$${API_URL}/domains/registrations/decide" \
-		--region $(AWS_REGION) \
+	echo "$(BOLD)(3/4) Approve (OAuth API — approvals are interactive-only)$(RESET)"; \
+	DECIDE_RESPONSE=$$(curl -s -X POST "$${OAUTH_URL}/domains/registrations/decide" \
+		-H "Authorization: Bearer $(TOKEN)" \
 		-H "Content-Type: application/json" \
-		-d "{\"taskToken\":\"$${TASK_TOKEN}\",\"decision\":\"ACCEPT\",\"decidedBy\":\"smoke-test\"}"); \
+		-d "{\"taskToken\":\"$${TASK_TOKEN}\",\"decision\":\"ACCEPT\"}"); \
 	echo "  $${DECIDE_RESPONSE}"; \
 	echo ""; \
 	echo "$(BOLD)(4/4) Poll for ACTIVE status$(RESET)"; \
@@ -225,7 +234,7 @@ list-domains: ## List registered domains (optional: DOMAIN_STATUS=, OWNER_ACCOUN
 		--query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
 		--output text \
 		--region $(AWS_REGION) 2>/dev/null) || true; \
-	[ -n "$${API_URL}" ] || { echo "konductor-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
+	[ -n "$${API_URL}" ] && [ "$${API_URL}" != "None" ] || { echo "konductor-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
 	QUERY=""; \
 	[ -n "$(DOMAIN_STATUS)" ] && QUERY="$${QUERY}&status=$(DOMAIN_STATUS)"; \
 	[ -n "$(OWNER_ACCOUNT_ID)" ] && QUERY="$${QUERY}&ownerAccountId=$(OWNER_ACCOUNT_ID)"; \
@@ -243,7 +252,7 @@ endif
 		--query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
 		--output text \
 		--region $(AWS_REGION) 2>/dev/null) || true; \
-	[ -n "$${API_URL}" ] || { echo "konductor-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
+	[ -n "$${API_URL}" ] && [ "$${API_URL}" != "None" ] || { echo "konductor-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
 	QUERY="consumerDomain=$(CONSUMER_DOMAIN)"; \
 	[ -n "$(DOMAIN)" ] && QUERY="$${QUERY}&domain=$(DOMAIN)"; \
 	[ -n "$(ENV)" ] && QUERY="$${QUERY}&environment=$(ENV)"; \
@@ -263,7 +272,7 @@ endif
 		--query "Stacks[0].Outputs[?OutputKey=='IamApiEndpoint'].OutputValue" \
 		--output text \
 		--region $(AWS_REGION) 2>/dev/null) || true; \
-	[ -n "$${API_URL}" ] || { echo "konductor-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
+	[ -n "$${API_URL}" ] && [ "$${API_URL}" != "None" ] || { echo "konductor-core stack not found or has no IamApiEndpoint output — deploy first with 'make deploy-core'"; exit 1; }; \
 	QUERY="domain=$(DOMAIN)&direction=$(DIRECTION)"; \
 	[ -n "$(SCHEMA_NAME)" ] && QUERY="$${QUERY}&schema=$(SCHEMA_NAME)"; \
 	[ -n "$(SUBSCRIPTION_STATUS)" ] && QUERY="$${QUERY}&status=$(SUBSCRIPTION_STATUS)"; \

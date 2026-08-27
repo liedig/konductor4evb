@@ -8,7 +8,7 @@ If you are a platform team member responsible for approving registrations or man
 
 ## Overview
 
-Konductor for Amazon EventBridge provisions and manages the cross-account EventBridge infrastructure your domain needs: event buses, schema registries, DLQs, and CloudWatch dashboards across all configured environments. You interact with Konductor through a REST API offered on two surfaces — IAM (SigV4-signed, for automation) and OAuth (Cognito token, for interactive users) — with identical semantics. This guide's examples use the IAM surface via `awscurl`.
+Konductor for Amazon EventBridge provisions and manages the cross-account EventBridge infrastructure your domain needs: event buses, schema registries, DLQs, and CloudWatch dashboards across all configured environments. You interact with Konductor through a REST API offered on two surfaces: **IAM** (SigV4-signed, for automation and platform tooling) and **OAuth** (Cognito token, for interactive users). The day-to-day operations — register/describe/list domains, publish, subscriptions, schemas — exist on both. Platform-administration operations are **OAuth-only**: deciding registrations (`/domains/registrations/decide`), the pending-registrations inbox, binding and entitlement administration, and domain enable/disable. OAuth responses are also ownership-scoped: team callers see the domains their teams own, while platform roles see everything. This guide's examples use the IAM surface via `awscurl`.
 
 Your domain name is your domain's identity. It is the sole identifier used in API paths, DynamoDB records, event payloads, and resource names. Choose carefully — domain names are globally unique and cannot be renamed.
 

@@ -198,7 +198,7 @@ You need these two values:
 | `KonductorFunctionRoleArn` | `KonductorRoleArn` parameter |
 | `ProvisioningWorkflowRoleArn` | `ProvisioningWorkflowRoleArn` parameter |
 
-Also note the `ApiEndpoint` output — you will use it in the smoke test.
+Also note the `IamApiEndpoint` and `OAuthApiEndpoint` outputs — the smoke test uses both (registration and status polling go to the IAM endpoint; approval is OAuth-only).
 
 ---
 
@@ -247,23 +247,25 @@ For detailed instructions including verification and troubleshooting, see
 ## Phase 4 — Smoke test
 
 Verify your installation by running the automated smoke test, which registers a
-test domain, approves it, and polls until it reaches ACTIVE status:
+test domain, approves it, and polls until it reaches ACTIVE status. The approval
+step is OAuth-only, so `TOKEN` must be a platform-admin access token (see the
+[OAuth Authentication Guide](development/oauth-authentication-guide.md)):
 
 ```bash
-make smoke AWS_REGION=<region> APP_ACCOUNT_ID=<domain-account-id> OWNER_EMAIL=<owner@example.com> SECONDARY_OWNER_EMAIL=<secondary@example.com>
+make smoke AWS_REGION=<region> APP_ACCOUNT_ID=<domain-account-id> OWNER_EMAIL=<owner@example.com> SECONDARY_OWNER_EMAIL=<secondary@example.com> TOKEN=<platform-admin-access-token>
 ```
 
 Example:
 
 ```bash
-make smoke AWS_REGION=us-east-1 APP_ACCOUNT_ID=222233334444 OWNER_EMAIL=owner@example.com SECONDARY_OWNER_EMAIL=secondary@example.com
+make smoke AWS_REGION=us-east-1 APP_ACCOUNT_ID=222233334444 OWNER_EMAIL=owner@example.com SECONDARY_OWNER_EMAIL=secondary@example.com TOKEN=eyJraWQ...
 ```
 
 The smoke test:
 
-1. Fetches the API endpoint from the core stack outputs
+1. Fetches the IAM and OAuth API endpoints from the core stack outputs
 2. Registers a domain named `smoke-test` via `awscurl` (IAM-signed request)
-3. Waits for the approval workflow to publish the task token, then approves the domain via the API
+3. Waits for the approval workflow to publish the task token, then approves the domain via the OAuth API with the `TOKEN` credentials
 4. Polls until the domain reaches `ACTIVE` status (up to ~3.5 minutes)
 
 If all steps pass, your Konductor installation is working. To verify provisioned
@@ -285,23 +287,27 @@ make teardown-domain DOMAIN_NAME=smoke-test
 
 ### Manual smoke test
 
-If you prefer to run the steps manually (e.g., to test with a real domain name or inspect intermediate states), see the API endpoints below. The API uses IAM authentication — use `awscurl` for signed requests.
+If you prefer to run the steps manually (e.g., to test with a real domain name or inspect intermediate states), use the endpoints below. Registration and status polling use the IAM surface (`awscurl` SigV4-signed requests); approval is OAuth-only, so the decide call is a plain `curl` with a platform-admin bearer token.
 
 ```bash
-API_URL="<ApiEndpoint from Phase 2>"
+API_URL="<IamApiEndpoint from Phase 2>"
+OAUTH_URL="<OAuthApiEndpoint from Phase 2>"
 REGION="<region>"
+TOKEN="<platform-admin access token>"
 
-# Register
+# Register (IAM surface)
 awscurl -X POST "${API_URL}/domains" --region "${REGION}" \
   -H "Content-Type: application/json" \
   -d '{"domainName":"billing","ownerAccountId":"<domain-account-id>","ownerEmail":"<email>","secondaryOwnerEmails":["<secondary-email>"],"description":"Billing domain"}'
 
-# Approve
-awscurl -X POST "${API_URL}/domains/registrations/decide" --region "${REGION}" \
+# Approve (OAuth surface). The task token is listed by
+# GET ${OAUTH_URL}/domains/registrations/pending and stored on the domain record.
+curl -s -X POST "${OAUTH_URL}/domains/registrations/decide" \
+  -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"taskToken":"<taskToken>","decision":"ACCEPT","decidedBy":"<email>"}'
+  -d '{"taskToken":"<taskToken>","decision":"ACCEPT"}'
 
-# Check status
+# Check status (IAM surface)
 awscurl -X GET "${API_URL}/domains/<domainName>" --region "${REGION}"
 ```
 

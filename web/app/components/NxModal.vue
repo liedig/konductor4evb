@@ -12,7 +12,7 @@ watch(() => props.open, (open) => {
     if (event.key === 'Escape') emit('close')
   }
   window.addEventListener('keydown', onKey)
-  onUnmounted(() => window.removeEventListener('keydown', onKey))
+  onWatcherCleanup(() => window.removeEventListener('keydown', onKey))
 })
 </script>
 
