@@ -231,11 +231,12 @@ pub async fn query_streams_by_consumer(
 
 /// Runs `build_query` repeatedly, feeding each page's `LastEvaluatedKey` back
 /// in as `ExclusiveStartKey`, until DynamoDB reports no further pages.
+/// The error is boxed: SdkError is ~400 bytes, tripping clippy::result_large_err.
 async fn query_all_pages<F>(
     build_query: F,
 ) -> std::result::Result<
     Vec<EventStream>,
-    aws_sdk_dynamodb::error::SdkError<aws_sdk_dynamodb::operation::query::QueryError>,
+    Box<aws_sdk_dynamodb::error::SdkError<aws_sdk_dynamodb::operation::query::QueryError>>,
 >
 where
     F: Fn(
