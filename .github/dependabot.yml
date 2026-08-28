@@ -1,0 +1,51 @@
+version: 2
+updates:
+  # Rust workspace (Cargo.lock is committed, so these are reviewable lockfile PRs).
+  - package-ecosystem: cargo
+    directory: "/"
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+      include: scope
+    labels: ["type:deps", "area:deps"]
+    groups:
+      aws-sdk:
+        patterns: ["aws-config", "aws-sdk-*", "aws-smithy-*"]
+      rust-platform:
+        patterns: ["tokio", "serde", "serde_json", "lambda_runtime", "tracing", "tracing-subscriber", "thiserror", "anyhow"]
+
+  # Web console (pnpm). Cooldown so brand-new package versions can't auto-land.
+  - package-ecosystem: npm
+    directory: "/web"
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+      include: scope
+    labels: ["type:deps", "area:deps"]
+    cooldown:
+      default-days: 7
+    groups:
+      nuxt-vue:
+        patterns: ["nuxt", "@nuxt/*", "vue", "vue-router", "@pinia/*", "pinia"]
+      amplify:
+        patterns: ["aws-amplify", "@aws-amplify/*"]
+      web-tooling:
+        patterns: ["eslint", "@nuxt/eslint", "typescript", "vue-tsc", "tailwindcss", "@tailwindcss/*"]
+
+  # Workflows pin actions by SHA; this is what keeps those pins current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+      include: scope
+    labels: ["type:deps", "area:ci"]
