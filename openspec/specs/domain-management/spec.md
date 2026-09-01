@@ -290,13 +290,15 @@ The OAuth control plane SHALL expose `GET /domains/registrations/pending` restri
 
 ### Requirement: Update Domain
 
-Domain owners SHALL be able to update mutable domain metadata by submitting a command that is processed asynchronously. The update command SHALL accept `description`, `tags`, `ownerEmail`, and `secondaryOwnerEmails` fields; all other domain attributes SHALL be immutable through this command. The domain name SHALL NOT be updatable. Status transitions SHALL NOT be performed via the update command. The `ownerAccountId` field SHALL NOT be updatable. The API path SHALL be `PUT /domains/{domainName}`. The API SHALL accept the command and return immediately; the outcome SHALL be communicated via an EventBridge event.
+Domain owners SHALL be able to update mutable domain metadata by submitting a command that is processed asynchronously. The update command SHALL accept `description`, `ownerEmail`, `secondaryOwnerEmails`, and `costCenter` fields; all other domain attributes SHALL be immutable through this command. The domain name SHALL NOT be updatable. Status transitions SHALL NOT be performed via the update command. The `ownerAccountId` field SHALL NOT be updatable. The API path SHALL be `PUT /domains/{domainName}`. The API SHALL accept the command and return immediately; the outcome SHALL be communicated via an EventBridge event.
 
 For OAuth callers the command SHALL be authorized by an owner binding held by one of the caller's team groups on the domain, or by the `platform-admin` role. IAM callers SHALL remain authorized exactly as before.
 
+The `UpdateDomainSucceeded` event detail SHALL carry the update command's `requestId` (the SQS message id) alongside `domainName`, `updatedAt`, `status`, and `changedFields`, so downstream consumers can key idempotent follow-up work to a single committed update.
+
 #### Scenario: Update command accepted and enqueued
 
-- **WHEN** a domain owner calls `PUT /domains/{domainName}` with valid fields (description, tags, ownerEmail, and/or secondaryOwnerEmails)
+- **WHEN** a domain owner calls `PUT /domains/{domainName}` with valid fields (description, ownerEmail, secondaryOwnerEmails, and/or costCenter)
 - **THEN** API Gateway SHALL validate the request structure and enqueue the command to the domains SQS queue
 - **AND THEN** the `domainName` path parameter SHALL be injected into the message body by the API Gateway VTL mapping template
 - **AND THEN** the API SHALL return `202 Accepted` with `{"requestId":"<SQS-MessageId>","message":"Domain update request accepted"}`
@@ -319,6 +321,18 @@ For OAuth callers the command SHALL be authorized by an owner binding held by on
 - **THEN** the command handler SHALL update the `ownerEmail` field on the domain record in DynamoDB
 - **AND THEN** emit `UpdateDomainSucceeded` with `ownerEmail` in the `changedFields` list
 - **AND THEN** subsequent notification emails SHALL be sent to the new owner email address
+
+#### Scenario: Update cost center
+
+- **WHEN** a domain owner calls `PUT /domains/{domainName}` with a valid non-empty `costCenter`
+- **THEN** the command handler SHALL update the `costCenter` field on the domain record in DynamoDB and recompute the record's stored effective `tags` map to carry the new `cost-center` value
+- **AND THEN** emit `UpdateDomainSucceeded` with `costCenter` in the `changedFields` list and the new `costCenter` value and command `requestId` in the event detail
+
+#### Scenario: Invalid cost center update fails
+
+- **WHEN** an update-domain command carries a `costCenter` that fails the governed-tag validation (over 256 characters or containing control characters)
+- **THEN** no update SHALL be applied to the domain record
+- **AND THEN** the handler SHALL emit `UpdateDomainFailed` with the validation reason
 
 #### Scenario: Update command processed and succeeded event emitted
 
@@ -492,9 +506,9 @@ Before persisting a registration, the command handler SHALL check for colliding 
 - **WHEN** a registration command is processed and no colliding resources exist
 - **THEN** the domain SHALL be persisted as `PENDING_APPROVAL` and the approval workflow SHALL start, exactly as before
 
-### Requirement: Governed domain tag model
+### Requirement: Domain resource tagging
 
-Every domain SHALL carry a standard tag set, applied by the platform: `konductor:managed-by` (`konductor`), `konductor:domain` (the domain name), `konductor:environment` (per environment on per-environment resources), and `konductor:namespace` (the `{org}-{domain}` namespace identity). A registration MAY additionally supply a single governed custom tag, `costCenter`, for cost allocation; the API SHALL reject any other custom tag keys. The domain record SHALL store the effective tag set (standard set plus `cost-center` when supplied), and describe and list responses SHALL render it. `cost-center` SHALL be settable at registration and SHALL NOT be editable afterwards in this capability version.
+Every domain SHALL carry a standard tag set, applied by the platform: `konductor:managed-by` (`konductor`), `konductor:domain` (the domain name), `konductor:environment` (per environment on per-environment resources), and `konductor:namespace` (the `{org}-{domain}` namespace identity). A registration MAY additionally supply a single governed custom tag, `costCenter`, for cost allocation; the API SHALL reject any other custom tag keys. The domain record SHALL store the effective tag set (standard set plus `cost-center` when supplied), and describe and list responses SHALL render it. `cost-center` SHALL be settable at registration and SHALL be mutable afterwards via the update command with change-only semantics: an update MAY set a `costCenter` where none exists and MAY replace an existing value with another valid value, but SHALL NOT clear an existing value (the API schema makes clearing inexpressible by requiring a non-empty value).
 
 #### Scenario: Registration with a cost center
 
@@ -512,10 +526,17 @@ Every domain SHALL carry a standard tag set, applied by the platform: `konductor
 - **WHEN** a registration omits `costCenter`
 - **THEN** the record SHALL carry the standard tag set only and registration SHALL proceed normally
 
-#### Scenario: Cost center is immutable
+#### Scenario: Cost center is replaceable via update
 
-- **WHEN** an owner submits a domain update carrying `costCenter`
+- **WHEN** an owner submits a domain update carrying a valid `costCenter` different from the stored value
+- **THEN** the domain record SHALL store the new `costCenter` and a recomputed effective `tags` map
+- **AND THEN** describe SHALL render the new `cost-center` tag value
+
+#### Scenario: Cost center cannot be cleared
+
+- **WHEN** an owner submits a domain update with `costCenter` set to an empty string
 - **THEN** the API SHALL return `400 ValidationException`
+- **AND THEN** the stored value SHALL remain unchanged
 
 ### Requirement: Domain count is capped
 

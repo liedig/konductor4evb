@@ -97,6 +97,7 @@ export interface UpdateDomainRequest {
   description?: string
   ownerEmail?: string
   secondaryOwnerEmails?: string[]
+  costCenter?: string
 }
 
 export type DecideDecision = 'ACCEPT' | 'REJECT'

@@ -19,7 +19,10 @@ const editForm = reactive({
   description: '',
   ownerEmail: '',
   secondaryOwnerEmails: [''],
+  costCenter: '',
 })
+const currentCostCenter = ref('')
+const costCenterError = ref('')
 
 async function load() {
   try {
@@ -39,17 +42,36 @@ function startEdit() {
   editForm.ownerEmail = domain.value.ownerEmail ?? ''
   editForm.secondaryOwnerEmails = [...(domain.value.secondaryOwnerEmails ?? []), ''].slice(0, -1)
   if (editForm.secondaryOwnerEmails.length === 0) editForm.secondaryOwnerEmails = ['']
+  currentCostCenter.value = domain.value.costCenter ?? domain.value.tags?.['cost-center'] ?? ''
+  editForm.costCenter = currentCostCenter.value
+  costCenterError.value = ''
   editing.value = true
 }
 
 async function saveEdit() {
   if (busy.value) return
+  const costCenter = editForm.costCenter.trim()
+  if (currentCostCenter.value && !costCenter) {
+    costCenterError.value = 'Cost center cannot be cleared — enter a value or restore the current one.'
+    return
+  }
+  if (costCenter.length > 256) {
+    costCenterError.value = 'At most 256 characters.'
+    return
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f]/.test(costCenter)) {
+    costCenterError.value = 'No control characters.'
+    return
+  }
+  costCenterError.value = ''
   busy.value = true
   try {
     await domainsApi.update(name, {
       description: editForm.description || undefined,
       ownerEmail: editForm.ownerEmail || undefined,
       secondaryOwnerEmails: editForm.secondaryOwnerEmails.map(e => e.trim()).filter(Boolean),
+      costCenter: costCenter && costCenter !== currentCostCenter.value ? costCenter : undefined,
     })
     toast.success('Update request accepted — changes apply asynchronously')
     editing.value = false
@@ -223,7 +245,14 @@ onMounted(load)
               </NxButton>
             </div>
           </div>
-          <p class="text-sm text-faint">Name, account, environments, and cost center are not editable.</p>
+          <NxInput
+            v-model="editForm.costCenter"
+            label="Cost center"
+            placeholder="e.g. cc-1234"
+            hint="Change-only: re-tags every provisioned resource. Leave as-is to keep the current value."
+            :error="costCenterError"
+          />
+          <p class="text-sm text-faint">Name, account, and environments are not editable.</p>
         </div>
         <template #actions>
           <NxButton variant="secondary" :disabled="busy" @click="editing = false">Cancel</NxButton>

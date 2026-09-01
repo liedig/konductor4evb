@@ -2688,6 +2688,114 @@ Resources:
             DeadLetterConfig:
               Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
 
+  RetagWorkflowRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "konductor-retag-workflow-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+
+  # Deliberately narrower than ProvisioningWorkflowPolicy: read the domain
+  # record, tag existing resources, report failures. No create/delete powers.
+  RetagWorkflowPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: RetagWorkflowPolicy
+      Roles:
+        - !Ref RetagWorkflowRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+            Resource: !GetAtt DomainsTable.Arn
+          - Effect: Allow
+            Action:
+              - events:TagResource
+              - events:UntagResource
+            Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
+          - Effect: Allow
+            Action:
+              - events:PutEvents
+            Resource: !GetAtt KonductorEventBus.Arn
+          - Effect: Allow
+            Action:
+              - schemas:TagResource
+              - schemas:UntagResource
+            Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
+          - Effect: Allow
+            Action:
+              - sqs:TagQueue
+              - sqs:UntagQueue
+            Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Organization}-*"
+          - Effect: Allow
+            Action:
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+            Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/${Organization}-*"
+          - Effect: Allow
+            Action:
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+            Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Organization}-*"
+          - Effect: Allow
+            Action:
+              - ssm:AddTagsToResource
+            Resource:
+              - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/namespace/*"
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - !Sub "arn:aws:iam::*:role/${Organization}-konductor-trust-role"
+          - Effect: Allow
+            Action:
+              - xray:PutTraceSegments
+              - xray:PutTelemetryRecords
+              - xray:GetSamplingRules
+              - xray:GetSamplingTargets
+            Resource: "*"
+
+  RetagDomainWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub "konductor-retag-domain"
+      Role: !GetAtt RetagWorkflowRole.Arn
+      Tracing:
+        Enabled: true
+      DefinitionUri: ./domain-management/state-machines/retag-domain.asl.yaml
+      DefinitionSubstitutions:
+        DomainsTable: !Ref DomainsTable
+        KonductorEventBus: !GetAtt KonductorEventBus.Arn
+        Organization: !Ref Organization
+        "AWS::Region": !Ref "AWS::Region"
+        "AWS::AccountId": !Ref "AWS::AccountId"
+      Events:
+        # Executions are auto-named (rule targets cannot set execution names);
+        # duplicate runs from event redelivery are harmless because every tag
+        # call in the workflow is an idempotent upsert.
+        CostCenterUpdated:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref KonductorEventBus
+            Pattern:
+              detail-type:
+                - UpdateDomainSucceeded
+              source:
+                - konductor.domain-management
+              detail:
+                changedFields:
+                  - costCenter
+            DeadLetterConfig:
+              Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
+
   SubscriptionWorkflowRole:
     Type: AWS::IAM::Role
     Properties:
@@ -2986,6 +3094,9 @@ Outputs:
   ProvisioningWorkflowRoleArn:
     Description: Provisioning workflow role ARN (pass as ProvisioningWorkflowRoleArn to trust-stack.yaml)
     Value: !GetAtt ProvisioningWorkflowRole.Arn
+  RetagWorkflowRoleArn:
+    Description: Cost-center retag workflow role ARN (pass as RetagWorkflowRoleArn to trust-stack.yaml)
+    Value: !GetAtt RetagWorkflowRole.Arn
   LambdaFailureDlqUrl:
     Description: Lambda Dead Letter Queue URL for monitoring failed async invocations
     Value: !Ref LambdaFailureDlq
@@ -3013,6 +3124,9 @@ Outputs:
   DeprovisionEnvStateMachineArn:
     Description: Per-environment teardown workflow ARN (used by provisioning rollback and scripts/teardown-domain.sh)
     Value: !Ref DeprovisionEnvWorkflow
+  RetagDomainStateMachineArn:
+    Description: Cost-center retag workflow ARN (triggered by UpdateDomainSucceeded events carrying costCenter in changedFields)
+    Value: !Ref RetagDomainWorkflow
   CognitoUserPoolId:
     Description: Cognito user pool ID for interactive control-plane identity
     Value: !Ref KonductorUserPool

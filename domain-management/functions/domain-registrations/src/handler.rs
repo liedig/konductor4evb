@@ -77,7 +77,7 @@ async fn process_record(clients: &Clients, record: &Value, message_id: &str) -> 
         "PUT" => {
             let request: update::UpdateDomainMessage =
                 serde_json::from_str(body_str).context("invalid UpdateDomainMessage")?;
-            update::handle(&clients.ddb, &clients.eb, &request, &principal).await
+            update::handle(&clients.ddb, &clients.eb, &request, &principal, message_id).await
         }
         other => Err(ControlPlaneError::ValidationException {
             message: format!("unrecognised HttpMethod: {other}"),

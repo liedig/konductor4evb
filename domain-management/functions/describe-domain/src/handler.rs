@@ -118,6 +118,7 @@ fn render_domain(item: &HashMap<String, AttributeValue>, org: &str) -> Value {
         "ownerAccountId": get_s(item, "ownerAccountId"),
         "ownerEmail": get_s(item, "ownerEmail"),
         "secondaryOwnerEmails": secondary_owner_emails,
+        "costCenter": get_s(item, "costCenter"),
         "status": get_s(item, "status"),
         "environments": environments,
         "tags": attr_to_string_map(item, "tags"),
@@ -283,6 +284,59 @@ mod tests {
             body.get("namespaces").is_none(),
             "a domain has exactly one namespace; per-env names are resource names, not namespaces"
         );
+    }
+
+    #[tokio::test]
+    async fn cost_center_is_rendered_top_level_when_present() {
+        let mut item = domain_item();
+        item.insert("costCenter".to_string(), s("cc-9000"));
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let resp = fetch_domain(
+            &ddb,
+            "domains",
+            "bindings",
+            &event,
+            &iam_principal(),
+            "acme",
+        )
+        .await;
+
+        assert_eq!(resp["statusCode"], 200);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["costCenter"], "cc-9000");
+    }
+
+    #[tokio::test]
+    async fn cost_center_renders_null_when_unset() {
+        let item = domain_item();
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let resp = fetch_domain(
+            &ddb,
+            "domains",
+            "bindings",
+            &event,
+            &iam_principal(),
+            "acme",
+        )
+        .await;
+
+        assert_eq!(resp["statusCode"], 200);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert!(body["costCenter"].is_null());
     }
 
     #[tokio::test]

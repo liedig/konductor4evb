@@ -171,7 +171,7 @@ async function submit() {
           v-model="form.costCenter"
           label="Cost center"
           placeholder="e.g. cc-1234"
-          hint="Optional. Applied as a cost-center tag on every resource this domain provisions. Set once; cannot be changed later."
+          hint="Optional. Applied as a cost-center tag on every resource this domain provisions."
           :error="fieldErrors.costCenter"
         />
         <div class="mt-2 flex justify-end gap-2">

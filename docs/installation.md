@@ -197,6 +197,7 @@ You need these two values:
 |---|---|
 | `KonductorFunctionRoleArn` | `KonductorRoleArn` parameter |
 | `ProvisioningWorkflowRoleArn` | `ProvisioningWorkflowRoleArn` parameter |
+| `RetagWorkflowRoleArn` | `RetagWorkflowRoleArn` parameter |
 
 Also note the `IamApiEndpoint` and `OAuthApiEndpoint` outputs — the smoke test uses both (registration and status polling go to the IAM endpoint; approval is OAuth-only).
 
@@ -204,7 +205,7 @@ Also note the `IamApiEndpoint` and `OAuthApiEndpoint` outputs — the smoke test
 
 ## Phase 3 — Onboard a domain account
 
-Deploy the trust stack in each domain account that will own domains. This grants Konductor cross-account access to provision domain resources, including tagging them with the domain's tag set. **Existing installations**: redeploy the trust stack after upgrading past the resource-tagging change — without the added tag permissions, app-side provisioning fails at the tagging step.
+Deploy the trust stack in each domain account that will own domains. This grants Konductor cross-account access to provision domain resources, including tagging them with the domain's tag set. **Existing installations**: redeploy the trust stack after upgrading past the resource-tagging change — without the added tag permissions, app-side provisioning fails at the tagging step. Likewise, after upgrading past the editable cost-center change, redeploy the trust stack with the new `RetagWorkflowRoleArn` parameter — without it, cost-center retagging of app-side resources fails with an assume-role denial and the platform emits `RetagDomainFailed`.
 
 Switch your AWS CLI credentials to the domain account, then:
 
@@ -215,6 +216,7 @@ aws cloudformation deploy \
   --parameter-overrides \
     KonductorRoleArn=<KonductorFunctionRoleArn from Phase 2> \
     ProvisioningWorkflowRoleArn=<ProvisioningWorkflowRoleArn from Phase 2> \
+    RetagWorkflowRoleArn=<RetagWorkflowRoleArn from Phase 2> \
     Organization=<org> \
   --tags Application=konductor Component=trust \
   --capabilities CAPABILITY_NAMED_IAM \
@@ -230,6 +232,7 @@ aws cloudformation deploy \
   --parameter-overrides \
     KonductorRoleArn=arn:aws:iam::111111111111:role/konductor-function-role \
     ProvisioningWorkflowRoleArn=arn:aws:iam::111111111111:role/konductor-provisioning-workflow-role \
+    RetagWorkflowRoleArn=arn:aws:iam::111111111111:role/konductor-retag-workflow-role \
     Organization=acme \
   --tags Application=konductor Component=trust \
   --capabilities CAPABILITY_NAMED_IAM \
@@ -339,7 +342,7 @@ If domain provisioning fails with `AccessDenied` when assuming the trust role:
 
 - Verify the trust stack is deployed in the target domain account.
 - Check the trust role's trust policy lists the correct platform account role ARNs.
-- Confirm the role ARNs match the `KonductorFunctionRoleArn` and `ProvisioningWorkflowRoleArn` outputs from the core stack.
+- Confirm the role ARNs match the `KonductorFunctionRoleArn`, `ProvisioningWorkflowRoleArn`, and `RetagWorkflowRoleArn` outputs from the core stack.
 
 ```bash
 aws iam get-role \

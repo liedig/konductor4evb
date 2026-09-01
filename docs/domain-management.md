@@ -269,10 +269,7 @@ awscurl -X PUT "${API_URL}/domains/billing" \
   -H "Content-Type: application/json" \
   -d '{
     "description": "Billing and invoicing domain events",
-    "tags": {
-      "team": "finance",
-      "cost-center": "cc-5678"
-    }
+    "costCenter": "cc-5678"
   }'
 ```
 
@@ -281,7 +278,7 @@ awscurl -X PUT "${API_URL}/domains/billing" \
 | Field | Mutable | Notes |
 |-------|---------|-------|
 | `description` | Yes | Max 256 characters. |
-| `tags` | Yes | Key-value string map. Replaces the entire tags map. |
+| `costCenter` | Yes | Change-only: 1-256 characters, no control characters. Omit the field to leave it unchanged; an empty value is rejected. Changing it re-tags every provisioned resource (see below). |
 | `domainName` | No | Cannot be renamed. Register a new domain instead. |
 | `status` | No | Status transitions are managed by workflows, not the update API. |
 | `ownerAccountId` | No | Fixed at registration time. |
@@ -293,9 +290,28 @@ awscurl -X PUT "${API_URL}/domains/billing" \
 ```json
 {
   "requestId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-  "message": "Request accepted"
+  "message": "Domain update request accepted"
 }
 ```
+
+### Update outcome events
+
+A successful update emits `UpdateDomainSucceeded` on the control plane bus (`konductor-bus`, source `konductor.domain-management`). The detail carries the committed record state, the fields that changed, and the accepted command's `requestId`:
+
+```json
+{
+  "domainName": "billing",
+  "updatedAt": "2026-09-01T10:31:15.000Z",
+  "status": "ACTIVE",
+  "changedFields": ["costCenter"],
+  "costCenter": "cc-5678",
+  "requestId": "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+}
+```
+
+`costCenter` is present in the detail only when it changed. A failed update emits `UpdateDomainFailed` with `domainName`, `reason`, and `failedAt`.
+
+When `costCenter` changes, an `UpdateDomainSucceeded` event with `costCenter` in `changedFields` additionally triggers the **retag workflow** (`konductor-retag-domain`), which converges the `cost-center` tag on every provisioned resource — both event buses, schema registries, DLQs, dashboards, and alarms across all environments, plus the namespace parameter — to the new value. Retagging is asynchronous and idempotent: tag calls are upserts, so a redelivered event that starts a duplicate execution converges to the same tag state. A retag failure emits `RetagDomainFailed` and never reverts the committed record change.
 
 ---
 

@@ -6,13 +6,14 @@ use serde_json::json;
 use std::env;
 
 use konductor_common::domain_scope::is_full_visibility;
-use konductor_common::dynamodb::{get_s, s};
+use konductor_common::dynamodb::{get_s, s, string_map_to_attr};
 use konductor_common::error::ControlPlaneError;
 use konductor_common::grant::ResourceRole;
 use konductor_common::grant_engine;
 use konductor_common::grant_store::BindingStore;
 use konductor_common::models::DomainStatus;
 use konductor_common::principal::TrustedPrincipal;
+use konductor_common::tags;
 
 /// IAM automation and platform roles update any domain; OAuth team callers
 /// update only domains their team groups own. Binding-store failures deny.
@@ -53,6 +54,7 @@ pub struct UpdateDomainBody {
     pub description: Option<String>,
     pub owner_email: Option<String>,
     pub secondary_owner_emails: Option<Vec<String>>,
+    pub cost_center: Option<String>,
 }
 
 const NOT_AN_OWNER: &str =
@@ -63,9 +65,11 @@ pub async fn handle(
     eb: &aws_sdk_eventbridge::Client,
     message: &UpdateDomainMessage,
     principal: &TrustedPrincipal,
+    request_id: &str,
 ) -> Result<()> {
     let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let cp_bus = env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?;
+    let org = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
     let domain_name = &message.domain_name;
 
     if !authorize_update(ddb, principal, domain_name).await {
@@ -80,6 +84,7 @@ pub async fn handle(
     if message.body.description.is_none()
         && message.body.owner_email.is_none()
         && message.body.secondary_owner_emails.is_none()
+        && message.body.cost_center.is_none()
     {
         return emit_failed(eb, &cp_bus, domain_name, "no fields provided to update").await;
     }
@@ -97,10 +102,15 @@ pub async fn handle(
         )
         .await;
     }
+    if let Some(cost_center) = message.body.cost_center.as_deref() {
+        if let Err(reason) = tags::validate_cost_center(cost_center) {
+            return emit_failed(eb, &cp_bus, domain_name, &reason).await;
+        }
+    }
 
     let now = chrono::Utc::now().to_rfc3339();
     let (update_expression, expr_values, changed_fields) =
-        build_update_expression(&message.body, &now);
+        build_update_expression(&message.body, &now, &org, domain_name);
 
     let mut update = ddb
         .update_item()
@@ -133,13 +143,18 @@ pub async fn handle(
         }
     };
 
+    let attrs = output.attributes.unwrap_or_default();
     emit_success(
         eb,
         &cp_bus,
-        domain_name,
-        &now,
-        &output.attributes.unwrap_or_default(),
-        &changed_fields,
+        SuccessDetail {
+            domain_name,
+            updated_at: &now,
+            request_id,
+            status: get_s(&attrs, "status"),
+            changed_fields: &changed_fields,
+            cost_center: message.body.cost_center.as_deref(),
+        },
     )
     .await
 }
@@ -147,6 +162,8 @@ pub async fn handle(
 fn build_update_expression(
     body: &UpdateDomainBody,
     now: &str,
+    org: &str,
+    domain_name: &str,
 ) -> (String, Vec<(String, AttributeValue)>, Vec<&'static str>) {
     let mut parts = vec!["updatedAt = :now".to_string()];
     let mut values = vec![(":now".to_string(), s(now))];
@@ -170,24 +187,59 @@ fn build_update_expression(
         ));
         changed.push("secondaryOwnerEmails");
     }
+    if let Some(cost_center) = body.cost_center.as_deref() {
+        parts.push("costCenter = :costCenter".into());
+        values.push((":costCenter".to_string(), s(cost_center)));
+        let effective: std::collections::HashMap<String, String> =
+            tags::effective_tags(org, domain_name, None, Some(cost_center))
+                .into_iter()
+                .collect();
+        parts.push("tags = :tags".into());
+        values.push((":tags".to_string(), string_map_to_attr(&effective)));
+        changed.push("costCenter");
+    }
 
     (format!("SET {}", parts.join(", ")), values, changed)
+}
+
+struct SuccessDetail<'a> {
+    domain_name: &'a str,
+    updated_at: &'a str,
+    request_id: &'a str,
+    status: Option<String>,
+    changed_fields: &'a [&'a str],
+    cost_center: Option<&'a str>,
 }
 
 async fn emit_success(
     eb: &aws_sdk_eventbridge::Client,
     cp_bus: &str,
-    domain_name: &str,
-    now: &str,
-    attrs: &std::collections::HashMap<String, AttributeValue>,
-    changed_fields: &[&str],
+    outcome: SuccessDetail<'_>,
 ) -> Result<()> {
-    let result = eb.put_events().entries(
-        aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
-            .event_bus_name(cp_bus).source("konductor.domain-management").detail_type("UpdateDomainSucceeded")
-            .detail(json!({"domainName": domain_name, "updatedAt": now, "status": get_s(attrs, "status"), "changedFields": changed_fields}).to_string())
-            .build(),
-    ).send().await.map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
+    let mut detail = json!({
+        "domainName": outcome.domain_name,
+        "updatedAt": outcome.updated_at,
+        "status": outcome.status,
+        "changedFields": outcome.changed_fields,
+        "requestId": outcome.request_id,
+    });
+    if let Some(cost_center) = outcome.cost_center {
+        detail["costCenter"] = json!(cost_center);
+    }
+
+    let result = eb
+        .put_events()
+        .entries(
+            aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
+                .event_bus_name(cp_bus)
+                .source("konductor.domain-management")
+                .detail_type("UpdateDomainSucceeded")
+                .detail(detail.to_string())
+                .build(),
+        )
+        .send()
+        .await
+        .map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
 
     if result.failed_entry_count > 0 {
         return Err(ControlPlaneError::EventBridge(format!(
@@ -245,6 +297,8 @@ mod tests {
     use aws_smithy_mocks::{mock, mock_client};
     use std::collections::HashMap;
 
+    const REQUEST_ID: &str = "msg-1";
+
     fn update_message(domain_name: &str, description: Option<&str>) -> UpdateDomainMessage {
         UpdateDomainMessage {
             domain_name: domain_name.to_string(),
@@ -252,6 +306,19 @@ mod tests {
                 description: description.map(std::string::ToString::to_string),
                 owner_email: None,
                 secondary_owner_emails: None,
+                cost_center: None,
+            },
+        }
+    }
+
+    fn cost_center_message(domain_name: &str, cost_center: &str) -> UpdateDomainMessage {
+        UpdateDomainMessage {
+            domain_name: domain_name.to_string(),
+            body: UpdateDomainBody {
+                description: None,
+                owner_email: None,
+                secondary_owner_emails: None,
+                cost_center: Some(cost_center.to_string()),
             },
         }
     }
@@ -289,6 +356,7 @@ mod tests {
         env::set_var("DOMAINS_TABLE", "domains");
         env::set_var("BINDINGS_TABLE", "bindings");
         env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
+        env::set_var("ORGANIZATION", "acme");
     }
 
     const ISSUER: &str = "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_AbCdEfGh";
@@ -360,6 +428,7 @@ mod tests {
             &eb,
             &message,
             &TrustedPrincipal::iam("111122223333", None),
+            REQUEST_ID,
         )
         .await;
 
@@ -395,6 +464,7 @@ mod tests {
             &eb,
             &message,
             &TrustedPrincipal::iam("111122223333", None),
+            REQUEST_ID,
         )
         .await;
 
@@ -419,6 +489,7 @@ mod tests {
             &eb,
             &message,
             &TrustedPrincipal::iam("111122223333", None),
+            REQUEST_ID,
         )
         .await;
 
@@ -447,6 +518,7 @@ mod tests {
             &eb,
             &message,
             &TrustedPrincipal::iam("111122223333", None),
+            REQUEST_ID,
         )
         .await;
 
@@ -470,6 +542,7 @@ mod tests {
                 description: None,
                 owner_email: None,
                 secondary_owner_emails: Some(vec![]),
+                cost_center: None,
             },
         };
         let result = handle(
@@ -477,6 +550,7 @@ mod tests {
             &eb,
             &message,
             &TrustedPrincipal::iam("111122223333", None),
+            REQUEST_ID,
         )
         .await;
 
@@ -514,6 +588,7 @@ mod tests {
             &eb,
             &message,
             &oauth_principal(&[], &["team-payments"]),
+            REQUEST_ID,
         )
         .await;
 
@@ -538,6 +613,7 @@ mod tests {
             &eb,
             &message,
             &oauth_principal(&[], &["team-billing"]),
+            REQUEST_ID,
         )
         .await;
 
@@ -569,6 +645,7 @@ mod tests {
             &eb,
             &message,
             &oauth_principal(&["platform-admin"], &[]),
+            REQUEST_ID,
         )
         .await;
 
@@ -585,7 +662,7 @@ mod tests {
         let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
 
         let message = update_message("billing", Some("nope"));
-        let result = handle(&ddb, &eb, &message, &oauth_principal(&[], &[])).await;
+        let result = handle(&ddb, &eb, &message, &oauth_principal(&[], &[]), REQUEST_ID).await;
 
         assert!(result.is_ok());
         assert_eq!(eb_rule.num_calls(), 1);
@@ -603,5 +680,140 @@ mod tests {
 
         let parsed = serde_json::from_value::<UpdateDomainMessage>(message);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn update_body_accepts_cost_center() {
+        let message = serde_json::json!({
+            "domainName": "billing",
+            "body": { "costCenter": "cc-9000" }
+        });
+
+        let parsed = serde_json::from_value::<UpdateDomainMessage>(message).unwrap();
+        assert_eq!(parsed.body.cost_center.as_deref(), Some("cc-9000"));
+    }
+
+    #[tokio::test]
+    async fn cost_center_update_rewrites_tags_and_enriches_event() {
+        set_env();
+
+        let update_rule = mock!(aws_sdk_dynamodb::Client::update_item)
+            .match_requests(|req| {
+                let values = req
+                    .expression_attribute_values()
+                    .cloned()
+                    .unwrap_or_default();
+                let cost_center = values
+                    .get(":costCenter")
+                    .and_then(|v| v.as_s().ok())
+                    .is_some_and(|v| v == "cc-9000");
+                let tags = values
+                    .get(":tags")
+                    .and_then(|v| v.as_m().ok())
+                    .is_some_and(|m| {
+                        m.get("cost-center")
+                            .and_then(|v| v.as_s().ok())
+                            .is_some_and(|v| v == "cc-9000")
+                            && m.get("konductor:namespace")
+                                .and_then(|v| v.as_s().ok())
+                                .is_some_and(|v| v == "acme-billing")
+                    });
+                cost_center && tags
+            })
+            .then_output(|| {
+                UpdateItemOutput::builder()
+                    .set_attributes(Some(HashMap::from([
+                        ("domainName".into(), s("billing")),
+                        ("status".into(), s("ACTIVE")),
+                    ])))
+                    .build()
+            });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&update_rule]);
+
+        let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                req.entries().iter().any(|entry| {
+                    entry.detail_type() == Some("UpdateDomainSucceeded")
+                        && entry.detail().is_some_and(|d| {
+                            d.contains("\"changedFields\":[\"costCenter\"]")
+                                && d.contains("\"costCenter\":\"cc-9000\"")
+                                && d.contains("\"requestId\":\"msg-cc\"")
+                        })
+                })
+            })
+            .then_output(|| PutEventsOutput::builder().build());
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = cost_center_message("billing", "cc-9000");
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &TrustedPrincipal::iam("111122223333", None),
+            "msg-cc",
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(update_rule.num_calls(), 1);
+        assert_eq!(eb_rule.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_cost_center_without_touching_dynamodb() {
+        set_env();
+
+        let ddb = mock_client!(aws_sdk_dynamodb, &[]);
+
+        let eb_rule = failed_event_rule_with_reason("costCenter");
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = cost_center_message("billing", "bad\nvalue");
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &TrustedPrincipal::iam("111122223333", None),
+            REQUEST_ID,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(eb_rule.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn success_event_always_carries_request_id() {
+        set_env();
+
+        let update_rule = mock!(aws_sdk_dynamodb::Client::update_item)
+            .then_output(|| UpdateItemOutput::builder().build());
+        let ddb = mock_client!(aws_sdk_dynamodb, [&update_rule]);
+
+        let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                req.entries().iter().any(|entry| {
+                    entry.detail_type() == Some("UpdateDomainSucceeded")
+                        && entry.detail().is_some_and(|d| {
+                            d.contains("\"requestId\":\"msg-desc\"")
+                                && !d.contains("\"costCenter\"")
+                        })
+                })
+            })
+            .then_output(|| PutEventsOutput::builder().build());
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = update_message("billing", Some("Updated billing domain"));
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &TrustedPrincipal::iam("111122223333", None),
+            "msg-desc",
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(eb_rule.num_calls(), 1);
     }
 }

@@ -12,6 +12,9 @@ Parameters:
   ProvisioningWorkflowRoleArn:
     Type: String
     Description: ARN of the provisioning workflow role in the platform account (from Konductor stack outputs)
+  RetagWorkflowRoleArn:
+    Type: String
+    Description: ARN of the cost-center retag workflow role in the platform account (from Konductor stack outputs)
   Organization:
     Type: String
     Description: Organization identifier (must match Konductor configuration)
@@ -39,6 +42,7 @@ Resources:
                 aws:PrincipalArn:
                   - !Ref KonductorRoleArn
                   - !Ref ProvisioningWorkflowRoleArn
+                  - !Ref RetagWorkflowRoleArn
 
   KonductorTrustEventBusPolicy:
     Type: AWS::IAM::Policy

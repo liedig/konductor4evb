@@ -1451,6 +1451,10 @@ components:
           items:
             type: string
           example: ["dev", "staging", "prod"]
+        costCenter:
+          type: string
+          description: Governed cost-center tag value set at registration or by update.
+          example: "cc-5678"
         tags:
           type: object
           additionalProperties:
@@ -1515,6 +1519,11 @@ components:
           items:
             type: string
             format: email
+        costCenter:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Governed cost-allocation tag propagated to every provisioned resource. Change-only — an empty value is rejected; omit the field to leave it unchanged.
 
     ListDomainsResponse:
       type: object

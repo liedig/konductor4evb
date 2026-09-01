@@ -5,6 +5,7 @@ export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 AWS_REGION ?= $(shell aws configure get region 2>/dev/null || echo us-east-1)
 ORGANIZATION ?= acme
 DOMAIN_NAME ?= smoke-test
+PLATFORM_PROFILE ?= default
 
 # Colour codes for help output (tput falls back to empty strings on dumb terminals)
 BOLD := $(shell tput bold 2>/dev/null)
@@ -321,15 +322,24 @@ endif
 		--stack-name konductor-core \
 		--query "Stacks[0].Outputs[?OutputKey=='KonductorFunctionRoleArn'].OutputValue" \
 		--output text \
-		--region $(AWS_REGION)); \
+		--region $(AWS_REGION) \
+		--profile $(PLATFORM_PROFILE)); \
 	PROVISIONING_ROLE_ARN=$$(aws cloudformation describe-stacks \
 		--stack-name konductor-core \
 		--query "Stacks[0].Outputs[?OutputKey=='ProvisioningWorkflowRoleArn'].OutputValue" \
 		--output text \
-		--region $(AWS_REGION)); \
+		--region $(AWS_REGION) \
+		--profile $(PLATFORM_PROFILE)); \
+	RETAG_ROLE_ARN=$$(aws cloudformation describe-stacks \
+		--stack-name konductor-core \
+		--query "Stacks[0].Outputs[?OutputKey=='RetagWorkflowRoleArn'].OutputValue" \
+		--output text \
+		--region $(AWS_REGION) \
+		--profile $(PLATFORM_PROFILE)); \
 	echo "$(BOLD)$(CYAN)Deploying trust stack to profile: $(APP_PROFILE)$(RESET)"; \
 	echo "  KonductorRoleArn:           $${KONDUKTOR_ROLE_ARN}"; \
 	echo "  ProvisioningRoleArn:    $${PROVISIONING_ROLE_ARN}"; \
+	echo "  RetagRoleArn:           $${RETAG_ROLE_ARN}"; \
 	echo "  Organization:           $(ORGANIZATION)"; \
 	aws cloudformation deploy \
 		--template-file trust-stack.yaml \
@@ -337,6 +347,7 @@ endif
 		--parameter-overrides \
 			KonductorRoleArn=$${KONDUKTOR_ROLE_ARN} \
 			ProvisioningWorkflowRoleArn=$${PROVISIONING_ROLE_ARN} \
+			RetagWorkflowRoleArn=$${RETAG_ROLE_ARN} \
 			Organization=$(ORGANIZATION) \
 		--tags Application=konductor Component=trust auto-delete=no \
 		--capabilities CAPABILITY_NAMED_IAM \

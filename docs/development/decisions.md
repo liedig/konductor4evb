@@ -51,6 +51,7 @@ Every handler code path that commits a DynamoDB write or performs side effects, 
 | `register.rs` — registration path | MIGRATE | `stream-driven-domain-registration` |
 | `register.rs` — collision-preflight path | MIGRATE | `stream-driven-domain-registration` |
 | `update.rs` | MIGRATE | `stream-domain-lifecycle-events` |
+| `update.rs` costCenter → retag workflow | STAY | — |
 | `domain-state` — retry-provisioning | MIGRATE | `stream-domain-lifecycle-events` |
 | `domain-state` — enable/disable | STAY | — |
 | `finalize-approval` | STAY | — |
@@ -98,6 +99,15 @@ Every handler code path that commits a DynamoDB write or performs side effects, 
 - **Decision:** MIGRATE.
 - **Rationale:** the duplicate-emission window is real and unmitigated; the stream gives one record per actual change, which is the correct event granularity. Failure events remain handler-emitted (no committed transition).
 - **Follow-up:** `stream-domain-lifecycle-events` (shares the domains-table stream with `stream-driven-domain-registration`; whichever lands first builds the consumer infrastructure, the other adds translations).
+
+### `update.rs` costCenter → retag workflow (`editable-cost-center`, 2026-09-01)
+
+- **Committed write(s):** none new — the same conditional `UpdateItem` audited above, now also setting `costCenter` and recomputing the stored `tags` map atomically when `costCenter` changes. The retag workflow performs no DynamoDB writes.
+- **Side effect(s):** `UpdateDomainSucceeded` (now carrying `requestId` and, when changed, `costCenter`) is matched by an EventBridge rule that starts the `konductor-retag-domain` STANDARD workflow; the workflow issues tag upserts on every recorded provisioned resource (platform account directly, owner account via the trust role) and emits `RetagDomainFailed` on unrecoverable failure.
+- **Rubric:** (1) yes — the committed record carries everything the workflow needs (`costCenter`, `environments`, `resourceArns`, `ownerAccountId`); the workflow reads the record rather than trusting the event beyond `domainName`/`requestId`; (2) yes — the rule fires only on `UpdateDomainSucceeded`, which hangs on the committed transition; rejections never commit and never reach the rule; (3) partially — EventBridge rule targets cannot set Step Functions execution names (StartExecution takes `name` only as a top-level API parameter; aws/aws-cdk#34731 tracks the gap), so executions are auto-named and a redelivered event can start a duplicate; tolerated because every tag call is an idempotent upsert against the record's value, so duplicates converge to identical state; (4) yes — retagging is explicitly eventually consistent; (5) n/a — no stream consumer involved; (6) yes — the STANDARD execution context is the durable envelope for the tag calls, and the rule's DLQ covers target-invocation failure.
+- **Failure walk:** event redelivery → duplicate execution re-applies the same tags (harmless); tag call exhausts retries → iteration error recorded, remaining environments still converge, `RetagDomainFailed` identifies the first failure; rule target invocation fails outright → rule DLQ, redrivable.
+- **Decision:** STAY — no new synchronous side effect in the handler (single commit, one event); convergence is workflow-envelope-driven. When `stream-domain-lifecycle-events` lands, the rule can be re-pointed at stream-derived events without changing the workflow contract.
+- **Follow-up:** —
 
 ### `domain-state` — retry-provisioning
 
