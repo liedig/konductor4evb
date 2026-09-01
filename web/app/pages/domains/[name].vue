@@ -166,6 +166,10 @@ onMounted(load)
         </dl>
       </NxCard>
 
+      <DomainSchemasPanel :domain="name" />
+      <DomainSubscriptionsPanel :domain="name" />
+      <DomainAccessPanel :domain="name" />
+
       <NxCard title="Environments">
         <div class="flex flex-wrap gap-2">
           <NxBadge v-for="env in environments" :key="env" tone="info">{{ env }}</NxBadge>
@@ -213,10 +217,6 @@ onMounted(load)
           </div>
         </div>
       </NxCard>
-
-      <DomainSchemasPanel :domain="name" />
-      <DomainSubscriptionsPanel :domain="name" />
-      <DomainAccessPanel :domain="name" />
 
       <NxModal :open="editing" title="Edit domain" @close="editing = false">
         <div class="flex flex-col gap-4">
