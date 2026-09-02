@@ -95,6 +95,17 @@ const prettyContent = computed(() => {
   }
 })
 
+// Entry points pass ?from=<internal path> so the back link returns to the
+// referring page; default is the consumer catalog. Internal paths only.
+const backHref = computed(() => {
+  const from = route.query.from
+  return typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') ? from : '/catalog'
+})
+const backLabel = computed(() => {
+  const match = backHref.value.match(/^\/domains\/([^/?]+)/)
+  return match ? `← ${decodeURIComponent(match[1] ?? '')} schemas` : '← Catalog'
+})
+
 onMounted(load)
 watch(consumerDomain, load)
 </script>
@@ -102,7 +113,7 @@ watch(consumerDomain, load)
 <template>
   <div class="flex flex-col gap-6">
     <header>
-      <NuxtLink to="/catalog" class="text-sm text-muted hover:text-foreground">← Catalog</NuxtLink>
+      <NuxtLink :to="backHref" class="text-sm text-muted hover:text-foreground">{{ backLabel }}</NuxtLink>
       <div class="mt-2 flex items-center justify-between gap-4">
         <h1 class="font-mono text-xl font-semibold break-all">{{ schemaName }}</h1>
         <NxButton v-if="schema && consumerDomain" @click="subscribeOpen = true">

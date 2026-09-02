@@ -65,7 +65,7 @@ onMounted(load)
     <ul v-else class="flex flex-col gap-2">
       <li v-for="schema in schemas" :key="schema.schemaName" class="flex items-center justify-between gap-4">
         <NuxtLink
-          :to="`/catalog/${encodeURIComponent(schema.producerDomain ?? '')}/${encodeURIComponent(schema.schemaName ?? '')}`"
+          :to="`/catalog/${encodeURIComponent(schema.producerDomain ?? '')}/${encodeURIComponent(schema.schemaName ?? '')}?from=/domains/${encodeURIComponent(domain)}`"
           class="truncate font-mono text-sm text-accent hover:underline"
         >
           {{ schema.schemaName }}
