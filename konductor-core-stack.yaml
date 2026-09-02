@@ -664,7 +664,6 @@ Resources:
             Resource:
               - !GetAtt DomainRegistrationsQueue.Arn
               - !GetAtt SubscriptionsQueue.Arn
-              - !GetAtt PublishQueue.Arn
 
   # Assumed by EventBridge to deliver matched events onto consumer app-side
   # buses cross-account, under the provision-time resource policy on those buses.
@@ -1490,7 +1489,10 @@ Resources:
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
-  # ---- Publish Consumer (store-and-forward) ----
+  # ---- Publish Consumer (delivery-only) ----
+  # Admission (authorization, schema resolution, payload validation) happens
+  # synchronously in PublishEventsAdmissionFunction; this consumer stamps the
+  # admission-resolved version and delivers to the domain bus.
   PublishEventsLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
@@ -1507,21 +1509,12 @@ Resources:
       FunctionName: !Sub "konductor-publish-events"
       CodeUri: ./event-streams/functions/publish-events
       Handler: bootstrap
-      Environment:
-        Variables:
-          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
       Policies:
-        - !Ref BindingsTableReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action: [dynamodb:GetItem]
               Resource: !GetAtt DomainsTable.Arn
-            - Effect: Allow
-              Action: [schemas:DescribeSchema]
-              Resource:
-                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
-                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
             - Effect: Allow
               Action: [events:PutEvents]
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
@@ -1536,6 +1529,89 @@ Resources:
             BatchSize: 10
             FunctionResponseTypes:
               - ReportBatchItemFailures
+
+  # ---- Publish Admission (validate at the edge) ----
+  PublishEventsAdmissionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-publish-events-admission"
+      RetentionInDays: 30
+  PublishEventsAdmissionFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: PublishEventsAdmissionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-publish-events-admission"
+      CodeUri: ./event-streams/functions/publish-events-admission
+      Handler: bootstrap
+      # Caps admission concurrency so a publish surge cannot exhaust account
+      # Lambda concurrency or hammer the Schemas API; 100 is generous for the
+      # hot path given cache-served publishes complete in single-digit ms.
+      ReservedConcurrentExecutions: 100
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+          ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+          PUBLISH_QUEUE_URL: !Ref PublishQueue
+          SCHEMA_CACHE_TTL_MS: "60000"
+      Policies:
+        - !Ref BindingsTableReadPolicy
+        - !Ref EntitlementsTableReadPolicy
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [schemas:DescribeSchema]
+              Resource:
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+            - Effect: Allow
+              Action: [sqs:SendMessage]
+              Resource: !GetAtt PublishQueue.Arn
+      Events:
+        OAuthPublish:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /publish
+            Method: POST
+        IamPublish:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorIamApi
+            Path: /publish
+            Method: POST
+
+  # Admission 503s mean publishers cannot ingest (registry outage, unusable
+  # stored schema, or queue failure) — any occurrence warrants investigation.
+  PublishAdmissionUnavailableFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref PublishEventsAdmissionLogGroup
+      FilterPattern: '{ $.fields.metric = "PublishUnavailable" }'
+      MetricTransformations:
+        - MetricName: PublishAdmissionUnavailable
+          MetricNamespace: Konductor/EventStreams
+          MetricValue: "1"
+
+  PublishAdmissionUnavailableAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-publish-admission-unavailable-alarm"
+      AlarmDescription: Publish admission is returning 503 — ingest is degraded
+      Namespace: Konductor/EventStreams
+      MetricName: PublishAdmissionUnavailable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
 
   # ---- Publisher Schema Administration (append-only) ----
   SchemaAdminLogGroup:

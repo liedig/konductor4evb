@@ -18,6 +18,7 @@ members = [
     "domain-management/functions/send-registration-failed-notification",
     "domain-management/functions/send-rejection-outcome-notification",
     "event-streams/functions/publish-events",
+    "event-streams/functions/publish-events-admission",
     "event-streams/functions/schema-admin",
     "event-streams/functions/subscriptions",
     "event-streams/functions/list-subscriptions",
@@ -62,6 +63,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 aws-smithy-mocks = "0.2"
 uuid = { version = "1", features = ["v4", "v5"] }
 urlencoding = "2"
+jsonschema = { version = "0.37", default-features = false }
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"

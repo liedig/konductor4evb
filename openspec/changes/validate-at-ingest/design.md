@@ -53,11 +53,11 @@ Registry-read failure (including throttling) fails closed with `503`: an expired
 
 `POST /schemas` rejects `OpenApi3` with `400`; both create and append validate that `content` parses as draft 4. Rationale: an OpenAPI 3.0 document describes an HTTP API, not one payload — component-schema selection is conventional, its dialect differs from draft 4 (`nullable`, `readOnly`, no type arrays), and no standard "validate this payload against this spec" operation exists. Allowing it would create an unenforceable tier behind the same conformance promise.
 
-Validation uses the `jsonschema` crate with draft-4 support. Legacy `OpenApi3` schemas already in registries (expected: none — the publisher API is the only write path) publish without validation as a transitional carve-out; an audit task confirms none exist before enforcement ships.
+Validation uses the `jsonschema` crate with draft-4 support. The transitional carve-out for legacy `OpenApi3` registry content was dropped: the pre-implementation audit of every `acme-*` registry (task 5.3) found zero `OpenApi3` schemas — exactly one schema exists (`acme-billing@OrderNotification`, `JSONSchemaDraft4`) — so any unvalidatable stored content is simply the 503 `SchemaUnusable` path.
 
 ### 5. Message attributes carry admitted metadata
 
-The validator sets SQS message attributes: `Environment` (from `$context.stage`, replacing the VTL injection), `SchemaVersion`, `Source` (derived namespace identity), and the effective idempotency key (caller-supplied or the API Gateway request ID). The consumer builds the envelope from attributes plus the SQS `SentTimestamp` (unchanged `publishedAt` semantics). Envelope structural validation stays in the consumer as a cheap local invariant check.
+The validator sets SQS message attributes: `Environment` (from `$context.stage`, replacing the VTL injection), `SchemaVersion` (the admission-resolved version the payload was validated against), and the effective idempotency key (caller-supplied or the API Gateway request ID), plus the trusted-principal envelope the VTL used to write. The consumer derives `source` itself from the namespace resolver and builds the envelope from attributes plus the SQS `SentTimestamp` (unchanged `publishedAt` semantics). Envelope structural validation stays in the consumer as a cheap local invariant check.
 
 ## Risks / Trade-offs
 

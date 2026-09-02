@@ -214,4 +214,81 @@ impl TrustedPrincipal {
 
         Err(PrincipalContextError::MissingContext)
     }
+
+    /// Serializes the principal into the SQS message-attribute envelope that
+    /// [`TrustedPrincipal::from_sqs_attributes`] parses — the same attributes
+    /// the API Gateway mapping templates write. The publish admission Lambda
+    /// uses this to rebuild the trusted envelope when it takes over enqueueing
+    /// from the direct SQS integration.
+    pub fn to_sqs_attributes(&self) -> HashMap<String, String> {
+        let mut attrs = HashMap::new();
+        attrs.insert(
+            attr::VERSION.to_string(),
+            TRUSTED_PRINCIPAL_VERSION.to_string(),
+        );
+        match self {
+            TrustedPrincipal::OAuth(p) => {
+                attrs.insert(attr::MECHANISM.to_string(), "oauth".to_string());
+                attrs.insert(attr::PRINCIPAL_ID.to_string(), p.subject.clone());
+                attrs.insert(attr::ISSUER.to_string(), p.issuer.clone());
+                attrs.insert(attr::CLIENT_ID.to_string(), p.client_id.clone());
+                attrs.insert(
+                    attr::GLOBAL_ROLES.to_string(),
+                    serde_json::to_string(&p.global_roles).unwrap_or_else(|_| "[]".to_string()),
+                );
+                attrs.insert(
+                    attr::TEAM_GROUPS.to_string(),
+                    serde_json::to_string(&p.team_groups).unwrap_or_else(|_| "[]".to_string()),
+                );
+            }
+            TrustedPrincipal::Iam(p) => {
+                attrs.insert(attr::MECHANISM.to_string(), "iam".to_string());
+                attrs.insert(attr::ACCOUNT_ID.to_string(), p.account_id.clone());
+                if let Some(arn) = &p.principal_arn {
+                    attrs.insert(attr::PRINCIPAL_ARN.to_string(), arn.clone());
+                }
+            }
+        }
+        attrs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::principal::GlobalRole;
+
+    #[test]
+    fn oauth_principal_round_trips_through_sqs_attributes() {
+        let principal = TrustedPrincipal::oauth(
+            "sub-123",
+            "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TestPool",
+            "client-1",
+            vec![GlobalRole::PlatformAdmin],
+            vec!["team-orders".to_string()],
+        );
+        let attrs = principal.to_sqs_attributes();
+        let parsed = TrustedPrincipal::from_sqs_attributes(&attrs).unwrap();
+        assert_eq!(parsed, principal);
+    }
+
+    #[test]
+    fn iam_principal_round_trips_through_sqs_attributes() {
+        let principal = TrustedPrincipal::iam(
+            "111122223333",
+            Some("arn:aws:iam::111122223333:role/publisher".to_string()),
+        );
+        let attrs = principal.to_sqs_attributes();
+        let parsed = TrustedPrincipal::from_sqs_attributes(&attrs).unwrap();
+        assert_eq!(parsed, principal);
+    }
+
+    #[test]
+    fn iam_principal_without_arn_round_trips() {
+        let principal = TrustedPrincipal::iam("111122223333", None);
+        let attrs = principal.to_sqs_attributes();
+        assert!(!attrs.contains_key(attr::PRINCIPAL_ARN));
+        let parsed = TrustedPrincipal::from_sqs_attributes(&attrs).unwrap();
+        assert_eq!(parsed, principal);
+    }
 }
