@@ -1557,11 +1557,13 @@ Resources:
       Environment:
         Variables:
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+          ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
       Policies:
         - !Ref BindingsTableReadPolicy
+        - !Ref EntitlementsTableReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow

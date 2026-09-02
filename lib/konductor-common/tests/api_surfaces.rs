@@ -375,8 +375,8 @@ fn schema_admin_has_least_privilege_permissions() {
     let (mut actions, managed) = function_policy_shape(&doc, "SchemaAdminFunction");
     assert_eq!(
         managed,
-        ["BindingsTableReadPolicy"],
-        "authorization decisions read bindings only through the reserved policy"
+        ["BindingsTableReadPolicy", "EntitlementsTableReadPolicy"],
+        "grant-engine decisions read bindings and entitlements through the reserved policies"
     );
     actions.sort();
     assert_eq!(
