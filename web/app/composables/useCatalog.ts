@@ -1,8 +1,11 @@
 import type {
+  AppendSchemaVersionRequest,
   CommandAccepted,
+  CreateSchemaRequest,
   ListSchemasResponse,
   ListSubscriptionsResponse,
   SchemaDetail,
+  SchemaMutationResponse,
   SubscribeRequest,
   SubscriptionDetail,
   UpdateSubscriptionStateRequest,
@@ -27,6 +30,10 @@ export function useCatalog() {
         consumerDomain: options.consumerDomain,
         domain: options.producerDomain,
       }),
+    createSchema: (body: CreateSchemaRequest) =>
+      api.post<SchemaMutationResponse>('/schemas', body),
+    appendSchemaVersion: (body: AppendSchemaVersionRequest) =>
+      api.post<SchemaMutationResponse>('/schemas/versions', body),
     subscribe: (body: SubscribeRequest) => api.post<CommandAccepted>('/subscriptions', body),
     listSubscriptions: (options: { domain: string, direction: 'inbound' | 'outbound', schema?: string, status?: string }) =>
       api.get<ListSubscriptionsResponse>('/subscriptions', {

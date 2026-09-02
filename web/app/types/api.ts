@@ -133,6 +133,24 @@ export interface ListSchemasResponse {
   nextToken?: string
 }
 
+export interface CreateSchemaRequest {
+  domain: string
+  eventName: string
+  schemaType: 'JSONSchemaDraft4'
+  content: string
+}
+
+export interface AppendSchemaVersionRequest {
+  domain: string
+  eventName: string
+  content: string
+}
+
+export interface SchemaMutationResponse {
+  schemaName?: string
+  schemaVersion?: number
+}
+
 export type SubscriptionStatus = 'PENDING' | 'ACTIVE' | 'FAILED' | 'REMOVED'
 
 export interface EnvStreamState {
