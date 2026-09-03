@@ -11,20 +11,21 @@ Publishing is a single API call:
 ```text
 POST /{stage}/publish   { "domain", "eventName", "data", "idempotencyKey"? }
         │
-        ▼  202 Accepted (requestId = queue message ID)
-   SQS queue  ── durable before anything can fail ──
+        ▼  synchronous admission: authorize → domain ACTIVE →
+        │  resolve latest schema → validate data against it
+        ▼  202 Accepted (only when every check passed)
+   SQS queue  ── durable from this point ──
         ▼
-   Konductor consumer: authorize → resolve latest schema version →
-   stamp canonical envelope → PutEvents to the domain's event bus
+   Konductor delivery: stamp canonical envelope → PutEvents to the domain's event bus
 ```
 
-You hand Konductor a domain, an event name, and your business data. Konductor authorizes the call against your domain's publisher bindings, derives the canonical event identity, resolves the latest schema version in the target environment, stamps the envelope metadata, and delivers to the domain's bus. `202 Accepted` means the event is durably queued — delivery and retries are the platform's problem from that point.
+You hand Konductor a domain, an event name, and your business data. Before answering, Konductor authorizes the call against your domain's publisher bindings, confirms the domain is `ACTIVE`, resolves the latest schema version in the target environment, and validates your `data` against it. `202 Accepted` means all of that passed and the event is durably queued — delivery and retries are the platform's problem from that point. Failures answer synchronously instead: `403` (no publisher binding), `404` (domain or schema missing), `422` (payload violates the schema, violations listed).
 
 ## Before you can publish: publisher bindings
 
 Publishing and schema writes require a **`publisher` role binding** on the domain. A binding grants a principal — your AWS account (IAM surface) or a Cognito team group (OAuth surface) — the publisher role for one specific domain. Bindings are domain-isolated: a binding for `orders` authorizes nothing on `payments`.
 
-Bindings are granted by platform administrators through the binding administration API (`POST /bindings`, OAuth-only). Without one, schema writes return `403 Forbidden`, and a publish is accepted (`202`) but denied at delivery time — the event never arrives. If either happens, ask your platform team for a publisher binding naming your domain and your principal (AWS account ID or team group). Administrators: see [Bootstrapping Role Bindings](development/oauth-authentication-guide.md#bootstrapping-role-bindings).
+Bindings are granted by platform administrators through the binding administration API (`POST /bindings`, OAuth-only). Without one, schema writes and publishes return `403 Forbidden`. If that happens, ask your platform team for a publisher binding naming your domain and your principal (AWS account ID or team group). Administrators: see [Bootstrapping Role Bindings](development/oauth-authentication-guide.md#bootstrapping-role-bindings).
 
 One binding covers every environment stage — you do not need per-environment grants.
 
@@ -61,6 +62,7 @@ awscurl -X POST "${API_URL}/schemas" --region ${AWS_REGION} \
 
 Key things to know:
 
+- **Schemas are JSON Schema draft-4.** Any other `schemaType` answers `400`, and `content` that does not compile as a draft-4 document is rejected (`400`) before anything is written — so a schema you successfully registered can always be validated against at publish time.
 - **Konductor owns the schema name.** It is always `{org}-{domain}@{eventName}`, derived from the domain's registered namespace identity. You never supply a schema name, version, or registry.
 - **Event names are validated up front.** Characters are limited to `[A-Za-z0-9._-]`, and the name must be able to form a valid subscription rule name within EventBridge's 64-character limit. Invalid names fail with `400` before anything is written.
 - **Duplicates are rejected, never replaced.** Creating an existing schema returns `409 Conflict`; the existing schema and all its versions remain unchanged.
@@ -111,30 +113,32 @@ The body accepts exactly `domain`, `eventName`, `data`, and an optional `idempot
 ```
 
 - `source` is the domain's environment-independent namespace identity — identical in every environment.
-- `metadata.schemaVersion` is the **latest** version in the target environment's registry, resolved at publish time. You cannot choose a version.
+- `metadata.schemaVersion` is the registry's **latest** version at admission time — the exact version your payload was validated against. You cannot choose a version.
 - `metadata.idempotencyKey` is your key, or the API Gateway request ID if you omit it.
 - `metadata.publishedAt` is when the platform accepted the event (the queue timestamp), not when it was delivered.
 
-Konductor validates the envelope it generates (identity, numeric version, structure, EventBridge size limits) but **never validates your `data` against the schema content** — schema conformance is a contract between you and your consumers.
+Konductor validates your `data` against the schema's latest version **before** accepting the publish. A conforming payload gets `202`; a violating one gets `422` with the violations listed in `message` (for example, `-5 is less than the minimum of 0; "aud" does not match "^[A-Z]{3}$"`) — fix the payload and retry. Konductor also validates the envelope it generates (identity, numeric version, structure, EventBridge size limits) before delivery.
 
 ## Durability, retries, and idempotency
 
 `202 Accepted` is a durability guarantee: the event is in the queue before any downstream system can lose it.
 
-- **Delivery failures retry automatically.** If EventBridge rejects the entry or the schema cannot be resolved yet, the consumer reports the message for retry instead of acknowledging it. Retries carry the **same idempotency key and the same `publishedAt` timestamp** — consumers can deduplicate on the key.
+- **Delivery failures retry automatically.** If EventBridge rejects the entry, the delivery consumer reports the message for retry instead of acknowledging it. Retries carry the **same idempotency key and the same `publishedAt` timestamp** — consumers can deduplicate on the key.
 - **Retries exhaust to a DLQ.** After the queue's redrive limit, the message lands in the platform's publish DLQ with all attributes intact for operator inspection.
-- **Authorization denials do not retry.** A missing or insufficient binding is deterministic: the event is logged as denied and acknowledged. Fix the binding and republish.
-- **The caller does not learn the delivery outcome.** If you need confirmation, subscribe to your own domain's bus and observe your events.
+- **Rejected publishes never reach the queue.** Authorization (`403`), a missing or inactive domain or schema (`404`), and payload violations (`422`) are answered synchronously — nothing is queued, so there is nothing to retry. Fix the cause and republish.
+- **The caller does not learn the delivery outcome.** `202` covers admission and durable queueing; if you need delivery confirmation, subscribe to your own domain's bus and observe your events.
 
 ## Error reference
 
 | Response | Cause | Action |
 |----------|-------|--------|
-| `400` | Body failed structural validation (missing field, unknown field, invalid event name) | Fix the request body |
-| `403` (schema writes) | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
-| `404` (schema writes) | Domain missing/inactive, or appending a version to a schema that does not exist | Check domain status; create the schema first |
+| `400` | Body failed structural validation (missing field, unknown field, invalid event name); on schema writes, also `content` that is not a valid draft-4 document | Fix the request body / schema document |
+| `403` | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
+| `404` | Domain missing/inactive, or no schema registered for this event in this environment | Check domain status; create the schema first |
 | `409` (create schema) | Schema already exists in this environment | Append a version instead |
-| `202` then nothing arrives | Publish denied (no binding), schema missing in that environment, or delivery failing | Confirm your binding; check the schema exists (`GET /schemas/{schemaName}?domain=...` — any caller with a binding on a covered consumer domain, or a platform role, can describe); the platform's publish DLQ holds exhausted messages |
+| `422` (publish) | `data` violates the schema's latest version — violations are listed in `message` | Fix the payload and retry; if you just appended a schema version, a plain retry picks it up |
+| `503` (publish) | The platform could not evaluate the publish (schema registry or queue trouble) | Retry with backoff; alert your platform team if it persists |
+| `202` then nothing arrives | Rare: the domain was disabled between admission and delivery, or EventBridge delivery is failing | The platform's publish DLQ holds exhausted messages — contact your platform team |
 
 ## Discovering schemas
 
@@ -142,4 +146,4 @@ Konductor validates the envelope it generates (identity, numeric version, struct
 
 ## Deep dive
 
-The publish pipeline internals — VTL principal envelope, consumer retry semantics, grant-engine decision model, and least-privilege infrastructure — are documented in [Architecture](development/architecture.md): *Event Publishing (Store-and-Forward)*, *Schema Management (Append-Only)*, *The Canonical Event Envelope*, and *Grant Engine*.
+Why the publish path is built this way — the synchronous-failure rationale, the schema cache and refresh-before-reject rule, the earned-stamp invariant, and the alternatives that were rejected — is documented in [Publish Validation at Ingest](development/publish-validation.md). Lower-level internals (principal envelope, retry semantics, grant-engine decision model, least-privilege infrastructure) are in [Architecture](development/architecture.md): *Event Publishing (Validate-at-Ingest)*, *Schema Management (Append-Only)*, *The Canonical Event Envelope*, and *Grant Engine*.

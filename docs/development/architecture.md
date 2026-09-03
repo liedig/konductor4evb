@@ -612,6 +612,8 @@ Admission is the synchronous commit point: a 202 means the caller is authenticat
 
 Delivery stays store-and-forward: the consumer re-checks domain liveness, rebuilds the canonical envelope, and retries transient `PutEvents` failures; `publishedAt` still derives from the SQS `SentTimestamp`, so a retried publish keeps its original publish time and idempotency key. The consumer performs no authorization, schema fetch, or payload validation — a queued command was validated at admission, and the queue accepts writes from the admission function only. It still validates the generated envelope (positive version, non-empty identity, serializable, within the 256KB entry limit) before delivery — an invalid generated envelope is a processing failure, never a partial delivery.
 
+The full design rationale — the failure mode this removes, the status taxonomy, cache semantics and refresh-before-reject, the earned-stamp invariant, and the rejected alternatives — is in [Publish Validation at Ingest](publish-validation.md).
+
 ### Schema Management (Append-Only)
 
 Publishers manage schemas through two synchronous endpoints mirroring the EventBridge Schemas API: `POST /schemas` (like `CreateSchema` — creates `{namespaceIdentity}@{eventName}` in the stage-selected environment's registry as version 1, 409 on duplicates) and `POST /schemas/versions` (like `UpdateSchema` — appends the next version, existing versions immutable, 404 when the schema does not exist). Both require a `publisher` binding for the domain (`schema:create` / `schema:version-append` actions), require an `ACTIVE` domain, and infer the environment from the API stage. Schemas are **JSON Schema draft-4 only**: any other `schemaType` is a 400, and `content` that does not compile as a draft-4 document is rejected (400) before any registry write, so nothing in a registry is ever unvalidatable. Schemas are append-only: no delete, retire, replace, or version-deletion operations exist, and publisher permissions cover only `CreateSchema`/`UpdateSchema` inside org-namespaced registries — registry lifecycle and policy administration remain platform-admin operations.
@@ -799,6 +801,7 @@ evb-konductor/
 | Document | Purpose |
 |----------|---------|
 | [decisions.md](decisions.md) | Why things are built this way — architectural decision log |
+| [publish-validation.md](publish-validation.md) | Publish path deep dive — admission/delivery split, cache and stamp invariants, status taxonomy |
 | [testing.md](testing.md) | Testing strategy, smithy-mocks patterns, TDD workflow |
 | [domain-management.md](../domain-management.md) | Domain owner guide — registering, approving, and operating domains |
 | [publishing-events.md](../publishing-events.md) | Producer guide — publisher bindings, schema management, and the publish API |
