@@ -69,3 +69,16 @@ jsonschema = { version = "0.37", default-features = false }
 cognitive_complexity = "warn"
 too_many_lines = "warn"
 type_complexity = "warn"
+
+# Dev builds need enough debug info for readable panic backtraces, not full
+# DWARF: line tables only for workspace crates, none for dependencies.
+# This roughly halves the target/ directory for this workspace.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0
+
+# Strip debug info from deployed Lambda binaries (smaller zip, no runtime cost).
+[profile.release]
+strip = "debuginfo"

@@ -95,17 +95,9 @@ async fn admit<A: ResourceAuthorizer>(
     principal: &TrustedPrincipal,
 ) -> Result<Value, Error> {
     let started = Instant::now();
-    let raw_body: Value = match api::parse_body(payload) {
-        Ok(v) => v,
-        Err(e) => return Ok(api::from_control_plane_error(&e)),
-    };
-    let request: PublishRequest = match serde_json::from_value(raw_body.clone()) {
-        Ok(r) => r,
-        Err(e) => {
-            return Ok(api::from_control_plane_error(&api::parse_error(format!(
-                "Invalid request body: {e}"
-            ))))
-        }
+    let (request, raw_body) = match parse_publish_request(payload) {
+        Ok(parsed) => parsed,
+        Err(response) => return Ok(response),
     };
 
     tracing::info!(
@@ -115,38 +107,8 @@ async fn admit<A: ResourceAuthorizer>(
         "publish admission request received"
     );
 
-    if authorizer
-        .authorize(principal, actions::SCHEMA_PUBLISH, &request.domain)
-        .await
-        != AuthorizationDecision::Allow
-    {
-        tracing::warn!(
-            metric = "AdmissionDenied",
-            mechanism = ?principal.authentication_mechanism(),
-            domain = request.domain,
-            action = actions::SCHEMA_PUBLISH,
-            "publisher authorization denied"
-        );
-        return Ok(api::from_control_plane_error(
-            &ControlPlaneError::AccessDenied,
-        ));
-    }
-
-    if let Err(e) = require_active_domain(clients, &request.domain).await {
-        return Ok(match e {
-            // A domain-store outage is a platform-side evaluation failure,
-            // not an answer about the domain: retryable 503, never a 404/500.
-            ControlPlaneError::DynamoDb(detail) => {
-                tracing::error!(
-                    metric = "PublishUnavailable",
-                    domain = request.domain,
-                    error = detail,
-                    "domain store unavailable"
-                );
-                temporarily_unavailable()
-            }
-            other => api::from_control_plane_error(&other),
-        });
+    if let Err(response) = authorize_publish(clients, authorizer, &request, principal).await {
+        return Ok(response);
     }
 
     let stage = match stage_of(payload) {
@@ -182,27 +144,16 @@ async fn admit<A: ResourceAuthorizer>(
         })
         .unwrap_or_else(uuid_v4);
 
-    // A publish that can never be delivered must not be admitted: build the
-    // envelope now so structural or size violations answer 400 here instead
-    // of a 202 that retries deterministically into the DLQ. The placeholder
-    // timestamp stands in for the queue-stamped SentTimestamp; the
-    // ISO-8601-millis format is fixed-width, so the size check is exact.
-    if let Err(e) = EventEnvelope::new(
-        schema_name.source.clone(),
-        schema_name.detail_type.clone(),
-        resolver.event_bus_name(&stage, &organization, &request.domain),
+    if let Err(response) = ensure_deliverable_envelope(
+        &resolver,
+        &stage,
+        &organization,
+        &request,
+        &schema_name,
         latest.version,
-        idempotency_key.clone(),
-        chrono::Utc::now(),
-        request.data.clone(),
+        &idempotency_key,
     ) {
-        tracing::info!(
-            metric = "AdmissionRejected",
-            domain = request.domain,
-            error = %e,
-            "envelope would be undeliverable; refusing admission"
-        );
-        return Ok(api::from_control_plane_error(&e));
+        return Ok(response);
     }
 
     let command = AdmittedCommand {
@@ -219,6 +170,94 @@ async fn admit<A: ResourceAuthorizer>(
     };
 
     Ok(queue_admitted(clients, principal, &command, started).await)
+}
+
+/// Parses and deserializes the publish request; anything malformed is a 400.
+fn parse_publish_request(payload: &Value) -> Result<(PublishRequest, Value), Value> {
+    let raw_body: Value =
+        api::parse_body(payload).map_err(|e| api::from_control_plane_error(&e))?;
+    let request: PublishRequest = serde_json::from_value(raw_body.clone()).map_err(|e| {
+        api::from_control_plane_error(&api::parse_error(format!("Invalid request body: {e}")))
+    })?;
+    Ok((request, raw_body))
+}
+
+/// Publisher binding plus domain liveness: 403 without a binding, 404 for an
+/// unknown/inactive domain. A domain-store outage is a platform-side
+/// evaluation failure, not an answer about the domain: retryable 503, never
+/// a 404/500.
+async fn authorize_publish<A: ResourceAuthorizer>(
+    clients: &Clients,
+    authorizer: &A,
+    request: &PublishRequest,
+    principal: &TrustedPrincipal,
+) -> Result<(), Value> {
+    if authorizer
+        .authorize(principal, actions::SCHEMA_PUBLISH, &request.domain)
+        .await
+        != AuthorizationDecision::Allow
+    {
+        tracing::warn!(
+            metric = "AdmissionDenied",
+            mechanism = ?principal.authentication_mechanism(),
+            domain = request.domain,
+            action = actions::SCHEMA_PUBLISH,
+            "publisher authorization denied"
+        );
+        return Err(api::from_control_plane_error(
+            &ControlPlaneError::AccessDenied,
+        ));
+    }
+
+    match require_active_domain(clients, &request.domain).await {
+        Ok(()) => Ok(()),
+        Err(ControlPlaneError::DynamoDb(detail)) => {
+            tracing::error!(
+                metric = "PublishUnavailable",
+                domain = request.domain,
+                error = detail,
+                "domain store unavailable"
+            );
+            Err(temporarily_unavailable())
+        }
+        Err(other) => Err(api::from_control_plane_error(&other)),
+    }
+}
+
+/// A publish that can never be delivered must not be admitted: build the
+/// envelope now so structural or size violations answer 400 here instead of
+/// a 202 that retries deterministically into the DLQ. The placeholder
+/// timestamp stands in for the queue-stamped SentTimestamp; the
+/// ISO-8601-millis format is fixed-width, so the size check is exact.
+#[allow(clippy::too_many_arguments)]
+fn ensure_deliverable_envelope(
+    resolver: &NamespaceResolver,
+    stage: &str,
+    organization: &str,
+    request: &PublishRequest,
+    schema_name: &SchemaName,
+    schema_version: i64,
+    idempotency_key: &str,
+) -> Result<(), Value> {
+    EventEnvelope::new(
+        schema_name.source.clone(),
+        schema_name.detail_type.clone(),
+        resolver.event_bus_name(stage, organization, &request.domain),
+        schema_version,
+        idempotency_key.to_string(),
+        chrono::Utc::now(),
+        request.data.clone(),
+    )
+    .map(|_| ())
+    .map_err(|e| {
+        tracing::info!(
+            metric = "AdmissionRejected",
+            domain = request.domain,
+            error = %e,
+            "envelope would be undeliverable; refusing admission"
+        );
+        api::from_control_plane_error(&e)
+    })
 }
 
 /// An admitted publish command, ready for the queue: the caller's request
