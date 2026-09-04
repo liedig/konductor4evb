@@ -109,7 +109,15 @@ const backHref = computed(() => {
 })
 const backLabel = computed(() => {
   const match = backHref.value.match(/^\/domains\/([^/?]+)/)
-  return match ? `← ${decodeURIComponent(match[1] ?? '')} schemas` : '← Catalog'
+  if (!match) return '← Catalog'
+  const segment = match[1] ?? ''
+  try {
+    return `← ${decodeURIComponent(segment)} schemas`
+  } catch {
+    // Malformed percent-encoding in the from param: show it verbatim
+    // rather than letting URIError break page rendering.
+    return `← ${segment} schemas`
+  }
 })
 
 onMounted(load)

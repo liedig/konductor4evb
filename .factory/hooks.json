@@ -2,7 +2,7 @@
   "PreToolUse": [
     {
       "matcher": "Execute",
-      "commandRegex": "git\\s+push",
+      "commandRegex": "(^|\\s)(rtk\\s+)?git\\s+push(\\s|$)",
       "hooks": [
         {
           "type": "command",

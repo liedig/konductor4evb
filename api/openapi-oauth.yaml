@@ -1623,7 +1623,7 @@ components:
           minLength: 1
           description: Event name (detail-type); must match a schema registered for the domain.
         data:
-          description: Business event payload, passed through unvalidated.
+          description: Business event payload; validated against the domain's latest registered schema at admission.
         idempotencyKey:
           type: string
           minLength: 1
