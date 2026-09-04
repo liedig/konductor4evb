@@ -80,6 +80,44 @@ cargo test --workspace -- --nocapture
 make check
 ```
 
+## Keeping `target/` Small
+
+This workspace builds 30+ Lambda crates, and a full test-suite build used to
+leave `target/` at 5-15 GB. Two facts explain most of that, and both have
+cheaper alternatives than `cargo clean`:
+
+**Debug info dominates dev builds.** The workspace sets
+`debug = "line-tables-only"` for local crates and `debug = 0` for dependencies
+(root `Cargo.toml`), which keeps panic backtraces readable while roughly
+halving the dev tree (~2.4 GB for a full workspace test build). Panics still
+print file:line; you lose only local-variable inspection in a debugger.
+
+**Cargo never garbage-collects.** Every dependency update or branch switch
+leaves the old fingerprinted artifacts in `target/debug/deps` alongside the
+new ones — weeks of updates accumulate, which is how the directory balloons
+between cleans. Instead of a full `cargo clean` (which forces a full rebuild
+of ~600 crates):
+
+```bash
+# Prune artifacts not touched in 30 days, keep everything fresh
+cargo sweep --time 30            # cargo install cargo-sweep, once
+
+# Drop only the cross-compiled Lambda tree (recreated by make build)
+cargo clean --target aarch64-unknown-linux-gnu && rm -rf target/lambda
+
+# Drop one crate's artifacts
+cargo clean -p publish-events
+```
+
+Everyday habits that keep builds small and fast:
+
+- Iterate with `make check` (`cargo check` emits metadata only — no codegen,
+  a fraction of the size and time of a build).
+- Test the crate you are changing (`cargo test -p <pkg>`) instead of
+  `--workspace`; each test binary links the full AWS SDK surface.
+- `CARGO_INCREMENTAL=0` trades slower rebuilds for ~0.5 GB less disk; the
+  default (on) is usually the right call on a dev machine.
+
 ## Unit Tests
 
 Place unit tests in a `#[cfg(test)]` module at the bottom of the source file they exercise. This keeps tests co-located with the code they verify.
