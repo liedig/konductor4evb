@@ -296,20 +296,33 @@ async fn queue_admitted(
     })
     .to_string();
 
+    let mut attributes = Vec::new();
+    for (name, value) in message_attributes(principal, command) {
+        match aws_sdk_sqs::types::MessageAttributeValue::builder()
+            .string_value(value)
+            .data_type("String")
+            .build()
+        {
+            Ok(attribute) => attributes.push((name, attribute)),
+            Err(error) => {
+                tracing::error!(
+                    metric = "PublishUnavailable",
+                    domain = command.request.domain,
+                    error = %error,
+                    "message attribute build failed before enqueue"
+                );
+                return temporarily_unavailable();
+            }
+        }
+    }
+
     let mut send = clients
         .sqs
         .send_message()
         .queue_url(queue_url)
         .message_body(message_body);
-    for (name, value) in message_attributes(principal, command) {
-        send = send.message_attributes(
-            name,
-            aws_sdk_sqs::types::MessageAttributeValue::builder()
-                .string_value(value)
-                .data_type("String")
-                .build()
-                .expect("message attribute value with string data type"),
-        );
+    for (name, attribute) in attributes {
+        send = send.message_attributes(name, attribute);
     }
 
     match send.send().await {

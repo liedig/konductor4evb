@@ -10,6 +10,7 @@ const config = useKonductorConfig()
 
 const schemas = ref<SchemaSummary[]>([])
 const forbidden = ref(false)
+const loadFailed = ref(false)
 const pending = ref(true)
 
 const formOpen = ref(false)
@@ -31,6 +32,8 @@ function appendable(schema: SchemaSummary): boolean {
 // consumer entitlement (GET /schemas?domain=... with no consumerDomain).
 async function load() {
   pending.value = true
+  forbidden.value = false
+  loadFailed.value = false
   try {
     const response = await catalog.listSchemas({ producerDomain: props.domain })
     schemas.value = response.items ?? []
@@ -38,6 +41,7 @@ async function load() {
     if (error instanceof ApiError && error.status === 403) {
       forbidden.value = true
     } else {
+      loadFailed.value = true
       toast.error(error instanceof ApiError ? error.message : 'Failed to load schemas')
     }
   } finally {
@@ -65,12 +69,15 @@ onMounted(load)
 <template>
   <NxCard title="Schemas">
     <template #actions>
-      <NxButton v-if="!forbidden && !pending" size="sm" @click="openRegister">Register schema</NxButton>
+      <NxButton v-if="!forbidden && !loadFailed && !pending" size="sm" @click="openRegister">Register schema</NxButton>
     </template>
 
     <p v-if="pending" class="text-sm text-muted">Loading…</p>
     <p v-else-if="forbidden" class="text-sm text-muted">
       Publisher access is required to view this domain's schemas.
+    </p>
+    <p v-else-if="loadFailed" class="text-sm text-muted">
+      Schemas could not be loaded — refresh to try again.
     </p>
     <p v-else-if="schemas.length === 0" class="text-sm text-muted">
       No schemas registered for this domain yet.
