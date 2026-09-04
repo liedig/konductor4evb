@@ -72,11 +72,20 @@ pub enum ValidationError {
 /// How many violations make it into a `422` message before truncation.
 const MAX_REPORTED_VIOLATIONS: usize = 10;
 
+/// The only `$schema` declarations honored. A document declaring any other
+/// dialect is rejected outright: draft-4 compilation would silently ignore
+/// newer keywords (e.g. `unevaluatedProperties`), accepting payloads the
+/// authored schema intends to reject.
+const DRAFT4_DECLARATIONS: [&str; 2] = [
+    "http://json-schema.org/draft-04/schema#",
+    "http://json-schema.org/draft-04/schema",
+];
+
 /// Compiles `content` as a JSON Schema draft-4 document.
 ///
-/// Compilation is forced to draft-4 regardless of the document's `$schema`
-/// keyword: the registry only accepts `JSONSchemaDraft4` documents, so
-/// ambiguity is a defect, never a silent interpretation.
+/// Compilation is forced to draft-4 and the document's `$schema` keyword must
+/// agree (or be absent): the registry only accepts `JSONSchemaDraft4`
+/// documents, so ambiguity is a defect, never a silent interpretation.
 fn compile_draft4(content: &str) -> Result<jsonschema::Validator, ValidationError> {
     let schema: Value = serde_json::from_str(content)
         .map_err(|e| ValidationError::SchemaUnusable(format!("not parseable JSON: {e}")))?;
@@ -84,6 +93,13 @@ fn compile_draft4(content: &str) -> Result<jsonschema::Validator, ValidationErro
         return Err(ValidationError::SchemaUnusable(
             "schema document must be a JSON object".to_string(),
         ));
+    }
+    if let Some(declared) = schema.get("$schema").and_then(Value::as_str) {
+        if !DRAFT4_DECLARATIONS.contains(&declared) {
+            return Err(ValidationError::SchemaUnusable(format!(
+                "declares $schema '{declared}'; only JSON Schema draft-4 is supported"
+            )));
+        }
     }
     jsonschema::options()
         .with_draft(jsonschema::Draft::Draft4)
@@ -249,6 +265,23 @@ mod tests {
         assert!(check_draft4_document("not json").is_err());
         assert!(check_draft4_document(r#""a string""#).is_err());
         assert!(check_draft4_document(r#"{"type": "nonsense"}"#).is_err());
+    }
+
+    #[test]
+    fn check_draft4_document_rejects_newer_dialect_declarations() {
+        let declared_2020 = r#"{"$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object", "unevaluatedProperties": false}"#;
+        let err = check_draft4_document(declared_2020).unwrap_err();
+        assert!(
+            err.to_string().contains("draft-4"),
+            "rejection must name the supported dialect: {err}"
+        );
+        // No declaration is fine; the draft-04 URI (with or without the
+        // fragment) is fine.
+        assert!(check_draft4_document(r#"{"type": "object"}"#).is_ok());
+        assert!(check_draft4_document(
+            r#"{"$schema": "http://json-schema.org/draft-04/schema", "type": "object"}"#
+        )
+        .is_ok());
     }
 
     #[test]

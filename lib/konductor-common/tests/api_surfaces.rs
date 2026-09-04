@@ -402,6 +402,26 @@ fn publish_queue_writes_are_restricted_to_admission() {
         !resources.iter().any(|r| r.contains("PublishQueue")),
         "API Gateway must no longer write the publish queue directly"
     );
+
+    // IAM grants are necessary but not sufficient: a same-account principal
+    // with broad sqs:SendMessage could inject an unvalidated command, so the
+    // queue itself denies every writer except the admission role.
+    let queue_policy = resource(&doc, "PublishQueueAdmissionOnlyPolicy");
+    let qp_statements = seq(at(at(props(queue_policy), "PolicyDocument"), "Statement"));
+    let deny = qp_statements
+        .iter()
+        .find(|s| text(at(s, "Sid")) == "DenyNonAdmissionSenders")
+        .expect("queue policy must deny non-admission senders");
+    assert_eq!(text(at(deny, "Effect")), "Deny");
+    assert_eq!(text(at(deny, "Action")), "sqs:SendMessage");
+    let exempt = format!(
+        "{:?}",
+        at(at(at(deny, "Condition"), "ArnNotLike"), "aws:PrincipalArn")
+    );
+    assert!(
+        exempt.contains("PublishEventsAdmissionFunctionRole"),
+        "the deny must exempt only the admission role, got {exempt}"
+    );
 }
 
 #[test]

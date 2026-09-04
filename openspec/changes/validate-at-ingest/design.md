@@ -57,7 +57,7 @@ Validation uses the `jsonschema` crate with draft-4 support. The transitional ca
 
 ### 5. Message attributes carry admitted metadata
 
-The validator sets SQS message attributes: `Environment` (from `$context.stage`, replacing the VTL injection), `SchemaVersion` (the admission-resolved version the payload was validated against), and the effective idempotency key (caller-supplied or the API Gateway request ID), plus the trusted-principal envelope the VTL used to write. The consumer derives `source` itself from the namespace resolver and builds the envelope from attributes plus the SQS `SentTimestamp` (unchanged `publishedAt` semantics). Envelope structural validation stays in the consumer as a cheap local invariant check.
+The validator sets SQS message attributes: `Environment` (from `$context.stage`, replacing the VTL injection), `SchemaVersion` (the admission-resolved version the payload was validated against), and the effective idempotency key (caller-supplied or the API Gateway request ID), plus the trusted-principal envelope the VTL used to write. The consumer derives `source` itself from the namespace resolver and builds the envelope from attributes plus the SQS `SentTimestamp` (unchanged `publishedAt` semantics). Envelope structural/size validation runs at admission (a publish that could never be delivered must not earn a 202) and stays in the consumer as a cheap local invariant re-check.
 
 ## Risks / Trade-offs
 

@@ -12,6 +12,7 @@ aws-config = { workspace = true }
 aws-sdk-dynamodb = { workspace = true }
 aws-sdk-schemas = { workspace = true }
 aws-sdk-sqs = { workspace = true }
+chrono = { workspace = true }
 konductor-common = { path = "../../../lib/konductor-common" }
 lambda_runtime = { workspace = true }
 serde = { workspace = true }
@@ -23,7 +24,6 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 aws-smithy-mocks = { workspace = true }
-chrono = { workspace = true }
 
 [lints]
 workspace = true

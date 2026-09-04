@@ -96,10 +96,16 @@ const prettyContent = computed(() => {
 })
 
 // Entry points pass ?from=<internal path> so the back link returns to the
-// referring page; default is the consumer catalog. Internal paths only.
+// referring page; default is the consumer catalog. Internal paths only:
+// reject protocol-relative (//) and backslash forms — browsers normalize
+// `/\evil.example` to an external authority.
 const backHref = computed(() => {
   const from = route.query.from
-  return typeof from === 'string' && from.startsWith('/') && !from.startsWith('//') ? from : '/catalog'
+  const internal = typeof from === 'string'
+    && from.startsWith('/')
+    && !from.startsWith('//')
+    && !from.includes('\\')
+  return internal ? from : '/catalog'
 })
 const backLabel = computed(() => {
   const match = backHref.value.match(/^\/domains\/([^/?]+)/)

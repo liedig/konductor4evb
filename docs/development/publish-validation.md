@@ -96,8 +96,13 @@ Why split, instead of one function that validates and delivers synchronously?
   failure mode this design exists to remove.
 - **Least privilege.** Delivery no longer needs to read the authorization
   bindings table or the schema registry, so its IAM role loses both. The queue
-  itself grants `SendMessage` to the admission role and nothing else — no other
-  component can inject a message that bypasses validation.
+  enforces the same boundary: IAM grants `SendMessage` to the admission role
+  only, and a resource policy on the queue denies `sqs:SendMessage` to every
+  other principal — so even a same-account workload with broad SQS permissions
+  cannot inject a command that skips validation. The deliberate trade-off:
+  console/CLI DLQ redrive is denied too. The correct re-drive is re-publishing
+  through `/publish` — the DLQ retains the original message body for exactly
+  that, and re-admission re-validates rather than bypassing the gate.
 
 ## 4. What admission checks, and why in that order
 
@@ -125,16 +130,22 @@ justified by what it protects:
    human-readable, instance-located messages (`"total": -5 is less than the
    minimum of 0`), capped so a pathological payload cannot produce an unbounded
    response.
-6. **Enqueue (`202`).** Only now does anything durable happen.
+6. **Envelope deliverability (`400`).** Admission constructs the exact
+   EventBridge entry the delivery step would send — same source, detail-type,
+   version stamp, and payload — and rejects the request if it fails structural
+   or size validation (256 KiB entry limit). Without this step, a conforming
+   but oversized payload would earn a `202` and then fail deterministically on
+   every delivery retry into the DLQ: the silent-drop failure in a new costume.
+7. **Enqueue (`202`).** Only now does anything durable happen.
 
-Steps 2–5 each answer *before* touching anything the caller is not entitled to
+Steps 2–6 each answer *before* touching anything the caller is not entitled to
 know about, and no step writes anything except the last.
 
 ## 5. Reading the answers
 
 | Status | Meaning | What the caller should do |
 |--------|---------|---------------------------|
-| `400` | The request body itself is malformed (missing field, unknown field, bad event name) | Fix the request shape |
+| `400` | The request body itself is malformed (missing field, unknown field, bad event name), or the resulting event entry would exceed EventBridge's size limit | Fix the request shape; shrink the payload |
 | `403` | No publisher binding for this principal on this domain | Ask the platform team for a binding |
 | `404` | Domain missing/inactive, or no schema for this event in this environment | Check domain status; register the schema first |
 | `422` | The payload violates the schema's latest version | Fix the payload (violations are listed in `message`) |
@@ -224,10 +235,13 @@ about the payload, not about the registry's current state.
   partially delivered.
 - **Retry semantics, unchanged.** Transient `PutEvents` failures are reported
   for retry; retries exhaust to the publish DLQ with all attributes intact.
-  `publishedAt` still derives from the SQS `SentTimestamp` — which means a
-  redelivered message gets a *new* `publishedAt`. That is a pre-existing
-  ambiguity this design deliberately did not touch; stabilizing the ingest
-  timestamp at admission is a known follow-up.
+  `publishedAt` derives from the SQS `SentTimestamp`, which is fixed when the
+  message is first sent and survives every in-queue retry — so automatic
+  retries always keep the original publish time. The one exception is a DLQ
+  *redrive*, which re-sends as a new message with a new `SentTimestamp`; given
+  the queue's admission-only write policy, the sanctioned re-drive path is
+  re-publishing through `/publish`, which stamps a fresh ingest time by
+  definition.
 
 ## 9. Why schemas are draft-4 only, enforced at write time
 

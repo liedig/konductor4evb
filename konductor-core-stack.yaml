@@ -415,6 +415,33 @@ Resources:
         deadLetterTargetArn: !GetAtt PublishDlq.Arn
         maxReceiveCount: 3
 
+  # Admission is the only legitimate writer: a queued command is proof of
+  # validation, so any other principal able to SendMessage could inject
+  # unvalidated events. IAM-side grants are already admission-only; this deny
+  # closes the same-account-broad-permissions hole. Consequence: console/CLI
+  # DLQ redrive is also denied — re-drive by re-publishing through /publish
+  # (the DLQ retains the original body for exactly that).
+  PublishQueueAdmissionOnlyPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref PublishQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyNonAdmissionSenders
+            Effect: Deny
+            Principal: "*"
+            Action: sqs:SendMessage
+            Resource: !GetAtt PublishQueue.Arn
+            Condition:
+              ArnNotLike:
+                aws:PrincipalArn:
+                  - !GetAtt PublishEventsAdmissionFunctionRole.Arn
+                  - !Sub
+                    - "arn:aws:sts::${AWS::AccountId}:assumed-role/${AdmissionRoleName}/*"
+                    - AdmissionRoleName: !Select [1, !Split [":role/", !GetAtt PublishEventsAdmissionFunctionRole.Arn]]
+
   EntitlementRevocationDlq:
     Type: AWS::SQS::Queue
     DeletionPolicy: Delete

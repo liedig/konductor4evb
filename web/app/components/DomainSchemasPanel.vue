@@ -6,6 +6,7 @@ const props = defineProps<{ domain: string }>()
 
 const catalog = useCatalog()
 const toast = useToast()
+const config = useKonductorConfig()
 
 const schemas = ref<SchemaSummary[]>([])
 const forbidden = ref(false)
@@ -13,6 +14,18 @@ const pending = ref(true)
 
 const formOpen = ref(false)
 const formEventName = ref<string | undefined>(undefined)
+
+// Appends target only the console's API stage environment. The catalog
+// merges every environment, so a schema that exists solely in another stage
+// would deterministically 404 — offer append only when it exists here.
+const targetEnvironment = computed(() => {
+  const segment = config.apiBaseUrl.replace(/\/+$/, '').split('/').pop()
+  return segment && segment !== config.apiBaseUrl ? segment : config.apiBaseUrl
+})
+
+function appendable(schema: SchemaSummary): boolean {
+  return (schema.latestVersions ?? {})[targetEnvironment.value] != null
+}
 
 // Producer scope: publishers see their own domain's schemas without any
 // consumer entitlement (GET /schemas?domain=... with no consumerDomain).
@@ -74,7 +87,8 @@ onMounted(load)
           <NxBadge v-for="(version, env) in schema.latestVersions" :key="env" tone="neutral">
             {{ env }} v{{ version }}
           </NxBadge>
-          <NxButton variant="secondary" size="sm" @click="openAppend(schema)">New version</NxButton>
+          <NxButton v-if="appendable(schema)" variant="secondary" size="sm" @click="openAppend(schema)">New version</NxButton>
+          <span v-else class="text-xs text-muted">Not registered in {{ targetEnvironment }} yet</span>
         </span>
       </li>
     </ul>

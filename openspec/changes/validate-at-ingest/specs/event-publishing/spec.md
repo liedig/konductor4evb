@@ -104,7 +104,7 @@ For every publish request, the admission step SHALL derive the canonical schema 
 
 ### Requirement: Payload conformance validation at admission
 
-For every publish request, the admission step SHALL validate the request `data` against the latest-version schema document of the derived schema in the stage-selected environment's registry. A non-conformant payload SHALL be rejected with `400 Bad Request` carrying machine-readable validation violations, and SHALL NOT be queued. Before rejecting on conformance grounds, admission SHALL refresh its cached schema from the registry once and re-validate, so a conformance rejection always reflects the true latest registered version rather than a stale cache entry. Schemas registered with legacy `OpenApi3` content SHALL be stamped with the resolved version and queued without conformance validation (transitional carve-out; new `OpenApi3` creation is rejected by the schema-management capability).
+For every publish request, the admission step SHALL validate the request `data` against the latest-version schema document of the derived schema in the stage-selected environment's registry. A non-conformant payload SHALL be rejected with `422 Unprocessable Entity` carrying human-readable, instance-located validation violations, and SHALL NOT be queued. Before rejecting on conformance grounds, admission SHALL refresh its cached schema from the registry once and re-validate, so a conformance rejection always reflects the true latest registered version rather than a stale cache entry. Every stored schema is JSON Schema draft-4 (schema management rejects anything else at write time); a stored document that nonetheless cannot be compiled — including one declaring a newer `$schema` dialect — SHALL make admission fail closed with `503 Service Unavailable`, never skip validation.
 
 #### Scenario: Conformant payload admitted
 
@@ -115,7 +115,7 @@ For every publish request, the admission step SHALL validate the request `data` 
 #### Scenario: Non-conformant payload rejected with violations
 
 - **WHEN** an authorized publisher sends a payload that fails the latest registered schema
-- **THEN** the API SHALL return `400 Bad Request` with machine-readable validation violations
+- **THEN** the API SHALL return `422 Unprocessable Entity` with validation violations identifying the failing instance paths
 - **AND THEN** no SQS message SHALL be queued and no EventBridge call SHALL occur
 
 #### Scenario: Rejection reflects the true latest version
@@ -124,10 +124,11 @@ For every publish request, the admission step SHALL validate the request `data` 
 - **THEN** admission SHALL re-validate against the refreshed schema before deciding
 - **AND THEN** a payload conforming to the refreshed version SHALL be admitted rather than rejected against the stale entry
 
-#### Scenario: Legacy OpenAPI schema publishes without conformance validation
+#### Scenario: Unusable stored schema fails closed
 
-- **WHEN** the derived schema was registered with `OpenApi3` content before the JSON-Schema-only constraint
-- **THEN** admission SHALL stamp the resolved version and queue the event without payload validation
+- **WHEN** the stored schema content cannot be compiled as JSON Schema draft-4 (malformed, or declaring a newer `$schema` dialect)
+- **THEN** the API SHALL return `503 Service Unavailable`
+- **AND THEN** the event SHALL NOT be queued, and no publish SHALL bypass conformance validation
 
 ### Requirement: Admission schema cache
 

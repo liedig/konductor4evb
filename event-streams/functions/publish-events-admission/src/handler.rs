@@ -8,12 +8,13 @@
 //! enqueued for the delivery-only `publish-events` consumer.
 //!
 //! Outcomes: 202 once the command is durably queued (the new durability
-//! boundary), 400 for malformed requests, 403 for missing publisher binding,
-//! 404 for unknown/inactive domain or unregistered schema, 422 for payload
-//! conformance failures, 503 for registry/platform-side failures (schema that
-//! will not compile, registry unreachable, enqueue failure). A 422 triggers a
-//! forced cache refresh before rejecting, so a publish racing a schema append
-//! is never rejected against a definition the caller could not have known.
+//! boundary), 400 for malformed requests or envelopes that could never be
+//! delivered (over EventBridge's entry size limit), 403 for missing publisher
+//! binding, 404 for unknown/inactive domain or unregistered schema, 422 for
+//! payload conformance failures, 503 for platform-side failures (domain store,
+//! registry, unusable stored schema, enqueue). A 422 triggers a forced cache
+//! refresh before rejecting, so a publish racing a schema append is never
+//! rejected against a definition the caller could not have known.
 
 use std::env;
 use std::time::Instant;
@@ -23,7 +24,7 @@ use serde_json::{json, Value};
 
 use konductor_common::api;
 use konductor_common::dynamodb::{get_s, s};
-use konductor_common::envelope::SchemaName;
+use konductor_common::envelope::{EventEnvelope, SchemaName};
 use konductor_common::error::ControlPlaneError;
 use konductor_common::grant_engine::actions;
 use konductor_common::models::{ApiError, DomainStatus, PublishRequest};
@@ -132,7 +133,20 @@ async fn admit<A: ResourceAuthorizer>(
     }
 
     if let Err(e) = require_active_domain(clients, &request.domain).await {
-        return Ok(api::from_control_plane_error(&e));
+        return Ok(match e {
+            // A domain-store outage is a platform-side evaluation failure,
+            // not an answer about the domain: retryable 503, never a 404/500.
+            ControlPlaneError::DynamoDb(detail) => {
+                tracing::error!(
+                    metric = "PublishUnavailable",
+                    domain = request.domain,
+                    error = detail,
+                    "domain store unavailable"
+                );
+                temporarily_unavailable()
+            }
+            other => api::from_control_plane_error(&other),
+        });
     }
 
     let stage = match stage_of(payload) {
@@ -156,22 +170,47 @@ async fn admit<A: ResourceAuthorizer>(
             Err(response) => return Ok(response),
         };
 
+    let idempotency_key = request
+        .idempotency_key
+        .clone()
+        .filter(|k| !k.is_empty())
+        .or_else(|| {
+            payload
+                .pointer("/requestContext/requestId")
+                .and_then(Value::as_str)
+                .map(String::from)
+        })
+        .unwrap_or_else(uuid_v4);
+
+    // A publish that can never be delivered must not be admitted: build the
+    // envelope now so structural or size violations answer 400 here instead
+    // of a 202 that retries deterministically into the DLQ. The placeholder
+    // timestamp stands in for the queue-stamped SentTimestamp; the
+    // ISO-8601-millis format is fixed-width, so the size check is exact.
+    if let Err(e) = EventEnvelope::new(
+        schema_name.source.clone(),
+        schema_name.detail_type.clone(),
+        resolver.event_bus_name(&stage, &organization, &request.domain),
+        latest.version,
+        idempotency_key.clone(),
+        chrono::Utc::now(),
+        request.data.clone(),
+    ) {
+        tracing::info!(
+            metric = "AdmissionRejected",
+            domain = request.domain,
+            error = %e,
+            "envelope would be undeliverable; refusing admission"
+        );
+        return Ok(api::from_control_plane_error(&e));
+    }
+
     let command = AdmittedCommand {
         request: &request,
         raw_body: &raw_body,
         stage: &stage,
         schema_version: latest.version,
-        idempotency_key: request
-            .idempotency_key
-            .clone()
-            .filter(|k| !k.is_empty())
-            .or_else(|| {
-                payload
-                    .pointer("/requestContext/requestId")
-                    .and_then(Value::as_str)
-                    .map(String::from)
-            })
-            .unwrap_or_else(uuid_v4),
+        idempotency_key,
         caller_account_id: payload
             .pointer("/requestContext/identity/accountId")
             .and_then(Value::as_str)
@@ -265,12 +304,16 @@ async fn queue_admitted(
 /// The full message-attribute set the delivery consumer parses: the trusted
 /// principal envelope plus the admission-stamped routing and idempotency
 /// attributes.
+///
+/// SQS allows at most 10 attributes per message and the OAuth principal
+/// envelope carries 7, leaving exactly the three routing stamps — there is no
+/// headroom, so this set may not grow. (`HttpMethod` is deliberately absent:
+/// unlike the multi-route command queues, this queue serves only `/publish`.)
 fn message_attributes(
     principal: &TrustedPrincipal,
     command: &AdmittedCommand<'_>,
 ) -> std::collections::HashMap<String, String> {
     let mut attributes = principal.to_sqs_attributes();
-    attributes.insert("HttpMethod".to_string(), "POST".to_string());
     attributes.insert("Environment".to_string(), command.stage.to_string());
     attributes.insert(
         "IdempotencyKey".to_string(),
@@ -736,7 +779,6 @@ mod tests {
                     || attr("IdempotencyKey") != Some(expected_key)
                     || attr("AuthMechanism") != Some(mechanism)
                     || attr("PrincipalVersion") != Some("1")
-                    || attr("HttpMethod") != Some("POST")
                     || attr("SchemaVersion") != Some(expected_version)
                 {
                     return false;
@@ -1075,6 +1117,93 @@ mod tests {
         .unwrap();
 
         assert_eq!(status(&resp), 202);
+    }
+
+    #[tokio::test]
+    async fn oauth_message_attributes_stay_within_the_sqs_limit() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        // SQS allows at most 10 message attributes per message; the OAuth
+        // principal envelope carries 7, so the rule matches only while the
+        // total stays within the limit.
+        let send = mock!(aws_sdk_sqs::Client::send_message)
+            .match_requests(|req| req.message_attributes().is_some_and(|a| a.len() <= 10))
+            .then_output(|| {
+                aws_sdk_sqs::operation::send_message::SendMessageOutput::builder()
+                    .message_id("sqs-msg-1")
+                    .build()
+            });
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(STRICT_SCHEMA, "3")],
+            &[send],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            event(oauth_event(publish_body(json!({"orderId": 1})))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 202);
+    }
+
+    #[tokio::test]
+    async fn an_undeliverable_envelope_is_a_400_without_queueing() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        // No SQS rule: an enqueue attempt panics. The relaxed schema accepts
+        // any object, so only the envelope size check can reject.
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            &[],
+        );
+        let big = publish_body(json!({"blob": "x".repeat(270 * 1024)}));
+
+        let resp = handle(&clients, &authorizer, &cache(), event(oauth_event(big)))
+            .await
+            .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        assert!(
+            response_body(&resp)["message"]
+                .as_str()
+                .unwrap()
+                .contains("at most"),
+            "400 must name the EventBridge size limit"
+        );
+    }
+
+    #[tokio::test]
+    async fn domain_store_outage_is_a_503() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let ddb_error = mock!(aws_sdk_dynamodb::Client::get_item).then_error(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemError::generic(
+                aws_sdk_dynamodb::error::ErrorMetadata::builder()
+                    .message("throttled")
+                    .build(),
+            )
+        });
+        let clients = clients(RuleMode::MatchAny, &[ddb_error], &[], &[]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            event(oauth_event(publish_body(json!({"orderId": 1})))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 503);
+        assert_eq!(response_body(&resp)["code"], "ServiceUnavailableException");
     }
 
     #[tokio::test]
