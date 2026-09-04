@@ -1,0 +1,15 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "Execute",
+      "commandRegex": "git\\s+push",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "\"$FACTORY_PROJECT_DIR\"/.factory/hooks/rust-analyzer-before-push.sh",
+          "timeout": 600
+        }
+      ]
+    }
+  ]
+}
