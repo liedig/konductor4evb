@@ -413,7 +413,11 @@ fn publish_queue_writes_are_restricted_to_admission() {
         .find(|s| text(at(s, "Sid")) == "DenyNonAdmissionSenders")
         .expect("queue policy must deny non-admission senders");
     assert_eq!(text(at(deny, "Effect")), "Deny");
-    assert_eq!(text(at(deny, "Action")), "sqs:SendMessage");
+    let actions: Vec<&str> = seq(at(deny, "Action")).iter().map(|a| text(a)).collect();
+    assert!(
+        actions.contains(&"sqs:SendMessage") && actions.contains(&"sqs:SendMessageBatch"),
+        "the deny must cover both send APIs, got {actions:?}"
+    );
     let exempt = format!(
         "{:?}",
         at(at(at(deny, "Condition"), "ArnNotLike"), "aws:PrincipalArn")

@@ -5,8 +5,10 @@ set -uo pipefail
 
 ROOT="${FACTORY_PROJECT_DIR:-$PWD}"
 
-if ! command -v rust-analyzer >/dev/null 2>&1; then
-  echo "rust-analyzer not found on PATH — install with: rustup component add rust-analyzer" >&2
+# `command -v` is not enough: rustup installs a rust-analyzer shim even when
+# the component itself is missing, and the shim only fails at runtime.
+if ! rust-analyzer --version >/dev/null 2>&1; then
+  echo "rust-analyzer unavailable — install with: rustup component add rust-analyzer" >&2
   exit 2
 fi
 

@@ -432,7 +432,11 @@ Resources:
           - Sid: DenyNonAdmissionSenders
             Effect: Deny
             Principal: "*"
-            Action: sqs:SendMessage
+            # Both send APIs: SendMessageBatch is a separate IAM action, and
+            # denying only SendMessage would leave the injection path open.
+            Action:
+              - sqs:SendMessage
+              - sqs:SendMessageBatch
             Resource: !GetAtt PublishQueue.Arn
             Condition:
               ArnNotLike:
