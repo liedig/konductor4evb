@@ -296,25 +296,10 @@ async fn queue_admitted(
     })
     .to_string();
 
-    let mut attributes = Vec::new();
-    for (name, value) in message_attributes(principal, command) {
-        match aws_sdk_sqs::types::MessageAttributeValue::builder()
-            .string_value(value)
-            .data_type("String")
-            .build()
-        {
-            Ok(attribute) => attributes.push((name, attribute)),
-            Err(error) => {
-                tracing::error!(
-                    metric = "PublishUnavailable",
-                    domain = command.request.domain,
-                    error = %error,
-                    "message attribute build failed before enqueue"
-                );
-                return temporarily_unavailable();
-            }
-        }
-    }
+    let attributes = match build_message_attributes(principal, command) {
+        Ok(attributes) => attributes,
+        Err(response) => return response,
+    };
 
     let mut send = clients
         .sqs
@@ -351,6 +336,33 @@ async fn queue_admitted(
             temporarily_unavailable()
         }
     }
+}
+
+/// Builds the SQS message attributes for an admitted command. A build
+/// failure is a platform-side defect: answer 503 like any enqueue failure,
+/// never panic in the request path.
+fn build_message_attributes(
+    principal: &TrustedPrincipal,
+    command: &AdmittedCommand<'_>,
+) -> Result<Vec<(String, aws_sdk_sqs::types::MessageAttributeValue)>, Value> {
+    let mut attributes = Vec::new();
+    for (name, value) in message_attributes(principal, command) {
+        let attribute = aws_sdk_sqs::types::MessageAttributeValue::builder()
+            .string_value(value)
+            .data_type("String")
+            .build()
+            .map_err(|error| {
+                tracing::error!(
+                    metric = "PublishUnavailable",
+                    domain = command.request.domain,
+                    error = %error,
+                    "message attribute build failed before enqueue"
+                );
+                temporarily_unavailable()
+            })?;
+        attributes.push((name, attribute));
+    }
+    Ok(attributes)
 }
 
 /// The full message-attribute set the delivery consumer parses: the trusted
