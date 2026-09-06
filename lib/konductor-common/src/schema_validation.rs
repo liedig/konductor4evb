@@ -72,13 +72,17 @@ pub enum ValidationError {
 /// How many violations make it into a `422` message before truncation.
 const MAX_REPORTED_VIOLATIONS: usize = 10;
 
-/// The only `$schema` declarations honored. A document declaring any other
-/// dialect is rejected outright: draft-4 compilation would silently ignore
-/// newer keywords (e.g. `unevaluatedProperties`), accepting payloads the
-/// authored schema intends to reject.
-const DRAFT4_DECLARATIONS: [&str; 2] = [
+/// The only `$schema` declarations honored, in both spellings: generators
+/// emit the draft-04 meta-schema over `https` as readily as `http`, and the
+/// scheme does not change the dialect. A document declaring any other dialect
+/// is rejected outright: draft-4 compilation would silently ignore newer
+/// keywords (e.g. `unevaluatedProperties`), accepting payloads the authored
+/// schema intends to reject.
+const DRAFT4_DECLARATIONS: [&str; 4] = [
     "http://json-schema.org/draft-04/schema#",
     "http://json-schema.org/draft-04/schema",
+    "https://json-schema.org/draft-04/schema#",
+    "https://json-schema.org/draft-04/schema",
 ];
 
 /// Compiles `content` as a JSON Schema draft-4 document.
@@ -275,11 +279,19 @@ mod tests {
             err.to_string().contains("draft-4"),
             "rejection must name the supported dialect: {err}"
         );
-        // No declaration is fine; the draft-04 URI (with or without the
-        // fragment) is fine.
+        // No declaration is fine; the draft-04 URI is fine over either
+        // scheme, with or without the fragment.
         assert!(check_draft4_document(r#"{"type": "object"}"#).is_ok());
         assert!(check_draft4_document(
             r#"{"$schema": "http://json-schema.org/draft-04/schema", "type": "object"}"#
+        )
+        .is_ok());
+        assert!(check_draft4_document(
+            r#"{"$schema": "https://json-schema.org/draft-04/schema#", "type": "object"}"#
+        )
+        .is_ok());
+        assert!(check_draft4_document(
+            r#"{"$schema": "https://json-schema.org/draft-04/schema", "type": "object"}"#
         )
         .is_ok());
     }
