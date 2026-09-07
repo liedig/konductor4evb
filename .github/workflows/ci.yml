@@ -17,6 +17,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
+# Read-only everywhere: PR builds must not write to the repo, and push builds
+# have no write need either. Fork PRs would be downgraded to read-only anyway;
+# this makes the posture explicit rather than inherited.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 

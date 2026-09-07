@@ -14,12 +14,17 @@ on:
 
 jobs:
   droid:
+    # Mention triggers run in the default-branch context with secrets and
+    # id-token: write, so the actor must be a known contributor — otherwise any
+    # GitHub user could invoke this workflow by commenting "@droid" on a public
+    # repo. External PRs can be reviewed after vetting by having an owner post
+    # the @droid comment themselves.
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@droid')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@droid')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@droid')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@droid') || contains(github.event.issue.title, '@droid'))) ||
-      (github.event_name == 'pull_request' && (contains(github.event.pull_request.body, '@droid') || contains(github.event.pull_request.title, '@droid')))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@droid') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@droid') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@droid') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@droid') || contains(github.event.issue.title, '@droid')) && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) ||
+      (github.event_name == 'pull_request' && (contains(github.event.pull_request.body, '@droid') || contains(github.event.pull_request.title, '@droid')) && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     runs-on: ubuntu-latest
     permissions:
       contents: read

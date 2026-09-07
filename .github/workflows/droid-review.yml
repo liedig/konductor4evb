@@ -10,7 +10,11 @@ concurrency:
 
 jobs:
   droid-review:
-    if: github.event.pull_request.draft == false
+    # Same-repo PRs only: fork runs receive no secrets (so they would fail
+    # noisily), and unvetted external code should not be auto-analyzed under
+    # the repo's identity. After vetting a fork PR, trigger a review via an
+    # @droid comment (see droid.yml).
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: write
