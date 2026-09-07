@@ -21,6 +21,7 @@ members = [
     "event-streams/functions/publish-events-admission",
     "event-streams/functions/schema-admin",
     "event-streams/functions/subscriptions",
+    "event-streams/functions/materialize-subscription-env",
     "event-streams/functions/list-subscriptions",
     "event-streams/functions/describe-subscription",
     "event-streams/functions/list-schemas",
@@ -49,7 +50,7 @@ aws-sdk-ssm = { version = "1", default-features = false, features = ["rt-tokio",
 aws-sdk-sts = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-schemas = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
 sha2 = "0.11"
-aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }

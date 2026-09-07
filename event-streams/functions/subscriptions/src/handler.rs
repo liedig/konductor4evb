@@ -262,6 +262,7 @@ mod tests {
                 rule_arn: None,
                 enabled: false,
                 status: StreamStatus::Active,
+                error_detail: None,
             },
         );
         let stream = EventStream {
@@ -271,6 +272,7 @@ mod tests {
             detail_type: "OrderNotification".to_string(),
             schema_name: "acme-orders@OrderNotification".to_string(),
             status: StreamStatus::Active,
+            error_detail: None,
             environments,
             request_id: None,
             created_at: Utc::now(),

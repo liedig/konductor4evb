@@ -14,6 +14,7 @@ pub enum StreamStatus {
     Active,
     Failed,
     Removed,
+    AwaitingPromotion,
 }
 
 impl StreamStatus {
@@ -23,6 +24,7 @@ impl StreamStatus {
             Self::Active => "ACTIVE",
             Self::Failed => "FAILED",
             Self::Removed => "REMOVED",
+            Self::AwaitingPromotion => "AWAITING_PROMOTION",
         }
     }
 }
@@ -42,6 +44,7 @@ impl std::str::FromStr for StreamStatus {
             "ACTIVE" => Ok(Self::Active),
             "FAILED" => Ok(Self::Failed),
             "REMOVED" => Ok(Self::Removed),
+            "AWAITING_PROMOTION" => Ok(Self::AwaitingPromotion),
             _ => Err(()),
         }
     }
@@ -60,6 +63,8 @@ pub struct EnvStream {
     pub rule_arn: Option<String>,
     pub enabled: bool,
     pub status: StreamStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_detail: Option<String>,
 }
 
 /// An event stream: the record of a subscription contract between a consumer
@@ -74,6 +79,8 @@ pub struct EventStream {
     pub detail_type: String,
     pub schema_name: String,
     pub status: StreamStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_detail: Option<String>,
     pub environments: HashMap<String, EnvStream>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
@@ -160,6 +167,7 @@ mod tests {
             (StreamStatus::Active, "ACTIVE"),
             (StreamStatus::Failed, "FAILED"),
             (StreamStatus::Removed, "REMOVED"),
+            (StreamStatus::AwaitingPromotion, "AWAITING_PROMOTION"),
         ] {
             assert_eq!(status.to_string(), wire);
             assert_eq!(wire.parse::<StreamStatus>(), Ok(status));
@@ -218,10 +226,46 @@ mod tests {
             rule_arn: None,
             enabled: true,
             status: StreamStatus::Pending,
+            error_detail: None,
         };
         let value = serde_json::to_value(&env).unwrap();
         assert!(value.get("pinnedVersion").is_none());
         assert_eq!(value["status"], "PENDING");
+    }
+
+    #[test]
+    fn awaiting_promotion_env_round_trips_without_materialization() {
+        let env = EnvStream {
+            pinned_version: None,
+            rule_name: "checkout-OrderNotification".to_string(),
+            rule_arn: None,
+            enabled: false,
+            status: StreamStatus::AwaitingPromotion,
+            error_detail: None,
+        };
+        let value = serde_json::to_value(&env).unwrap();
+        assert_eq!(value["status"], "AWAITING_PROMOTION");
+        assert!(value.get("ruleArn").is_none());
+        assert!(value.get("pinnedVersion").is_none());
+        assert!(value.get("errorDetail").is_none());
+        let back: EnvStream = serde_json::from_value(value).unwrap();
+        assert_eq!(back, env);
+    }
+
+    #[test]
+    fn failed_env_carries_error_detail() {
+        let env = EnvStream {
+            pinned_version: None,
+            rule_name: "checkout-OrderNotification".to_string(),
+            rule_arn: None,
+            enabled: true,
+            status: StreamStatus::Failed,
+            error_detail: Some("PutRule throttled".to_string()),
+        };
+        let value = serde_json::to_value(&env).unwrap();
+        assert_eq!(value["errorDetail"], "PutRule throttled");
+        let back: EnvStream = serde_json::from_value(value).unwrap();
+        assert_eq!(back, env);
     }
 
     #[test]
@@ -232,6 +276,7 @@ mod tests {
             rule_arn: None,
             enabled: true,
             status: StreamStatus::Active,
+            error_detail: None,
         };
         let value = serde_json::to_value(&env).unwrap();
         assert_eq!(value["pinnedVersion"], 3);

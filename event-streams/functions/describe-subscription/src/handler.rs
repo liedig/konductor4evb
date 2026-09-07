@@ -116,6 +116,7 @@ pub async fn handle(
                         "detailType": stream.detail_type,
                         "schemaName": stream.schema_name,
                         "status": stream.status,
+                        "errorDetail": stream.error_detail,
                         "environments": stream.environments,
                         "createdAt": stream.created_at.to_rfc3339(),
                         "updatedAt": stream.updated_at.to_rfc3339(),
@@ -207,6 +208,7 @@ mod tests {
                 rule_arn: None,
                 enabled: true,
                 status: StreamStatus::Active,
+                error_detail: None,
             },
         );
         EventStream {
@@ -216,6 +218,7 @@ mod tests {
             detail_type: "OrderNotification".to_string(),
             schema_name: "acme-orders@OrderNotification".to_string(),
             status: StreamStatus::Active,
+            error_detail: None,
             environments,
             request_id: None,
             created_at: Utc::now(),
@@ -296,6 +299,37 @@ mod tests {
 
         assert_eq!(resp["statusCode"], 200);
         assert_eq!(body(&resp)["subscriptionId"], ID);
+        assert!(body(&resp)["errorDetail"].is_null());
+    }
+
+    #[tokio::test]
+    async fn failed_stream_exposes_its_error_detail() {
+        set_env();
+        let mut failed = stream();
+        failed.status = StreamStatus::Failed;
+        failed.error_detail = Some(
+            "schema acme-orders@OrderNotification not found in any environment of 'orders'"
+                .to_string(),
+        );
+        failed.environments.get_mut("prod").unwrap().error_detail =
+            Some("PutRule throttled".to_string());
+        let stream = stream_rule(Some(failed));
+        let ddb = ddb_client(&[&stream]);
+
+        let resp = handle(&ddb, request(oauth_platform_context("platform-admin"), ID))
+            .await
+            .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let detail = body(&resp);
+        assert_eq!(
+            detail["errorDetail"],
+            "schema acme-orders@OrderNotification not found in any environment of 'orders'"
+        );
+        assert_eq!(
+            detail["environments"]["prod"]["errorDetail"],
+            "PutRule throttled"
+        );
     }
 
     #[tokio::test]

@@ -28,7 +28,7 @@ fn get_dt(item: &HashMap<String, AttributeValue>, key: &str) -> Option<DateTime<
     get_s(item, key).and_then(|v| v.parse().ok())
 }
 
-fn env_stream_to_attr(env: &EnvStream) -> AttributeValue {
+pub fn env_stream_to_attr(env: &EnvStream) -> AttributeValue {
     let mut map = HashMap::new();
     if let Some(version) = env.pinned_version {
         map.insert("pinnedVersion".to_string(), n(version));
@@ -39,6 +39,9 @@ fn env_stream_to_attr(env: &EnvStream) -> AttributeValue {
     }
     map.insert("enabled".to_string(), AttributeValue::Bool(env.enabled));
     map.insert("status".to_string(), s(env.status.as_str()));
+    if let Some(detail) = &env.error_detail {
+        map.insert("errorDetail".to_string(), s(detail));
+    }
     AttributeValue::M(map)
 }
 
@@ -49,6 +52,7 @@ fn attr_to_env_stream(inner: &HashMap<String, AttributeValue>) -> Option<EnvStre
         rule_arn: get_s(inner, "ruleArn"),
         enabled: get_bool(inner, "enabled")?,
         status: get_s(inner, "status")?.parse().ok()?,
+        error_detail: get_s(inner, "errorDetail"),
     })
 }
 
@@ -67,6 +71,9 @@ pub fn stream_to_item(stream: &EventStream) -> HashMap<String, AttributeValue> {
     item.insert("detailType".to_string(), s(&stream.detail_type));
     item.insert("schemaName".to_string(), s(&stream.schema_name));
     item.insert("status".to_string(), s(stream.status.as_str()));
+    if let Some(detail) = &stream.error_detail {
+        item.insert("errorDetail".to_string(), s(detail));
+    }
     let envs: HashMap<String, AttributeValue> = stream
         .environments
         .iter()
@@ -108,6 +115,7 @@ pub fn item_to_stream(item: &HashMap<String, AttributeValue>) -> Option<EventStr
         detail_type: get_s(item, "detailType")?,
         schema_name: get_s(item, "schemaName")?,
         status: get_s(item, "status")?.parse().ok()?,
+        error_detail: get_s(item, "errorDetail"),
         environments,
         request_id: get_s(item, "requestId"),
         created_at: get_dt(item, "createdAt")?,
@@ -128,6 +136,33 @@ pub async fn put_stream(
         .send()
         .await
         .context("failed to put event stream record")?;
+    Ok(())
+}
+
+/// Presence-scoped per-env merge: writes only `environments.<env>` plus
+/// `updatedAt`, so environments materialized concurrently by separate
+/// workflow map iterations never clobber each other. The entry replaces the
+/// whole sub-map, clearing any stale `errorDetail` on success.
+pub async fn merge_env_stream(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    producer_domain: &str,
+    schema_name: &str,
+    consumer_domain: &str,
+    environment: &str,
+    entry: &EnvStream,
+) -> Result<()> {
+    ddb.update_item()
+        .table_name(table)
+        .key(PK, s(producer_domain))
+        .key(SK, s(&EventStream::sort_key(schema_name, consumer_domain)))
+        .update_expression("SET environments.#env = :entry, updatedAt = :now")
+        .expression_attribute_names("#env", environment)
+        .expression_attribute_values(":entry", env_stream_to_attr(entry))
+        .expression_attribute_values(":now", s(&Utc::now().to_rfc3339()))
+        .send()
+        .await
+        .context("failed to merge per-environment stream entry")?;
     Ok(())
 }
 
@@ -362,6 +397,7 @@ mod tests {
                 rule_arn: Some("arn:aws:events:us-east-1:111122223333:rule/x".to_string()),
                 enabled: true,
                 status: StreamStatus::Active,
+                error_detail: None,
             },
         );
         environments.insert(
@@ -372,6 +408,7 @@ mod tests {
                 rule_arn: None,
                 enabled: false,
                 status: StreamStatus::Pending,
+                error_detail: None,
             },
         );
         EventStream {
@@ -381,6 +418,7 @@ mod tests {
             detail_type: "OrderNotification".to_string(),
             schema_name: "acme-orders@OrderNotification".to_string(),
             status: StreamStatus::Pending,
+            error_detail: None,
             environments,
             request_id: Some("req-123".to_string()),
             created_at: "2026-07-15T00:00:00Z".parse().unwrap(),
@@ -451,5 +489,53 @@ mod tests {
         let mut item = stream_to_item(&sample_stream());
         item.remove("schemaName");
         assert!(item_to_stream(&item).is_none());
+    }
+
+    #[tokio::test]
+    async fn merge_env_stream_updates_only_the_named_env_and_timestamp() {
+        use aws_sdk_dynamodb::operation::update_item::UpdateItemOutput;
+        use aws_smithy_mocks::{mock, mock_client};
+
+        let merge_rule = mock!(aws_sdk_dynamodb::Client::update_item)
+            .match_requests(|req| {
+                req.update_expression() == Some("SET environments.#env = :entry, updatedAt = :now")
+                    && req
+                        .expression_attribute_names()
+                        .and_then(|names| names.get("#env"))
+                        .map(String::as_str)
+                        == Some("staging")
+                    && req
+                        .expression_attribute_values()
+                        .and_then(|v| v.get(":entry"))
+                        .and_then(|v| v.as_m().ok())
+                        .and_then(|m| m.get("status"))
+                        .and_then(|v| v.as_s().ok())
+                        .map(String::as_str)
+                        == Some("AWAITING_PROMOTION")
+            })
+            .then_output(|| UpdateItemOutput::builder().build());
+        let ddb = mock_client!(aws_sdk_dynamodb, &[&merge_rule]);
+
+        let entry = EnvStream {
+            pinned_version: None,
+            rule_name: "checkout-OrderNotification".to_string(),
+            rule_arn: None,
+            enabled: true,
+            status: StreamStatus::AwaitingPromotion,
+            error_detail: None,
+        };
+        merge_env_stream(
+            &ddb,
+            "konductor-event-streams",
+            "orders",
+            "acme-orders@OrderNotification",
+            "checkout",
+            "staging",
+            &entry,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(merge_rule.num_calls(), 1);
     }
 }

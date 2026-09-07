@@ -208,6 +208,7 @@ fn stream_summary(stream: &EventStream) -> Value {
         "producerDomain": stream.producer_domain,
         "schemaName": stream.schema_name,
         "status": stream.status,
+        "errorDetail": stream.error_detail,
         "environments": stream.environments,
         "createdAt": stream.created_at.to_rfc3339(),
     })
@@ -277,6 +278,7 @@ mod tests {
                 rule_arn: None,
                 enabled: true,
                 status: StreamStatus::Active,
+                error_detail: None,
             },
         );
         EventStream {
@@ -286,6 +288,7 @@ mod tests {
             detail_type: detail_type.to_string(),
             schema_name: format!("acme-orders@{detail_type}"),
             status,
+            error_detail: None,
             environments,
             request_id: None,
             created_at: Utc::now(),
@@ -344,6 +347,32 @@ mod tests {
 
     fn body(response: &Value) -> Value {
         serde_json::from_str(response["body"].as_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn summary_carries_error_detail_when_present() {
+        let mut failed = stream("checkout", "OrderNotification", StreamStatus::Failed, 3);
+        failed.error_detail = Some("schema not found in any environment".to_string());
+        failed.environments.get_mut("prod").unwrap().error_detail =
+            Some("PutRule throttled".to_string());
+
+        let value = stream_summary(&failed);
+
+        assert_eq!(value["errorDetail"], "schema not found in any environment");
+        assert_eq!(
+            value["environments"]["prod"]["errorDetail"],
+            "PutRule throttled"
+        );
+    }
+
+    #[test]
+    fn summary_renders_null_error_detail_when_absent() {
+        let active = stream("checkout", "OrderNotification", StreamStatus::Active, 3);
+
+        let value = stream_summary(&active);
+
+        assert!(value["errorDetail"].is_null());
+        assert!(value["environments"]["prod"].get("errorDetail").is_none());
     }
 
     #[tokio::test]

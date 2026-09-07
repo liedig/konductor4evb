@@ -2,16 +2,16 @@
 
 ## 1. Stream model and read surface
 
-- [ ] 1.1 Test: `EventStream` round-trips a per-env entry with status `AWAITING_PROMOTION` (null `ruleArn`/`pinnedVersion`) and an optional per-env `errorDetail`. Implement the `StreamStatus::AwaitingPromotion` variant and the `EnvStream.errorDetail` field in `konductor-common/src/streams.rs`; verify the new test passes
-- [ ] 1.2 Test: `list-subscriptions` summaries and subscription detail include top-level and per-env `errorDetail` when present and omit it when absent. Implement in the read handlers; verify the new handler tests pass and the existing read tests stay green
+- [x] 1.1 Test: `EventStream` round-trips a per-env entry with status `AWAITING_PROMOTION` (null `ruleArn`/`pinnedVersion`) and an optional per-env `errorDetail`. Implement the `StreamStatus::AwaitingPromotion` variant and the `EnvStream.errorDetail` field in `konductor-common/src/streams.rs`; verify the new test passes
+- [x] 1.2 Test: `list-subscriptions` summaries and subscription detail include top-level and per-env `errorDetail` when present and omit it when absent. Implement in the read handlers; verify the new handler tests pass and the existing read tests stay green
 
 ## 2. materialize-subscription-env Lambda
 
-- [ ] 2.1 Create the `materialize-subscription-env` function crate under `event-streams/functions/` with input `{producerDomain, consumerDomain, consumerAccountId, source, detailType, schemaName, ruleName, environment, enabled}`; verify `cargo check -p materialize-subscription-env` passes
-- [ ] 2.2 Test: happy path — describe resolves latest version, `PutRule` upserts the version-pinned pattern with state from `enabled`, `PutTargets` sets the consumer app bus with the producer DLQ, the zero-events alarm is created, and the record update merges only its own env key (`SET environments.#env = ...`). Implement; verify the smithy-mocks test passes
-- [ ] 2.3 Test: schema absent in the environment (`ResourceNotFound` from describe) records the env entry `AWAITING_PROMOTION` with no rule created and no error raised. Implement; verify
-- [ ] 2.4 Test: final coverage re-check via the konductor-common grant engine `covers()` — revoked entitlement (enabled env, non-self subscription) records the env `FAILED` with the denial and creates no rule; disabled envs and self-subscriptions skip the check. Implement; verify
-- [ ] 2.5 Test: re-invoking for an already-materialized env is a no-op beyond upsert idempotency (no duplicate target, record unchanged in shape). Implement any needed conditionals; verify
+- [x] 2.1 Create the `materialize-subscription-env` function crate under `event-streams/functions/` with input `{producerDomain, consumerDomain, consumerAccountId, source, detailType, schemaName, ruleName, environment, enabled}`; verify `cargo check -p materialize-subscription-env` passes
+- [x] 2.2 Test: happy path — describe resolves latest version, `PutRule` upserts the version-pinned pattern with state from `enabled`, `PutTargets` sets the consumer app bus with the producer DLQ, the zero-events alarm is created, and the record update merges only its own env key (`SET environments.#env = ...`). Implement; verify the smithy-mocks test passes
+- [x] 2.3 Test: schema absent in the environment (`ResourceNotFound` from describe) records the env entry `AWAITING_PROMOTION` with no rule created and no error raised. Implement; verify
+- [x] 2.4 Test: final coverage re-check via the konductor-common grant engine `covers()` — revoked entitlement (enabled env, non-self subscription) records the env `FAILED` with the denial and creates no rule; disabled envs and self-subscriptions skip the check. Implement; verify
+- [x] 2.5 Test: re-invoking for an already-materialized env is a no-op beyond upsert idempotency (no duplicate target, record unchanged in shape). Implement any needed conditionals; verify
 
 ## 3. Activation workflow rewrite (activate-subscription.asl.yaml)
 

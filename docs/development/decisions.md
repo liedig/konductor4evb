@@ -64,6 +64,7 @@ Every handler code path that commits a DynamoDB write or performs side effects, 
 | `subscriptions/subscribe.rs` | MIGRATE | `stream-subscription-outcomes` |
 | `subscriptions/update_state.rs` | STAY | — |
 | `subscriptions/unsubscribe.rs` | STAY | `fix-unsubscribe-execution-idempotency` |
+| `materialize-subscription-env` | ENVELOPE-DRIVEN | — |
 | `publish-events` | ENVELOPE-DRIVEN | — |
 | `publish-events-admission` | STAY | — |
 | `schema-admin` | STAY | — |
@@ -187,6 +188,14 @@ Every handler code path that commits a DynamoDB write or performs side effects, 
 - **Decision:** STAY.
 - **Rationale:** there is no committed write in this handler for a stream to carry — the fix is not a migration but restoring the established execution-name idempotency convention.
 - **Follow-up:** `fix-unsubscribe-execution-idempotency` (deterministic name, e.g. `remove-{subscriptionId}` or the SQS messageId; verify the removal workflow's reentrancy).
+
+### `materialize-subscription-env` (`follow-schema-promotion`, 2026-09-08)
+
+- **Committed write(s):** one `UpdateItem` per invocation — the per-env merge (`SET environments.#env = :entry, updatedAt = :now`) recording the materialization outcome (ACTIVE with `ruleArn`/`pinnedVersion`, AWAITING_PROMOTION, or FAILED with `errorDetail`).
+- **Side effect(s):** before the commit, in order — `DescribeSchema` (read), entitlements query (read, skipped for disabled envs and self-subscriptions), `PutRule` upsert, `PutTargets` (consumer bus + platform DLQ), `PutMetricAlarm` (zero-events). No compensation between steps.
+- **Rubric:** (1) yes — the merged entry carries everything a reader or retry needs, including the failure step; (2) inverted — the side effects *precede* the commit, so a crash between them leaves an orphaned rule/target/alarm with no record entry; tolerated because the rule name is deterministic (`{consumer}-{detailType}`) so unsubscribe deletes it without a record entry, `update_state` enable re-invokes materialization as the heal path, and an orphan rule with no matching schema versions is inert; (3) yes — every AWS call is an upsert and the merge replaces its own sub-map, so re-invocation converges (asserted by the repeated-invocation test); (4) yes — subscription activation is explicitly asynchronous; (5) n/a — no stream consumer; (6) yes — the invoking Step Functions execution (activation workflow map iteration or promotion extender) is the durable envelope; transient AWS errors are recorded as per-env FAILED rather than retried, because the heal path exists and retry semantics stay in the caller.
+- **Decision:** ENVELOPE-DRIVEN.
+- **Rationale:** the caller's execution context already provides durability; the handler's single commit records the outcome and is the read surface for the workflow's post-map aggregation and the UI's failure display.
 
 ### `publish-events`
 

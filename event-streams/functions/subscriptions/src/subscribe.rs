@@ -193,6 +193,7 @@ fn build_pending_stream(
                     rule_arn: None,
                     enabled,
                     status: StreamStatus::Pending,
+                    error_detail: None,
                 },
             )
         })

@@ -120,6 +120,7 @@ mod tests {
                         )),
                         enabled: *enabled,
                         status: StreamStatus::Active,
+                        error_detail: None,
                     },
                 )
             })
@@ -131,6 +132,7 @@ mod tests {
             detail_type: detail_type.to_string(),
             schema_name: format!("acme-orders@{detail_type}"),
             status,
+            error_detail: None,
             environments,
             request_id: None,
             created_at: Utc::now(),
