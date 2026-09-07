@@ -74,7 +74,7 @@ Event names (`detail-type` values) SHALL be validated when a publisher creates a
 
 ### Requirement: Publish API owns canonical envelope construction
 
-The publish API SHALL accept only `domain`, `eventName`, `data`, and an optional `idempotencyKey` in the request body. The publish consumer SHALL derive `source` from the domain's registered namespace identity, use `eventName` as `detail-type`, resolve the stage-selected environment's target bus and latest schema version, and construct `detail` with a platform-owned `metadata` object and the caller's `data`. Callers SHALL NOT supply or override `source`, `detail-type`, target bus, or `detail.metadata` fields.
+The publish API SHALL accept only `domain`, `eventName`, `data`, and an optional `idempotencyKey` in the request body. The admission step SHALL derive `source` from the domain's registered namespace identity, use `eventName` as `detail-type`, resolve the stage-selected environment's target bus and latest schema version, validate the payload, and stamp the resolved version onto the admitted message; the publish consumer SHALL construct `detail` with a platform-owned `metadata` object and the caller's `data` from the admitted attributes. Callers SHALL NOT supply or override `source`, `detail-type`, target bus, or `detail.metadata` fields.
 
 #### Scenario: Canonical envelope is derived
 
@@ -86,14 +86,14 @@ The publish API SHALL accept only `domain`, `eventName`, `data`, and an optional
 #### Scenario: Envelope metadata contains immutable publish fields
 
 - **WHEN** the latest stage-selected-environment version of the schema is 4
-- **THEN** the envelope `detail.metadata.schemaVersion` SHALL be numeric value `4`
-- **AND THEN** `detail.metadata.idempotencyKey` SHALL be the caller-supplied key or the API Gateway request ID
+- **THEN** the envelope `detail.metadata.schemaVersion` SHALL be numeric value `4`, equal to the version the payload was validated against at admission
+- **AND THEN** `detail.metadata.idempotencyKey` SHALL be the caller-supplied key or the API Gateway request ID injected at admission
 - **AND THEN** `detail.metadata.publishedAt` SHALL be the ISO 8601 conversion of the SQS `SentTimestamp`
 - **AND THEN** `detail.data` SHALL contain the caller's business data
 
 ### Requirement: Idempotency key survives the event lifecycle
 
-The envelope `detail.metadata.idempotencyKey` SHALL be set at API Gateway time: the caller MAY supply it in the request body, or the VTL mapping template SHALL inject `$context.requestId` if omitted. The key SHALL be immutable from that point and SHALL survive SQS retries and EventBridge replays. EventBridge's native `id` field cannot be set by the producer; this field provides idempotency within the envelope.
+The envelope `detail.metadata.idempotencyKey` SHALL be set at admission time: the caller MAY supply it in the request body, or the admission step SHALL inject the API Gateway request ID (`$context.requestId`) if omitted. The key SHALL be immutable from that point and SHALL survive SQS retries and EventBridge replays. EventBridge's native `id` field cannot be set by the producer; this field provides idempotency within the envelope.
 
 #### Scenario: Caller-supplied idempotency key is preserved
 
@@ -104,7 +104,7 @@ The envelope `detail.metadata.idempotencyKey` SHALL be set at API Gateway time: 
 #### Scenario: Generated idempotency key when caller omits it
 
 - **WHEN** a publisher omits `idempotencyKey` from the publish request body
-- **THEN** the VTL mapping template SHALL inject `$context.requestId` as the key
+- **THEN** the admission step SHALL inject the API Gateway request ID as the key
 - **AND THEN** the key SHALL remain constant through retries and replays
 
 ### Requirement: Published timestamp from SQS SentTimestamp
@@ -117,18 +117,3 @@ The envelope `detail.metadata.publishedAt` SHALL be the ISO 8601 conversion of t
 - **THEN** the envelope `detail.metadata.publishedAt` SHALL equal `2026-07-30T10:30:00.123Z`
 - **AND THEN** the value SHALL NOT change if the consumer processes the message later or retries it
 
-### Requirement: Publish-time validation is envelope-only
-
-Before calling EventBridge, the publish consumer SHALL validate the complete generated envelope, including canonical identity, numeric schema version, required `metadata`/`data` structure, serializability, and EventBridge entry constraints. It SHALL NOT validate the business `data` against the schema document.
-
-#### Scenario: Business data is not schema-validated
-
-- **WHEN** an authorized publisher supplies JSON business data that does not satisfy the registered schema
-- **THEN** the consumer SHALL NOT reject the request on schema-conformance grounds
-- **AND THEN** the consumer SHALL continue envelope validation and publication
-
-#### Scenario: Invalid generated envelope fails before delivery
-
-- **WHEN** the complete generated envelope violates a required envelope or EventBridge entry constraint
-- **THEN** the consumer SHALL treat the message as a processing failure
-- **AND THEN** the consumer SHALL NOT call EventBridge for that event
