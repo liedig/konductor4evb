@@ -20,6 +20,7 @@ use konductor_common::models::{
 use konductor_common::namespace::NamespaceResolver;
 use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
 use konductor_common::principal_context::log_principal;
+use konductor_common::schema_validation::check_draft4_document;
 
 use aws_sdk_schemas::error::ProvideErrorMetadata;
 
@@ -99,6 +100,11 @@ async fn create_schema<A: ResourceAuthorizer>(
             format!("schemaType must be {SUPPORTED_SCHEMA_TYPE}"),
         )));
     }
+    if let Err(e) = check_draft4_document(&request.content) {
+        return Ok(api::from_control_plane_error(&api::validation_error(
+            format!("content is not a valid JSON Schema draft-4 document: {e}"),
+        )));
+    }
     let target = match prepare(
         clients,
         authorizer,
@@ -171,6 +177,11 @@ async fn append_schema_version<A: ResourceAuthorizer>(
         Ok(r) => r,
         Err(e) => return Ok(api::from_control_plane_error(&e)),
     };
+    if let Err(e) = check_draft4_document(&request.content) {
+        return Ok(api::from_control_plane_error(&api::validation_error(
+            format!("content is not a valid JSON Schema draft-4 document: {e}"),
+        )));
+    }
     let target = match prepare(
         clients,
         authorizer,
@@ -571,6 +582,45 @@ mod tests {
         let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", bad)))
             .await
             .unwrap();
+
+        assert_eq!(status(&resp), 400);
+    }
+
+    #[tokio::test]
+    async fn create_schema_with_malformed_draft4_content_returns_400() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        // Zero rules: content validation precedes any resource access.
+        let clients = clients(vec![], vec![]);
+        let mut bad = create_body();
+        bad["content"] = json!("not json");
+
+        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", bad)))
+            .await
+            .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        assert!(
+            body(&resp)["message"].as_str().unwrap().contains("draft-4"),
+            "400 must name the draft-4 constraint"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_with_malformed_draft4_content_returns_400() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let clients = clients(vec![], vec![]);
+        let mut bad = append_body();
+        bad["content"] = json!(r#"{"type": "nonsense"}"#);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", bad)),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 400);
     }

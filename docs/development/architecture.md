@@ -140,7 +140,7 @@ Konductor exposes two separate API Gateway surfaces, each with its own OpenAPI c
 
 - **IAM surface** (`api/openapi-iam.yaml`): AWS-native automation callers authenticate with SigV4. The caller's AWS account ID serves as the principal identifier. Read endpoints (list, describe) and publisher/subscription management are available on this surface. Approval is OAuth-only and not exposed on the IAM surface.
 
-Both surfaces inject a versioned **trusted-principal envelope** into SQS message attributes via VTL mapping templates, sourcing every identity field from API Gateway authorization context (`$context.authorizer.*` for OAuth, `$context.identity.*` for IAM), never from the request body. Consumer Lambda handlers reconstruct the `TrustedPrincipal` from this envelope and invoke the resource-authorization interface before any state change. The grant engine (`DynamoGrantEngine`, backed by the `konductor-authorization-bindings` table) is the production authorizer for every path that represents a domain owner (publish, schema writes, all subscription commands and reads). Domain registration and update are OAuth-enabled: registration requires the caller to name an owning team group, and update authorizes owner bindings or platform roles; IAM automation on both paths is byte-for-byte unaffected.
+Both surfaces inject a versioned **trusted-principal envelope** into SQS message attributes via VTL mapping templates, sourcing every identity field from API Gateway authorization context (`$context.authorizer.*` for OAuth, `$context.identity.*` for IAM), never from the request body — with one exception: the publish path routes through the admission Lambda, which builds the same envelope synchronously before enqueue (see Event Publishing below). Consumer Lambda handlers reconstruct the `TrustedPrincipal` from this envelope and invoke the resource-authorization interface before any state change. The grant engine (`DynamoGrantEngine`, backed by the `konductor-authorization-bindings` table) is the production authorizer for every path that represents a domain owner (publish, schema writes, all subscription commands and reads). Domain registration and update are OAuth-enabled: registration requires the caller to name an owning team group, and update authorizes owner bindings or platform roles; IAM automation on both paths is byte-for-byte unaffected.
 
 ```mermaid
 sequenceDiagram
@@ -237,7 +237,7 @@ The **scope pattern** is a single additive grammar reused by coverage checks, su
 | `DELETE` | `/subscriptions/{subscriptionId}` | Async (SQS) | `subscriptions` (unsubscribe) |
 | `GET` | `/schemas` | Sync (Lambda proxy) | `list-schemas` (entitlement-expanded catalog) |
 | `GET` | `/schemas/{schemaName}` | Sync (Lambda proxy) | `describe-schema` |
-| `POST` | `/publish` | Async (SQS) | `publish-events` (store-and-forward publish) |
+| `POST` | `/publish` | Sync admission + async delivery | `publish-events-admission` (validate-and-stamp) → `publish-events` (delivery) |
 | `POST` | `/schemas` | Sync (Lambda proxy) | `schema-admin` (create schema, version 1) |
 | `POST` | `/schemas/versions` | Sync (Lambda proxy) | `schema-admin` (append schema version) |
 | `POST` | `/bindings` | Sync (Lambda proxy, OAuth only) | `binding-admin` (create) |
@@ -592,25 +592,31 @@ The subscription rule Konductor materializes to match it — EventBridge event p
 
 Producers publish through `POST /publish`; Konductor stamps the entire envelope. Direct `PutEvents` to a domain bus remains possible for domain-internal events, but mis-stamped events fail closed (no rule matches — non-delivery, never misdelivery).
 
-### Event Publishing (Store-and-Forward)
+### Event Publishing (Validate-at-Ingest)
 
-`POST /publish` accepts a flat request — `{domain, eventName, data, idempotencyKey?}` — and Konductor owns everything else: identity, schema resolution, envelope construction, and bus selection. Caller-supplied identity, version, registry, bus, or envelope fields are rejected at both the OpenAPI schema and the serde model.
+`POST /publish` accepts a flat request — `{domain, eventName, data, idempotencyKey?}` — and Konductor owns everything else: identity, schema resolution, conformance checking, envelope construction, and bus selection. Caller-supplied identity, version, registry, bus, or envelope fields are rejected at both the OpenAPI schema and the serde model.
 
 ```mermaid
 graph LR
-    api["API Gateway<br/>POST /publish"] -->|"validate body, inject principal envelope<br/>+ Environment (stage) + IdempotencyKey"| q["Publish Queue<br/>(DLQ after 3 receives)"]
-    q --> consumer["publish-events Lambda<br/>(batch 10, partial batch responses)"]
-    consumer -->|"schema:publish decision"| bindings[("konductor-authorization-bindings")]
-    consumer -->|"ACTIVE check"| domains[("domains")]
-    consumer -->|"latest version"| registry["{org}-{env}-{domain}<br/>schema registry"]
+    api["API Gateway<br/>POST /publish"] --> admission["publish-events-admission Lambda<br/>(synchronous aws_proxy)"]
+    admission -->|"schema:publish decision"| bindings[("konductor-authorization-bindings")]
+    admission -->|"ACTIVE check"| domains[("domains")]
+    admission -->|"latest schema (TTL cache,<br/>force-refresh before reject)"| registry["{org}-{env}-{domain}<br/>schema registry"]
+    admission -->|"202: principal envelope + Environment (stage)<br/>+ IdempotencyKey + SchemaVersion"| q["Publish Queue<br/>(DLQ after 3 receives)"]
+    q --> consumer["publish-events Lambda<br/>(delivery-only, batch 10)"]
+    consumer -->|"ACTIVE recheck"| domains
     consumer -->|"canonical envelope"| bus["{org}-{env}-{domain}<br/>event bus"]
 ```
 
-The flow is **store-and-forward**: API Gateway durably queues the request (202 carries the queue message ID), and the consumer retries transient failures with the same immutable message attributes — `publishedAt` derives from the SQS `SentTimestamp`, so a retried publish keeps its original publish time and idempotency key. Authorization denials are deterministic and acknowledged without retry; malformed envelopes, missing or inactive domains, absent schemas, and `PutEvents` failures are reported for retry. The consumer validates the generated envelope (positive version, non-empty identity, serializable, within the 256KB entry limit) before delivery — an invalid generated envelope is a processing failure, never a partial delivery.
+Admission is the synchronous commit point: a 202 means the caller is authenticated and authorized (`schema:publish`), the target domain is ACTIVE, and `data` conforms to the schema's latest version — that validated version is stamped as the immutable `SchemaVersion` message attribute, and the delivery path stamps it verbatim into the event envelope. Deterministic failures answer before anything is queued: 403 (no publisher binding), 404 (domain or schema not found), 422 (payload violates the schema, violating instance paths in `message`), and 503 (registry unavailable or the stored schema is unusable — retryable, never a rejection). A cached schema that rejects a payload is force-refreshed from the registry before the 422 is final, so a brand-new schema append can never falsely reject a publish; the ≤60s TTL cache is an availability hedge, not an authority.
+
+Delivery stays store-and-forward: the consumer re-checks domain liveness, rebuilds the canonical envelope, and retries transient `PutEvents` failures; `publishedAt` still derives from the SQS `SentTimestamp`, so a retried publish keeps its original publish time and idempotency key. The consumer performs no authorization, schema fetch, or payload validation — a queued command was validated at admission, and the queue accepts writes from the admission function only. It still validates the generated envelope (positive version, non-empty identity, serializable, within the 256KB entry limit) before delivery — an invalid generated envelope is a processing failure, never a partial delivery.
+
+The full design rationale — the failure mode this removes, the status taxonomy, cache semantics and refresh-before-reject, the earned-stamp invariant, and the rejected alternatives — is in [Publish Validation at Ingest](publish-validation.md).
 
 ### Schema Management (Append-Only)
 
-Publishers manage schemas through two synchronous endpoints mirroring the EventBridge Schemas API: `POST /schemas` (like `CreateSchema` — creates `{namespaceIdentity}@{eventName}` in the stage-selected environment's registry as version 1, 409 on duplicates) and `POST /schemas/versions` (like `UpdateSchema` — appends the next version, existing versions immutable, 404 when the schema does not exist). Both require a `publisher` binding for the domain (`schema:create` / `schema:version-append` actions), require an `ACTIVE` domain, and infer the environment from the API stage. Schemas are append-only: no delete, retire, replace, or version-deletion operations exist, and publisher permissions cover only `CreateSchema`/`UpdateSchema` inside org-namespaced registries — registry lifecycle and policy administration remain platform-admin operations.
+Publishers manage schemas through two synchronous endpoints mirroring the EventBridge Schemas API: `POST /schemas` (like `CreateSchema` — creates `{namespaceIdentity}@{eventName}` in the stage-selected environment's registry as version 1, 409 on duplicates) and `POST /schemas/versions` (like `UpdateSchema` — appends the next version, existing versions immutable, 404 when the schema does not exist). Both require a `publisher` binding for the domain (`schema:create` / `schema:version-append` actions), require an `ACTIVE` domain, and infer the environment from the API stage. Schemas are **JSON Schema draft-4 only**: any other `schemaType` is a 400, and `content` that does not compile as a draft-4 document is rejected (400) before any registry write, so nothing in a registry is ever unvalidatable. Schemas are append-only: no delete, retire, replace, or version-deletion operations exist, and publisher permissions cover only `CreateSchema`/`UpdateSchema` inside org-namespaced registries — registry lifecycle and policy administration remain platform-admin operations.
 
 ### Subscription Materialization
 
@@ -795,6 +801,7 @@ evb-konductor/
 | Document | Purpose |
 |----------|---------|
 | [decisions.md](decisions.md) | Why things are built this way — architectural decision log |
+| [publish-validation.md](publish-validation.md) | Publish path deep dive — admission/delivery split, cache and stamp invariants, status taxonomy |
 | [testing.md](testing.md) | Testing strategy, smithy-mocks patterns, TDD workflow |
 | [domain-management.md](../domain-management.md) | Domain owner guide — registering, approving, and operating domains |
 | [publishing-events.md](../publishing-events.md) | Producer guide — publisher bindings, schema management, and the publish API |

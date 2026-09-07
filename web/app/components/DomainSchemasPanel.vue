@@ -5,32 +5,79 @@ import type { SchemaSummary } from '~/types/api'
 const props = defineProps<{ domain: string }>()
 
 const catalog = useCatalog()
+const toast = useToast()
+const config = useKonductorConfig()
 
 const schemas = ref<SchemaSummary[]>([])
 const forbidden = ref(false)
+const loadFailed = ref(false)
 const pending = ref(true)
+
+const formOpen = ref(false)
+const formEventName = ref<string | undefined>(undefined)
+
+// Appends target only the console's API stage environment. The catalog
+// merges every environment, so a schema that exists solely in another stage
+// would deterministically 404 — offer append only when it exists here.
+const targetEnvironment = computed(() => {
+  const segment = config.apiBaseUrl.replace(/\/+$/, '').split('/').pop()
+  return segment && segment !== config.apiBaseUrl ? segment : config.apiBaseUrl
+})
+
+function appendable(schema: SchemaSummary): boolean {
+  return (schema.latestVersions ?? {})[targetEnvironment.value] != null
+}
 
 // Producer scope: publishers see their own domain's schemas without any
 // consumer entitlement (GET /schemas?domain=... with no consumerDomain).
-onMounted(async () => {
+async function load() {
+  pending.value = true
+  forbidden.value = false
+  loadFailed.value = false
   try {
     const response = await catalog.listSchemas({ producerDomain: props.domain })
     schemas.value = response.items ?? []
   } catch (error) {
     if (error instanceof ApiError && error.status === 403) {
       forbidden.value = true
+    } else {
+      loadFailed.value = true
+      toast.error(error instanceof ApiError ? error.message : 'Failed to load schemas')
     }
   } finally {
     pending.value = false
   }
-})
+}
+
+function openRegister() {
+  formEventName.value = undefined
+  formOpen.value = true
+}
+
+function openAppend(schema: SchemaSummary) {
+  formEventName.value = schema.schemaName?.split('@')[1] ?? schema.schemaName
+  formOpen.value = true
+}
+
+async function onSaved() {
+  await load()
+}
+
+onMounted(load)
 </script>
 
 <template>
   <NxCard title="Schemas">
+    <template #actions>
+      <NxButton v-if="!forbidden && !loadFailed && !pending" size="sm" @click="openRegister">Register schema</NxButton>
+    </template>
+
     <p v-if="pending" class="text-sm text-muted">Loading…</p>
     <p v-else-if="forbidden" class="text-sm text-muted">
       Publisher access is required to view this domain's schemas.
+    </p>
+    <p v-else-if="loadFailed" class="text-sm text-muted">
+      Schemas could not be loaded — refresh to try again.
     </p>
     <p v-else-if="schemas.length === 0" class="text-sm text-muted">
       No schemas registered for this domain yet.
@@ -38,17 +85,27 @@ onMounted(async () => {
     <ul v-else class="flex flex-col gap-2">
       <li v-for="schema in schemas" :key="schema.schemaName" class="flex items-center justify-between gap-4">
         <NuxtLink
-          :to="`/catalog/${encodeURIComponent(schema.producerDomain ?? '')}/${encodeURIComponent(schema.schemaName ?? '')}`"
+          :to="`/catalog/${encodeURIComponent(schema.producerDomain ?? '')}/${encodeURIComponent(schema.schemaName ?? '')}?from=/domains/${encodeURIComponent(domain)}`"
           class="truncate font-mono text-sm text-accent hover:underline"
         >
           {{ schema.schemaName }}
         </NuxtLink>
-        <span class="flex shrink-0 gap-2">
+        <span class="flex shrink-0 items-center gap-2">
           <NxBadge v-for="(version, env) in schema.latestVersions" :key="env" tone="neutral">
             {{ env }} v{{ version }}
           </NxBadge>
+          <NxButton v-if="appendable(schema)" variant="secondary" size="sm" @click="openAppend(schema)">New version</NxButton>
+          <span v-else class="text-xs text-muted">Not registered in {{ targetEnvironment }} yet</span>
         </span>
       </li>
     </ul>
+
+    <SchemaAuthoringForm
+      :open="formOpen"
+      :domain="domain"
+      :event-name="formEventName"
+      @close="formOpen = false"
+      @saved="onSaved"
+    />
   </NxCard>
 </template>

@@ -351,8 +351,8 @@ fn publish_consumer_has_least_privilege_permissions() {
     let (mut actions, managed) = function_policy_shape(&doc, "PublishEventsFunction");
     assert_eq!(
         managed,
-        ["BindingsTableReadPolicy"],
-        "authorization decisions read bindings only through the reserved policy"
+        [] as [&str; 0],
+        "the delivery-only consumer needs no grant-engine policies"
     );
     actions.sort();
     assert_eq!(
@@ -360,12 +360,71 @@ fn publish_consumer_has_least_privilege_permissions() {
         [
             "dynamodb:GetItem",
             "events:PutEvents",
-            "schemas:DescribeSchema",
             "sqs:DeleteMessage",
             "sqs:GetQueueAttributes",
             "sqs:ReceiveMessage",
         ],
-        "publish consumer: domain-state read, schema read, org-scoped PutEvents, queue access"
+        "publish consumer: domain-state read, org-scoped PutEvents, queue access"
+    );
+}
+
+#[test]
+fn publish_admission_has_least_privilege_permissions() {
+    let doc = core_template();
+    let (mut actions, managed) = function_policy_shape(&doc, "PublishEventsAdmissionFunction");
+    assert_eq!(
+        managed,
+        ["BindingsTableReadPolicy", "EntitlementsTableReadPolicy"],
+        "authorization decisions read bindings and entitlements through the reserved policies"
+    );
+    actions.sort();
+    assert_eq!(
+        actions,
+        [
+            "dynamodb:GetItem",
+            "schemas:DescribeSchema",
+            "sqs:SendMessage",
+        ],
+        "admission: domain-state read, schema read, publish-queue write"
+    );
+}
+
+#[test]
+fn publish_queue_writes_are_restricted_to_admission() {
+    let doc = core_template();
+    let policy = resource(&doc, "KonductorApiSqsPolicy");
+    let statements = seq(at(at(props(policy), "PolicyDocument"), "Statement"));
+    let resources: Vec<String> = statements
+        .iter()
+        .flat_map(|s| seq(at(s, "Resource")).iter().map(|r| format!("{r:?}")))
+        .collect();
+    assert!(
+        !resources.iter().any(|r| r.contains("PublishQueue")),
+        "API Gateway must no longer write the publish queue directly"
+    );
+
+    // IAM grants are necessary but not sufficient: a same-account principal
+    // with broad sqs:SendMessage could inject an unvalidated command, so the
+    // queue itself denies every writer except the admission role.
+    let queue_policy = resource(&doc, "PublishQueueAdmissionOnlyPolicy");
+    let qp_statements = seq(at(at(props(queue_policy), "PolicyDocument"), "Statement"));
+    let deny = qp_statements
+        .iter()
+        .find(|s| text(at(s, "Sid")) == "DenyNonAdmissionSenders")
+        .expect("queue policy must deny non-admission senders");
+    assert_eq!(text(at(deny, "Effect")), "Deny");
+    let actions: Vec<&str> = seq(at(deny, "Action")).iter().map(|a| text(a)).collect();
+    assert!(
+        actions.contains(&"sqs:SendMessage") && actions.contains(&"sqs:SendMessageBatch"),
+        "the deny must cover both send APIs, got {actions:?}"
+    );
+    let exempt = format!(
+        "{:?}",
+        at(at(at(deny, "Condition"), "ArnNotLike"), "aws:PrincipalArn")
+    );
+    assert!(
+        exempt.contains("PublishEventsAdmissionFunctionRole"),
+        "the deny must exempt only the admission role, got {exempt}"
     );
 }
 
@@ -375,8 +434,8 @@ fn schema_admin_has_least_privilege_permissions() {
     let (mut actions, managed) = function_policy_shape(&doc, "SchemaAdminFunction");
     assert_eq!(
         managed,
-        ["BindingsTableReadPolicy"],
-        "authorization decisions read bindings only through the reserved policy"
+        ["BindingsTableReadPolicy", "EntitlementsTableReadPolicy"],
+        "grant-engine decisions read bindings and entitlements through the reserved policies"
     );
     actions.sort();
     assert_eq!(
@@ -408,7 +467,11 @@ fn publisher_functions_have_no_administration_permissions() {
         "dynamodb:DeleteItem",
         "dynamodb:UpdateItem",
     ];
-    for logical_id in ["PublishEventsFunction", "SchemaAdminFunction"] {
+    for logical_id in [
+        "PublishEventsFunction",
+        "PublishEventsAdmissionFunction",
+        "SchemaAdminFunction",
+    ] {
         let (actions, _) = function_policy_shape(&doc, logical_id);
         for action in &forbidden {
             assert!(
@@ -469,8 +532,8 @@ fn write_templates(doc: &Value) -> Vec<(String, String, String)> {
 fn write_templates_inject_trusted_principal_envelope_from_context() {
     let oauth = write_templates(&oauth_contract());
     let iam = write_templates(&iam_contract());
-    assert_eq!(oauth.len(), 6, "OAuth must expose 6 SQS write templates");
-    assert_eq!(iam.len(), 6, "IAM must expose 6 SQS write templates");
+    assert_eq!(oauth.len(), 5, "OAuth must expose 5 SQS write templates");
+    assert_eq!(iam.len(), 5, "IAM must expose 5 SQS write templates");
 
     for (path, method, t) in &oauth {
         assert!(
@@ -516,14 +579,8 @@ fn write_templates_never_source_identity_attributes_from_caller_body() {
     }
 }
 
-fn publish_vtl(doc: &Value) -> String {
-    let op = at(at(at(doc, "paths"), "/publish"), "post");
-    let integration = at(op, "x-amazon-apigateway-integration");
-    text(at(at(integration, "requestTemplates"), "application/json")).to_string()
-}
-
 #[test]
-fn publish_routes_use_sqs_store_and_forward_with_stage_environment() {
+fn publish_routes_admit_through_the_admission_lambda() {
     for doc in [oauth_contract(), iam_contract()] {
         let op = at(at(at(&doc, "paths"), "/publish"), "post");
         assert_eq!(
@@ -531,30 +588,28 @@ fn publish_routes_use_sqs_store_and_forward_with_stage_environment() {
             "validate-body"
         );
         let integration = at(op, "x-amazon-apigateway-integration");
-        assert_eq!(text(at(integration, "type")), "aws");
+        assert_eq!(text(at(integration, "type")), "aws_proxy");
         assert!(
-            text(at(at(integration, "uri"), "Fn::Sub")).contains("${PublishQueue.QueueName}"),
-            "publish must integrate with the publish queue"
+            text(at(at(integration, "uri"), "Fn::Sub"))
+                .contains("${PublishEventsAdmissionFunction.Arn}"),
+            "publish must integrate with the admission Lambda"
         );
-        assert_eq!(
-            text(at(
-                at(at(integration, "responses"), "default"),
-                "statusCode"
-            )),
-            "202"
+        assert!(
+            integration.get("requestTemplates").is_none(),
+            "admission owns envelope construction; no SQS mapping template"
+        );
+        assert!(
+            integration.get("credentials").is_none(),
+            "no API Gateway SQS role on the publish route"
         );
 
-        let vtl = publish_vtl(&doc);
-        assert!(
-            vtl.contains("Name=Environment&") && vtl.contains("Value.StringValue=$context.stage"),
-            "publish must inject the stage as the Environment attribute"
-        );
-        assert!(
-            vtl.contains("Name=IdempotencyKey&")
-                && vtl.contains("$.idempotencyKey")
-                && vtl.contains("$context.requestId"),
-            "publish must inject the caller key or fall back to the request ID"
-        );
+        let responses = mapping(at(op, "responses"));
+        for status in ["202", "400", "403", "404", "422", "503"] {
+            assert!(
+                responses.contains_key(status),
+                "publish must document a {status} response"
+            );
+        }
     }
 }
 
@@ -566,10 +621,6 @@ fn publish_credentials_are_not_interchangeable() {
         text(at(at(iam_op, "x-amazon-apigateway-auth"), "type")),
         "AWS_IAM"
     );
-    let iam_vtl = publish_vtl(&iam_doc);
-    assert!(iam_vtl.contains("Value.StringValue=iam&"));
-    assert!(iam_vtl.contains("$context.identity.accountId"));
-    assert!(!iam_vtl.contains("$context.authorizer."));
 
     let oauth_doc = oauth_contract();
     let oauth_op = at(at(at(&oauth_doc, "paths"), "/publish"), "post");
@@ -577,10 +628,6 @@ fn publish_credentials_are_not_interchangeable() {
         oauth_op.get("x-amazon-apigateway-auth").is_none(),
         "OAuth publish relies on the default REQUEST authorizer, not IAM"
     );
-    let oauth_vtl = publish_vtl(&oauth_doc);
-    assert!(oauth_vtl.contains("Value.StringValue=oauth&"));
-    assert!(oauth_vtl.contains("$context.authorizer.principalId"));
-    assert!(!oauth_vtl.contains("$context.identity.userArn"));
 }
 
 #[test]
@@ -661,6 +708,20 @@ fn schema_management_is_append_only() {
                     "{method} {path} violates append-only schema management"
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn schema_write_routes_document_validation_failures() {
+    for doc in [oauth_contract(), iam_contract()] {
+        for path in ["/schemas", "/schemas/versions"] {
+            let op = at(at(at(&doc, "paths"), path), "post");
+            let responses = mapping(at(op, "responses"));
+            assert!(
+                responses.contains_key("400"),
+                "POST {path} must document the 400 for unsupported schemaType and malformed draft-4 content"
+            );
         }
     }
 }

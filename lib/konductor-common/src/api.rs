@@ -129,7 +129,13 @@ pub fn path_param(event: &Value, name: &str) -> Option<String> {
         .get("pathParameters")
         .and_then(|p| p.get(name))
         .and_then(|v| v.as_str())
-        .map(String::from)
+        // API Gateway leaves path parameters percent-encoded in proxy events
+        // (schema names contain `@`, which arrives as `%40`).
+        .map(|raw| {
+            urlencoding::decode(raw)
+                .map(String::from)
+                .unwrap_or_else(|_| raw.to_string())
+        })
 }
 
 pub fn query_param(event: &Value, name: &str) -> Option<String> {
@@ -338,6 +344,24 @@ mod tests {
     fn path_param_returns_none_for_unknown_param() {
         let event = json!({"pathParameters": {"other": "val"}});
         assert_eq!(path_param(&event, "domainName"), None);
+    }
+
+    #[test]
+    fn path_param_percent_decodes_value() {
+        let event = json!({"pathParameters": {"schemaName": "acme-orders%40OrderNotification"}});
+        assert_eq!(
+            path_param(&event, "schemaName"),
+            Some("acme-orders@OrderNotification".to_string())
+        );
+    }
+
+    #[test]
+    fn path_param_keeps_raw_value_on_malformed_encoding() {
+        let event = json!({"pathParameters": {"schemaName": "acme-orders%4"}});
+        assert_eq!(
+            path_param(&event, "schemaName"),
+            Some("acme-orders%4".to_string())
+        );
     }
 
     #[test]

@@ -18,6 +18,7 @@ members = [
     "domain-management/functions/send-registration-failed-notification",
     "domain-management/functions/send-rejection-outcome-notification",
     "event-streams/functions/publish-events",
+    "event-streams/functions/publish-events-admission",
     "event-streams/functions/schema-admin",
     "event-streams/functions/subscriptions",
     "event-streams/functions/list-subscriptions",
@@ -39,16 +40,16 @@ license = "Apache-2.0"
 [workspace.dependencies]
 anyhow = "1"
 aws-config = "1"
-aws-sdk-dynamodb = { version = "1", features = ["test-util"] }
-aws-sdk-eventbridge = { version = "1", features = ["test-util"] }
-aws-sdk-sesv2 = { version = "1", features = ["test-util"] }
-aws-sdk-sfn = { version = "1", features = ["test-util"] }
-aws-sdk-sqs = { version = "1", features = ["test-util"] }
-aws-sdk-ssm = { version = "1", features = ["test-util"] }
-aws-sdk-sts = "1"
-aws-sdk-schemas = { version = "1", features = ["test-util"] }
+aws-sdk-dynamodb = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-eventbridge = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-sesv2 = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-sfn = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-sqs = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-ssm = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-sts = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-schemas = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
 sha2 = "0.11"
-aws-sdk-cloudwatch = "1"
+aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -59,10 +60,25 @@ thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-aws-smithy-mocks = "0.2"
+aws-smithy-mocks = "0.3"
 uuid = { version = "1", features = ["v4", "v5"] }
+urlencoding = "2"
+jsonschema = { version = "0.37", default-features = false }
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"
 too_many_lines = "warn"
 type_complexity = "warn"
+
+# Dev builds need enough debug info for readable panic backtraces, not full
+# DWARF: line tables only for workspace crates, none for dependencies.
+# This roughly halves the target/ directory for this workspace.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = 0
+
+# Strip debug info from deployed Lambda binaries (smaller zip, no runtime cost).
+[profile.release]
+strip = "debuginfo"

@@ -502,6 +502,35 @@ mod tests {
         assert_eq!(body(&resp)["schemaName"], SCHEMA);
     }
 
+    // API Gateway leaves path parameters percent-encoded; `@` arrives as `%40`.
+    #[tokio::test]
+    async fn percent_encoded_schema_name_is_decoded() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let dev = describe_rule("dev", 5, "dev-content");
+        let prod = describe_rule("prod", 3, "prod-content");
+        let (ddb, schemas) = clients(&[&binding, &domain], &[&dev, &prod]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            LambdaEvent::new(
+                json!({
+                    "requestContext": oauth_team_context("team-orders"),
+                    "pathParameters": { "schemaName": "acme-orders%40OrderNotification" },
+                    "queryStringParameters": { "domain": "orders" },
+                }),
+                LambdaContext::default(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(body(&resp)["schemaName"], SCHEMA);
+    }
+
     #[tokio::test]
     async fn non_publisher_without_consumer_context_is_forbidden() {
         set_env();
