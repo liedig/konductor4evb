@@ -1164,45 +1164,110 @@ fn entitlement_observability_covers_the_revocation_path_and_drift() {
 }
 
 #[test]
-fn activation_workflow_queries_entitlements_before_enabling() {
+fn activation_materializes_each_environment_via_the_shared_function() {
     let doc = core_template();
     let workflow = resource(&doc, "ActivateSubscriptionWorkflow");
     let substitutions = mapping(at(props(workflow), "DefinitionSubstitutions"));
-    assert!(
-        substitutions.contains_key("EntitlementsTable"),
-        "the activation workflow needs the entitlements table for its final coverage check"
-    );
+    for key in ["MaterializeEnvFunctionArn", "EventStreamsTable", "KonductorEventBus"] {
+        assert!(
+            substitutions.contains_key(key),
+            "missing substitution {key}"
+        );
+    }
 
-    let role = resource(&doc, "SubscriptionWorkflowRole");
-    let managed: Vec<&str> = seq(at(props(role), "ManagedPolicyArns"))
+    // Per-env materialization (resolve latest version, fail-closed coverage
+    // re-check, rule upsert, consumer-bus target, zero-events alarm, per-env
+    // record merge) lives in one function shared by the activation workflow
+    // and the promotion extender (follow-schema-promotion).
+    let (actions, managed) = function_policy_shape(&doc, "MaterializeSubscriptionEnvFunction");
+    assert!(
+        managed.iter().any(|p| p.contains("EntitlementsTableReadPolicy")),
+        "materialization re-checks entitlement coverage"
+    );
+    for required in [
+        "schemas:DescribeSchema",
+        "events:PutRule",
+        "events:PutTargets",
+        "iam:PassRole",
+        "cloudwatch:PutMetricAlarm",
+        "dynamodb:UpdateItem",
+    ] {
+        assert!(actions.contains(&required.to_string()), "missing {required}");
+    }
+
+    // The workflow role no longer creates rules: creation moved into the
+    // function with per-env independence; the role keeps teardown
+    // (remove-subscription), invocation, and record/status writes.
+    let policy = resource(&doc, "SubscriptionWorkflowPolicy");
+    let statements = seq(at(at(props(policy), "PolicyDocument"), "Statement"));
+    let workflow_actions: Vec<String> = statements
         .iter()
-        .map(text)
+        .flat_map(|s| seq(at(s, "Action")).iter().map(text).map(str::to_string).collect::<Vec<_>>())
         .collect();
     assert!(
-        managed.contains(&"EntitlementsTableReadPolicy"),
-        "the workflow role must be able to query the entitlements table"
+        workflow_actions.contains(&"lambda:InvokeFunction".to_string()),
+        "the workflow invokes the materialize function"
+    );
+    for moved in [
+        "schemas:DescribeSchema",
+        "events:PutRule",
+        "events:PutTargets",
+        "cloudwatch:PutMetricAlarm",
+        "iam:PassRole",
+    ] {
+        assert!(
+            !workflow_actions.contains(&moved.to_string()),
+            "{moved} belongs to the materialize function, not the workflow role"
+        );
+    }
+
+    let asl = repo_yaml("event-streams/state-machines/activate-subscription.asl.yaml");
+    let states = mapping(at(&asl, "States"));
+    let map_state = states
+        .iter()
+        .find(|(name, _)| name.as_str() == Some("MaterializeEnvironments"))
+        .map(|(_, state)| state)
+        .expect("MaterializeEnvironments state");
+    let item_states = mapping(at(at(map_state, "ItemProcessor"), "States"));
+    let invoke = item_states
+        .iter()
+        .find(|(name, _)| name.as_str() == Some("MaterializeEnv"))
+        .map(|(_, state)| state)
+        .expect("MaterializeEnv state");
+    assert_eq!(
+        text(at(invoke, "Resource")),
+        "arn:aws:states:::lambda:invoke"
     );
 
-    // DynamoDB Query has no optimized integration (get/put/update/delete
-    // only); pinning the SDK ARN rejects the invalid bare form at test time
-    // instead of at deployment.
-    let asl = repo_yaml("event-streams/state-machines/activate-subscription.asl.yaml");
-    let item_states = mapping(at(
-        at(
-            at(at(&asl, "States"), "ActivateEnvironments"),
-            "ItemProcessor",
-        ),
-        "States",
-    ));
-    let query_state = item_states
+    // Per-env independence: no cross-environment compensation anywhere.
+    for (name, _) in states.iter().chain(item_states.iter()) {
+        let name = name.as_str().expect("state name");
+        assert!(
+            !name.contains("Rollback") && !name.starts_with("Delete") && !name.starts_with("Remove"),
+            "no cross-environment compensation state {name}"
+        );
+    }
+
+    // The post-map aggregation touches only status fields; per-env entries
+    // are merged by the function, never replaced wholesale.
+    let active = states
         .iter()
-        .find(|(name, _)| name.as_str() == Some("QueryCoveringEntitlements"))
+        .find(|(name, _)| name.as_str() == Some("UpdateStreamActive"))
         .map(|(_, state)| state)
-        .expect("QueryCoveringEntitlements state");
-    assert_eq!(
-        text(at(query_state, "Resource")),
-        "arn:aws:states:::aws-sdk:dynamodb:query"
+        .expect("UpdateStreamActive state");
+    let update_expression = text(at(at(active, "Arguments"), "UpdateExpression"));
+    assert!(
+        update_expression.contains("REMOVE errorDetail"),
+        "activation clears a stale top-level errorDetail"
     );
+    assert!(
+        !update_expression.contains("environments"),
+        "the whole environments map must never be replaced by the aggregation"
+    );
+    states
+        .iter()
+        .find(|(name, _)| name.as_str() == Some("UpdateStreamFailed"))
+        .expect("UpdateStreamFailed state (typo guard + per-env failures)");
 }
 
 #[test]
