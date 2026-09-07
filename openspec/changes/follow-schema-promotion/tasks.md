@@ -20,9 +20,9 @@
 
 ## 4. update_state desired-state reconciliation
 
-- [ ] 4.1 Test: pausing or resuming an `AWAITING_PROMOTION` env records the desired flag without any EventBridge call (no rule exists to flip). Implement; verify
-- [ ] 4.2 Test: setting `enabled: true` on a per-env `FAILED` entry invokes `materialize-subscription-env` for that env (after the existing entitlement re-check) and the entry becomes `ACTIVE` on success. Implement; verify
-- [ ] 4.3 Verify existing update_state tests (materialized pause/resume kill switch) stay green
+- [x] 4.1 Test: pausing or resuming an `AWAITING_PROMOTION` env records the desired flag without any EventBridge call (no rule exists to flip). Implement; verify
+- [x] 4.2 Test: setting `enabled: true` on a per-env `FAILED` entry invokes `materialize-subscription-env` for that env (after the existing entitlement re-check) and the entry becomes `ACTIVE` on success. Implement; verify
+- [x] 4.3 Verify existing update_state tests (materialized pause/resume kill switch) stay green
 
 ## 5. schema-admin promotion signal
 

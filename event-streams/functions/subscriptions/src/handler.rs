@@ -17,6 +17,7 @@ pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
     pub eb: aws_sdk_eventbridge::Client,
     pub sfn: aws_sdk_sfn::Client,
+    pub lambda: aws_sdk_lambda::Client,
 }
 
 impl Clients {
@@ -25,6 +26,7 @@ impl Clients {
             ddb: aws_sdk_dynamodb::Client::new(config),
             eb: aws_sdk_eventbridge::Client::new(config),
             sfn: aws_sdk_sfn::Client::new(config),
+            lambda: aws_sdk_lambda::Client::new(config),
         }
     }
 }
@@ -123,6 +125,8 @@ mod tests {
     use aws_sdk_eventbridge::operation::disable_rule::DisableRuleOutput;
     use aws_sdk_eventbridge::operation::enable_rule::EnableRuleOutput;
     use aws_sdk_eventbridge::operation::put_events::PutEventsOutput;
+    use aws_sdk_lambda::operation::invoke::InvokeOutput;
+    use aws_sdk_lambda::primitives::Blob;
     use aws_sdk_sfn::operation::start_execution::StartExecutionOutput;
     use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
     use chrono::Utc;
@@ -152,6 +156,10 @@ mod tests {
         std::env::set_var(
             "REMOVE_SUBSCRIPTION_STATE_MACHINE_ARN",
             "arn:aws:states:us-east-1:123:stateMachine:remove",
+        );
+        std::env::set_var(
+            "MATERIALIZE_FUNCTION_ARN",
+            "arn:aws:lambda:us-east-1:123:function:materialize",
         );
     }
 
@@ -252,7 +260,7 @@ mod tests {
             .then_output(|| GetItemOutput::builder().build())
     }
 
-    fn active_stream_item() -> HashMap<String, AttributeValue> {
+    fn stream_item_with_env(status: StreamStatus, enabled: bool) -> HashMap<String, AttributeValue> {
         let mut environments = HashMap::new();
         environments.insert(
             "prod".to_string(),
@@ -260,8 +268,8 @@ mod tests {
                 pinned_version: None,
                 rule_name: "checkout-OrderNotification".to_string(),
                 rule_arn: None,
-                enabled: false,
-                status: StreamStatus::Active,
+                enabled,
+                status,
                 error_detail: None,
             },
         );
@@ -283,8 +291,11 @@ mod tests {
         stream_to_item(&stream)
     }
 
-    fn active_stream_rule() -> Rule {
-        let item = active_stream_item();
+    fn active_stream_item() -> HashMap<String, AttributeValue> {
+        stream_item_with_env(StreamStatus::Active, false)
+    }
+
+    fn stream_rule(item: HashMap<String, AttributeValue>) -> Rule {
         mock!(aws_sdk_dynamodb::Client::get_item)
             .match_requests(|req| {
                 req.key()
@@ -296,6 +307,30 @@ mod tests {
                     .set_item(Some(item.clone()))
                     .build()
             })
+    }
+
+    fn active_stream_rule() -> Rule {
+        stream_rule(active_stream_item())
+    }
+
+    fn set_env_enabled_rule(env: &'static str, enabled: bool) -> Rule {
+        mock!(aws_sdk_dynamodb::Client::update_item)
+            .match_requests(move |req| {
+                req.update_expression()
+                    .is_some_and(|e| e.contains("environments.#env.enabled"))
+                    && req
+                        .expression_attribute_names()
+                        .and_then(|names| names.get("#env"))
+                        .map(String::as_str)
+                        == Some(env)
+                    && req
+                        .expression_attribute_values()
+                        .and_then(|v| v.get(":enabled"))
+                        .and_then(|v| v.as_bool().ok())
+                        .copied()
+                        == Some(enabled)
+            })
+            .then_output(|| UpdateItemOutput::builder().build())
     }
 
     fn entitlements_rule(covering: bool) -> Rule {
@@ -356,10 +391,20 @@ mod tests {
     }
 
     fn clients(ddb_rules: &[&Rule], eb_rules: &[&Rule], sfn_rules: &[&Rule]) -> Clients {
+        clients_with_lambda(ddb_rules, eb_rules, sfn_rules, &[])
+    }
+
+    fn clients_with_lambda(
+        ddb_rules: &[&Rule],
+        eb_rules: &[&Rule],
+        sfn_rules: &[&Rule],
+        lambda_rules: &[&Rule],
+    ) -> Clients {
         Clients {
             ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, ddb_rules),
             eb: mock_client!(aws_sdk_eventbridge, RuleMode::MatchAny, eb_rules),
             sfn: mock_client!(aws_sdk_sfn, RuleMode::MatchAny, sfn_rules),
+            lambda: mock_client!(aws_sdk_lambda, RuleMode::MatchAny, lambda_rules),
         }
     }
 
@@ -643,6 +688,143 @@ mod tests {
 
         assert_eq!(result["batchItemFailures"], json!([]));
         assert_eq!(disable.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn pausing_an_awaiting_env_records_the_flag_without_eventbridge() {
+        set_env();
+        let binding = binding_rule("checkout");
+        let checkout = domain_rule("checkout");
+        let stream = stream_rule(stream_item_with_env(StreamStatus::AwaitingPromotion, true));
+        let update = set_env_enabled_rule("prod", false);
+        let put_events = put_events_rule();
+        // No enable/disable rule mocks: an awaiting env has no rule to flip.
+        let c = clients(&[&binding, &checkout, &stream, &update], &[&put_events], &[]);
+        let body = json!({
+            "body": {
+                "subscriptionId": "checkout.orders.OrderNotification",
+                "consumerDomain": "checkout",
+                "environments": { "prod": { "enabled": false } }
+            }
+        });
+        let rec = record("msg-pause-awaiting", iam_envelope("POST", "/subscriptions/state"), body);
+
+        let result = handle(&c, sqs_event(vec![rec])).await.unwrap();
+
+        assert_eq!(result["batchItemFailures"], json!([]));
+        assert_eq!(update.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn resuming_an_awaiting_env_records_the_flag_without_materializing() {
+        set_env();
+        let binding = binding_rule("checkout");
+        let checkout = domain_rule("checkout");
+        let stream = stream_rule(stream_item_with_env(StreamStatus::AwaitingPromotion, false));
+        let entitlements = entitlements_rule(true);
+        let update = set_env_enabled_rule("prod", true);
+        let put_events = put_events_rule();
+        // No lambda mock: promotion-following extension, not this command,
+        // materializes an awaiting env.
+        let c = clients(
+            &[&binding, &checkout, &stream, &entitlements, &update],
+            &[&put_events],
+            &[],
+        );
+        let body = json!({
+            "body": {
+                "subscriptionId": "checkout.orders.OrderNotification",
+                "consumerDomain": "checkout",
+                "environments": { "prod": { "enabled": true } }
+            }
+        });
+        let rec = record("msg-resume-awaiting", iam_envelope("POST", "/subscriptions/state"), body);
+
+        let result = handle(&c, sqs_event(vec![rec])).await.unwrap();
+
+        assert_eq!(result["batchItemFailures"], json!([]));
+        assert_eq!(update.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn enabling_a_failed_env_reinvokes_materialization() {
+        set_env();
+        let binding = binding_rule("checkout");
+        let checkout = domain_rule("checkout");
+        let stream = stream_rule(stream_item_with_env(StreamStatus::Failed, false));
+        let entitlements = entitlements_rule(true);
+        let invoke = mock!(aws_sdk_lambda::Client::invoke)
+            .match_requests(|req| {
+                req.function_name()
+                    == Some("arn:aws:lambda:us-east-1:123:function:materialize")
+                    && req
+                        .payload()
+                        .map(|b| {
+                            let text = String::from_utf8_lossy(b.as_ref()).into_owned();
+                            text.contains("\"environment\":\"prod\"") && text.contains("\"enabled\":true")
+                        })
+                        .unwrap_or(false)
+            })
+            .then_output(|| {
+                InvokeOutput::builder()
+                    .payload(Blob::new(
+                        serde_json::to_vec(&json!({
+                            "status": "SUCCEEDED",
+                            "environment": "prod",
+                            "enabled": true,
+                            "ruleName": "checkout-OrderNotification",
+                            "pinnedVersion": 4,
+                        }))
+                        .unwrap(),
+                    ))
+                    .build()
+            });
+        let put_events = put_events_rule();
+        // No update_item rule: the materialize function merges the healed
+        // entry itself; the command must not also write it.
+        let c = clients_with_lambda(
+            &[&binding, &checkout, &stream, &entitlements],
+            &[&put_events],
+            &[],
+            &[&invoke],
+        );
+        let body = json!({
+            "body": {
+                "subscriptionId": "checkout.orders.OrderNotification",
+                "consumerDomain": "checkout",
+                "environments": { "prod": { "enabled": true } }
+            }
+        });
+        let rec = record("msg-heal-failed", iam_envelope("POST", "/subscriptions/state"), body);
+
+        let result = handle(&c, sqs_event(vec![rec])).await.unwrap();
+
+        assert_eq!(result["batchItemFailures"], json!([]));
+        assert_eq!(invoke.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn disabling_a_failed_env_records_the_flag_only() {
+        set_env();
+        let binding = binding_rule("checkout");
+        let checkout = domain_rule("checkout");
+        let stream = stream_rule(stream_item_with_env(StreamStatus::Failed, true));
+        let update = set_env_enabled_rule("prod", false);
+        let put_events = put_events_rule();
+        let c = clients(&[&binding, &checkout, &stream, &update], &[&put_events], &[]);
+        let body = json!({
+            "body": {
+                "subscriptionId": "checkout.orders.OrderNotification",
+                "consumerDomain": "checkout",
+                "environments": { "prod": { "enabled": false } }
+            }
+        });
+        let rec = record("msg-disable-failed", iam_envelope("POST", "/subscriptions/state"), body);
+
+        let result = handle(&c, sqs_event(vec![rec])).await.unwrap();
+
+        assert_eq!(result["batchItemFailures"], json!([]));
+        assert_eq!(update.num_calls(), 1);
     }
 
     #[tokio::test]

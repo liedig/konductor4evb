@@ -206,6 +206,7 @@ fn build_pending_stream(
         detail_type: schema.detail_type.clone(),
         schema_name: body.schema_name.clone(),
         status: StreamStatus::Pending,
+        error_detail: None,
         environments: env_map,
         request_id: Some(request_id.to_string()),
         created_at: now,
@@ -402,6 +403,7 @@ mod tests {
             ),
             eb: mock_client!(aws_sdk_eventbridge, []),
             sfn: mock_client!(aws_sdk_sfn, []),
+            lambda: mock_client!(aws_sdk_lambda, []),
         }
     }
 
@@ -426,6 +428,7 @@ mod tests {
             ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, [&get_rule]),
             eb: mock_client!(aws_sdk_eventbridge, []),
             sfn: mock_client!(aws_sdk_sfn, []),
+            lambda: mock_client!(aws_sdk_lambda, []),
         };
         let body = body("checkout", "checkout", "acme-checkout@CartAbandoned");
 

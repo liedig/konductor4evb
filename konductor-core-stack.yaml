@@ -1482,6 +1482,7 @@ Resources:
         Variables:
           ACTIVATE_SUBSCRIPTION_STATE_MACHINE_ARN: !Ref ActivateSubscriptionWorkflow
           REMOVE_SUBSCRIPTION_STATE_MACHINE_ARN: !Ref RemoveSubscriptionWorkflow
+          MATERIALIZE_FUNCTION_ARN: !GetAtt MaterializeSubscriptionEnvFunction.Arn
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
           ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
       Policies:
@@ -1503,6 +1504,11 @@ Resources:
             - Effect: Allow
               Action: [events:EnableRule, events:DisableRule]
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${Organization}-*"
+            # Heal path: enabling a per-env FAILED entry re-invokes the
+            # same per-env materialization unit the activation workflow runs.
+            - Effect: Allow
+              Action: [lambda:InvokeFunction]
+              Resource: !GetAtt MaterializeSubscriptionEnvFunction.Arn
             - Effect: Allow
               Action: [states:StartExecution]
               Resource:

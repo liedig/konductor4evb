@@ -1,12 +1,12 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::env;
 
 use crate::handler::Clients;
 use crate::outcome;
-use crate::validate::{self, DomainLookup};
+use crate::validate::{self, DomainLookup, DomainRecord};
 use konductor_common::entitlement_store::EntitlementStore;
 use konductor_common::grant_engine::{actions, covers};
 use konductor_common::principal::{ResourceAuthorizer, TrustedPrincipal};
@@ -34,7 +34,7 @@ pub struct EnvDesiredState {
 }
 
 enum StreamLookup {
-    Ready(Box<EventStream>),
+    Ready(Box<EventStream>, DomainRecord),
     Failed(String),
 }
 
@@ -84,9 +84,9 @@ pub async fn handle(
         return emit_failed(reason).await;
     }
 
-    let stream =
+    let (stream, domain) =
         match load_validated_stream(clients, body, &id, &streams_table, &organization).await? {
-            StreamLookup::Ready(stream) => stream,
+            StreamLookup::Ready(stream, domain) => (stream, domain),
             StreamLookup::Failed(reason) => return emit_failed(reason).await,
         };
 
@@ -96,16 +96,19 @@ pub async fn handle(
         return emit_failed(reason).await;
     }
 
+    let mut env_outcomes = serde_json::Map::new();
     for (env_name, desired) in &body.environments {
-        apply_rule_state(clients, &organization, env_name, &stream, desired.enabled).await?;
-        streams_db::set_stream_env_enabled(
-            &clients.ddb,
+        let result = reconcile_env(
+            clients,
+            &organization,
             &streams_table,
             &stream,
+            &domain,
             env_name,
             desired.enabled,
         )
         .await?;
+        env_outcomes.insert(env_name.clone(), result);
     }
 
     outcome::emit(
@@ -114,12 +117,94 @@ pub async fn handle(
         "UpdateSubscriptionSucceeded",
         json!({
             "subscriptionId": body.subscription_id,
-            "environments": body.environments.iter()
-                .map(|(env, d)| (env.clone(), json!({ "enabled": d.enabled })))
-                .collect::<serde_json::Map<_, _>>(),
+            "environments": env_outcomes,
         }),
     )
     .await
+}
+
+/// Desired-state reconciliation per environment. Materialized entries flip
+/// native rule state; entries awaiting promotion (or still pending) only
+/// record the desired flag — there is no rule to flip, and promotion
+/// materialization honors the flag. Enabling a FAILED entry re-invokes
+/// materialization, which re-resolves the version, re-checks coverage, and
+/// merges the fresh entry itself; disabling a FAILED entry only records the
+/// flag (a partially created rule with no target delivers nothing).
+async fn reconcile_env(
+    clients: &Clients,
+    organization: &str,
+    streams_table: &str,
+    stream: &EventStream,
+    domain: &DomainRecord,
+    env_name: &str,
+    enabled: bool,
+) -> Result<Value> {
+    let entry = stream
+        .environments
+        .get(env_name)
+        .ok_or_else(|| anyhow!("unknown environment '{env_name}'"))?;
+
+    if entry.status == StreamStatus::Failed && enabled {
+        let outcome = rematerialize(clients, stream, domain, env_name, &entry.rule_name).await?;
+        let status = outcome
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("FAILED");
+        return Ok(json!({ "enabled": true, "materialization": status }));
+    }
+
+    if entry.status == StreamStatus::Active {
+        apply_rule_state(clients, organization, env_name, stream, enabled).await?;
+    }
+    streams_db::set_stream_env_enabled(
+        &clients.ddb,
+        streams_table,
+        stream,
+        env_name,
+        enabled,
+    )
+    .await?;
+    Ok(json!({ "enabled": enabled }))
+}
+
+/// The repair path for a transient per-env failure: re-run the same
+/// per-env materialization unit the activation workflow runs. The function
+/// merges the resulting entry (including `enabled: true`) itself.
+async fn rematerialize(
+    clients: &Clients,
+    stream: &EventStream,
+    domain: &DomainRecord,
+    env_name: &str,
+    rule_name: &str,
+) -> Result<Value> {
+    let function_arn =
+        env::var("MATERIALIZE_FUNCTION_ARN").context("MATERIALIZE_FUNCTION_ARN not set")?;
+    let payload = json!({
+        "producerDomain": stream.producer_domain,
+        "consumerDomain": stream.consumer_domain,
+        "consumerAccountId": domain.owner_account_id,
+        "source": stream.source,
+        "detailType": stream.detail_type,
+        "schemaName": stream.schema_name,
+        "ruleName": rule_name,
+        "environment": env_name,
+        "enabled": true,
+    });
+    let response = clients
+        .lambda
+        .invoke()
+        .function_name(&function_arn)
+        .payload(aws_sdk_lambda::primitives::Blob::new(serde_json::to_vec(
+            &payload,
+        )?))
+        .send()
+        .await
+        .context("failed to invoke materialize-subscription-env")?;
+    if let Some(error) = response.function_error() {
+        return Err(anyhow!("materialize-subscription-env errored: {error}"));
+    }
+    let bytes = response.payload().map(|b| b.as_ref()).unwrap_or(b"{}");
+    serde_json::from_slice(bytes).context("materialize-subscription-env returned no outcome")
 }
 
 async fn allowed(
@@ -219,8 +304,8 @@ async fn load_validated_stream(
     streams_table: &str,
     organization: &str,
 ) -> Result<StreamLookup> {
-    match validate::lookup_active_domain(&clients.ddb, &id.consumer_domain).await? {
-        DomainLookup::Found(_) => {}
+    let domain = match validate::lookup_active_domain(&clients.ddb, &id.consumer_domain).await? {
+        DomainLookup::Found(domain) => domain,
         DomainLookup::NotFound => {
             return Ok(StreamLookup::Failed(format!(
                 "consumer domain '{}' not found",
@@ -233,7 +318,7 @@ async fn load_validated_stream(
                 id.consumer_domain
             )))
         }
-    }
+    };
 
     let schema_name = format!("{organization}-{}@{}", id.producer_domain, id.detail_type);
     let Some(stream) = streams_db::get_stream(
@@ -267,7 +352,7 @@ async fn load_validated_stream(
         }
     }
 
-    Ok(StreamLookup::Ready(Box::new(stream)))
+    Ok(StreamLookup::Ready(Box::new(stream), domain))
 }
 
 /// Enablement is materialized as native rule state — an atomic flip, no

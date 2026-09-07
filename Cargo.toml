@@ -49,6 +49,7 @@ aws-sdk-sqs = { version = "1", default-features = false, features = ["rt-tokio",
 aws-sdk-ssm = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
 aws-sdk-sts = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-schemas = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-lambda = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
 sha2 = "0.11"
 aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
