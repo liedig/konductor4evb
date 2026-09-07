@@ -3,7 +3,6 @@ updates:
   # Rust workspace (Cargo.lock is committed, so these are reviewable lockfile PRs).
   - package-ecosystem: cargo
     directory: "/"
-    target-branch: develop
     schedule:
       interval: weekly
       day: monday
@@ -20,7 +19,6 @@ updates:
   # Web console (pnpm). Cooldown so brand-new package versions can't auto-land.
   - package-ecosystem: npm
     directory: "/web"
-    target-branch: develop
     schedule:
       interval: weekly
       day: monday
@@ -41,7 +39,6 @@ updates:
   # Workflows pin actions by SHA; this is what keeps those pins current.
   - package-ecosystem: github-actions
     directory: "/"
-    target-branch: develop
     schedule:
       interval: weekly
       day: monday

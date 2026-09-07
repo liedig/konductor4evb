@@ -8,21 +8,21 @@ How the repository enforces quality gates automatically: a GitHub Actions workfl
 
 ### Requirement: CI workflow triggers
 
-The CI workflow SHALL run on pull requests targeting `develop` or `main` and on pushes to `develop` or `main`. The workflow SHALL NOT run on pushes to feature branches or other branches.
+The CI workflow SHALL run on pull requests targeting `main` and on pushes to `main`. The workflow SHALL NOT run on pushes to feature branches or other branches.
 
 #### Scenario: Pull request triggers CI
 
-- **WHEN** a pull request is opened, synchronised, or reopened targeting `develop` or `main`
+- **WHEN** a pull request is opened, synchronised, or reopened targeting `main`
 - **THEN** the CI workflow SHALL execute all jobs
 
 #### Scenario: Push to protected branch triggers CI
 
-- **WHEN** a commit is pushed directly to `develop` or `main`
+- **WHEN** a commit is pushed directly to `main`
 - **THEN** the CI workflow SHALL execute all jobs
 
 #### Scenario: Feature branch push does not trigger CI
 
-- **WHEN** a commit is pushed to a branch that is not `develop` or `main`
+- **WHEN** a commit is pushed to a branch that is not `main`
 - **THEN** the CI workflow SHALL NOT execute
 
 ### Requirement: Code quality checks

@@ -1,13 +1,13 @@
 name: CI
 
 on:
-  # Run on PRs, and on pushes to the long-lived branches only. A PR branch push
+  # Run on PRs, and on pushes to the default branch only. A PR branch push
   # would otherwise trigger two runs for the same commit (push + pull_request)
   # in separate GitHub Actions cache scopes that can't share artifacts, so each
-  # keeps missing the cache the other just saved. Pushes to develop/main still
+  # keeps missing the cache the other just saved. Pushes to main still
   # populate a branch-scoped cache that PRs inherit as their base.
   push:
-    branches: [develop, main]
+    branches: [main]
   pull_request:
 
 # Key on the head commit SHA so the push and pull_request events for the same
