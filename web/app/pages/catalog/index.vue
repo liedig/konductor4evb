@@ -39,7 +39,15 @@ async function loadOwnedDomains() {
   }
 }
 
+const needsConsumerDomain = computed(() => !session.isPlatformRole && activeOwned.value.length === 0)
+
+// Requests can overlap (a filter change while a page is still in flight);
+// only the latest request may write into the list, or stale responses
+// duplicate rows.
+let requestSeq = 0
+
 async function load(reset = true) {
+  const seq = ++requestSeq
   pending.value = true
   errorMessage.value = ''
   if (reset) {
@@ -53,26 +61,30 @@ async function load(reset = true) {
       environment: environmentFilter.value || undefined,
       nextToken: nextToken.value,
     })
+    if (seq !== requestSeq) return
     schemas.value.push(...(response.items ?? []))
     nextToken.value = response.nextToken
   } catch (error) {
+    if (seq !== requestSeq) return
     errorMessage.value = error instanceof ApiError ? error.message : 'Failed to load the catalog'
   } finally {
-    pending.value = false
+    if (seq === requestSeq) pending.value = false
   }
 }
-
-watch([consumerDomain, producerFilter, environmentFilter], () => load())
-
-const needsConsumerDomain = computed(() => !session.isPlatformRole && activeOwned.value.length === 0)
 
 onMounted(async () => {
   await loadOwnedDomains()
   // Without an active owned domain there is no consumer perspective and the
-  // unscoped listing is platform-only — skip the request entirely.
+  // unscoped listing is platform-only — skip the request entirely. The watch
+  // registers only now: the default consumer domain assigned above must not
+  // fire a second, overlapping load.
   if (!needsConsumerDomain.value) {
     await load()
   }
+  watch([consumerDomain, producerFilter, environmentFilter], () => {
+    if (needsConsumerDomain.value) return
+    load()
+  })
 })
 
 function detailHref(schema: SchemaSummary) {
