@@ -15,8 +15,8 @@
 
 ## 3. Activation workflow rewrite (activate-subscription.asl.yaml)
 
-- [ ] 3.1 Replace the inline per-env states (describe, JSONata coverage query, PutRule/PutTargets/alarm, rollback chain) with a single `materialize-subscription-env` Lambda invocation per Map item; delete `RollbackCreatedRules` and its helpers; verify the ASL parses (`sam validate` or equivalent YAML/ASL lint)
-- [ ] 3.2 Post-Map aggregation: top-level `ACTIVE` when ≥1 env materialized, else `FAILED` with `errorDetail` naming schema/producer; top-level record update sets only `status`/`errorDetail`/`updatedAt` (never replaces the `environments` map); `SubscriptionActivated` / `SubscriptionActivationFailed` carry per-env outcomes including awaiting envs. Verify via workflow-level tests or a local Step Functions/simulated run if the repo supports it; otherwise verify by inspection plus the e2e task 8.2
+- [x] 3.1 Replace the inline per-env states (describe, JSONata coverage query, PutRule/PutTargets/alarm, rollback chain) with a single `materialize-subscription-env` Lambda invocation per Map item; delete `RollbackCreatedRules` and its helpers; verify the ASL parses (`sam validate` or equivalent YAML/ASL lint)
+- [x] 3.2 Post-Map aggregation: top-level `ACTIVE` when ≥1 env materialized, else `FAILED` with `errorDetail` naming schema/producer; top-level record update sets only `status`/`errorDetail`/`updatedAt` (never replaces the `environments` map); `SubscriptionActivated` / `SubscriptionActivationFailed` carry per-env outcomes including awaiting envs. Verify via workflow-level tests or a local Step Functions/simulated run if the repo supports it; otherwise verify by inspection plus the e2e task 8.2
 
 ## 4. update_state desired-state reconciliation
 
