@@ -1169,7 +1169,11 @@ fn activation_materializes_each_environment_via_the_shared_function() {
     let doc = core_template();
     let workflow = resource(&doc, "ActivateSubscriptionWorkflow");
     let substitutions = mapping(at(props(workflow), "DefinitionSubstitutions"));
-    for key in ["MaterializeEnvFunctionArn", "EventStreamsTable", "KonductorEventBus"] {
+    for key in [
+        "MaterializeEnvFunctionArn",
+        "EventStreamsTable",
+        "KonductorEventBus",
+    ] {
         assert!(
             substitutions.contains_key(key),
             "missing substitution {key}"
@@ -1182,7 +1186,9 @@ fn activation_materializes_each_environment_via_the_shared_function() {
     // and the promotion extender (follow-schema-promotion).
     let (actions, managed) = function_policy_shape(&doc, "MaterializeSubscriptionEnvFunction");
     assert!(
-        managed.iter().any(|p| p.contains("EntitlementsTableReadPolicy")),
+        managed
+            .iter()
+            .any(|p| p.contains("EntitlementsTableReadPolicy")),
         "materialization re-checks entitlement coverage"
     );
     for required in [
@@ -1193,7 +1199,10 @@ fn activation_materializes_each_environment_via_the_shared_function() {
         "cloudwatch:PutMetricAlarm",
         "dynamodb:UpdateItem",
     ] {
-        assert!(actions.contains(&required.to_string()), "missing {required}");
+        assert!(
+            actions.contains(&required.to_string()),
+            "missing {required}"
+        );
     }
 
     // The workflow role no longer creates rules: creation moved into the
@@ -1203,7 +1212,13 @@ fn activation_materializes_each_environment_via_the_shared_function() {
     let statements = seq(at(at(props(policy), "PolicyDocument"), "Statement"));
     let workflow_actions: Vec<String> = statements
         .iter()
-        .flat_map(|s| seq(at(s, "Action")).iter().map(text).map(str::to_string).collect::<Vec<_>>())
+        .flat_map(|s| {
+            seq(at(s, "Action"))
+                .iter()
+                .map(text)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
         .collect();
     assert!(
         workflow_actions.contains(&"lambda:InvokeFunction".to_string()),
@@ -1244,7 +1259,9 @@ fn activation_materializes_each_environment_via_the_shared_function() {
     for (name, _) in states.iter().chain(item_states.iter()) {
         let name = name.as_str().expect("state name");
         assert!(
-            !name.contains("Rollback") && !name.starts_with("Delete") && !name.starts_with("Remove"),
+            !name.contains("Rollback")
+                && !name.starts_with("Delete")
+                && !name.starts_with("Remove"),
             "no cross-environment compensation state {name}"
         );
     }
@@ -1314,7 +1331,9 @@ fn promotion_extender_is_wired_to_schema_publication() {
         text(seq(at(pattern, "detail-type")).first().unwrap()),
         "SchemaVersionPublished"
     );
-    let target = seq(at(props(rule), "Targets")).first().expect("rule target");
+    let target = seq(at(props(rule), "Targets"))
+        .first()
+        .expect("rule target");
     assert!(
         format!("{:?}", at(target, "Arn")).contains("SubscriptionExtenderFunction"),
         "the promotion signal must invoke the extender"
@@ -1325,7 +1344,10 @@ fn promotion_extender_is_wired_to_schema_publication() {
     );
 
     let permission = resource(&doc, "SchemaVersionPublishedRulePermission");
-    assert_eq!(text(at(props(permission), "Principal")), "events.amazonaws.com");
+    assert_eq!(
+        text(at(props(permission), "Principal")),
+        "events.amazonaws.com"
+    );
 }
 
 #[test]
