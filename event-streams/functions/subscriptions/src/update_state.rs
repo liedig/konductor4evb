@@ -156,14 +156,8 @@ async fn reconcile_env(
     if entry.status == StreamStatus::Active {
         apply_rule_state(clients, organization, env_name, stream, enabled).await?;
     }
-    streams_db::set_stream_env_enabled(
-        &clients.ddb,
-        streams_table,
-        stream,
-        env_name,
-        enabled,
-    )
-    .await?;
+    streams_db::set_stream_env_enabled(&clients.ddb, streams_table, stream, env_name, enabled)
+        .await?;
     Ok(json!({ "enabled": enabled }))
 }
 

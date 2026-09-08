@@ -38,7 +38,7 @@
 
 ## 7. Unsubscribe hardening (orphan-rule race)
 
-- [ ] 7.1 Test: unsubscribe deletes the deterministic rule name (`{consumerDomain}-{detailType}`) on every producer env bus even when the record has no materialized entry for that env, treating not-found as a no-op. Implement; verify the test passes and existing unsubscribe tests stay green
+- [x] 7.1 Test: unsubscribe deletes the deterministic rule name (`{consumerDomain}-{detailType}`) on every producer env bus even when the record has no materialized entry for that env, treating not-found as a no-op. Implement; verify the test passes and existing unsubscribe tests stay green
 
 ## 8. Web UI and end-to-end
 

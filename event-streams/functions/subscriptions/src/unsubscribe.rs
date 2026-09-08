@@ -5,6 +5,8 @@ use std::env;
 
 use crate::handler::Clients;
 use crate::outcome;
+use konductor_common::dynamodb::{get_string_list, s};
+use konductor_common::envelope::rule_name;
 use konductor_common::grant_engine::actions;
 use konductor_common::principal::{ResourceAuthorizer, TrustedPrincipal};
 use konductor_common::streams::{EventStream, StreamStatus, SubscriptionId};
@@ -114,20 +116,40 @@ async fn start_removal_workflow(
     stream: &EventStream,
     subscription_id: &str,
 ) -> Result<()> {
-    let rule_name = stream
-        .environments
-        .values()
-        .next()
-        .map(|env| env.rule_name.clone())
-        .unwrap_or_default();
+    let derived = rule_name(&stream.consumer_domain, &stream.detail_type).ok();
+    let rule = derived.or_else(|| {
+        stream
+            .environments
+            .values()
+            .next()
+            .map(|env| env.rule_name.clone())
+    });
+
+    let Some(rule) = rule else {
+        return Err(anyhow::anyhow!(
+            "cannot derive the deterministic rule name for '{subscription_id}'"
+        ));
+    };
+
+    // Teardown targets every producer environment, not just recorded ones:
+    // a crash between rule creation and the record merge leaves an orphan
+    // the record never captured. The rule name is deterministic and the
+    // workflow treats not-found as a no-op, so extra attempts are harmless.
+    let mut environments: Vec<String> = stream.environments.keys().cloned().collect();
+    for env_name in producer_environments(clients, &stream.producer_domain).await {
+        if !environments.contains(&env_name) {
+            environments.push(env_name);
+        }
+    }
+    environments.sort();
 
     let workflow_input = json!({
         "producerDomain": stream.producer_domain,
         "consumerDomain": stream.consumer_domain,
         "detailType": stream.detail_type,
         "schemaName": stream.schema_name,
-        "ruleName": rule_name,
-        "environments": stream.environments.keys().collect::<Vec<_>>(),
+        "ruleName": rule,
+        "environments": environments,
     });
 
     clients
@@ -149,6 +171,38 @@ async fn start_removal_workflow(
         })?;
 
     Ok(())
+}
+
+/// Producer environments for teardown coverage. Status is irrelevant here —
+/// a suspended producer's buses still hold rules to delete — so this reads
+/// the record raw, and any lookup failure degrades to the recorded
+/// environments rather than blocking the unsubscribe.
+async fn producer_environments(clients: &Clients, producer_domain: &str) -> Vec<String> {
+    let Ok(table) = env::var("DOMAINS_TABLE") else {
+        return Vec::new();
+    };
+    let output = clients
+        .ddb
+        .get_item()
+        .table_name(&table)
+        .key("domainName", s(producer_domain))
+        .send()
+        .await;
+    match output {
+        Ok(output) => output
+            .item
+            .as_ref()
+            .and_then(|item| get_string_list(item, "environments"))
+            .unwrap_or_default(),
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                producer_domain,
+                "producer domain lookup failed; removing only recorded environments"
+            );
+            Vec::new()
+        }
+    }
 }
 
 fn sanitize_execution_name(id: &str) -> String {

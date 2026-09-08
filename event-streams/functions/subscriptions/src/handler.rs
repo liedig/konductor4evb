@@ -260,7 +260,10 @@ mod tests {
             .then_output(|| GetItemOutput::builder().build())
     }
 
-    fn stream_item_with_env(status: StreamStatus, enabled: bool) -> HashMap<String, AttributeValue> {
+    fn stream_item_with_env(
+        status: StreamStatus,
+        enabled: bool,
+    ) -> HashMap<String, AttributeValue> {
         let mut environments = HashMap::new();
         environments.insert(
             "prod".to_string(),
@@ -699,7 +702,11 @@ mod tests {
         let update = set_env_enabled_rule("prod", false);
         let put_events = put_events_rule();
         // No enable/disable rule mocks: an awaiting env has no rule to flip.
-        let c = clients(&[&binding, &checkout, &stream, &update], &[&put_events], &[]);
+        let c = clients(
+            &[&binding, &checkout, &stream, &update],
+            &[&put_events],
+            &[],
+        );
         let body = json!({
             "body": {
                 "subscriptionId": "checkout.orders.OrderNotification",
@@ -707,7 +714,11 @@ mod tests {
                 "environments": { "prod": { "enabled": false } }
             }
         });
-        let rec = record("msg-pause-awaiting", iam_envelope("POST", "/subscriptions/state"), body);
+        let rec = record(
+            "msg-pause-awaiting",
+            iam_envelope("POST", "/subscriptions/state"),
+            body,
+        );
 
         let result = handle(&c, sqs_event(vec![rec])).await.unwrap();
 
@@ -738,7 +749,11 @@ mod tests {
                 "environments": { "prod": { "enabled": true } }
             }
         });
-        let rec = record("msg-resume-awaiting", iam_envelope("POST", "/subscriptions/state"), body);
+        let rec = record(
+            "msg-resume-awaiting",
+            iam_envelope("POST", "/subscriptions/state"),
+            body,
+        );
 
         let result = handle(&c, sqs_event(vec![rec])).await.unwrap();
 
@@ -755,13 +770,13 @@ mod tests {
         let entitlements = entitlements_rule(true);
         let invoke = mock!(aws_sdk_lambda::Client::invoke)
             .match_requests(|req| {
-                req.function_name()
-                    == Some("arn:aws:lambda:us-east-1:123:function:materialize")
+                req.function_name() == Some("arn:aws:lambda:us-east-1:123:function:materialize")
                     && req
                         .payload()
                         .map(|b| {
                             let text = String::from_utf8_lossy(b.as_ref()).into_owned();
-                            text.contains("\"environment\":\"prod\"") && text.contains("\"enabled\":true")
+                            text.contains("\"environment\":\"prod\"")
+                                && text.contains("\"enabled\":true")
                         })
                         .unwrap_or(false)
             })
@@ -795,7 +810,11 @@ mod tests {
                 "environments": { "prod": { "enabled": true } }
             }
         });
-        let rec = record("msg-heal-failed", iam_envelope("POST", "/subscriptions/state"), body);
+        let rec = record(
+            "msg-heal-failed",
+            iam_envelope("POST", "/subscriptions/state"),
+            body,
+        );
 
         let result = handle(&c, sqs_event(vec![rec])).await.unwrap();
 
@@ -811,7 +830,11 @@ mod tests {
         let stream = stream_rule(stream_item_with_env(StreamStatus::Failed, true));
         let update = set_env_enabled_rule("prod", false);
         let put_events = put_events_rule();
-        let c = clients(&[&binding, &checkout, &stream, &update], &[&put_events], &[]);
+        let c = clients(
+            &[&binding, &checkout, &stream, &update],
+            &[&put_events],
+            &[],
+        );
         let body = json!({
             "body": {
                 "subscriptionId": "checkout.orders.OrderNotification",
@@ -819,7 +842,11 @@ mod tests {
                 "environments": { "prod": { "enabled": false } }
             }
         });
-        let rec = record("msg-disable-failed", iam_envelope("POST", "/subscriptions/state"), body);
+        let rec = record(
+            "msg-disable-failed",
+            iam_envelope("POST", "/subscriptions/state"),
+            body,
+        );
 
         let result = handle(&c, sqs_event(vec![rec])).await.unwrap();
 
@@ -855,9 +882,10 @@ mod tests {
         set_env();
         let binding = binding_rule("checkout");
         let stream = active_stream_rule();
+        let producer = domain_rule("orders");
         let put_events = put_events_rule();
         let start = start_execution_rule();
-        let c = clients(&[&binding, &stream], &[&put_events], &[&start]);
+        let c = clients(&[&binding, &stream, &producer], &[&put_events], &[&start]);
         let body = json!({
             "body": { "subscriptionId": "checkout.orders.OrderNotification" }
         });
@@ -871,6 +899,53 @@ mod tests {
 
         assert_eq!(result["batchItemFailures"], json!([]));
         assert_eq!(start.num_calls(), 1, "removal workflow must start");
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_covers_producer_envs_missing_from_the_record() {
+        set_env();
+        let binding = binding_rule("checkout");
+        // The record only ever captured prod (e.g. a crash orphaned dev's
+        // rule); the producer domain still lists dev and prod.
+        let stream = active_stream_rule();
+        let producer = domain_rule("orders");
+        let put_events = put_events_rule();
+        let start = mock!(aws_sdk_sfn::Client::start_execution)
+            .match_requests(|req| {
+                let input: Value = serde_json::from_str(req.input().unwrap()).unwrap();
+                let envs: Vec<&str> = input["environments"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect();
+                envs == ["dev", "prod"] && input["ruleName"] == "checkout-OrderNotification"
+            })
+            .then_output(|| {
+                StartExecutionOutput::builder()
+                    .execution_arn("arn:aws:states:us-east-1:123:execution:remove:x")
+                    .start_date(aws_sdk_sfn::primitives::DateTime::from_secs(1_700_000_000))
+                    .build()
+                    .unwrap()
+            });
+        let c = clients(&[&binding, &stream, &producer], &[&put_events], &[&start]);
+        let body = json!({
+            "body": { "subscriptionId": "checkout.orders.OrderNotification" }
+        });
+        let rec = record(
+            "msg-unsub-orphan",
+            iam_envelope("DELETE", "/subscriptions/{subscriptionId}"),
+            body,
+        );
+
+        let result = handle(&c, sqs_event(vec![rec])).await.unwrap();
+
+        assert_eq!(result["batchItemFailures"], json!([]));
+        assert_eq!(
+            start.num_calls(),
+            1,
+            "removal must cover producer envs absent from the record"
+        );
     }
 
     #[tokio::test]
