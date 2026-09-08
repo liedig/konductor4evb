@@ -76,7 +76,9 @@ async function pollSubscription(subscriptionId: string) {
       }
       if (detail.status === 'FAILED') {
         pollState.value = 'failed'
-        failureReason.value = 'Activation failed — see the subscription detail for the reason.'
+        failureReason.value = detail.errorDetail
+          ? `Activation failed: ${detail.errorDetail}`
+          : 'Activation failed — see the subscription detail for the reason.'
         return
       }
     } catch {
@@ -85,6 +87,10 @@ async function pollSubscription(subscriptionId: string) {
   }
   pollState.value = 'settling'
 }
+
+// Environments with a current schema version materialize at activation; the
+// producer's remaining environments follow on promotion (awaiting promotion).
+const availableEnvironments = computed(() => Object.keys(schema.value?.latestVersions ?? {}).sort())
 
 const prettyContent = computed(() => {
   if (!schema.value?.content) return ''
@@ -177,6 +183,12 @@ watch(consumerDomain, load)
         Subscribe <span class="font-medium text-foreground">{{ consumerDomain }}</span> to
         <span class="font-mono text-xs text-foreground">{{ schemaName }}</span>?
         The command is processed asynchronously; activation is tracked after submission.
+      </p>
+      <p class="mt-3 text-sm text-muted">
+        Materializes now in:
+        <span class="font-medium text-foreground">{{ availableEnvironments.join(', ') }}</span>.
+        Environments the producer adds the schema to later follow automatically on promotion —
+        no re-subscribe needed.
       </p>
       <template #actions>
         <NxButton variant="secondary" :disabled="subscribing" @click="subscribeOpen = false">Cancel</NxButton>

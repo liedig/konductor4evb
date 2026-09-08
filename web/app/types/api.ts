@@ -151,13 +151,14 @@ export interface SchemaMutationResponse {
   schemaVersion?: number
 }
 
-export type SubscriptionStatus = 'PENDING' | 'ACTIVE' | 'FAILED' | 'REMOVED'
+export type SubscriptionStatus = 'PENDING' | 'ACTIVE' | 'AWAITING_PROMOTION' | 'FAILED' | 'REMOVED'
 
 export interface EnvStreamState {
   pinnedVersion?: number
   ruleArn?: string
   enabled?: boolean
   status?: SubscriptionStatus
+  errorDetail?: string
 }
 
 export interface SubscriptionSummary {
@@ -166,6 +167,7 @@ export interface SubscriptionSummary {
   producerDomain?: string
   schemaName?: string
   status?: SubscriptionStatus
+  errorDetail?: string
   environments?: Record<string, EnvStreamState>
   createdAt?: string
 }

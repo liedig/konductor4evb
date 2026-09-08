@@ -14,6 +14,7 @@ const tones: Record<string, BadgeTone> = {
   PROVISIONING: 'info',
   PENDING: 'warning',
   PENDING_APPROVAL: 'warning',
+  AWAITING_PROMOTION: 'warning',
   APPROVAL_NOTIFICATION_FAILED: 'danger',
   PROVISIONING_FAILED: 'danger',
   FAILED: 'danger',

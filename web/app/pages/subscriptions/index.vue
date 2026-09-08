@@ -89,9 +89,12 @@ async function confirmUnsubscribe() {
 
 function envSummary(item: SubscriptionSummary): string {
   const envs = item.environments ?? {}
-  const parts = Object.entries(envs).map(([env, state]) =>
-    `${env}: ${state.enabled === false ? 'paused' : (state.status ?? 'unknown').toLowerCase()}`,
-  )
+  const parts = Object.entries(envs).map(([env, state]) => {
+    if (state.enabled === false) return `${env}: paused`
+    if (state.status === 'AWAITING_PROMOTION') return `${env}: awaiting promotion`
+    if (state.status === 'FAILED' && state.errorDetail) return `${env}: failed — ${state.errorDetail}`
+    return `${env}: ${(state.status ?? 'unknown').toLowerCase()}`
+  })
   return parts.join(' · ') || '—'
 }
 
@@ -141,7 +144,9 @@ watch(selectedDomain, load)
       <template #cell-status="{ item }">
         <div class="flex flex-col gap-1">
           <NxStatusPill :status="String(item.status ?? '')" />
-          <span v-if="item.status === 'FAILED'" class="text-xs text-danger">activation failed</span>
+          <span v-if="item.status === 'FAILED'" class="text-xs text-danger">
+            {{ (item as unknown as SubscriptionSummary).errorDetail ?? 'activation failed' }}
+          </span>
         </div>
       </template>
       <template #cell-environments="{ item }">
