@@ -29,6 +29,7 @@ const SUPPORTED_SCHEMA_TYPE: &str = "JSONSchemaDraft4";
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
     pub schemas: aws_sdk_schemas::Client,
+    pub eb: aws_sdk_eventbridge::Client,
 }
 
 impl Clients {
@@ -36,6 +37,7 @@ impl Clients {
         Self {
             ddb: aws_sdk_dynamodb::Client::new(config),
             schemas: aws_sdk_schemas::Client::new(config),
+            eb: aws_sdk_eventbridge::Client::new(config),
         }
     }
 }
@@ -131,7 +133,10 @@ async fn create_schema<A: ResourceAuthorizer>(
         .await;
 
     match result {
-        Ok(output) => mutation_response(&target.schema_name, output.schema_version),
+        Ok(output) => {
+            emit_version_published(clients, &target, output.schema_version.as_deref()).await;
+            mutation_response(&target.schema_name, output.schema_version)
+        }
         Err(e) => {
             use aws_sdk_schemas::operation::create_schema::CreateSchemaError;
             let service_err = e.into_service_error();
@@ -208,7 +213,10 @@ async fn append_schema_version<A: ResourceAuthorizer>(
         .await;
 
     match result {
-        Ok(output) => mutation_response(&target.schema_name, output.schema_version),
+        Ok(output) => {
+            emit_version_published(clients, &target, output.schema_version.as_deref()).await;
+            mutation_response(&target.schema_name, output.schema_version)
+        }
         Err(e) => {
             let service_err = e.into_service_error();
             let mapped = match &service_err {
@@ -233,6 +241,8 @@ async fn append_schema_version<A: ResourceAuthorizer>(
 struct SchemaTarget {
     schema_name: SchemaName,
     registry: String,
+    producer_domain: String,
+    environment: String,
 }
 
 /// The shared gate for both mutations: event-name feasibility, publisher
@@ -269,7 +279,90 @@ async fn prepare<A: ResourceAuthorizer>(
     Ok(SchemaTarget {
         schema_name,
         registry,
+        producer_domain: domain.to_string(),
+        environment: stage.to_string(),
     })
+}
+
+/// Promotion-following extension hinges on this signal: every committed
+/// registry write announces itself on the control-plane bus. `UpdateSchema`
+/// appends are not safely retryable (a retry would append yet another
+/// version), so an emission failure is logged, never surfaced — a 5xx would
+/// invite exactly that retry.
+async fn emit_version_published(
+    clients: &Clients,
+    target: &SchemaTarget,
+    schema_version: Option<&str>,
+) {
+    let bus = match std::env::var("KONDUKTOR_EVENT_BUS") {
+        Ok(bus) => bus,
+        Err(_) => {
+            log_missing_bus(target);
+            return;
+        }
+    };
+    let entry = version_published_entry(bus, target, schema_version);
+    match clients.eb.put_events().entries(entry).send().await {
+        Ok(output) if output.failed_entry_count() > 0 => log_rejected(&output, target),
+        Ok(_) => log_published(target),
+        Err(error) => log_failed(&error, target),
+    }
+}
+
+fn log_missing_bus(target: &SchemaTarget) {
+    tracing::error!(
+        schema = %target.schema_name,
+        "KONDUKTOR_EVENT_BUS not set — SchemaVersionPublished not emitted"
+    );
+}
+
+fn log_published(target: &SchemaTarget) {
+    tracing::info!(
+        schema = %target.schema_name,
+        environment = %target.environment,
+        "SchemaVersionPublished emitted"
+    );
+}
+
+fn log_rejected(
+    output: &aws_sdk_eventbridge::operation::put_events::PutEventsOutput,
+    target: &SchemaTarget,
+) {
+    let cause = output
+        .entries()
+        .first()
+        .and_then(|e| e.error_message())
+        .unwrap_or("unknown");
+    tracing::error!(cause, schema = %target.schema_name, "SchemaVersionPublished entry rejected");
+}
+
+fn log_failed(
+    error: &aws_sdk_eventbridge::error::SdkError<
+        aws_sdk_eventbridge::operation::put_events::PutEventsError,
+    >,
+    target: &SchemaTarget,
+) {
+    tracing::error!(error = %error, schema = %target.schema_name, "SchemaVersionPublished emission failed");
+}
+
+fn version_published_entry(
+    bus: String,
+    target: &SchemaTarget,
+    schema_version: Option<&str>,
+) -> aws_sdk_eventbridge::types::PutEventsRequestEntry {
+    let detail = serde_json::json!({
+        "producerDomain": target.producer_domain,
+        "schemaName": target.schema_name.to_string(),
+        "environment": target.environment,
+        "version": schema_version.and_then(|v| v.parse::<i64>().ok()),
+        "publishedAt": chrono::Utc::now().to_rfc3339(),
+    });
+    aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
+        .event_bus_name(bus)
+        .source("konductor.schema-management")
+        .detail_type("SchemaVersionPublished")
+        .detail(detail.to_string())
+        .build()
 }
 
 async fn require_active_domain(
@@ -321,6 +414,7 @@ fn mutation_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_eventbridge::operation::put_events::PutEventsOutput;
     use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
     use chrono::Utc;
     use konductor_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
@@ -334,6 +428,7 @@ mod tests {
     fn set_env() {
         std::env::set_var("ORGANIZATION", "acme");
         std::env::set_var("DOMAINS_TABLE", "domains-test");
+        std::env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
     }
 
     fn publisher_binding(group: &str, domain: &str) -> RoleBinding {
@@ -461,10 +556,31 @@ mod tests {
             })
     }
 
-    fn clients(ddb_rules: Vec<Rule>, schemas_rules: Vec<Rule>) -> Clients {
+    fn version_published_rule(environment: &'static str, expected_version: i64) -> Rule {
+        let needle = format!("\"version\":{expected_version}");
+        let env_needle = format!("\"environment\":\"{environment}\"");
+        mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(move |req| {
+                req.entries().iter().any(|e| {
+                    e.detail_type() == Some("SchemaVersionPublished")
+                        && e.source() == Some("konductor.schema-management")
+                        && e.event_bus_name() == Some("konductor-bus")
+                        && e.detail().is_some_and(|d| {
+                            d.contains("\"producerDomain\":\"orders\"")
+                                && d.contains(&env_needle)
+                                && d.contains("\"schemaName\":\"acme-orders@OrderNotification\"")
+                                && d.contains(&needle)
+                        })
+                })
+            })
+            .then_output(|| PutEventsOutput::builder().failed_entry_count(0).build())
+    }
+
+    fn clients(ddb_rules: &[&Rule], schemas_rules: &[&Rule], eb_rules: &[&Rule]) -> Clients {
         Clients {
-            ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, &ddb_rules),
-            schemas: mock_client!(aws_sdk_schemas, RuleMode::MatchAny, &schemas_rules),
+            ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, ddb_rules),
+            schemas: mock_client!(aws_sdk_schemas, RuleMode::MatchAny, schemas_rules),
+            eb: mock_client!(aws_sdk_eventbridge, RuleMode::MatchAny, eb_rules),
         }
     }
 
@@ -472,10 +588,10 @@ mod tests {
     async fn create_schema_creates_version_1_in_the_stage_registry() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
-        let clients = clients(
-            vec![active_domain_rule()],
-            vec![create_schema_rule("acme-prod-orders-schema-registry", "1")],
-        );
+        let domain = active_domain_rule();
+        let create = create_schema_rule("acme-prod-orders-schema-registry", "1");
+        let published = version_published_rule("prod", 1);
+        let clients = clients(&[&domain], &[&create], &[&published]);
 
         let resp = handle(
             &clients,
@@ -489,6 +605,7 @@ mod tests {
         let body = body(&resp);
         assert_eq!(body["schemaName"], "acme-orders@OrderNotification");
         assert_eq!(body["schemaVersion"], 1);
+        assert_eq!(published.num_calls(), 1, "create must announce the version");
     }
 
     #[tokio::test]
@@ -502,7 +619,7 @@ mod tests {
                     .build(),
             )
         });
-        let clients = clients(vec![active_domain_rule()], vec![conflict]);
+        let clients = clients(&[&active_domain_rule()], &[&conflict], &[]);
 
         let resp = handle(
             &clients,
@@ -520,7 +637,7 @@ mod tests {
     async fn create_schema_without_binding_returns_403_without_resource_access() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![]);
-        let clients = clients(vec![], vec![]);
+        let clients = clients(&[], &[], &[]);
 
         let resp = handle(
             &clients,
@@ -543,7 +660,7 @@ mod tests {
                 .item("status", s("PROVISIONING"))
                 .build()
         });
-        let clients = clients(vec![inactive], vec![]);
+        let clients = clients(&[&inactive], &[], &[]);
 
         let resp = handle(
             &clients,
@@ -560,7 +677,7 @@ mod tests {
     async fn create_schema_with_infeasible_event_name_returns_400() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
-        let clients = clients(vec![], vec![]);
+        let clients = clients(&[], &[], &[]);
         let mut bad = create_body();
         bad["eventName"] = json!("Order Notification");
 
@@ -575,7 +692,7 @@ mod tests {
     async fn create_schema_with_unsupported_type_returns_400() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
-        let clients = clients(vec![], vec![]);
+        let clients = clients(&[], &[], &[]);
         let mut bad = create_body();
         bad["schemaType"] = json!("Avro");
 
@@ -591,7 +708,7 @@ mod tests {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
         // Zero rules: content validation precedes any resource access.
-        let clients = clients(vec![], vec![]);
+        let clients = clients(&[], &[], &[]);
         let mut bad = create_body();
         bad["content"] = json!("not json");
 
@@ -610,7 +727,7 @@ mod tests {
     async fn append_version_with_malformed_draft4_content_returns_400() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
-        let clients = clients(vec![], vec![]);
+        let clients = clients(&[], &[], &[]);
         let mut bad = append_body();
         bad["content"] = json!(r#"{"type": "nonsense"}"#);
 
@@ -629,10 +746,10 @@ mod tests {
     async fn append_version_creates_the_next_version() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
-        let clients = clients(
-            vec![active_domain_rule()],
-            vec![update_schema_rule("acme-prod-orders-schema-registry", "5")],
-        );
+        let domain = active_domain_rule();
+        let update = update_schema_rule("acme-prod-orders-schema-registry", "5");
+        let published = version_published_rule("prod", 5);
+        let clients = clients(&[&domain], &[&update], &[&published]);
 
         let resp = handle(
             &clients,
@@ -644,6 +761,11 @@ mod tests {
 
         assert_eq!(status(&resp), 201);
         assert_eq!(body(&resp)["schemaVersion"], 5);
+        assert_eq!(
+            published.num_calls(),
+            1,
+            "append must announce the new version"
+        );
     }
 
     #[tokio::test]
@@ -657,7 +779,7 @@ mod tests {
                     .build(),
             )
         });
-        let clients = clients(vec![active_domain_rule()], vec![not_found]);
+        let clients = clients(&[&active_domain_rule()], &[&not_found], &[]);
 
         let resp = handle(
             &clients,
@@ -674,7 +796,7 @@ mod tests {
     async fn append_version_without_binding_returns_403() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![]);
-        let clients = clients(vec![], vec![]);
+        let clients = clients(&[], &[], &[]);
 
         let resp = handle(
             &clients,
@@ -692,10 +814,10 @@ mod tests {
         set_env();
         let authorizer =
             InMemoryGrantEngine::new(vec![iam_publisher_binding("111122223333", "orders")]);
-        let clients = clients(
-            vec![active_domain_rule()],
-            vec![create_schema_rule("acme-prod-orders-schema-registry", "1")],
-        );
+        let domain = active_domain_rule();
+        let create = create_schema_rule("acme-prod-orders-schema-registry", "1");
+        let published = version_published_rule("prod", 1);
+        let clients = clients(&[&domain], &[&create], &[&published]);
 
         let resp = handle(
             &clients,
@@ -727,7 +849,7 @@ mod tests {
                 "bindings-test",
             ),
         );
-        let clients = clients(vec![], vec![]);
+        let clients = clients(&[], &[], &[]);
 
         let resp = handle(
             &clients,
@@ -745,18 +867,44 @@ mod tests {
         set_env();
         std::env::set_var("ORGANIZATION", "acme");
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
-        let clients = clients(
-            vec![active_domain_rule()],
-            vec![update_schema_rule(
-                "acme-staging-orders-schema-registry",
-                "2",
-            )],
-        );
+        let domain = active_domain_rule();
+        let update = update_schema_rule("acme-staging-orders-schema-registry", "2");
+        let published = version_published_rule("staging", 2);
+        let clients = clients(&[&domain], &[&update], &[&published]);
         let mut payload = oauth_event("/schemas/versions", append_body());
         payload["requestContext"]["stage"] = json!("staging");
 
         let resp = handle(&clients, &authorizer, event(payload)).await.unwrap();
 
         assert_eq!(status(&resp), 201);
+    }
+
+    #[tokio::test]
+    async fn emission_failure_does_not_fail_the_committed_mutation() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let domain = active_domain_rule();
+        let update = update_schema_rule("acme-prod-orders-schema-registry", "6");
+        let bus_down = mock!(aws_sdk_eventbridge::Client::put_events).then_error(|| {
+            aws_sdk_eventbridge::operation::put_events::PutEventsError::InternalException(
+                aws_sdk_eventbridge::types::error::InternalException::builder()
+                    .message("bus unavailable")
+                    .build(),
+            )
+        });
+        let clients = clients(&[&domain], &[&update], &[&bus_down]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", append_body())),
+        )
+        .await
+        .unwrap();
+
+        // Appends are not safely retryable: the committed registry write
+        // reports success even though the promotion signal could not be sent.
+        assert_eq!(status(&resp), 201);
+        assert_eq!(body(&resp)["schemaVersion"], 6);
     }
 }

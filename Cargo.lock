@@ -3375,6 +3375,7 @@ dependencies = [
  "anyhow",
  "aws-config",
  "aws-sdk-dynamodb",
+ "aws-sdk-eventbridge",
  "aws-sdk-schemas",
  "aws-smithy-mocks",
  "chrono",

@@ -378,7 +378,6 @@ async fn finish(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     use aws_sdk_cloudwatch::operation::put_metric_alarm::PutMetricAlarmOutput;
     use aws_sdk_dynamodb::operation::query::QueryOutput;

@@ -216,10 +216,10 @@ Every handler code path that commits a DynamoDB write or performs side effects, 
 ### `schema-admin`
 
 - **Committed write(s):** none to DynamoDB — `CreateSchema`/`UpdateSchema` against the schemas service is the only mutation.
-- **Side effect(s):** none; the synchronous 201 response is the outcome.
-- **Rubric:** (4) no — synchronous read-your-write paths are exempt by the rubric's own terms.
-- **Failure walk:** client retry after an unacknowledged create → 409 (safe); retry of an update appends a duplicate version — accepted, schemas are append-only.
-- **Decision:** STAY. **Rationale:** single atomic service call after read-only gates; nothing to stream.
+- **Side effect(s):** `SchemaVersionPublished` on the control-plane bus after every committed registry write (added by `follow-schema-promotion`, 2026-09-08), carrying `{producerDomain, schemaName, environment, version, publishedAt}`; before that change, none.
+- **Rubric:** (4) no — synchronous read-your-write paths are exempt by the rubric's own terms. The promotion-signal emission takes a documented exception to (2): the registry write IS the committed transition, but there is no DynamoDB stream off the registry, so the event cannot be stream-derived. The exception holds because the promotion extender tolerates a lost signal (extension is idempotent; the next publish to that environment re-triggers it) and because appends are not safely retryable — surfacing an emission failure as a 5xx would invite a duplicate-version retry, a worse failure than a missed signal. Emission failure is therefore logged-only (`tracing::error!` with schema and cause), never surfaced.
+- **Failure walk:** client retry after an unacknowledged create → 409 (safe); retry of an update appends a duplicate version — accepted, schemas are append-only. Registry write commits but emission fails → subscriptions awaiting that environment stay `AWAITING_PROMOTION` until the next publish to it (or a manual re-subscribe). Registry write fails → no event; nothing committed.
+- **Decision:** STAY. **Rationale:** single atomic service call after read-only gates; the promotion signal hangs on the committed registry write with the logged-only exception above.
 
 ### `entitlement-admin`
 

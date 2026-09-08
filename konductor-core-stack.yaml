@@ -1724,6 +1724,7 @@ Resources:
         Variables:
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
           ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+          KONDUKTOR_EVENT_BUS: !GetAtt KonductorEventBus.Arn
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
@@ -1740,6 +1741,11 @@ Resources:
               Resource:
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+            # Promotion signal: every committed registry write announces
+            # itself; the promotion extender subscribes (follow-schema-promotion).
+            - Effect: Allow
+              Action: [events:PutEvents]
+              Resource: !GetAtt KonductorEventBus.Arn
       Events:
         OAuthCreateSchema:
           Type: Api

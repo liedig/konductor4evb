@@ -26,9 +26,9 @@
 
 ## 5. schema-admin promotion signal
 
-- [ ] 5.1 Test: successful `POST /schemas` emits `SchemaVersionPublished` on the control-plane bus with `{producerDomain, schemaName, environment, version: 1, publishedAt}` (source `konductor.schema-management`); same for append with the new version. Implement emission in `schema-admin`; verify
-- [ ] 5.2 Test: when the registry write succeeded but emission fails, the API response still reports success and the failure is logged. Implement; verify
-- [ ] 5.3 Record the handler-emission side-effect exception (registry write has no DDB stream) in `docs/development/decisions.md`; verify the entry exists and follows the rubric format
+- [x] 5.1 Test: successful `POST /schemas` emits `SchemaVersionPublished` on the control-plane bus with `{producerDomain, schemaName, environment, version: 1, publishedAt}` (source `konductor.schema-management`); same for append with the new version. Implement emission in `schema-admin`; verify
+- [x] 5.2 Test: when the registry write succeeded but emission fails, the API response still reports success and the failure is logged. Implement; verify
+- [x] 5.3 Record the handler-emission side-effect exception (registry write has no DDB stream) in `docs/development/decisions.md`; verify the entry exists and follows the rubric format
 
 ## 6. Subscription extender
 
