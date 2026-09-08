@@ -415,8 +415,12 @@ fn publish_queue_writes_are_restricted_to_admission() {
     assert_eq!(text(at(deny, "Effect")), "Deny");
     let actions: Vec<&str> = seq(at(deny, "Action")).iter().map(|a| text(a)).collect();
     assert!(
-        actions.contains(&"sqs:SendMessage") && actions.contains(&"sqs:SendMessageBatch"),
-        "the deny must cover both send APIs, got {actions:?}"
+        actions.contains(&"sqs:SendMessage"),
+        "sqs:SendMessage authorizes both send APIs (batch has no distinct IAM action), got {actions:?}"
+    );
+    assert!(
+        !actions.contains(&"sqs:SendMessageBatch"),
+        "sqs:SendMessageBatch is not a valid IAM action and fails deployment"
     );
     let exempt = format!(
         "{:?}",

@@ -432,11 +432,11 @@ Resources:
           - Sid: DenyNonAdmissionSenders
             Effect: Deny
             Principal: "*"
-            # Both send APIs: SendMessageBatch is a separate IAM action, and
-            # denying only SendMessage would leave the injection path open.
+            # sqs:SendMessage authorizes both SendMessage and SendMessageBatch
+            # (the batch API has no distinct IAM action), so this single deny
+            # closes the batch injection path too.
             Action:
               - sqs:SendMessage
-              - sqs:SendMessageBatch
             Resource: !GetAtt PublishQueue.Arn
             Condition:
               ArnNotLike:
