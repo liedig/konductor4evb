@@ -1258,6 +1258,13 @@ fn activation_materializes_each_environment_via_the_shared_function() {
         text(at(invoke, "Resource")),
         "arn:aws:states:::lambda:invoke"
     );
+    // lambda:invoke under JSONata yields the payload already parsed; $parse
+    // on it throws T0410 and falsely fails the map iteration (e2e, 2026-09-08).
+    assert_eq!(
+        text(at(invoke, "Output")),
+        "{% $states.result.Payload %}",
+        "the invoke output must not re-$parse the payload"
+    );
 
     // Per-env independence: no cross-environment compensation anywhere.
     for (name, _) in states.iter().chain(item_states.iter()) {

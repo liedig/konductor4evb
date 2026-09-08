@@ -50,7 +50,9 @@ States:
               IntervalSeconds: 2
               MaxAttempts: 3
               BackoffRate: 2
-          Output: "{% $parse($states.result.Payload) %}"
+          # lambda:invoke in JSONata yields the payload already parsed;
+          # wrapping it in $parse throws T0410 (argument is not a string).
+          Output: "{% $states.result.Payload %}"
           End: true
           Catch:
             - ErrorEquals:
