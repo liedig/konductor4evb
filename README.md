@@ -1,3 +1,5 @@
+<img src="docs/konductor-logo-light-bg.svg" alt="Konductor for Amazon EventBridge" width="500">
+
 # Konductor for Amazon EventBridge
 
 [![CI (main)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml?query=branch%3Amain)
