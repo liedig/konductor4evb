@@ -546,8 +546,10 @@ The **konductor bus** (`konductor-bus`) carries all internal lifecycle events. I
 | `SubscriptionActivated` | `konductor.event-streams` | Activate-subscription workflow | — |
 | `SubscriptionActivationFailed` | `konductor.event-streams` | Activate-subscription workflow | — |
 | `SubscriptionRemoved` | `konductor.event-streams` | Remove-subscription workflow | — |
+| `SchemaVersionPublished` | `konductor.schema-management` | Schema-admin (after a committed create/append) | Subscription-extender Lambda |
+| `SubscriptionEnvironmentExtended` | `konductor.event-streams` | Subscription-extender Lambda | — |
 
-The `DomainProvisioningFailed` payload carries `failedEnvironment` (or `null` for domain-level failures), `failedStep`, `errorCode`, `errorMessage`, and an aggregated `compensationErrors` array from any rollback runs. `SubscriptionActivationFailed` carries the same failure anatomy for the subscription saga.
+The `DomainProvisioningFailed` payload carries `failedEnvironment` (or `null` for domain-level failures), `failedStep`, `errorCode`, `errorMessage`, and an aggregated `compensationErrors` array from any rollback runs. `SubscriptionActivationFailed` carries `failedEnvironment`, `failedStep`, and `errorMessage` (no compensation errors — activation has no rollback; per-environment outcomes ride on both subscription lifecycle events).
 
 Domain-management events use the source `konductor.domain-management`; subscription events use `konductor.event-streams`. The `DomainRegistrationApproved` event is the key orchestration trigger — it initiates the provisioning workflow via an EventBridge rule on the konductor bus.
 
@@ -635,12 +637,18 @@ graph LR
     q --> handler["Subscription Command<br/>Handler Lambda"]
     handler -->|"validate + PENDING record"| est[("konductor-event-streams")]
     handler --> wf["Activate-Subscription<br/>Workflow"]
-    wf -->|"per env: resolve latest version,<br/>PutRule + PutTargets + alarm"| rules["Rules on producer<br/>platform buses"]
-    wf -->|"ACTIVE | FAILED"| est
-    wf -->|"SubscriptionActivated"| bus["Konductor Bus"]
+    wf -->|"per env: invoke materialize-subscription-env"| mat["materialize-subscription-env<br/>Lambda"]
+    mat -->|"resolve latest version, coverage re-check,<br/>PutRule + PutTargets + alarm, per-env record merge"| rules["Rules on producer<br/>platform buses"]
+    wf -->|"ACTIVE if any env materializes, else FAILED"| est
+    wf -->|"SubscriptionActivated | SubscriptionActivationFailed"| bus["Konductor Bus"]
+    published["SchemaVersionPublished<br/>(schema-admin)"] -->|"bus rule (DLQ)"| ext["subscription-extender<br/>Lambda"]
+    ext -->|"invoke per awaiting env"| mat
+    ext -->|"SubscriptionEnvironmentExtended"| bus
 ```
 
-Activation is **all-or-nothing across environments**: if the schema is missing in any env or any step fails, compensation deletes the rules created so far and the record becomes `FAILED`. Before the first rule is created, the workflow **re-queries entitlement coverage** (`QueryCoveringEntitlements` → `CoverageGate`): the command handler's decision and rule materialization are separated by queue latency, so a grant revoked in between must stop the pipeline without materializing anything. Unsubscribe removes targets, rules, and alarms per env (idempotent), marks the record `REMOVED`, and retains it 90 days via TTL. Orphaned integration rules on the consumer's own bus are the application team's responsibility.
+Activation is **independent per environment**: each producer environment materializes through the shared `materialize-subscription-env` function (resolve latest version → final coverage re-check → rule upsert → consumer-bus target → zero-events alarm → per-env record merge). There is no cross-environment compensation. The stream becomes `ACTIVE` when at least one environment materializes; it becomes `FAILED` only when the schema exists in **no** producer environment (almost always a caller typo) or every materialization fails. Where the schema is absent from an environment, that entry is recorded `AWAITING_PROMOTION` — no rule is created there — and the failure cause of a materialized attempt is recorded on the entry's `errorDetail`. A per-env `FAILED` entry is healed by re-enabling it (`POST /subscriptions/state`), which re-invokes materialization; re-subscribing an `ACTIVE` stream is an idempotent no-op.
+
+**Promotion-following extension.** Every committed schema create/append emits `SchemaVersionPublished` from `schema-admin`; a bus rule (with DLQ) invokes the subscription extender, which extends every `ACTIVE` subscription on that schema whose record still awaits the promoted environment — materializing it with the recorded desired-enabled flag (a pre-declared pause survives promotion). Extension is idempotent: already-materialized environments are no-ops, so appends to existing environments never re-pin. The final coverage re-check inside materialization closes the revoke-between-promotion-and-extension race, fail-closed. Unsubscribe removes targets, rules, and alarms for **every producer environment** (not just recorded ones — an orphaned rule from a crashed materialization has no record entry), idempotently, then marks the record `REMOVED`, retained 90 days via TTL. Orphaned integration rules on the consumer's own bus are the application team's responsibility.
 
 **Subscription authorization** splits by composite resource: `subscription:environment:{id}:{env}` create/enable decisions require both a `subscriber` binding on the consumer domain *and* entitlement coverage of the target detail type (self-subscription within a domain skips the coverage check — a domain always sees its own schemas); disable and unsubscribe require the binding alone, so a lapsed entitlement can never wedge a subscription. Entitlement revocation later disables the subscription's rules in every environment via the revocation pipeline — the subscription record, its pinned version, and its enabled flags are retained, and re-granting coverage does not re-enable automatically: the consumer re-enables explicitly.
 
@@ -649,9 +657,11 @@ Per-environment **enable/disable** maps to native rule state (e.g., subscribe wi
 ### Subscription Lifecycle
 
 ```text
-PENDING ──activation succeeds──> ACTIVE ──unsubscribe──> REMOVED (TTL 90d)
-   └──────activation fails──────> FAILED
+PENDING ──any env materializes──> ACTIVE ──unsubscribe──> REMOVED (TTL 90d)
+   └────no env materializes─────> FAILED
 ```
+
+Per-environment entries carry their own status — `PENDING`, `ACTIVE`, `AWAITING_PROMOTION` (schema not yet in that environment; extends automatically when it arrives), `FAILED` (materialization failed; heal by re-enabling) — which may diverge from the overall status and from each other.
 
 ### Schema Discovery (Subscriber Catalog)
 
@@ -757,13 +767,15 @@ evb-konductor/
 ├── event-streams/
 │   ├── functions/
 │   │   ├── subscriptions/                    # Async: subscribe/state/unsubscribe commands
+│   │   ├── materialize-subscription-env/     # Per-env materialization unit (workflow + extender invoke it)
+│   │   ├── subscription-extender/            # Promotion-following extension on SchemaVersionPublished
 │   │   ├── list-subscriptions/               # Sync: direction-scoped stream listing
 │   │   ├── describe-subscription/            # Sync: stream detail by subscription id
 │   │   ├── list-schemas/                     # Sync: entitlement-expanded catalog
 │   │   └── describe-schema/                  # Sync: schema detail + content (coverage-checked)
 │   └── state-machines/
-│       ├── activate-subscription.asl.yaml    # Per-env rule creation, all-or-nothing + saga
-│       └── remove-subscription.asl.yaml      # Idempotent per-env rule removal
+│       ├── activate-subscription.asl.yaml    # Per-env materialization via the shared function, no saga
+│       └── remove-subscription.asl.yaml      # Idempotent per-env rule removal (all producer envs)
 ├── lib/
 │   └── konductor-common/                         # Shared library (models, DDB helpers, API, validation, namespace)
 ├── docs/

@@ -44,4 +44,4 @@
 
 - [x] 8.1 Web types and views: `errorDetail` (top-level and per-env) and the `AWAITING_PROMOTION` status rendered on "My subscriptions" and subscription detail; pause/resume offered for awaiting envs; catalog subscribe journey states which envs materialize now vs follow on promotion. Verify `pnpm lint`, `pnpm typecheck`, and `pnpm build` pass
 - [ ] 8.2 E2E on the live dev deployment: re-subscribe shipping to `acme-billing@OrderNotification` — expect dev `ACTIVE`, staging/prod `AWAITING_PROMOTION`, stream `ACTIVE`; then register the schema in the staging registry via the API and verify the subscription extends automatically (`SubscriptionEnvironmentExtended`, staging rule live); finally unsubscribe and verify all env rules including staging are gone. Verify via console/CLI reads of the stream record and buses
-- [ ] 8.3 Update `docs/development/architecture.md` where it describes the activation saga/all-or-nothing contract; verify the description matches the new per-env behavior
+- [x] 8.3 Update `docs/development/architecture.md` where it describes the activation saga/all-or-nothing contract; verify the description matches the new per-env behavior
