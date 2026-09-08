@@ -1,5 +1,7 @@
 import tailwindcss from '@tailwindcss/vite'
 
+import { createGalleryOpener } from './scripts/open-gallery.mjs'
+
 // nuxt.config.ts executes in Node; the app's tsconfig has no node types.
 declare const process: { env: Record<string, string | undefined> }
 
@@ -14,9 +16,15 @@ export default defineNuxtConfig({
   vite: {
     plugins: [tailwindcss()],
   },
+  hooks: {
+    listen: createGalleryOpener(process.env.KONDUKTOR_OPEN_GALLERY === '1'),
+  },
   app: {
     head: {
       title: 'Konductor for Amazon EventBridge',
+      link: [
+        { rel: 'icon', type: 'image/svg+xml', href: '/brand/konductor-web-icon.svg' },
+      ],
       meta: [
         { name: 'description', content: 'Konductor for Amazon EventBridge control-plane console' },
       ],

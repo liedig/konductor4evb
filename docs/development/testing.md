@@ -80,6 +80,29 @@ cargo test --workspace -- --nocapture
 make check
 ```
 
+## Web Component Behavior
+
+The focused Playwright suite in `web/tests/ui/` exercises real rendered `Nx*` wrappers on `/design-system`: labels and states, modal focus/dismissal, confirmation busy/retry behavior, notification timing and overlapping pause conditions, narrow viewports, enlarged text, and reduced motion. It also verifies that protected routes still redirect to sign-in.
+
+```bash
+cd web
+pnpm exec playwright install chromium
+pnpm test:ui
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+`playwright.config.ts` starts an isolated Nuxt server on `127.0.0.1:3107`; close any process using that port before running. Fresh browser contexts intercept `config.json` with non-secret test values and block external traffic and same-origin API calls. No Cognito account, real data, or authentication bypass is needed. Tests must never submit operations against a live service.
+
+For manual review, `make web-dev` keeps its AWS-backed configuration and API proxy, then opens `/design-system` in the default browser when Nuxt starts. It uses Nuxt's actual port (normally 3000). Plain `pnpm dev` does not automatically open a browser. Gallery demos make no service writes, but other pages connect to the live backend.
+
+The browser-opener helper has separate dependency-free tests: run `node --test tests/dev/open-gallery.test.mjs` from `web/`. These stub the browser launch and verify platform commands, the actual port, opt-in behavior, and graceful failure without opening a real browser.
+
+Screenshots/traces go to ignored `web/test-results/`; preserve review evidence in ignored `web/ui-evidence/` before another run clears results. Capture the gallery at 390px and 1440px before and after visual changes. Inspect the images rather than treating screenshot creation as visual approval.
+
+Automated accessible-name/description checks are not a screen-reader audit. Before acceptance, review the gallery with a screen reader, true browser zoom, keyboard-only operation, and reduced motion. The automated 200% root-font-size case covers enlarged text, not browser zoom. Verify modal focus entry/restoration and confinement, confirmation Cancel-first/busy states, F8 notification navigation, polite announcements, and independent dismissal. Record unavailable tooling or authentication-blocked consumer checks explicitly; do not claim those checks passed.
+
 ## Keeping `target/` Small
 
 This workspace builds 30+ Lambda crates, and a full test-suite build used to

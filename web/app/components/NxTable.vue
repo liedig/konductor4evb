@@ -11,10 +11,10 @@ defineProps<{
 </script>
 
 <template>
-  <div class="overflow-x-auto rounded-lg border border-border bg-surface">
+  <div class="max-w-full overflow-x-auto rounded-lg border border-border bg-surface">
     <table class="w-full text-sm">
       <thead>
-        <tr class="border-b border-border text-left">
+        <tr class="border-b border-border bg-surface-raised text-left">
           <th
             v-for="column in columns"
             :key="column.key"
@@ -29,7 +29,7 @@ defineProps<{
         <tr
           v-for="(item, index) in items"
           :key="index"
-          class="border-b border-border last:border-0"
+          class="border-b border-border transition-colors last:border-0 hover:bg-surface-raised/60"
         >
           <td v-for="column in columns" :key="column.key" class="px-4 py-3 align-top">
             <slot :name="`cell-${column.key}`" :item="item">

@@ -1,6 +1,6 @@
 # Design System
 
-The Konductor console has one visual identity, defined once as code and documented here. Every token and primitive listed below maps to a real code path; the living gallery at `/design-system` (excluded from navigation) renders each primitive against the current build. When you change a token or primitive, update this document in the same change.
+The Konductor console has one visual identity, defined once as code and documented here. Every token and primitive listed below maps to a real code path; the living gallery at `/design-system` (excluded from navigation) renders each primitive against the current build. Reka UI supplies unstyled dialog, confirmation, and notification behavior behind the existing `Nx*` interfaces. Konductor owns the styling and native form controls. When you change a token or primitive, update this document in the same change.
 
 ## Principles
 
@@ -41,6 +41,8 @@ Canonical source: `web/app/assets/css/tokens.css` (Tailwind v4 `@theme`). Compon
 
 Spacing uses the default Tailwind scale; the rhythm conventions are `gap-1.5` (label→control), `gap-4` (form fields), `p-6` (cards), `gap-10` (page sections).
 
+Body text uses a 1.6 line height; headings use slightly tightened tracking. Form controls have strong borders on the background surface, while table headings and secondary buttons use the raised surface. Keyboard focus has a two-pixel semantic outline. Disabled controls do not receive hover styling; loading buttons retain their label and expose `aria-busy`. Reduced-motion preferences suppress animation and transitions.
+
 ## Primitives
 
 All primitives live in `web/app/components/` and are auto-imported (`<NxButton />` …).
@@ -48,16 +50,25 @@ All primitives live in `web/app/components/` and are auto-imported (`<NxButton /
 | Primitive | Path | Notes |
 |---|---|---|
 | Button | `NxButton.vue` | Variants `primary`/`secondary`/`danger`/`ghost`, sizes `sm`/`md`, `loading` spinner |
-| Input | `NxInput.vue` | `v-model`, `label`/`hint`/`error`, required marker |
-| Select | `NxSelect.vue` | `v-model`, `options` prop, same label/hint/error contract |
+| Input | `NxInput.vue` | `v-model`, associated label/hint/error, required and disabled semantics |
+| Select | `NxSelect.vue` | Native select; `v-model`, `options`, associated label/hint/error; preserves empty filter values |
 | Badge | `NxBadge.vue` | Tones `success`/`info`/`warning`/`danger`/`neutral` |
 | Status pill | `NxStatusPill.vue` | The single mapping from lifecycle status strings (`ACTIVE`, `PENDING_APPROVAL`…) to tones — reuse it, don't re-map |
 | Card | `NxCard.vue` | Optional `title` + `#actions` header slot |
 | Table | `NxTable.vue` | `columns` + `items`; per-column `cell-<key>` slots, `#empty` slot |
-| Modal | `NxModal.vue` | Teleported, Escape/backdrop close, `#actions` footer slot |
-| Confirm | `NxConfirm.vue` | Modal specialized for destructive/irreversible confirms (`danger` prop) |
-| Toast | `NxToasts.vue` + `composables/useToast.ts` | `useToast().success/error/info(message)`; rendered once in `app.vue` |
+| Modal | `NxModal.vue` | Reka Dialog, controlled `open`/`close`, Escape/backdrop close, `#actions` footer slot |
+| Confirm | `NxConfirm.vue` | Reka AlertDialog, controlled `open`/`busy`/`confirm`/`cancel`; `danger` styling |
+| Toast | `NxToasts.vue` + `NxToastItem.vue` + `composables/useToast.ts` | `useToast().success/error/info(message)`; one provider and viewport in `app.vue` |
 | Empty state | `NxEmptyState.vue` | `title`, `body`, optional `#icon` and `#actions` |
+
+## Interaction contracts
+
+- **Modal**: focus enters the first suitable form field (or an available control), remains inside, and returns to the opener on close. If the opener disappears, `composables/useDialogFocus.ts` focuses the current main heading or main container. Background content is isolated and scroll-locked. Panels use `.nx-overlay`/`.nx-dialog` in `assets/css/main.css`, viewport gutters, and internal scrolling.
+- **Confirmation**: the explanatory slot supplies the accessible description. Cancel receives initial focus. Idle Escape cancels; outside clicks do not. While busy, confirmation, cancellation, and Escape dismissal are blocked. Pages own async work and decide when to close. Ordinary modals retain their existing dismissal behavior and do not gain a busy prop.
+- **Notification**: polite announcements do not move focus. Press **F8** to reach the viewport, then Tab to navigate notifications and dismiss controls. Each message expires after six seconds of unpaused display time. Hover, keyboard focus, and window inactivity pause expiry; it resumes only when all conditions clear. `composables/useToastLifetime.ts` owns the single timer per rendered item, with Reka expiry disabled. This avoids Reka 2.10.4's focus-out/hover overlap bug. Removal cleans up the timer.
+- **Form control**: labels and displayed hints/errors have stable ID associations. Inputs/selects expose `aria-invalid`; errors take precedence over hints. Selects remain native, including empty-valued “All…” filters and required placeholders.
+
+The gallery demonstrates error/disabled/loading states, awaiting-promotion status, long dialogs, a removed opener, simulated confirmation failure/retry, and multiple notifications. Demo components live in `components/gallery/` and never perform service writes. See [testing.md](./testing.md#web-component-behavior) for browser checks and manual accessibility review.
 
 ## Page patterns
 

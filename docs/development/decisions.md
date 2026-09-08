@@ -12,6 +12,14 @@ This document tracks architectural decisions, implemented changes, and deferred 
 
 ## Implemented Decisions
 
+### UI primitive refinement (2026-09-08, `refine-ui-with-reka`)
+
+Reka UI 2.10.4 supplies unstyled dialogs, alert dialogs, and toast rendering behind stable `Nx*` interfaces. The existing dark layout, native form controls, and semantic status mapping remain Konductor-owned. Programmatic dialog openers require explicit focus capture/restoration; confirmations remain caller-controlled and block dismissal while busy.
+
+Notification lifetime has one local owner per rendered item, with Reka expiry disabled. A browser regression demonstrated that Reka resumes its timer on focus-out even while hovered; the user approved local timer ownership to satisfy the union-of-pause-conditions contract. The queue itself has no timer. Playwright tests cover real gallery components with non-secret config interception, not live account operations.
+
+No handler write paths, backend side effects, resource topology, API contracts, or auth policies change. The stream-driven durability rubric therefore has no new backend paths to classify. Screen-reader and browser-zoom review remain separate acceptance checks from automated DOM/keyboard testing.
+
 | Date       | Change ID                                    | Domain          | Summary                              | Key Decision                                                                                                                                                                                                                |
 | ---------- | -------------------------------------------- | --------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 2026-04-14 | domain-management-redesign | Domain Management | Single domain table, sync decide, workflow-owned events | Merged domains + registration requests into one table. Decide endpoint is synchronous (API GW → Lambda, no SQS). Approval workflow solely owns approval/rejection events and DDB status updates. All Step Functions use YAML + JSONata. SES notifications for approval requests and rejections. Update command is metadata-only (no status transitions). Status model: PENDING_APPROVAL → APPROVED → PROVISIONING → ACTIVE, with REJECTED, PROVISIONING_FAILED, INACTIVE. |

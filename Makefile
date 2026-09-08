@@ -112,7 +112,7 @@ check: ## cargo fmt, check, clippy (CI-equivalent local gate)
 	cargo check --workspace
 	cargo clippy --workspace -- -D warnings
 
-web-dev: ## Run the Konductor web console dev server (http://localhost:3000), proxying /dev to the deployed OAuth API
+web-dev: ## Run the live-backed web console and open /design-system in your browser
 	@set -euo pipefail; \
 	output() { aws cloudformation describe-stacks --stack-name konductor-core \
 		--query "Stacks[0].Outputs[?OutputKey=='$$1'].OutputValue" --output text; }; \
@@ -122,7 +122,7 @@ web-dev: ## Run the Konductor web console dev server (http://localhost:3000), pr
 	test -n "$$POOL_ID" || { echo "$(YELLOW)KonductorUserPoolId output missing — deploy the core stack first (make deploy-core)$(RESET)"; exit 1; }; \
 	printf '{"apiBaseUrl":"/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s"}\n' \
 		"$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" > web/public/config.json; \
-	cd web && KONDUKTOR_DEV_API_URL="$$API_URL" pnpm dev
+	cd web && KONDUKTOR_DEV_API_URL="$$API_URL" KONDUKTOR_OPEN_GALLERY=1 pnpm dev
 
 deploy-web: ## Build the web console, publish to the web bucket, and write config.json from stack outputs
 	@set -euo pipefail; \

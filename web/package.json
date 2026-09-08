@@ -8,6 +8,7 @@
     "build": "nuxi generate && node scripts/externalize-inline-scripts.mjs",
     "lint": "eslint .",
     "typecheck": "nuxi typecheck",
+    "test:ui": "playwright test",
     "postinstall": "nuxi prepare"
   },
   "dependencies": {
@@ -15,11 +16,13 @@
     "aws-amplify": "^6.15.0",
     "nuxt": "^4.2.0",
     "pinia": "^3.0.3",
+    "reka-ui": "^2.10.4",
     "vue": "^3.5.18",
     "vue-router": "^5.3.1"
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.9.0",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.1.12",
     "eslint": "^9.34.0",
     "tailwindcss": "^4.1.12",

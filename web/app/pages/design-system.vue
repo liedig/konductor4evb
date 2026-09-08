@@ -3,7 +3,6 @@ import type { TableColumn } from '~/components/NxTable.vue'
 
 // Living reference for docs/development/design-system.md — every documented
 // primitive renders here. Excluded from navigation; referenced by the doc.
-const toast = useToast()
 
 const demoColumns: TableColumn[] = [
   { key: 'domainName', label: 'Domain' },
@@ -17,13 +16,12 @@ const demoRows = [
 
 const inputValue = ref('')
 const selectValue = ref('')
-const modalOpen = ref(false)
-const confirmOpen = ref(false)
-const statuses = ['ACTIVE', 'PENDING_APPROVAL', 'PROVISIONING', 'FAILED', 'INACTIVE']
+const filterValue = ref('')
+const statuses = ['ACTIVE', 'PENDING_APPROVAL', 'PROVISIONING', 'AWAITING_PROMOTION', 'FAILED', 'INACTIVE']
 </script>
 
 <template>
-  <main class="mx-auto flex max-w-4xl flex-col gap-10 px-6 py-10">
+  <div class="mx-auto flex max-w-4xl flex-col gap-10">
     <header>
       <h1 class="text-2xl font-semibold">Design system</h1>
       <p class="mt-1 text-sm text-muted">
@@ -48,6 +46,7 @@ const statuses = ['ACTIVE', 'PENDING_APPROVAL', 'PROVISIONING', 'FAILED', 'INACT
       <div class="grid max-w-md gap-4">
         <NxInput v-model="inputValue" label="Domain name" placeholder="orders" hint="Lowercase letters, digits, and hyphens." required />
         <NxInput v-model="inputValue" label="With error" error="Domain name is required." />
+        <NxInput label="Disabled input" model-value="Read only while busy" disabled />
         <NxSelect
           v-model="selectValue"
           label="Owning team"
@@ -58,6 +57,9 @@ const statuses = ['ACTIVE', 'PENDING_APPROVAL', 'PROVISIONING', 'FAILED', 'INACT
           ]"
           required
         />
+        <NxSelect v-model="filterValue" label="Environment filter" :options="[{ value: '', label: 'All environments' }, { value: 'dev', label: 'Development' }]" hint="An empty value means all environments." />
+        <NxSelect label="Select with error" :options="[]" error="Choose an environment." />
+        <NxSelect label="Disabled select" :options="[{ value: '', label: 'Unavailable' }]" disabled />
       </div>
     </NxCard>
 
@@ -88,35 +90,8 @@ const statuses = ['ACTIVE', 'PENDING_APPROVAL', 'PROVISIONING', 'FAILED', 'INACT
       </div>
     </NxCard>
 
-    <NxCard title="Modal and confirm">
-      <div class="flex gap-3">
-        <NxButton variant="secondary" @click="modalOpen = true">Open modal</NxButton>
-        <NxButton variant="danger" @click="confirmOpen = true">Open confirm</NxButton>
-      </div>
-      <NxModal :open="modalOpen" title="Modal" @close="modalOpen = false">
-        <p class="text-sm text-muted">Dialog content goes here. Escape or the backdrop closes it.</p>
-        <template #actions>
-          <NxButton variant="secondary" @click="modalOpen = false">Close</NxButton>
-        </template>
-      </NxModal>
-      <NxConfirm
-        :open="confirmOpen"
-        title="Disable domain"
-        confirm-label="Disable"
-        danger
-        @confirm="confirmOpen = false"
-        @cancel="confirmOpen = false"
-      >
-        Disabling rejects new publish and subscription activity. Existing subscriptions are retained.
-      </NxConfirm>
-    </NxCard>
-
-    <NxCard title="Toast">
-      <div class="flex gap-3">
-        <NxButton variant="secondary" @click="toast.success('Registration request accepted')">Success</NxButton>
-        <NxButton variant="secondary" @click="toast.error('AccessDenied: not an owner of this domain')">Error</NxButton>
-      </div>
-    </NxCard>
+    <GalleryOverlays />
+    <GalleryNotifications />
 
     <NxCard title="Empty state">
       <NxEmptyState
@@ -128,5 +103,5 @@ const statuses = ['ACTIVE', 'PENDING_APPROVAL', 'PROVISIONING', 'FAILED', 'INACT
         </template>
       </NxEmptyState>
     </NxCard>
-  </main>
+  </div>
 </template>
