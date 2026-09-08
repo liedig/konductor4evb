@@ -1272,6 +1272,63 @@ fn activation_materializes_each_environment_via_the_shared_function() {
 }
 
 #[test]
+fn promotion_extender_is_wired_to_schema_publication() {
+    let doc = core_template();
+
+    // Least privilege: census reads plus the lifecycle event; rule, alarm,
+    // and registry permissions stay on the shared materialize function,
+    // which the extender invokes (follow-schema-promotion design §5).
+    let (mut actions, managed) = function_policy_shape(&doc, "SubscriptionExtenderFunction");
+    assert_eq!(managed, [] as [&str; 0]);
+    actions.sort();
+    assert_eq!(
+        actions,
+        [
+            "dynamodb:GetItem",
+            "dynamodb:Query",
+            "events:PutEvents",
+            "lambda:InvokeFunction",
+        ],
+        "extender: stream census, consumer account lookup, materialize invoke, lifecycle event"
+    );
+
+    let func = resource(&doc, "SubscriptionExtenderFunction");
+    let env = mapping(at(at(props(func), "Environment"), "Variables"));
+    for key in [
+        "EVENT_STREAMS_TABLE",
+        "DOMAINS_TABLE",
+        "MATERIALIZE_FUNCTION_ARN",
+        "KONDUKTOR_EVENT_BUS",
+    ] {
+        assert!(env.contains_key(key), "missing extender env var {key}");
+    }
+
+    let rule = resource(&doc, "SchemaVersionPublishedRule");
+    assert_eq!(text(at(props(rule), "EventBusName")), "KonductorEventBus");
+    let pattern = at(props(rule), "EventPattern");
+    assert_eq!(
+        text(seq(at(pattern, "source")).first().unwrap()),
+        "konductor.schema-management"
+    );
+    assert_eq!(
+        text(seq(at(pattern, "detail-type")).first().unwrap()),
+        "SchemaVersionPublished"
+    );
+    let target = seq(at(props(rule), "Targets")).first().expect("rule target");
+    assert!(
+        format!("{:?}", at(target, "Arn")).contains("SubscriptionExtenderFunction"),
+        "the promotion signal must invoke the extender"
+    );
+    assert!(
+        format!("{:?}", at(at(target, "DeadLetterConfig"), "Arn")).contains("Dlq"),
+        "extension is idempotent, so a failed event dead-letters for replay"
+    );
+
+    let permission = resource(&doc, "SchemaVersionPublishedRulePermission");
+    assert_eq!(text(at(props(permission), "Principal")), "events.amazonaws.com");
+}
+
+#[test]
 fn approval_workflow_finalizes_through_lambda_transaction() {
     let doc = core_template();
     let workflow = resource(&doc, "ApprovalWorkflow");

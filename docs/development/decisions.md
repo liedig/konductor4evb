@@ -65,6 +65,7 @@ Every handler code path that commits a DynamoDB write or performs side effects, 
 | `subscriptions/update_state.rs` | STAY | — |
 | `subscriptions/unsubscribe.rs` | STAY | `fix-unsubscribe-execution-idempotency` |
 | `materialize-subscription-env` | ENVELOPE-DRIVEN | — |
+| `subscription-extender` | ENVELOPE-DRIVEN | — |
 | `publish-events` | ENVELOPE-DRIVEN | — |
 | `publish-events-admission` | STAY | — |
 | `schema-admin` | STAY | — |
@@ -196,6 +197,15 @@ Every handler code path that commits a DynamoDB write or performs side effects, 
 - **Rubric:** (1) yes — the merged entry carries everything a reader or retry needs, including the failure step; (2) inverted — the side effects *precede* the commit, so a crash between them leaves an orphaned rule/target/alarm with no record entry; tolerated because the rule name is deterministic (`{consumer}-{detailType}`) so unsubscribe deletes it without a record entry, `update_state` enable re-invokes materialization as the heal path, and an orphan rule with no matching schema versions is inert; (3) yes — every AWS call is an upsert and the merge replaces its own sub-map, so re-invocation converges (asserted by the repeated-invocation test); (4) yes — subscription activation is explicitly asynchronous; (5) n/a — no stream consumer; (6) yes — the invoking Step Functions execution (activation workflow map iteration or promotion extender) is the durable envelope; transient AWS errors are recorded as per-env FAILED rather than retried, because the heal path exists and retry semantics stay in the caller.
 - **Decision:** ENVELOPE-DRIVEN.
 - **Rationale:** the caller's execution context already provides durability; the handler's single commit records the outcome and is the read surface for the workflow's post-map aggregation and the UI's failure display.
+
+### `subscription-extender` (`follow-schema-promotion`, 2026-09-08)
+
+- **Committed write(s):** none — the record merge for each extended environment is committed by `materialize-subscription-env`, which the extender invokes per subscription.
+- **Side effect(s):** per eligible stream, a synchronous `lambda:InvokeFunction` (the materialization command); on a SUCCEEDED outcome, `SubscriptionEnvironmentExtended` on the control-plane bus.
+- **Rubric:** (1) n/a — the durable record of extension is the materialize function's per-env merge, not anything the extender writes; (3) yes — a replayed promotion event finds extended environments already materialized and skips them (no re-invoke, no duplicate event); (6) yes — the control-plane bus rule's DLQ is the durable envelope, and invocation-level failures (SDK error, function error) propagate so EventBridge retries the event.
+- **Failure walk:** query/lookup/invoke transient failure → the event fails and retries; a repeatedly crashing invocation dead-letters for replay after repair (materialization is idempotent, so replay is safe). A materialization *step* failure is already recorded as per-env FAILED by the invoked function, so it does not fail the event — the `update_state` heal path owns it. A missing consumer domain record is logged and counted, not retried (data-integrity problem, not transient). A lost `SubscriptionEnvironmentExtended` emission is logged-only: the event is observational, and a replay would find the environment materialized and skip without re-emitting — accepted.
+- **Decision:** ENVELOPE-DRIVEN.
+- **Rationale:** the handler performs no commit of its own; the bus rule plus the invoked function's idempotent merge provide durability, and the lifecycle event hangs on the SUCCEEDED outcome the function committed.
 
 ### `publish-events`
 

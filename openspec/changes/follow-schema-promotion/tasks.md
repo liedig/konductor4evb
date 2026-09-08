@@ -32,9 +32,9 @@
 
 ## 6. Subscription extender
 
-- [ ] 6.1 Test: a `SchemaVersionPublished` event for env E extends every `ACTIVE` subscription on that (producer, schema) whose record has E absent or `AWAITING_PROMOTION`, invoking materialization and emitting `SubscriptionEnvironmentExtended` with identity, env, pinned version, enabled. Implement the extender Lambda; verify
-- [ ] 6.2 Test: extender skips `PENDING`/`FAILED`/`REMOVED` streams, no-ops on already-materialized envs, and honors a recorded desired-disabled flag (rule created `DISABLED`). Implement; verify
-- [ ] 6.3 IaC: add the extender function, its control-plane bus rule on `SchemaVersionPublished` with a DLQ, and IAM (streams query/update, schemas describe, events PutRule/PutTargets, CloudWatch alarm, Lambda invoke, PutEvents) to the event-streams template; verify `sam validate` (or `cfn-lint`) passes
+- [x] 6.1 Test: a `SchemaVersionPublished` event for env E extends every `ACTIVE` subscription on that (producer, schema) whose record has E absent or `AWAITING_PROMOTION`, invoking materialization and emitting `SubscriptionEnvironmentExtended` with identity, env, pinned version, enabled. Implement the extender Lambda; verify
+- [x] 6.2 Test: extender skips `PENDING`/`FAILED`/`REMOVED` streams, no-ops on already-materialized envs, and honors a recorded desired-disabled flag (rule created `DISABLED`). Implement; verify
+- [x] 6.3 IaC: add the extender function, its control-plane bus rule on `SchemaVersionPublished` with a DLQ, and IAM (streams query/update, schemas describe, events PutRule/PutTargets, CloudWatch alarm, Lambda invoke, PutEvents) to the event-streams template; verify `sam validate` (or `cfn-lint`) passes
 
 ## 7. Unsubscribe hardening (orphan-rule race)
 

@@ -1579,6 +1579,72 @@ Resources:
               Action: [cloudwatch:PutMetricAlarm]
               Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${Organization}-*"
 
+  # ---- Promotion-Following Subscription Extender ----
+  # A schema arriving in a new producer environment extends every ACTIVE
+  # subscription on it whose record still awaits that environment.
+  SubscriptionExtenderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-subscription-extender"
+      RetentionInDays: 30
+
+  SubscriptionExtenderFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SubscriptionExtenderLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-subscription-extender"
+      CodeUri: ./event-streams/functions/subscription-extender
+      Handler: bootstrap
+      Environment:
+        Variables:
+          EVENT_STREAMS_TABLE: !Ref EventStreamsTable
+          DOMAINS_TABLE: !Ref DomainsTable
+          MATERIALIZE_FUNCTION_ARN: !GetAtt MaterializeSubscriptionEnvFunction.Arn
+          KONDUKTOR_EVENT_BUS: !GetAtt KonductorEventBus.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:Query]
+              Resource: !GetAtt EventStreamsTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            # Extension materializes through the shared per-env function,
+            # which holds the rule/alarm/registry permissions itself.
+            - Effect: Allow
+              Action: [lambda:InvokeFunction]
+              Resource: !GetAtt MaterializeSubscriptionEnvFunction.Arn
+            - Effect: Allow
+              Action: [events:PutEvents]
+              Resource: !GetAtt KonductorEventBus.Arn
+
+  SchemaVersionPublishedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "konductor-schema-version-published"
+      EventBusName: !Ref KonductorEventBus
+      EventPattern:
+        detail-type:
+          - SchemaVersionPublished
+        source:
+          - konductor.schema-management
+      Targets:
+        - Id: SubscriptionExtenderTarget
+          Arn: !GetAtt SubscriptionExtenderFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
+
+  SchemaVersionPublishedRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SubscriptionExtenderFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SchemaVersionPublishedRule.Arn
+
   # ---- Publish Consumer (delivery-only) ----
   # Admission (authorization, schema resolution, payload validation) happens
   # synchronously in PublishEventsAdmissionFunction; this consumer stamps the
