@@ -5,7 +5,7 @@
 
 mod support;
 
-use support::{at, boolean, core_template, mapping, props, resource, seq, text};
+use support::{at, boolean, core_template, int, mapping, props, resource, seq, text};
 
 /// The `Action` list of the single statement of a policy document.
 fn policy_actions(policy: &serde_yaml::Value) -> Vec<String> {
@@ -219,5 +219,102 @@ fn metadata_admin_function_reads_writes_through_the_admin_policy_only() {
     assert_eq!(
         policies.iter().map(text).collect::<Vec<_>>(),
         ["MetadataAdminPolicy"]
+    );
+}
+
+#[test]
+fn metadata_stream_consumer_wires_markers_and_event_publication() {
+    let doc = core_template();
+    let function = resource(&doc, "MetadataStreamConsumerFunction");
+    assert_eq!(text(at(function, "Type")), "AWS::Serverless::Function");
+
+    let props = props(function);
+    assert_eq!(
+        text(at(props, "CodeUri")),
+        "./control-plane/functions/metadata-stream-consumer"
+    );
+    assert_eq!(text(at(props, "Handler")), "bootstrap");
+
+    let env = at(at(props, "Environment"), "Variables");
+    assert_eq!(
+        text(at(env, "METADATA_TABLE")),
+        "MetadataConfigurationTable"
+    );
+    assert_eq!(text(at(env, "KONDUKTOR_EVENT_BUS")), "KonductorEventBus");
+
+    let policies = seq(at(props, "Policies"));
+    assert_eq!(policies.len(), 1);
+    let statements = seq(at(&policies[0], "Statement"));
+    assert_eq!(statements.len(), 2);
+
+    let marker_actions = seq(at(&statements[0], "Action"));
+    assert_eq!(
+        marker_actions.iter().map(text).collect::<Vec<_>>(),
+        ["dynamodb:PutItem", "dynamodb:DeleteItem"]
+    );
+    assert!(is_table_arn(at(&statements[0], "Resource")));
+
+    assert_eq!(
+        seq(at(&statements[1], "Action"))
+            .iter()
+            .map(text)
+            .collect::<Vec<_>>(),
+        ["events:PutEvents"]
+    );
+    assert_eq!(
+        text(at(&statements[1], "Resource")),
+        "KonductorEventBus.Arn",
+        "lifecycle events publish to the control-plane bus"
+    );
+}
+
+#[test]
+fn metadata_stream_consumer_esm_is_bounded_with_bisect_and_failure_capture() {
+    let doc = core_template();
+    let events = at(
+        props(resource(&doc, "MetadataStreamConsumerFunction")),
+        "Events",
+    );
+    let esm = at(mapping(events).values().next().unwrap(), "Properties");
+
+    assert_eq!(
+        text(at(esm, "Stream")),
+        "MetadataConfigurationTable.StreamArn"
+    );
+    assert_eq!(text(at(esm, "StartingPosition")), "TRIM_HORIZON");
+    assert!(boolean(at(esm, "BisectBatchOnFunctionError")));
+    assert_eq!(
+        int(at(esm, "MaximumRetryAttempts")),
+        3,
+        "bounded retry before failure capture"
+    );
+
+    let on_failure = at(at(esm, "DestinationConfig"), "OnFailure");
+    assert_eq!(text(at(on_failure, "Type")), "SQS");
+    assert_eq!(
+        text(at(on_failure, "Destination")),
+        "LambdaFailureDlq.Arn",
+        "records that exhaust retries land in the shared failure DLQ"
+    );
+}
+
+#[test]
+fn metadata_stream_consumer_has_an_iterator_age_alarm() {
+    let doc = core_template();
+    let alarm = props(resource(&doc, "MetadataStreamConsumerIteratorAgeAlarm"));
+    assert_eq!(text(at(alarm, "MetricName")), "IteratorAge");
+    assert_eq!(text(at(alarm, "Namespace")), "AWS/Lambda");
+
+    let dimensions = seq(at(alarm, "Dimensions"));
+    assert_eq!(dimensions.len(), 1);
+    assert_eq!(
+        text(at(&dimensions[0], "Value")),
+        "MetadataStreamConsumerFunction"
+    );
+
+    assert_eq!(int(at(alarm, "Threshold")), 60000);
+    assert_eq!(
+        text(at(alarm, "ComparisonOperator")),
+        "GreaterThanThreshold"
     );
 }

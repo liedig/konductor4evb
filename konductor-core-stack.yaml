@@ -590,6 +590,23 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
+  MetadataStreamConsumerIteratorAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-metadata-stream-consumer-iterator-age-alarm"
+      AlarmDescription: Metadata stream consumer falling behind — lifecycle events delayed; recover before the 24-hour stream window closes
+      Namespace: AWS/Lambda
+      MetricName: IteratorAge
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MetadataStreamConsumerFunction
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 60000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
   EntitlementRevocationWorkerErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -1973,6 +1990,55 @@ Resources:
           ENVIRONMENTS: !Join [",", !Ref Environments]
       Policies:
         - !Ref MetadataAdminPolicy
+
+  MetadataStreamConsumerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-metadata-stream-consumer"
+      RetentionInDays: 30
+  MetadataStreamConsumerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MetadataStreamConsumerLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-metadata-stream-consumer"
+      CodeUri: ./control-plane/functions/metadata-stream-consumer
+      Handler: bootstrap
+      Environment:
+        Variables:
+          METADATA_TABLE: !Ref MetadataConfigurationTable
+          KONDUKTOR_EVENT_BUS: !Ref KonductorEventBus
+      Policies:
+        # Idempotency markers are conditional puts (and best-effort
+        # releases) on the metadata table itself; lifecycle events publish
+        # to the control-plane bus.
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+              Resource: !GetAtt MetadataConfigurationTable.Arn
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !GetAtt KonductorEventBus.Arn
+      Events:
+        MetadataStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt MetadataConfigurationTable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 100
+            BisectBatchOnFunctionError: true
+            MaximumRetryAttempts: 3
+            DestinationConfig:
+              OnFailure:
+                Type: SQS
+                Destination: !GetAtt LambdaFailureDlq.Arn
 
   # ---- Decide Registration Function ----
   DecideFunctionLogGroup:

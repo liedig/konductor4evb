@@ -35,6 +35,7 @@ members = [
     "control-plane/functions/entitlement-coverage-sweep",
     "control-plane/functions/entitlement-revocation-worker",
     "control-plane/functions/entitlement-stream-consumer",
+    "control-plane/functions/metadata-stream-consumer",
     "control-plane/functions/grant-benchmark",
 ]
 
