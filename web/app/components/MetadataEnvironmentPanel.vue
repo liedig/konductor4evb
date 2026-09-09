@@ -172,6 +172,14 @@ function closeConfirmation(): void {
   confirmOpen.value = false
 }
 
+/** The prepare dialog under the confirmation is busy-safe too: an Escape
+ * (or backdrop click) during the flight would otherwise drop the identity
+ * the confirmation is naming. */
+function closePrepare(): void {
+  if (activating.value) return
+  prepareTarget.value = null
+}
+
 async function activate(): Promise<void> {
   if (!prepareTarget.value || candidateRevision.value === null || activating.value) return
   activating.value = true
@@ -262,7 +270,7 @@ onMounted(() => {
     <NxModal
       :open="!!prepareTarget"
       :title="prepareTarget ? `Prepare activation — ${prepareTarget.environment}` : ''"
-      @close="prepareTarget = null"
+      @close="closePrepare"
     >
       <div v-if="prepareTarget" class="flex max-h-[70vh] w-[42rem] flex-col gap-4 overflow-y-auto pr-1">
         <dl class="grid grid-cols-2 gap-2 text-sm">

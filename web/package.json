@@ -7,6 +7,7 @@
     "dev": "nuxi dev --port 3000",
     "build": "nuxi generate && node scripts/externalize-inline-scripts.mjs",
     "lint": "eslint .",
+    "test:ui": "playwright test",
     "typecheck": "nuxi typecheck",
     "postinstall": "nuxi prepare"
   },
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.9.0",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.1.12",
     "eslint": "^9.34.0",
     "tailwindcss": "^4.1.12",
