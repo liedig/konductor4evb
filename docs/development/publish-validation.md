@@ -243,7 +243,50 @@ about the payload, not about the registry's current state.
   re-publishing through `/publish`, which stamps a fresh ingest time by
   definition.
 
-## 9. Why schemas are draft-4 only, enforced at write time
+## 9. Metadata in the admitted command (format 2)
+
+Platform metadata adds a generated `metadata` block to every admitted event. The
+queue message therefore became an explicitly versioned **format-2 envelope**:
+the supported publisher body, the resolved business/schema identity and target,
+the selected metadata revision and digest, the generated extension values, and
+the compiled metadata schema (or a bounded validation descriptor) the delivery
+path will need. Metadata lives in the message body, not SQS attributes — the
+attribute surface stays bounded and the trusted-principal attributes are
+preserved unchanged.
+
+The selection boundary is a single strongly-consistent pointer read, after
+authorization:
+
+- A request whose read lands before an activation commit may complete afterward
+  under the old revision. A request reading after the commit gets the new one.
+  No cross-store atomicity between DynamoDB and SQS is promised, and no
+  in-flight work is invalidated.
+- Missing or unreadable configuration is `503` — never a fallback to an older
+  cached revision. The mutable active pointer is never TTL-cached; immutable
+  revision contents cache indefinitely keyed by revision and digest.
+
+Every generated field except `publishedAt` is a **frozen value** at enqueue.
+`publishedAt` is the queue-time exception: SQS's acceptance time is unknowable
+before SQS accepts, so preflight uses the fixed-width UTC-millisecond
+representation, no configurable constraint may depend on its eventual value, and
+delivery derives it from the recorded queue message and checks it against the
+frozen built-in rule.
+
+Delivery reads only recorded values — the format-2 body carries everything, so
+a retry cannot drift and no consumer path performs configuration reads or
+"repairs" a message with fresh UUIDs. A format-2 message with missing or
+inconsistent fields fails processing; only an actual legacy wrapper takes the
+old three-field path. Absence is legacy *recognition*, never recovery from a
+malformed new-format message.
+
+One honesty rule rides along: a client retry after an ambiguous enqueue outcome
+(a timeout with the request already sent) is a **new admission** and may generate
+a new UUID even with the same idempotency key. The application-level
+deduplication key is `idempotencyKey`; UUID metadata is not an exactly-once
+guarantee. The older claim that every non-`202` proves nothing queued is
+stronger than distributed enqueue can promise and is not repeated here.
+
+## 10. Why schemas are draft-4 only, enforced at write time
 
 Validation is only as reliable as the stored schemas. If a registry could hold
 a document that does not compile — malformed JSON, a non-object, an OpenAPI 3.0
@@ -265,7 +308,7 @@ An audit of every org registry before rollout found exactly one schema
 (`acme-billing@OrderNotification`, already draft-4), so the transitional
 carve-out for legacy OpenAPI 3.0 content was dropped rather than shipped.
 
-## 10. What this design deliberately does not do
+## 11. What this design deliberately does not do
 
 - **Caller-declared or pinned schema versions.** Producers cannot publish
   "against version 3." Allowing it would couple producers to consumer migration
@@ -285,7 +328,7 @@ carve-out for legacy OpenAPI 3.0 content was dropped rather than shipped.
   `data` against it. Shape checking stays at the edge (and in serde);
   conformance checking needs the schema, which only admission has.
 
-## 11. Where things live
+## 12. Where things live
 
 | Piece | Location |
 |-------|----------|
