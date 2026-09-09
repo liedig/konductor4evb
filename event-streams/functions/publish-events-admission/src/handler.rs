@@ -33,7 +33,7 @@ use konductor_common::namespace::NamespaceResolver;
 use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
 use konductor_common::principal_context::log_principal;
 use konductor_common::schema_validation::{
-    validate_against_latest, LatestSchema, SchemaCache, SchemaCacheError, ValidationError,
+    LatestSchema, SchemaCache, SchemaCacheError, ValidationError, ValidatorCache,
 };
 
 pub struct Clients {
@@ -56,6 +56,7 @@ pub async fn handle<A: ResourceAuthorizer>(
     clients: &Clients,
     authorizer: &A,
     cache: &SchemaCache,
+    validators: &ValidatorCache,
     metadata: &MetadataAdmission,
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
@@ -81,7 +82,10 @@ pub async fn handle<A: ResourceAuthorizer>(
 
     match (method, resource) {
         ("POST", "/publish") => {
-            admit(clients, authorizer, cache, metadata, payload, &principal).await
+            admit(
+                clients, authorizer, cache, validators, metadata, payload, &principal,
+            )
+            .await
         }
         _ => Ok(api::from_control_plane_error(
             &ControlPlaneError::SchemaNotFound {
@@ -95,6 +99,7 @@ async fn admit<A: ResourceAuthorizer>(
     clients: &Clients,
     authorizer: &A,
     cache: &SchemaCache,
+    validators: &ValidatorCache,
     metadata: &MetadataAdmission,
     payload: &Value,
     principal: &TrustedPrincipal,
@@ -120,9 +125,15 @@ async fn admit<A: ResourceAuthorizer>(
         Ok(s) => s,
         Err(e) => return Ok(api::from_control_plane_error(&e)),
     };
-    if let Err(response) = resolve_metadata(metadata, &stage).await {
-        return Ok(response);
-    }
+    let metadata_selection = match resolve_metadata(metadata, &stage).await {
+        Ok(selection) => selection,
+        Err(response) => return Ok(response),
+    };
+    // The generation scopes every downstream cache: an activation bumps it,
+    // so the very next publish re-fetches under the new identity.
+    let metadata_generation = metadata_selection
+        .as_ref()
+        .map_or(0, |selection| selection.generation);
     let organization = match env::var("ORGANIZATION") {
         Ok(o) => o,
         Err(_) => return Ok(internal_error("ORGANIZATION not set")),
@@ -134,11 +145,17 @@ async fn admit<A: ResourceAuthorizer>(
     );
     let registry = resolver.schema_registry_name(&stage, &organization, &request.domain);
 
-    let latest =
-        match validated_latest_schema(clients, cache, &registry, &schema_name, &request).await {
-            Ok(latest) => latest,
-            Err(response) => return Ok(response),
-        };
+    let resolution = SchemaResolution {
+        clients,
+        cache,
+        validators,
+        generation: metadata_generation,
+    };
+    let latest = match validated_latest_schema(&resolution, &registry, &schema_name, &request).await
+    {
+        Ok(latest) => latest,
+        Err(response) => return Ok(response),
+    };
 
     let idempotency_key = request
         .idempotency_key
@@ -211,6 +228,16 @@ async fn resolve_metadata(
             Err(temporarily_unavailable())
         }
     }
+}
+
+/// The schema-resolution context threaded through the validate/refresh
+/// path: the clients, the caches, and the metadata generation that scopes
+/// every cache entry.
+struct SchemaResolution<'a> {
+    clients: &'a Clients,
+    cache: &'a SchemaCache,
+    validators: &'a ValidatorCache,
+    generation: u64,
 }
 
 /// Parses and deserializes the publish request; anything malformed is a 400.
@@ -435,15 +462,17 @@ fn message_attributes(
 /// every failure to its API response: absent schema → 404, unusable stored
 /// schema or registry/refresh failure → 503, confirmed violations → 422.
 async fn validated_latest_schema(
-    clients: &Clients,
-    cache: &SchemaCache,
+    resolution: &SchemaResolution<'_>,
     registry: &str,
     schema_name: &SchemaName,
     request: &PublishRequest,
 ) -> Result<LatestSchema, Value> {
-    let latest = resolve_latest(clients, cache, registry, schema_name).await?;
+    let latest = resolve_latest(resolution, registry, schema_name).await?;
 
-    match validate_against_latest(&latest, &request.data) {
+    match resolution
+        .validators
+        .validate(&latest.content, &request.data)
+    {
         Ok(()) => {
             tracing::info!(
                 metric = "PublishValidated",
@@ -464,15 +493,7 @@ async fn validated_latest_schema(
             Err(schema_unusable())
         }
         Err(ValidationError::Violations(first_violations)) => {
-            reject_or_refresh(
-                clients,
-                cache,
-                registry,
-                schema_name,
-                request,
-                first_violations,
-            )
-            .await
+            reject_or_refresh(resolution, registry, schema_name, request, first_violations).await
         }
     }
 }
@@ -481,14 +502,13 @@ async fn validated_latest_schema(
 /// definition or reject with the confirmed violations. A failed refresh
 /// refuses to reject on unverifiable grounds and degrades to 503.
 async fn reject_or_refresh(
-    clients: &Clients,
-    cache: &SchemaCache,
+    resolution: &SchemaResolution<'_>,
     registry: &str,
     schema_name: &SchemaName,
     request: &PublishRequest,
     first_violations: String,
 ) -> Result<LatestSchema, Value> {
-    match refresh_and_revalidate(clients, cache, registry, schema_name, &request.data).await {
+    match refresh_and_revalidate(resolution, registry, schema_name, &request.data).await {
         Ok(latest) => Ok(latest),
         Err(RefreshOutcome::StillViolating(message)) => {
             tracing::info!(
@@ -516,15 +536,18 @@ async fn reject_or_refresh(
 /// API response: absent schema → 404, everything else → 503 without registry
 /// internals.
 async fn resolve_latest(
-    clients: &Clients,
-    cache: &SchemaCache,
+    resolution: &SchemaResolution<'_>,
     registry: &str,
     schema_name: &SchemaName,
 ) -> Result<LatestSchema, Value> {
-    cache
-        .get_or_fetch(registry, &schema_name.to_string(), || {
-            fetch_latest_schema(clients, registry, schema_name)
-        })
+    resolution
+        .cache
+        .get_or_fetch(
+            registry,
+            &schema_name.to_string(),
+            resolution.generation,
+            || fetch_latest_schema(resolution.clients, registry, schema_name),
+        )
         .await
         .map_err(|e| match e {
             SchemaCacheError::NotFound => {
@@ -552,19 +575,22 @@ enum RefreshOutcome {
 /// read, so a publish racing a schema append is judged against the newest
 /// definition, never a stale cached one. Only a second failure rejects.
 async fn refresh_and_revalidate(
-    clients: &Clients,
-    cache: &SchemaCache,
+    resolution: &SchemaResolution<'_>,
     registry: &str,
     schema_name: &SchemaName,
     data: &Value,
 ) -> Result<LatestSchema, RefreshOutcome> {
-    let latest = cache
-        .force_fetch(registry, &schema_name.to_string(), || {
-            fetch_latest_schema(clients, registry, schema_name)
-        })
+    let latest = resolution
+        .cache
+        .force_fetch(
+            registry,
+            &schema_name.to_string(),
+            resolution.generation,
+            || fetch_latest_schema(resolution.clients, registry, schema_name),
+        )
         .await
         .map_err(RefreshOutcome::RefreshFailed)?;
-    match validate_against_latest(&latest, data) {
+    match resolution.validators.validate(&latest.content, data) {
         Ok(()) => {
             tracing::info!(
                 metric = "PublishValidated",
@@ -913,6 +939,10 @@ mod tests {
         SchemaCache::new(std::time::Duration::from_secs(60))
     }
 
+    fn validators() -> ValidatorCache {
+        ValidatorCache::new(konductor_common::schema_validation::DEFAULT_VALIDATOR_CACHE_CAPACITY)
+    }
+
     fn metadata(rules: &[&Rule]) -> MetadataAdmission {
         MetadataAdmission::new(
             mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, rules),
@@ -987,6 +1017,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(body)),
         )
@@ -1012,6 +1043,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1034,6 +1066,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1060,6 +1093,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1085,6 +1119,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1112,6 +1147,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"amount": 9.5})))),
         )
@@ -1151,6 +1187,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(body)),
         )
@@ -1175,6 +1212,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1207,6 +1245,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1238,6 +1277,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1259,6 +1299,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[]),
             event(payload),
         )
@@ -1301,6 +1342,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(iam_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1335,6 +1377,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1362,6 +1405,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(big)),
         )
@@ -1395,6 +1439,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata(&[]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1438,6 +1483,7 @@ mod tests {
                 &clients,
                 &authorizer,
                 &cache,
+                &validators(),
                 &metadata(&[&legacy_pointer_rule()]),
                 event(oauth_event(body)),
             )
@@ -1473,6 +1519,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata,
             event(oauth_event(body_one)),
         )
@@ -1482,6 +1529,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata,
             event(oauth_event(body_two)),
         )
@@ -1519,6 +1567,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1545,6 +1594,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &validators(),
             &metadata,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
@@ -1552,5 +1602,82 @@ mod tests {
         .unwrap();
 
         assert_eq!(status(&resp), 503);
+    }
+
+    #[tokio::test]
+    async fn a_metadata_activation_re_fetches_the_business_schema_on_a_warm_instance() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        // Sequential pointer rules: the first publish observes generation 1
+        // (revision 2), the second observes generation 2 (the M1 -> M2
+        // activation). The revision record itself is immutable and cached.
+        let pointer_m1 = pointer_rule(2, 1);
+        let pointer_m2 = pointer_rule(2, 2);
+        let revision = revision_rule(2);
+        // Sequential metadata reads: publish one reads pointer M1 then the
+        // immutable revision record; publish two reads pointer M2 only,
+        // because the revision is served from the bounded cache.
+        let metadata = MetadataAdmission::new(
+            mock_client!(
+                aws_sdk_dynamodb,
+                RuleMode::Sequential,
+                [&pointer_m1, &revision, &pointer_m2]
+            ),
+            "metadata-test",
+        );
+        let schemas = describe_rule(RELAXED_SCHEMA, "3");
+        let clients = Clients {
+            ddb: mock_client!(
+                aws_sdk_dynamodb,
+                RuleMode::MatchAny,
+                &[active_domain_rule()]
+            ),
+            schemas: mock_client!(aws_sdk_schemas, RuleMode::MatchAny, [&schemas]),
+            sqs: mock_client!(
+                aws_sdk_sqs,
+                RuleMode::MatchAny,
+                &[
+                    send_message_rule("key-1", "oauth", "3"),
+                    send_message_rule("key-2", "oauth", "3")
+                ]
+            ),
+        };
+
+        let mut body_one = publish_body(json!({"orderId": 123}));
+        body_one["idempotencyKey"] = json!("key-1");
+        let mut body_two = publish_body(json!({"orderId": 123}));
+        body_two["idempotencyKey"] = json!("key-2");
+
+        handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &metadata,
+            event(oauth_event(body_one)),
+        )
+        .await
+        .unwrap();
+        handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &metadata,
+            event(oauth_event(body_two)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            schemas.num_calls(),
+            2,
+            "the generation bump re-fetches the schema; the old entry is unusable"
+        );
+        assert_eq!(
+            revision.num_calls(),
+            1,
+            "the revision record is immutable and stays cached across the activation"
+        );
     }
 }

@@ -40,13 +40,25 @@ async fn main() -> Result<(), Error> {
         clients.ddb.clone(),
         metadata_table,
     );
+    let validators = konductor_common::schema_validation::ValidatorCache::new(
+        konductor_common::schema_validation::DEFAULT_VALIDATOR_CACHE_CAPACITY,
+    );
 
     let clients_ref = &clients;
     let authorizer_ref = &authorizer;
     let cache_ref = &cache;
+    let validators_ref = &validators;
     let metadata_ref = &metadata;
     lambda_runtime::run(service_fn(move |event| async move {
-        handler::handle(clients_ref, authorizer_ref, cache_ref, metadata_ref, event).await
+        handler::handle(
+            clients_ref,
+            authorizer_ref,
+            cache_ref,
+            validators_ref,
+            metadata_ref,
+            event,
+        )
+        .await
     }))
     .await
 }
