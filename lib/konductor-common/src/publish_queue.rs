@@ -27,6 +27,26 @@ use crate::models::PublishRequest;
 /// The explicit format marker on versioned messages.
 pub const QUEUE_FORMAT_VERSIONED: u8 = 2;
 
+/// Maximum total size SQS accepts for one message: the body plus every
+/// attribute's name, data type, and value.
+pub const SQS_MESSAGE_MAX_BYTES: usize = 256 * 1024;
+
+/// The exact bytes SQS counts against its per-message limit: the body plus
+/// each attribute's name, data type (`String`), and value. Admission
+/// preflights the fully serialized message — including the format-2
+/// descriptor — against this before enqueueing, so oversized metadata is a
+/// pre-queue 400 rather than a deterministically retrying DLQ message.
+pub fn sqs_message_bytes(
+    body: &str,
+    attributes: &std::collections::HashMap<String, String>,
+) -> usize {
+    body.len()
+        + attributes
+            .iter()
+            .map(|(name, value)| name.len() + "String".len() + value.len())
+            .sum::<usize>()
+}
+
 /// The frozen metadata identity and generated extension values for one
 /// admitted event, recorded at admission and reused verbatim across every
 /// delivery retry.
@@ -160,6 +180,24 @@ fn queue_parse_error(message: String) -> ControlPlaneError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sqs_accounting_counts_body_and_every_attribute_part() {
+        use super::*;
+        use std::collections::HashMap;
+
+        let mut attributes = HashMap::new();
+        attributes.insert("Environment".to_string(), "prod".to_string());
+        // "Environment" (11) + "String" (6) + "prod" (4) = 21
+        assert_eq!(sqs_message_bytes("body", &attributes), 4 + 21);
+        attributes.insert("SchemaVersion".to_string(), "3".to_string());
+        // + "SchemaVersion" (13) + "String" (6) + "3" (1) = 20
+        assert_eq!(sqs_message_bytes("body", &attributes), 4 + 41);
+        assert_eq!(
+            sqs_message_bytes(&"x".repeat(SQS_MESSAGE_MAX_BYTES), &attributes),
+            SQS_MESSAGE_MAX_BYTES + 41
+        );
+    }
+
     use super::*;
 
     fn versioned_body() -> Value {

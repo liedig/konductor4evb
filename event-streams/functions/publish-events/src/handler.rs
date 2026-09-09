@@ -709,6 +709,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn format_two_delivery_keeps_admission_timestamps_distinct_from_queue_time() {
+        set_env();
+        // The `utc-timestamp` generator freezes the admission instant;
+        // `publishedAt` is materialized from the SQS `SentTimestamp`. The two
+        // differ legitimately, and delivery recomputes neither.
+        let rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                let detail: Value =
+                    serde_json::from_str(req.entries()[0].detail().unwrap()).unwrap();
+                detail["metadata"]["admittedAt"] == json!("2026-07-30T10:29:59.999Z")
+                    && detail["metadata"]["publishedAt"] == json!("2026-07-30T10:30:00.123Z")
+            })
+            .then_output(|| {
+                aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                    .failed_entry_count(0)
+                    .entries(
+                        aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                            .event_id("evt-timestamps")
+                            .build(),
+                    )
+                    .build()
+            });
+        let clients = clients(vec![active_domain_rule()], vec![rule]);
+
+        let mut body = versioned_body();
+        body["admission"]["metadata"]["values"] = json!({"admittedAt": "2026-07-30T10:29:59.999Z"});
+
+        let response = handle(
+            &clients,
+            &validators(),
+            sqs_event(vec![versioned_record(body, admitted_attributes())]),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+    }
+
+    #[tokio::test]
     async fn sqs_retries_reuse_frozen_values_without_configuration_reads() {
         set_env();
         // One MatchAny rule accepts both deliveries: the retry's composed

@@ -25,7 +25,9 @@ use serde_json::{json, Value};
 use konductor_common::api;
 use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{EventEnvelope, SchemaName};
-use konductor_common::error::ControlPlaneError;
+use konductor_common::error::{
+    ControlPlaneError, ValidationExceptionField, ValidationExceptionReason,
+};
 use konductor_common::grant_engine::actions;
 use konductor_common::metadata::admission::{
     freeze_extension_values, validate_frozen_block, MetadataAdmission, MetadataSelection,
@@ -36,7 +38,8 @@ use konductor_common::namespace::NamespaceResolver;
 use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
 use konductor_common::principal_context::log_principal;
 use konductor_common::publish_queue::{
-    AdmissionIdentity, FrozenMetadata, VersionedAdmission, QUEUE_FORMAT_VERSIONED,
+    sqs_message_bytes, AdmissionIdentity, FrozenMetadata, VersionedAdmission,
+    QUEUE_FORMAT_VERSIONED, SQS_MESSAGE_MAX_BYTES,
 };
 use konductor_common::schema_validation::{
     LatestSchema, SchemaCache, SchemaCacheError, ValidationError, ValidatorCache,
@@ -545,8 +548,12 @@ async fn queue_admitted(
         return temporarily_unavailable();
     };
     let message_body = command.message.to_string();
+    let attribute_map = message_attributes(principal, command);
+    if let Some(response) = queue_size_rejection(&message_body, &attribute_map, command) {
+        return response;
+    }
 
-    let attributes = match build_message_attributes(principal, command) {
+    let attributes = match build_message_attributes(command, &attribute_map) {
         Ok(attributes) => attributes,
         Err(response) => return response,
     };
@@ -588,15 +595,50 @@ async fn queue_admitted(
     }
 }
 
+/// Preflights the exact final SQS message size: the body plus every
+/// attribute's name, data type, and value, including the format-2 descriptor.
+/// An oversized message is a pre-queue 400 — SQS would never accept it, so
+/// queueing a deterministically undeliverable command would only retry into
+/// the DLQ.
+fn queue_size_rejection(
+    message_body: &str,
+    attribute_map: &std::collections::HashMap<String, String>,
+    command: &AdmittedCommand<'_>,
+) -> Option<Value> {
+    if sqs_message_bytes(message_body, attribute_map) <= SQS_MESSAGE_MAX_BYTES {
+        return None;
+    }
+    tracing::info!(
+        metric = "PublishRejected",
+        domain = command.request.domain,
+        environment = command.stage,
+        "queue message exceeds the supported SQS size limit"
+    );
+    Some(api::from_control_plane_error(
+        &ControlPlaneError::ValidationException {
+            message: format!(
+                "queue message exceeds the supported SQS limit of {SQS_MESSAGE_MAX_BYTES} bytes"
+            ),
+            reason: ValidationExceptionReason::FieldValidationFailed,
+            field_list: Some(vec![ValidationExceptionField {
+                name: "data".to_string(),
+                message:
+                    "publish with this metadata configuration exceeds the queue message size limit"
+                        .to_string(),
+            }]),
+        },
+    ))
+}
+
 /// Builds the SQS message attributes for an admitted command. A build
 /// failure is a platform-side defect: answer 503 like any enqueue failure,
 /// never panic in the request path.
 fn build_message_attributes(
-    principal: &TrustedPrincipal,
     command: &AdmittedCommand<'_>,
+    attribute_map: &std::collections::HashMap<String, String>,
 ) -> Result<Vec<(String, aws_sdk_sqs::types::MessageAttributeValue)>, Value> {
     let mut attributes = Vec::new();
-    for (name, value) in message_attributes(principal, command) {
+    for (name, value) in attribute_map {
         let attribute = aws_sdk_sqs::types::MessageAttributeValue::builder()
             .string_value(value)
             .data_type("String")
@@ -610,7 +652,7 @@ fn build_message_attributes(
                 );
                 temporarily_unavailable()
             })?;
-        attributes.push((name, attribute));
+        attributes.push((name.to_string(), attribute));
     }
     Ok(attributes)
 }
@@ -1903,7 +1945,7 @@ mod tests {
     /// A revision rule whose stored definition round-trips through
     /// definition validation and compiles to the exact metadata schema that
     /// `validate_frozen_block` accepts.
-    fn format_two_revision_rule(definition: &'static str) -> Rule {
+    fn format_two_revision_rule(definition: &str) -> Rule {
         let parsed: konductor_common::metadata::definition::MetadataDefinition =
             serde_json::from_str(definition).unwrap();
         let validated =
@@ -1915,6 +1957,7 @@ mod tests {
         )
         .unwrap();
         let metadata_schema = compiled.document_string();
+        let definition = definition.to_string();
         let sk = "r0000000002".to_string();
 
         mock!(aws_sdk_dynamodb::Client::get_item)
@@ -1929,7 +1972,7 @@ mod tests {
                     .item("SK", s("r0000000002"))
                     .item("revision", n(2))
                     .item("predecessor", n(1))
-                    .item("definition", s(definition))
+                    .item("definition", s(&definition))
                     .item("metadataSchema", s(&metadata_schema))
                     .item("definitionDigest", s("digest"))
                     .item("compilerFormat", n(1))
@@ -2146,6 +2189,59 @@ mod tests {
         .unwrap();
 
         assert_eq!(status(&resp), 503);
+    }
+
+    #[tokio::test]
+    async fn oversized_queue_message_answers_400_before_enqueue() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        // The maximum definition (64 generated fields) plus a data blob sized
+        // so the composed EventBridge entry still fits, but the queue message
+        // — which also carries the compiled descriptor and attributes —
+        // exceeds the SQS per-message bound.
+        let children: Vec<Value> = (0..64)
+            .map(|index| {
+                json!({"kind": "field", "name": format!("field{index}"), "generator": "uuid-v4"})
+            })
+            .collect();
+        let definition = json!({"children": children}).to_string();
+        let pointer = pointer_rule(2, 4);
+        let revision = format_two_revision_rule(&definition);
+        let metadata_client = metadata(&[&pointer, &revision]);
+        let blob = json!({"blob": "x".repeat(
+            konductor_common::publish_queue::SQS_MESSAGE_MAX_BYTES - 5000
+        )});
+        let captured: std::sync::Arc<std::sync::Mutex<Option<String>>> = std::sync::Arc::default();
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            &[capture_send_rule(&captured)],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &metadata_client,
+            &FixedUuidSource,
+            event(oauth_event(publish_body(blob))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let body = response_body(&resp);
+        let message = body["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("SQS"),
+            "the rejection names the queue bound, not the entry bound: {message}"
+        );
+        assert!(
+            captured.lock().unwrap().is_none(),
+            "nothing is enqueued when the queue message cannot fit"
+        );
     }
 
     #[tokio::test]
