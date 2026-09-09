@@ -374,8 +374,12 @@ fn publish_admission_has_least_privilege_permissions() {
     let (mut actions, managed) = function_policy_shape(&doc, "PublishEventsAdmissionFunction");
     assert_eq!(
         managed,
-        ["BindingsTableReadPolicy", "EntitlementsTableReadPolicy"],
-        "authorization decisions read bindings and entitlements through the reserved policies"
+        [
+            "BindingsTableReadPolicy",
+            "EntitlementsTableReadPolicy",
+            "MetadataPointerReadPolicy",
+        ],
+        "authorization decisions read bindings, entitlements, and the metadata pointer through the reserved policies"
     );
     actions.sort();
     assert_eq!(

@@ -7,6 +7,7 @@
 //! definitions a platform administrator can add on top of those defaults.
 
 pub mod additive;
+pub mod admission;
 pub mod composition;
 pub mod definition;
 pub mod generation;

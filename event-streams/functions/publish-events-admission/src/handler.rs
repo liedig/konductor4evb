@@ -27,6 +27,7 @@ use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{EventEnvelope, SchemaName};
 use konductor_common::error::ControlPlaneError;
 use konductor_common::grant_engine::actions;
+use konductor_common::metadata::admission::MetadataAdmission;
 use konductor_common::models::{ApiError, DomainStatus, PublishRequest};
 use konductor_common::namespace::NamespaceResolver;
 use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
@@ -55,6 +56,7 @@ pub async fn handle<A: ResourceAuthorizer>(
     clients: &Clients,
     authorizer: &A,
     cache: &SchemaCache,
+    metadata: &MetadataAdmission,
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
     let payload = &event.payload;
@@ -78,7 +80,9 @@ pub async fn handle<A: ResourceAuthorizer>(
         .unwrap_or_default();
 
     match (method, resource) {
-        ("POST", "/publish") => admit(clients, authorizer, cache, payload, &principal).await,
+        ("POST", "/publish") => {
+            admit(clients, authorizer, cache, metadata, payload, &principal).await
+        }
         _ => Ok(api::from_control_plane_error(
             &ControlPlaneError::SchemaNotFound {
                 schema_name: format!("{method} {resource}"),
@@ -91,6 +95,7 @@ async fn admit<A: ResourceAuthorizer>(
     clients: &Clients,
     authorizer: &A,
     cache: &SchemaCache,
+    metadata: &MetadataAdmission,
     payload: &Value,
     principal: &TrustedPrincipal,
 ) -> Result<Value, Error> {
@@ -115,6 +120,9 @@ async fn admit<A: ResourceAuthorizer>(
         Ok(s) => s,
         Err(e) => return Ok(api::from_control_plane_error(&e)),
     };
+    if let Err(response) = resolve_metadata(metadata, &stage).await {
+        return Ok(response);
+    }
     let organization = match env::var("ORGANIZATION") {
         Ok(o) => o,
         Err(_) => return Ok(internal_error("ORGANIZATION not set")),
@@ -170,6 +178,39 @@ async fn admit<A: ResourceAuthorizer>(
     };
 
     Ok(queue_admitted(clients, principal, &command, started).await)
+}
+
+/// Resolves the stage environment's metadata selection. Authorization
+/// has already passed; the pointer read is strongly consistent and fresh
+/// on every publish, and a missing or unreadable pointer is a 503 — never
+/// a stale-pointer fallback.
+async fn resolve_metadata(
+    metadata: &MetadataAdmission,
+    stage: &str,
+) -> Result<Option<konductor_common::metadata::admission::MetadataSelection>, Value> {
+    match metadata.resolve(stage).await {
+        Ok(selection) => {
+            if let Some(selection) = &selection {
+                tracing::info!(
+                    metric = "MetadataSelection",
+                    environment = %stage,
+                    revision = selection.active_revision,
+                    generation = selection.generation,
+                    "resolved active metadata revision"
+                );
+            }
+            Ok(selection)
+        }
+        Err(error) => {
+            tracing::error!(
+                metric = "PublishUnavailable",
+                environment = %stage,
+                error = %error,
+                "metadata configuration unavailable"
+            );
+            Err(temporarily_unavailable())
+        }
+    }
 }
 
 /// Parses and deserializes the publish request; anything malformed is a 400.
@@ -678,6 +719,7 @@ mod tests {
     use super::*;
     use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
     use chrono::Utc;
+    use konductor_common::dynamodb::n;
     use konductor_common::grant::{BindingPrincipal, ResourceRole, RoleBinding};
     use konductor_common::grant_engine::InMemoryGrantEngine;
 
@@ -871,6 +913,63 @@ mod tests {
         SchemaCache::new(std::time::Duration::from_secs(60))
     }
 
+    fn metadata(rules: &[&Rule]) -> MetadataAdmission {
+        MetadataAdmission::new(
+            mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, rules),
+            "metadata-test",
+        )
+    }
+
+    fn pointer_rule(revision: i64, generation: i64) -> Rule {
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| {
+                req.table_name() == Some("metadata-test")
+                    && req.key().and_then(|k| k.get("PK")) == Some(&s("ENV"))
+                    && req.key().and_then(|k| k.get("SK")) == Some(&s("prod"))
+            })
+            .then_output(move || {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("PK", s("ENV"))
+                    .item("SK", s("prod"))
+                    .item("activeRevision", n(revision))
+                    .item("generation", n(generation))
+                    .item("definitionDigest", s("digest-2"))
+                    .item("activatedBy", s("admin-sub"))
+                    .item("activatedAt", s("2026-01-01T00:00:00.000Z"))
+                    .build()
+            })
+    }
+
+    fn legacy_pointer_rule() -> Rule {
+        pointer_rule(0, 0)
+    }
+
+    fn revision_rule(revision: i64) -> Rule {
+        let sort_key = format!("r{revision:010}");
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                req.table_name() == Some("metadata-test")
+                    && req.key().and_then(|k| k.get("PK")) == Some(&s("REVISION"))
+                    && req.key().and_then(|k| k.get("SK")) == Some(&s(&sort_key))
+            })
+            .then_output(move || {
+                let sort_key = format!("r{revision:010}");
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("PK", s("REVISION"))
+                    .item("SK", s(&sort_key))
+                    .item("revision", n(revision))
+                    .item("predecessor", n(revision - 1))
+                    .item("definition", s("{}"))
+                    .item("metadataSchema", s("{}"))
+                    .item("definitionDigest", s("digest"))
+                    .item("compilerFormat", n(1))
+                    .item("createdBy", s("admin-sub"))
+                    .item("createdAt", s("2026-01-01T00:00:00.000Z"))
+                    .item("operationId", s("op"))
+                    .build()
+            })
+    }
+
     #[tokio::test]
     async fn conforming_publish_is_admitted_and_queued() {
         set_env();
@@ -884,9 +983,15 @@ mod tests {
             &[send_message_rule("key-1", "oauth", "3")],
         );
 
-        let resp = handle(&clients, &authorizer, &cache(), event(oauth_event(body)))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 202);
         assert_eq!(response_body(&resp)["requestId"], "sqs-msg-1");
@@ -907,6 +1012,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -919,14 +1025,16 @@ mod tests {
     async fn non_publisher_is_denied_without_any_resource_access() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![]);
-        // Zero rules on every client: any DDB, Schemas, or SQS call panics,
-        // proving authorization precedes resource access.
+        // Zero rules on every client, including the metadata resolver: any
+        // DDB, Schemas, SQS, or metadata-configuration call panics, proving
+        // authorization precedes all resource access.
         let clients = clients(RuleMode::MatchAny, &[], &[], &[]);
 
         let resp = handle(
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -952,6 +1060,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -976,6 +1085,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1002,6 +1112,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"amount": 9.5})))),
         )
         .await
@@ -1036,9 +1147,15 @@ mod tests {
         let mut body = publish_body(json!({"amount": 9.5}));
         body["idempotencyKey"] = json!("key-1");
 
-        let resp = handle(&clients, &authorizer, &cache(), event(oauth_event(body)))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 202);
     }
@@ -1058,6 +1175,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1089,6 +1207,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1119,6 +1238,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1135,9 +1255,15 @@ mod tests {
         payload["requestContext"]["stage"] = json!("");
         let clients = clients(RuleMode::MatchAny, &[active_domain_rule()], &[], &[]);
 
-        let resp = handle(&clients, &authorizer, &cache(), event(payload))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &metadata(&[]),
+            event(payload),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 400);
     }
@@ -1175,6 +1301,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
             event(iam_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1208,6 +1335,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1230,9 +1358,15 @@ mod tests {
         );
         let big = publish_body(json!({"blob": "x".repeat(270 * 1024)}));
 
-        let resp = handle(&clients, &authorizer, &cache(), event(oauth_event(big)))
-            .await
-            .unwrap();
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &metadata(&[&legacy_pointer_rule()]),
+            event(oauth_event(big)),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(status(&resp), 400);
         assert!(
@@ -1261,6 +1395,7 @@ mod tests {
             &clients,
             &authorizer,
             &cache(),
+            &metadata(&[]),
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1299,10 +1434,123 @@ mod tests {
         for _ in 0..2 {
             let mut body = publish_body(json!({"orderId": 1}));
             body["idempotencyKey"] = json!("key-1");
-            let resp = handle(&clients, &authorizer, &cache, event(oauth_event(body)))
-                .await
-                .unwrap();
+            let resp = handle(
+                &clients,
+                &authorizer,
+                &cache,
+                &metadata(&[&legacy_pointer_rule()]),
+                event(oauth_event(body)),
+            )
+            .await
+            .unwrap();
             assert_eq!(status(&resp), 202);
         }
+    }
+
+    #[tokio::test]
+    async fn authorized_publish_resolves_the_active_metadata_revision_with_a_fresh_pointer_read() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let pointer = pointer_rule(2, 1);
+        let revision = revision_rule(2);
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            &[
+                send_message_rule("key-1", "oauth", "3"),
+                send_message_rule("key-2", "oauth", "3"),
+            ],
+        );
+        let metadata = metadata(&[&pointer, &revision]);
+
+        let mut body_one = publish_body(json!({"orderId": 123}));
+        body_one["idempotencyKey"] = json!("key-1");
+        let mut body_two = publish_body(json!({"orderId": 123}));
+        body_two["idempotencyKey"] = json!("key-2");
+
+        handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &metadata,
+            event(oauth_event(body_one)),
+        )
+        .await
+        .unwrap();
+        handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &metadata,
+            event(oauth_event(body_two)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            pointer.num_calls(),
+            2,
+            "the pointer is re-read on every publish"
+        );
+        assert_eq!(
+            revision.num_calls(),
+            1,
+            "the immutable revision record is cached"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_metadata_pointer_is_a_503_without_a_stale_fallback() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let missing = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("metadata-test"))
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder().build()
+            });
+        // Zero Schemas and SQS rules: the 503 must precede schema resolution
+        // and enqueue, and the metadata read must answer 503, never a cached
+        // or invented selection.
+        let clients = clients(RuleMode::MatchAny, &[active_domain_rule()], &[], &[]);
+        let metadata = metadata(&[&missing]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &metadata,
+            event(oauth_event(publish_body(json!({"orderId": 1})))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 503);
+    }
+
+    #[tokio::test]
+    async fn a_pointer_to_a_missing_revision_is_a_503() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let pointer = pointer_rule(2, 1);
+        let missing_revision = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("metadata-test"))
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder().build()
+            });
+        let clients = clients(RuleMode::MatchAny, &[active_domain_rule()], &[], &[]);
+        let metadata = metadata(&[&pointer, &missing_revision]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &metadata,
+            event(oauth_event(publish_body(json!({"orderId": 1})))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 503);
     }
 }

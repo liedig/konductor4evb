@@ -223,6 +223,36 @@ fn metadata_admin_function_reads_writes_through_the_admin_policy_only() {
 }
 
 #[test]
+fn publish_admission_reads_metadata_through_the_pointer_read_policy() {
+    let doc = core_template();
+    let function = props(resource(&doc, "PublishEventsAdmissionFunction"));
+
+    let env = at(at(function, "Environment"), "Variables");
+    assert_eq!(
+        text(at(env, "METADATA_TABLE")),
+        "MetadataConfigurationTable",
+        "admission resolves the environment pointer from the metadata table"
+    );
+
+    let policies = seq(at(function, "Policies"));
+    // Managed-policy references are `!Ref Name` scalars; inline statement
+    // documents are mappings and stay out of the reference check.
+    let referenced: Vec<String> = policies
+        .iter()
+        .filter(|p| support::untag(p).as_str().is_some())
+        .map(|p| text(p).to_string())
+        .collect();
+    assert!(
+        referenced.contains(&"MetadataPointerReadPolicy".to_string()),
+        "admission attaches the GetItem-only pointer-read policy, not the admin policy"
+    );
+    assert!(
+        !referenced.contains(&"MetadataAdminPolicy".to_string()),
+        "admission must not hold mutation permissions"
+    );
+}
+
+#[test]
 fn metadata_stream_consumer_wires_markers_and_event_publication() {
     let doc = core_template();
     let function = resource(&doc, "MetadataStreamConsumerFunction");

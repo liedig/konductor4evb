@@ -1798,9 +1798,11 @@ Resources:
           ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
           PUBLISH_QUEUE_URL: !Ref PublishQueue
           SCHEMA_CACHE_TTL_MS: "60000"
+          METADATA_TABLE: !Ref MetadataConfigurationTable
       Policies:
         - !Ref BindingsTableReadPolicy
         - !Ref EntitlementsTableReadPolicy
+        - !Ref MetadataPointerReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow

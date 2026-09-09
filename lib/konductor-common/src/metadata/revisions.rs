@@ -28,6 +28,8 @@ pub enum MetadataStoreError {
     ConditionFailed,
     #[error("stored item failed to parse: {0}")]
     CorruptItem(String),
+    #[error("metadata configuration unavailable: {0}")]
+    Unavailable(String),
     #[error("dynamodb error: {0}")]
     Dynamo(String),
 }
