@@ -1393,11 +1393,14 @@ Resources:
         Variables:
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
           ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+          METADATA_TABLE: !Ref MetadataConfigurationTable
       Policies:
         # Detail authorization: subscriber-binding point read plus the
         # coverage query on the consumer entitlement partition.
         - !Ref BindingsTableReadPolicy
         - !Ref EntitlementsTableReadPolicy
+        # Composed-contract discovery: pointer and revision reads only.
+        - !Ref MetadataPointerReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow

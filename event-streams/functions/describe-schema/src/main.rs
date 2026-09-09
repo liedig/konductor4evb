@@ -1,3 +1,4 @@
+mod contract;
 mod handler;
 
 use aws_config::BehaviorVersion;

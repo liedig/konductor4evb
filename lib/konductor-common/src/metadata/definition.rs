@@ -147,6 +147,39 @@ pub struct MetadataDefinition {
     pub children: Vec<MetadataNode>,
 }
 
+/// One generated extension field with its generator identity, for read-only
+/// display in composed contracts and the admin UI.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeneratedField {
+    /// The field's location in the metadata tree: dotted paths below the
+    /// root for fields inside nested objects.
+    pub path: String,
+    pub generator: Generator,
+}
+
+fn collect_generated_fields(
+    children: &[MetadataNode],
+    prefix: &str,
+    fields: &mut Vec<GeneratedField>,
+) {
+    for node in children {
+        let path = if prefix.is_empty() {
+            node.name().to_string()
+        } else {
+            format!("{prefix}.{}", node.name())
+        };
+        match node {
+            MetadataNode::Field { generator, .. } => fields.push(GeneratedField {
+                path,
+                generator: *generator,
+            }),
+            MetadataNode::Object { children, .. } => {
+                collect_generated_fields(children, &path, fields)
+            }
+        }
+    }
+}
+
 /// A definition that passed every structural check. Constructing this type is
 /// the only way to reach generation, compilation, and additive comparison, so
 /// downstream code never handles an unvalidated tree.
@@ -190,6 +223,15 @@ impl ValidatedMetadataDefinition {
 
     pub fn children(&self) -> &[MetadataNode] {
         &self.0.children
+    }
+
+    /// Every generated leaf field in definition order, with dotted paths for
+    /// fields nested inside objects — the read-only generator catalogue for
+    /// composed contracts and the admin UI.
+    pub fn generated_fields(&self) -> Vec<GeneratedField> {
+        let mut fields = Vec::new();
+        collect_generated_fields(&self.0.children, "", &mut fields);
+        fields
     }
 
     /// Count of extension nodes (fields plus nested objects).

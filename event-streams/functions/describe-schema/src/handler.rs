@@ -38,6 +38,15 @@ pub async fn handle(
         }
     };
 
+    let resource = event
+        .payload
+        .get("resource")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if resource == crate::contract::CONTRACT_RESOURCE {
+        return crate::contract::contract(ddb, schemas, &event.payload, &principal).await;
+    }
+
     let Some(schema_name) = api::path_param(&event.payload, "schemaName") else {
         return Ok(validation("missing schemaName path parameter"));
     };
@@ -188,7 +197,7 @@ async fn describe_per_environment(
 /// a current covering entitlement (the same decision the engine makes for
 /// subscribe); platform roles inspect without either. No consumer domain: a
 /// platform role is required. Fail-closed throughout.
-async fn authorize(
+pub(crate) async fn authorize(
     ddb: &aws_sdk_dynamodb::Client,
     bindings_table: &str,
     entitlements_table: &str,
@@ -242,7 +251,7 @@ fn is_platform(principal: &TrustedPrincipal) -> bool {
             .contains(&GlobalRole::PlatformAuditor)
 }
 
-fn validation(message: &str) -> Value {
+pub(crate) fn validation(message: &str) -> Value {
     api::from_control_plane_error(&ControlPlaneError::ValidationException {
         message: message.to_string(),
         reason: ValidationExceptionReason::FieldValidationFailed,
@@ -250,7 +259,7 @@ fn validation(message: &str) -> Value {
     })
 }
 
-fn not_found(message: String) -> Value {
+pub(crate) fn not_found(message: String) -> Value {
     api::error_response(
         404,
         ApiError {
@@ -283,11 +292,18 @@ mod tests {
 
     const SCHEMA: &str = "acme-orders@OrderNotification";
 
+    const BUSINESS_SCHEMA: &str = r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"object","properties":{"orderId":{"type":"integer"}},"required":["orderId"]}"#;
+    const OLD_BUSINESS_SCHEMA: &str = r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"object","properties":{"amount":{"type":"number"}},"required":["amount"]}"#;
+    const METADATA_DEFINITION: &str =
+        r#"{"children":[{"kind":"field","name":"eventId","generator":"uuid-v4"}]}"#;
+    const METADATA_SCHEMA_DOC: &str = r#"{"$schema":"http://json-schema.org/draft-04/schema#","type":"object","properties":{"schemaVersion":{"type":"integer"},"idempotencyKey":{"type":"string"},"publishedAt":{"type":"string"},"metadataRevision":{"type":"integer"},"eventId":{"type":"string"}},"required":["schemaVersion","idempotencyKey","publishedAt","metadataRevision","eventId"],"additionalProperties":false}"#;
+
     fn set_env() {
         std::env::set_var("ORGANIZATION", "acme");
         std::env::set_var("DOMAINS_TABLE", "domains");
         std::env::set_var("BINDINGS_TABLE", "bindings");
         std::env::set_var("ENTITLEMENTS_TABLE", "entitlements");
+        std::env::set_var("METADATA_TABLE", "metadata");
     }
 
     fn iam_context(account_id: &str) -> Value {
@@ -665,6 +681,395 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(resp["statusCode"], 403);
+    }
+
+    fn contract_request(context: Value, params: Value) -> LambdaEvent<Value> {
+        LambdaEvent::new(
+            json!({
+                "resource": crate::contract::CONTRACT_RESOURCE,
+                "requestContext": context,
+                "pathParameters": { "schemaName": SCHEMA },
+                "queryStringParameters": params,
+            }),
+            LambdaContext::default(),
+        )
+    }
+
+    fn metadata_pointer_rule(revision: i64, generation: i64) -> Rule {
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| {
+                req.table_name() == Some("metadata")
+                    && req.consistent_read() == Some(true)
+                    && req
+                        .key()
+                        .and_then(|k| k.get("PK"))
+                        .and_then(|v| v.as_s().ok())
+                        .map(|v| v.as_str() == "ENV")
+                        == Some(true)
+                    && req
+                        .key()
+                        .and_then(|k| k.get("SK"))
+                        .and_then(|v| v.as_s().ok())
+                        .map(|v| v.as_str() == "prod")
+                        == Some(true)
+            })
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .item("PK", konductor_common::dynamodb::s("ENV"))
+                    .item("SK", konductor_common::dynamodb::s("prod"))
+                    .item("activeRevision", konductor_common::dynamodb::n(revision))
+                    .item("generation", konductor_common::dynamodb::n(generation))
+                    .item(
+                        "definitionDigest",
+                        konductor_common::dynamodb::s("digest-2"),
+                    )
+                    .item("activatedBy", konductor_common::dynamodb::s("admin-sub"))
+                    .item(
+                        "activatedAt",
+                        konductor_common::dynamodb::s("2026-01-01T00:00:00.000Z"),
+                    )
+                    .build()
+            })
+    }
+
+    fn metadata_revision_rule(
+        revision: i64,
+        definition: &'static str,
+        metadata_schema: &'static str,
+    ) -> Rule {
+        let sk = format!("r{revision:010}");
+        let sk_inner = sk.clone();
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                req.table_name() == Some("metadata")
+                    && req
+                        .key()
+                        .and_then(|k| k.get("PK"))
+                        .and_then(|v| v.as_s().ok())
+                        .map(|v| v.as_str() == "REVISION")
+                        == Some(true)
+                    && req
+                        .key()
+                        .and_then(|k| k.get("SK"))
+                        .and_then(|v| v.as_s().ok())
+                        .map(|v| v.as_str() == sk.as_str())
+                        == Some(true)
+            })
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .item("PK", konductor_common::dynamodb::s("REVISION"))
+                    .item("SK", konductor_common::dynamodb::s(&sk_inner))
+                    .item("revision", konductor_common::dynamodb::n(revision))
+                    .item("predecessor", konductor_common::dynamodb::n(revision - 1))
+                    .item("definition", konductor_common::dynamodb::s(definition))
+                    .item(
+                        "metadataSchema",
+                        konductor_common::dynamodb::s(metadata_schema),
+                    )
+                    .item("definitionDigest", konductor_common::dynamodb::s("digest"))
+                    .item("compilerFormat", konductor_common::dynamodb::n(1))
+                    .item("createdBy", konductor_common::dynamodb::s("admin-sub"))
+                    .item(
+                        "createdAt",
+                        konductor_common::dynamodb::s("2026-01-01T00:00:00.000Z"),
+                    )
+                    .item("operationId", konductor_common::dynamodb::s("op"))
+                    .build()
+            })
+    }
+
+    fn empty_metadata_rule() -> Rule {
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("metadata"))
+            .then_output(|| GetItemOutput::builder().build())
+    }
+
+    fn versioned_describe_rule(
+        env: &'static str,
+        version: &'static str,
+        content: &'static str,
+    ) -> Rule {
+        mock!(aws_sdk_schemas::Client::describe_schema)
+            .match_requests(move |req| {
+                req.registry_name() == Some(format!("acme-{env}-orders-schema-registry").as_str())
+                    && req.schema_name() == Some(SCHEMA)
+                    && req.schema_version() == Some(version)
+            })
+            .then_output(move || {
+                DescribeSchemaOutput::builder()
+                    .schema_name(SCHEMA)
+                    .schema_version(version)
+                    .content(content)
+                    .build()
+            })
+    }
+
+    fn composed(body: &Value) -> Value {
+        serde_json::from_str(body["composedDocument"].as_str().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn current_contract_composes_the_active_pair() {
+        set_env();
+        let domain = domain_rule();
+        let pointer = metadata_pointer_rule(2, 4);
+        let revision = metadata_revision_rule(2, METADATA_DEFINITION, METADATA_SCHEMA_DOC);
+        let prod = describe_rule("prod", 3, BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&domain, &pointer, &revision], &[&prod]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({"domain": "orders", "environment": "prod"}),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let body = body(&resp);
+        assert_eq!(body["environment"], "prod");
+        assert_eq!(body["registry"], "acme-prod-orders-schema-registry");
+        assert_eq!(body["schemaVersion"], 3);
+        assert_eq!(body["metadataRevision"], 2);
+        assert_eq!(body["generation"], 4);
+        assert_eq!(body["definitionDigest"], "digest");
+        assert_eq!(body["businessContent"], BUSINESS_SCHEMA);
+        let generators = body["generators"].as_array().unwrap();
+        assert_eq!(generators[0]["name"], "eventId");
+        assert_eq!(generators[0]["generator"], "uuid-v4");
+        assert!(!generators[0]["source"].as_str().unwrap().is_empty());
+        assert!(!generators[0]["constraint"].as_str().unwrap().is_empty());
+        let composed = composed(&body);
+        assert_eq!(
+            composed["properties"]["metadata"]["properties"]["schemaVersion"]["enum"],
+            json!([3]),
+            "the composed contract pins the business version"
+        );
+        assert_eq!(
+            composed["definitions"]["konductorBusiness"]["properties"]["orderId"],
+            json!({"type": "integer"}),
+            "business rules stay embedded in their own scope"
+        );
+    }
+
+    #[tokio::test]
+    async fn historical_contract_selects_the_explicit_pair() {
+        set_env();
+        let domain = domain_rule();
+        let revision = metadata_revision_rule(1, METADATA_DEFINITION, METADATA_SCHEMA_DOC);
+        let old = versioned_describe_rule("prod", "2", OLD_BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&domain, &revision], &[&old]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({
+                    "domain": "orders",
+                    "environment": "prod",
+                    "schemaVersion": "2",
+                    "metadataRevision": "1"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let body = body(&resp);
+        assert_eq!(body["schemaVersion"], 2);
+        assert_eq!(body["businessContent"], OLD_BUSINESS_SCHEMA);
+        assert_eq!(body["metadataRevision"], 1);
+        assert_eq!(
+            body["generation"],
+            Value::Null,
+            "historical reads do not guess the generation that was active"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_revision_contract_serves_the_original_three_field_metadata() {
+        set_env();
+        let domain = domain_rule();
+        let first = versioned_describe_rule("prod", "1", OLD_BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&domain], &[&first]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({
+                    "domain": "orders",
+                    "environment": "prod",
+                    "schemaVersion": "1",
+                    "metadataRevision": "0"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let body = body(&resp);
+        assert_eq!(body["metadataRevision"], 0);
+        assert_eq!(body["definitionDigest"], Value::Null);
+        assert_eq!(body["generators"], json!([]));
+        let metadata_schema: Value =
+            serde_json::from_str(body["metadataSchema"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata_schema["properties"].as_object().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn incomplete_historical_selectors_answer_400() {
+        set_env();
+        // Selector validation precedes authorization, so zero rules are safe.
+        let (ddb, schemas) = clients(&[], &[]);
+
+        let only_version = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({"domain": "orders", "environment": "prod", "schemaVersion": "2"}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(only_version["statusCode"], 400);
+
+        let only_revision = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({"domain": "orders", "environment": "prod", "metadataRevision": "1"}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(only_revision["statusCode"], 400);
+    }
+
+    #[tokio::test]
+    async fn missing_metadata_revision_answers_404() {
+        set_env();
+        let domain = domain_rule();
+        let missing = empty_metadata_rule();
+        let old = versioned_describe_rule("prod", "2", OLD_BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&domain, &missing], &[&old]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({
+                    "domain": "orders",
+                    "environment": "prod",
+                    "schemaVersion": "2",
+                    "metadataRevision": "9"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 404);
+    }
+
+    #[tokio::test]
+    async fn unknown_environment_answers_404() {
+        set_env();
+        let domain = domain_rule();
+        let (ddb, schemas) = clients(&[&domain], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({"domain": "orders", "environment": "staging"}),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 404);
+    }
+
+    #[tokio::test]
+    async fn missing_pointer_answers_503_without_legacy_fallback() {
+        set_env();
+        let domain = domain_rule();
+        let missing = empty_metadata_rule();
+        let prod = describe_rule("prod", 3, BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&domain, &missing], &[&prod]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({"domain": "orders", "environment": "prod"}),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 503);
+    }
+
+    #[tokio::test]
+    async fn revoked_entitlement_denies_the_contract() {
+        set_env();
+        let binding = subscriber_binding_rule("111122223333", "checkout");
+        let entitlements = entitlements_rule("checkout", vec!["InvoiceCreated"]);
+        let (ddb, schemas) = clients(&[&binding, &entitlements], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                iam_context("111122223333"),
+                json!({"domain": "orders", "environment": "prod", "consumerDomain": "checkout"}),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 403);
+        assert_eq!(body(&resp)["code"], "AccessDeniedException");
+    }
+
+    #[tokio::test]
+    async fn publisher_reads_their_own_contract_without_consumer_context() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let pointer = metadata_pointer_rule(2, 4);
+        let revision = metadata_revision_rule(2, METADATA_DEFINITION, METADATA_SCHEMA_DOC);
+        let prod = describe_rule("prod", 3, BUSINESS_SCHEMA);
+        // No entitlements rule: publisher access must not consult coverage.
+        let (ddb, schemas) = clients(&[&binding, &domain, &pointer, &revision], &[&prod]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_team_context("team-orders"),
+                json!({"domain": "orders", "environment": "prod"}),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(body(&resp)["schemaVersion"], 3);
     }
 
     #[tokio::test]

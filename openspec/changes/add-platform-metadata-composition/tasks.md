@@ -32,7 +32,7 @@
 
 ## 5. Composed contract discovery and preview
 
-- [ ] 5.1 Implement current and explicit historical contract reads using existing catalog authorization on both API surfaces. Verify current V3/M2 versus historical V2/M1 and legacy reads, environment identity, incomplete selectors, missing versions, revoked entitlements, and publisher/platform visibility with `describe-schema` handler tests.
+- [x] 5.1 Implement current and explicit historical contract reads using existing catalog authorization on both API surfaces. Verify current V3/M2 versus historical V2/M1 and legacy reads, environment identity, incomplete selectors, missing versions, revoked entitlements, and publisher/platform visibility with `describe-schema` handler tests.
 - [ ] 5.2 Add publisher-authorized unsaved contract preview and per-environment metadata summaries without changing raw business `content`. Verify previews do not register or publish, pagination still rechecks coverage, and domain-only access cannot reveal unrelated schema content with `list-schemas` and preview-handler tests.
 - [ ] 5.3 Add composed contract/preview request and response definitions to both OpenAPI surfaces, preserving management-route exceptions. Verify API parity tests and independent offline validation of returned current/historical documents pass.
 
