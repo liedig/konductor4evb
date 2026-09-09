@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use konductor_common::entitlement::ScopePattern;
+use konductor_common::metadata::revisions::MetadataStore;
 
 use crate::discovery;
 
@@ -33,12 +34,16 @@ pub enum Scope {
     Platform,
 }
 
-/// One catalog row: a covered schema with its latest version per environment.
+/// One catalog row: a covered schema with its latest version per
+/// environment, plus the environment's active metadata revision where it
+/// is readable. The summary is denormalized per entry but never persisted —
+/// it is not a schema index.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub producer_domain: String,
     pub schema_name: String,
     pub latest_versions: BTreeMap<String, i64>,
+    pub metadata_revisions: BTreeMap<String, u32>,
 }
 
 /// A filled page plus the watermark the next page continues from.
@@ -102,6 +107,7 @@ pub struct CatalogQuery {
 pub async fn list_catalog(
     ddb: &aws_sdk_dynamodb::Client,
     schemas: &aws_sdk_schemas::Client,
+    metadata_table: &str,
     organization: &str,
     scope: &Scope,
     query: &CatalogQuery,
@@ -159,28 +165,81 @@ pub async fn list_catalog(
     let has_more = collected.len() > page_size;
     let page: Vec<(String, String)> = collected.iter().take(page_size).cloned().collect();
 
+    let store = MetadataStore::new(ddb.clone(), metadata_table.to_string());
+    let entries = assemble_entries(
+        schemas,
+        &store,
+        organization,
+        &page,
+        &environments_by_producer,
+    )
+    .await?;
+
+    let watermark = if has_more { page.last().cloned() } else { None };
+    Ok(CatalogPage { entries, watermark })
+}
+
+/// Builds the page's entries: latest versions described per environment,
+/// plus the environment's active metadata revision. One pointer read per
+/// environment per page is shared by every entry — the pointer is
+/// environment-scoped, not producer-scoped — and an unreadable pointer
+/// omits that environment's summary without failing the catalog.
+async fn assemble_entries(
+    schemas: &aws_sdk_schemas::Client,
+    store: &MetadataStore,
+    organization: &str,
+    page: &[(String, String)],
+    environments_by_producer: &BTreeMap<String, Vec<String>>,
+) -> Result<Vec<CatalogEntry>> {
+    let mut metadata_by_environment: BTreeMap<String, Option<u32>> = BTreeMap::new();
     let mut entries = Vec::new();
-    for (producer, name) in &page {
+    for (producer, name) in page {
         let environments = environments_by_producer
             .get(producer)
             .cloned()
             .unwrap_or_default();
         let mut latest_versions = BTreeMap::new();
+        let mut metadata_revisions = BTreeMap::new();
         for env_name in &environments {
             let registry = format!("{organization}-{env_name}-{producer}-schema-registry");
             if let Some(version) = discovery::latest_version(schemas, &registry, name).await? {
                 latest_versions.insert(env_name.clone(), version);
+            }
+            let revision = match metadata_by_environment.get(env_name) {
+                Some(cached) => *cached,
+                None => {
+                    let revision = read_pointer_once(store, env_name).await;
+                    metadata_by_environment.insert(env_name.clone(), revision);
+                    revision
+                }
+            };
+            if let Some(revision) = revision {
+                metadata_revisions.insert(env_name.clone(), revision);
             }
         }
         entries.push(CatalogEntry {
             producer_domain: producer.clone(),
             schema_name: name.clone(),
             latest_versions,
+            metadata_revisions,
         });
     }
+    Ok(entries)
+}
 
-    let watermark = if has_more { page.last().cloned() } else { None };
-    Ok(CatalogPage { entries, watermark })
+/// One pointer read, reported as best-effort: `None` omits the summary.
+async fn read_pointer_once(store: &MetadataStore, environment: &str) -> Option<u32> {
+    match store.get_environment_pointer(environment).await {
+        Ok(Some(pointer)) => Some(pointer.active_revision),
+        Ok(None) => {
+            tracing::warn!(environment, "no metadata pointer; omitting summary");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, environment, "metadata pointer read failed; omitting summary");
+            None
+        }
+    }
 }
 
 fn covered(scope: &Scope, patterns: &[ScopePattern], schema_name: &str) -> bool {

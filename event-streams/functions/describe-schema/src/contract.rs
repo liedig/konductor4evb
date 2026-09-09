@@ -41,12 +41,12 @@ struct ContractPair {
 
 /// The metadata half of a contract: the exact revision, its compiled schema,
 /// and the read-only generator catalogue.
-struct MetadataSide {
-    revision: u32,
-    compiled: CompiledMetadataSchema,
-    definition_digest: Option<String>,
-    generation: Option<u64>,
-    generators: Vec<GeneratedField>,
+pub(crate) struct MetadataSide {
+    pub(crate) revision: u32,
+    pub(crate) compiled: CompiledMetadataSchema,
+    pub(crate) definition_digest: Option<String>,
+    pub(crate) generation: Option<u64>,
+    pub(crate) generators: Vec<GeneratedField>,
 }
 
 pub async fn contract(
@@ -156,7 +156,7 @@ fn parse_historical_selectors(payload: &Value) -> Result<Option<(i64, u32)>, Val
 }
 
 /// The domain's environments when it is ACTIVE; `None` is a 404.
-async fn active_domain_environments(
+pub(crate) async fn active_domain_environments(
     ddb: &aws_sdk_dynamodb::Client,
     domains_table: &str,
     domain_name: &str,
@@ -215,7 +215,10 @@ async fn resolve_pair(
 /// The active selection: one strongly consistent pointer read, mirroring
 /// admission. A missing or unreadable pointer is a 503 — never a legacy
 /// fallback. A legacy pointer (revision 0) serves the legacy contract.
-async fn current_metadata(store: &MetadataStore, environment: &str) -> Result<MetadataSide, Value> {
+pub(crate) async fn current_metadata(
+    store: &MetadataStore,
+    environment: &str,
+) -> Result<MetadataSide, Value> {
     let pointer = store
         .get_environment_pointer(environment)
         .await
@@ -386,7 +389,7 @@ fn contract_response(
     ))
 }
 
-fn unavailable(message: &str) -> Value {
+pub(crate) fn unavailable(message: &str) -> Value {
     api::error_response(
         503,
         ApiError {

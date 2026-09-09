@@ -1,5 +1,6 @@
 mod contract;
 mod handler;
+mod preview;
 
 use aws_config::BehaviorVersion;
 use lambda_runtime::{service_fn, Error};

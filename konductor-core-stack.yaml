@@ -1338,11 +1338,14 @@ Resources:
         Variables:
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
           ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+          METADATA_TABLE: !Ref MetadataConfigurationTable
       Policies:
         # Catalog authorization: subscriber-binding point read plus the
         # strongly consistent consumer-partition entitlement query.
         - !Ref BindingsTableReadPolicy
         - !Ref EntitlementsTableReadPolicy
+        # Per-environment active metadata revision summaries: pointer reads only.
+        - !Ref MetadataPointerReadPolicy
         - Version: '2012-10-17'
           Statement:
             # ACTIVE-domain expansion reads; Scan serves the platform-wide

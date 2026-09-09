@@ -21,12 +21,6 @@ pub async fn handle(
     schemas: &aws_sdk_schemas::Client,
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
-    let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
-    let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
-    let bindings_table = env::var("BINDINGS_TABLE").context("BINDINGS_TABLE not set")?;
-    let entitlements_table =
-        env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
-
     let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
     let principal = match log_principal(request_context) {
         Ok(p) => p,
@@ -43,23 +37,44 @@ pub async fn handle(
         .get("resource")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if resource == crate::contract::CONTRACT_RESOURCE {
-        return crate::contract::contract(ddb, schemas, &event.payload, &principal).await;
+    match resource {
+        crate::contract::CONTRACT_RESOURCE => {
+            crate::contract::contract(ddb, schemas, &event.payload, &principal).await
+        }
+        crate::preview::PREVIEW_RESOURCE => {
+            crate::preview::preview(ddb, schemas, &event.payload, &principal).await
+        }
+        _ => describe_detail(ddb, schemas, &event.payload, &principal).await,
     }
+}
 
-    let Some(schema_name) = api::path_param(&event.payload, "schemaName") else {
+/// The original raw business-schema detail route: per-environment latest
+/// versions plus the highest-version content, unchanged.
+async fn describe_detail(
+    ddb: &aws_sdk_dynamodb::Client,
+    schemas: &aws_sdk_schemas::Client,
+    payload: &Value,
+    principal: &TrustedPrincipal,
+) -> Result<Value, Error> {
+    let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
+    let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
+    let bindings_table = env::var("BINDINGS_TABLE").context("BINDINGS_TABLE not set")?;
+    let entitlements_table =
+        env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
+
+    let Some(schema_name) = api::path_param(payload, "schemaName") else {
         return Ok(validation("missing schemaName path parameter"));
     };
-    let Some(domain_name) = api::query_param(&event.payload, "domain") else {
+    let Some(domain_name) = api::query_param(payload, "domain") else {
         return Ok(validation("missing required query parameter 'domain'"));
     };
-    let consumer = api::query_param(&event.payload, "consumerDomain");
+    let consumer = api::query_param(payload, "consumerDomain");
 
     if !authorize(
         ddb,
         &bindings_table,
         &entitlements_table,
-        &principal,
+        principal,
         &consumer,
         &domain_name,
         &schema_name,
@@ -244,7 +259,7 @@ pub(crate) async fn authorize(
     }
 }
 
-fn is_platform(principal: &TrustedPrincipal) -> bool {
+pub(crate) fn is_platform(principal: &TrustedPrincipal) -> bool {
     principal.is_platform_admin()
         || principal
             .global_roles()
@@ -1070,6 +1085,186 @@ mod tests {
 
         assert_eq!(resp["statusCode"], 200);
         assert_eq!(body(&resp)["schemaVersion"], 3);
+    }
+
+    fn preview_request(context: Value, body: Value) -> LambdaEvent<Value> {
+        LambdaEvent::new(
+            json!({
+                "resource": crate::preview::PREVIEW_RESOURCE,
+                "httpMethod": "POST",
+                "requestContext": context,
+                "body": body.to_string(),
+            }),
+            LambdaContext::default(),
+        )
+    }
+
+    fn preview_body() -> Value {
+        json!({
+            "domain": "orders",
+            "schemaName": SCHEMA,
+            "environment": "prod",
+            "content": BUSINESS_SCHEMA,
+            "schemaVersion": 4
+        })
+    }
+
+    #[tokio::test]
+    async fn publisher_contract_preview_composes_without_registering() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let pointer = metadata_pointer_rule(2, 4);
+        let revision = metadata_revision_rule(2, METADATA_DEFINITION, METADATA_SCHEMA_DOC);
+        let (ddb, schemas) = clients(
+            &[&binding, &domain, &pointer, &revision],
+            // Zero Schemas rules: the explicit schemaVersion means no lookup
+            // happens, and any registration or publish attempt would fail
+            // this test by having no rule to match.
+            &[],
+        );
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            preview_request(oauth_team_context("team-orders"), preview_body()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let body = body(&resp);
+        assert_eq!(body["schemaVersion"], 4);
+        assert_eq!(body["metadataRevision"], 2);
+        assert_eq!(body["generation"], 4);
+        assert_eq!(body["registered"], false);
+        let composed: Value =
+            serde_json::from_str(body["composedDocument"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            composed["properties"]["metadata"]["properties"]["schemaVersion"]["enum"],
+            json!([4])
+        );
+        assert!(
+            composed["definitions"]["konductorBusiness"]["properties"]["orderId"].is_object(),
+            "the unsaved draft is embedded in its own business scope"
+        );
+    }
+
+    #[tokio::test]
+    async fn preview_defaults_to_the_latest_published_version() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let pointer = metadata_pointer_rule(2, 4);
+        let revision = metadata_revision_rule(2, METADATA_DEFINITION, METADATA_SCHEMA_DOC);
+        let prod = describe_rule("prod", 3, BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&binding, &domain, &pointer, &revision], &[&prod]);
+        let mut request_body = preview_body();
+        request_body
+            .as_object_mut()
+            .unwrap()
+            .remove("schemaVersion");
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            preview_request(oauth_team_context("team-orders"), request_body),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(body(&resp)["schemaVersion"], 3);
+    }
+
+    #[tokio::test]
+    async fn subscriber_binding_alone_cannot_preview() {
+        set_env();
+        let binding = subscriber_binding_rule("111122223333", "checkout");
+        // The publisher-binding lookup reads a different key: it must find
+        // no publisher binding, not fail the lookup.
+        let no_publisher = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("bindings"))
+            .then_output(|| GetItemOutput::builder().build());
+        let (ddb, schemas) = clients(&[&binding, &no_publisher], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            preview_request(iam_context("111122223333"), preview_body()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 403);
+        assert_eq!(body(&resp)["code"], "AccessDeniedException");
+    }
+
+    #[tokio::test]
+    async fn draft_with_unresolvable_reference_answers_400() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let pointer = metadata_pointer_rule(2, 4);
+        let revision = metadata_revision_rule(2, METADATA_DEFINITION, METADATA_SCHEMA_DOC);
+        let (ddb, schemas) = clients(&[&binding, &domain, &pointer, &revision], &[]);
+        let mut request_body = preview_body();
+        request_body["content"] = json!(
+            r#"{"$schema":"http://json-schema.org/draft-04/schema#","$ref":"https://example.com/remote.json"}"#
+        );
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            preview_request(oauth_team_context("team-orders"), request_body),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 400);
+        assert!(body(&resp)["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot participate in a composed contract"));
+    }
+
+    #[tokio::test]
+    async fn preview_without_active_configuration_answers_503() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let missing = empty_metadata_rule();
+        let (ddb, schemas) = clients(&[&binding, &domain, &missing], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            preview_request(oauth_team_context("team-orders"), preview_body()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 503);
+    }
+
+    #[tokio::test]
+    async fn platform_roles_preview_without_a_publisher_binding() {
+        set_env();
+        let domain = domain_rule();
+        let pointer = metadata_pointer_rule(2, 4);
+        let revision = metadata_revision_rule(2, METADATA_DEFINITION, METADATA_SCHEMA_DOC);
+        let (ddb, schemas) = clients(&[&domain, &pointer, &revision], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            preview_request(oauth_platform_context("platform-auditor"), preview_body()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(body(&resp)["metadataRevision"], 2);
     }
 
     #[tokio::test]
