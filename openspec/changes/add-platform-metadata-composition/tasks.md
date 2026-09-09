@@ -39,7 +39,7 @@
 ## 6. Metadata administration UI
 
 - [x] 6.1 Add typed metadata API models, a `useMetadata` composable over `useApi`, `/admin/metadata`, and platform navigation. Verify auth redirects, auditor read-only behavior, direct-route domain-user denial, and `rtk pnpm typecheck` from `web/`.
-- [ ] 6.2 Build the protected-defaults panel and additive field/object editor from shared controls. Verify unsupported generators and limits are visible, old fields cannot be edited, errors retain local work, and keyboard names/descriptions work in isolated browser tests.
+- [x] 6.2 Build the protected-defaults panel and additive field/object editor from shared controls. Verify unsupported generators and limits are visible, old fields cannot be edited, errors retain local work, and keyboard names/descriptions work in isolated browser tests.
 - [ ] 6.3 Build synthetic preview, immutable revision history, and diffs. Verify preview sends no live mutations, revision save does not activate, concurrent-save conflicts preserve local edits, and busy state prevents duplicate submissions.
 - [ ] 6.4 Build environment status/readiness, timestamped paginated affected-schema inventory, activation audit history, and explicit activation confirmation. Verify environment/current/candidate identity, consumer-readiness warning, stale-state conflict recovery, busy-safe dismissal rules, and authoritative refresh after success.
 - [ ] 6.5 Extend domain schema panels, producer authoring previews, and catalog detail with separate business/metadata version badges and business/metadata/composed views. Verify explicit historical selectors never default to current metadata, authoring remains business-only and stage-derived, and subscription actions remain unchanged.

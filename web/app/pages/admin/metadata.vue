@@ -15,6 +15,9 @@ const pending = ref(true)
 const pendingMore = ref(false)
 const errorMessage = ref('')
 
+/** Newest revision is the additive head the editor extends. */
+const headRevision = computed(() => revisions.value[0] ?? null)
+
 const environmentColumns: TableColumn[] = [
   { key: 'environment', label: 'Environment' },
   { key: 'activeRevision', label: 'Active revision' },
@@ -82,6 +85,19 @@ onMounted(async () => {
     </header>
 
     <p v-if="errorMessage" role="alert" class="text-sm text-danger">{{ errorMessage }}</p>
+
+    <MetadataDefaultsPanel />
+
+    <MetadataDefinitionEditor
+      v-if="session.isPlatformAdmin"
+      :predecessor="headRevision"
+    />
+    <NxCard v-else title="Definition editor">
+      <p class="text-sm text-muted">
+        Configuration is read-only for auditors. Mutations require the
+        platform-admin role; the API remains the enforcing boundary.
+      </p>
+    </NxCard>
 
     <NxCard title="Environments">
       <NxTable
