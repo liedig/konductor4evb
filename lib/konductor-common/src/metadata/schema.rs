@@ -41,7 +41,38 @@ impl CompiledMetadataSchema {
     pub fn document_string(&self) -> String {
         serde_json::to_string(&self.document).unwrap_or_default()
     }
+
+    /// Validates a full metadata block (built-ins plus extension values)
+    /// against this exact revision's closed contract, using the same
+    /// draft-4 validator family admission and delivery rely on. Readiness
+    /// probes platform-generated values through this; it performs no
+    /// configuration reads and no network resolution.
+    pub fn validate_block(&self, block: &Value) -> Result<(), String> {
+        let validator = jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft4)
+            .build(&self.document)
+            .map_err(|e| format!("metadata schema is not compilable: {e}"))?;
+        let mut violations = validator
+            .iter_errors(block)
+            .take(MAX_REPORTED_VIOLATIONS)
+            .map(|e| e.to_string());
+        match violations.next() {
+            None => Ok(()),
+            Some(first) => {
+                let mut message = first;
+                for violation in violations {
+                    message.push_str("; ");
+                    message.push_str(&violation);
+                }
+                Err(message)
+            }
+        }
+    }
 }
+
+/// Bounded violation reporting, matching the composition module's cap so
+/// error surfaces stay actionable rather than exhaustive.
+const MAX_REPORTED_VIOLATIONS: usize = 5;
 
 /// The read-only legacy contract for events predating metadata stamping:
 /// the original three built-in fields with their original semantics, closed
@@ -453,5 +484,37 @@ mod tests {
         .unwrap();
         let compiled = compile(2, vec![field("eventId", Generator::UuidV4)]);
         assert_eq!(compiled.document, golden);
+    }
+
+    #[test]
+    fn validate_block_accepts_exact_platform_output_and_rejects_drift() {
+        let compiled = compile(2, vec![field("eventId", Generator::UuidV4)]);
+        let exact = json!({
+            "schemaVersion": 1,
+            "idempotencyKey": "00000000-0000-4000-8000-000000000000",
+            "publishedAt": "2026-01-01T00:00:00.000Z",
+            "metadataRevision": 2,
+            "eventId": "48151623-42cd-4c8a-9c7b-3f2a1d0e5f6a"
+        });
+        assert!(compiled.validate_block(&exact).is_ok());
+
+        let unknown_field = json!({
+            "schemaVersion": 1,
+            "idempotencyKey": "00000000-0000-4000-8000-000000000000",
+            "publishedAt": "2026-01-01T00:00:00.000Z",
+            "metadataRevision": 2,
+            "eventId": "48151623-42cd-4c8a-9c7b-3f2a1d0e5f6a",
+            "injected": "producer-supplied values have no channel"
+        });
+        assert!(compiled.validate_block(&unknown_field).is_err());
+
+        let wrong_revision = json!({
+            "schemaVersion": 1,
+            "idempotencyKey": "00000000-0000-4000-8000-000000000000",
+            "publishedAt": "2026-01-01T00:00:00.000Z",
+            "metadataRevision": 3,
+            "eventId": "48151623-42cd-4c8a-9c7b-3f2a1d0e5f6a"
+        });
+        assert!(compiled.validate_block(&wrong_revision).is_err());
     }
 }

@@ -1969,6 +1969,8 @@ Resources:
       Environment:
         Variables:
           METADATA_TABLE: !Ref MetadataConfigurationTable
+          ORGANIZATION: !Ref Organization
+          ENVIRONMENTS: !Join [",", !Ref Environments]
       Policies:
         - !Ref MetadataAdminPolicy
 

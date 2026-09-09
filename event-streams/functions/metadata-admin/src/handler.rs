@@ -16,8 +16,11 @@ use konductor_common::metadata::revisions::{
 use konductor_common::principal::{AuthenticationMechanism, GlobalRole, TrustedPrincipal};
 use konductor_common::principal_context::log_principal;
 
+use crate::context::AdminConfig;
 use crate::create;
 use crate::pagination;
+use crate::preview;
+use crate::readiness;
 
 pub const DEFAULT_PAGE_SIZE: i32 = 20;
 pub const MAX_PAGE_SIZE: i32 = 50;
@@ -27,11 +30,16 @@ pub async fn handle(
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
     let table = std::env::var("METADATA_TABLE").context("METADATA_TABLE not set")?;
+    let config = AdminConfig::from_env().map_err(Error::from)?;
     let store = MetadataStore::new(ddb.clone(), table);
-    dispatch(&store, &event.payload).await
+    dispatch(&store, &config, &event.payload).await
 }
 
-pub async fn dispatch(store: &MetadataStore, payload: &Value) -> Result<Value, Error> {
+pub async fn dispatch(
+    store: &MetadataStore,
+    config: &AdminConfig,
+    payload: &Value,
+) -> Result<Value, Error> {
     let request_context = payload.get("requestContext").unwrap_or(&Value::Null);
     let principal = match log_principal(request_context) {
         Ok(p) => p,
@@ -74,6 +82,20 @@ pub async fn dispatch(store: &MetadataStore, payload: &Value) -> Result<Value, E
                 return Ok(denied());
             }
             create::create_revision(store, payload, &principal).await
+        }
+        // Read-only probes: controlled platform roles may inspect drafts and
+        // readiness, but nothing here persists, activates, or publishes.
+        ("POST", "/metadata/preview") => {
+            if !can_read(&principal) {
+                return Ok(denied());
+            }
+            preview::preview(store, config, payload).await
+        }
+        ("POST", "/metadata/readiness") => {
+            if !can_read(&principal) {
+                return Ok(denied());
+            }
+            readiness::readiness(store, config, payload).await
         }
         _ => Ok(api::error_response(
             404,
@@ -247,7 +269,12 @@ mod tests {
     }
 
     async fn invoke(store: &MetadataStore, payload: Value) -> Value {
-        dispatch(store, &payload).await.unwrap()
+        let config = crate::context::AdminConfig {
+            region: "us-east-1".to_string(),
+            organization: "acme".to_string(),
+            environments: vec!["dev".to_string(), "prod".to_string()],
+        };
+        dispatch(store, &config, &payload).await.unwrap()
     }
 
     fn status(resp: &Value) -> u16 {

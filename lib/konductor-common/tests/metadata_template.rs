@@ -207,6 +207,11 @@ fn metadata_admin_function_reads_writes_through_the_admin_policy_only() {
         text(at(env, "METADATA_TABLE")),
         "MetadataConfigurationTable"
     );
+    assert_eq!(text(at(env, "ORGANIZATION")), "Organization");
+    assert!(
+        mapping(env).contains_key("ENVIRONMENTS"),
+        "preview/readiness validate environments against the configured list"
+    );
 
     // The function attaches the metadata admin managed policy; the policy
     // resource stays attachable, never function-inline.
