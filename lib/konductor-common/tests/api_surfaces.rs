@@ -807,6 +807,59 @@ fn entitlement_admin_function_is_wired_to_the_oauth_surface_only() {
 }
 
 #[test]
+fn metadata_administration_routes_are_oauth_only() {
+    let oauth = operations(&oauth_contract());
+    let iam = operations(&iam_contract());
+
+    let mut oauth_ops: Vec<(&str, &str)> = oauth
+        .iter()
+        .filter(|op| op.path.starts_with("/metadata"))
+        .map(|op| (op.method.as_str(), op.path.as_str()))
+        .collect();
+    oauth_ops.sort();
+    assert_eq!(
+        oauth_ops,
+        [
+            ("get", "/metadata/activations"),
+            ("get", "/metadata/environments"),
+            ("get", "/metadata/revisions"),
+            ("get", "/metadata/revisions/{revision}"),
+            ("post", "/metadata/activations"),
+            ("post", "/metadata/preview"),
+            ("post", "/metadata/readiness"),
+            ("post", "/metadata/revisions"),
+        ],
+        "OAuth surface must expose exactly the eight metadata administration operations"
+    );
+
+    assert!(
+        iam.iter().all(|op| !op.path.starts_with("/metadata")),
+        "IAM surface must not expose metadata administration"
+    );
+}
+
+#[test]
+fn metadata_admin_function_is_wired_to_the_oauth_surface_only() {
+    let doc = core_template();
+    let func = resource(&doc, "MetadataAdminFunction");
+    let events = mapping(at(props(func), "Events"));
+    assert_eq!(
+        events.len(),
+        8,
+        "metadata admin must have exactly the eight route events"
+    );
+    for (name, event) in events {
+        let event_props = at(event, "Properties");
+        assert_eq!(
+            text(at(event_props, "RestApiId")),
+            "KonductorOAuthApi",
+            "event {:?} must target the OAuth API",
+            name
+        );
+    }
+}
+
+#[test]
 fn entitlements_table_matches_documented_schema() {
     let doc = core_template();
     let table = resource(&doc, "AuthorizationEntitlementsTable");

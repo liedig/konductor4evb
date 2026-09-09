@@ -1990,6 +1990,55 @@ Resources:
           ENVIRONMENTS: !Join [",", !Ref Environments]
       Policies:
         - !Ref MetadataAdminPolicy
+      Events:
+        ListMetadataRevisions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/revisions
+            Method: GET
+        CreateMetadataRevision:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/revisions
+            Method: POST
+        GetMetadataRevision:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/revisions/{revision}
+            Method: GET
+        PreviewMetadataRevision:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/preview
+            Method: POST
+        CheckMetadataReadiness:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/readiness
+            Method: POST
+        ListMetadataEnvironments:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/environments
+            Method: GET
+        ListMetadataActivations:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/activations
+            Method: GET
+        ActivateMetadataRevision:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/activations
+            Method: POST
 
   MetadataStreamConsumerLogGroup:
     Type: AWS::Logs::LogGroup
