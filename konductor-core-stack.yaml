@@ -322,6 +322,74 @@ Resources:
               - dynamodb:Query
             Resource: !GetAtt AuthorizationEntitlementsTable.Arn
 
+  # ---- DynamoDB (metadata configuration) ----
+  # Platform-owned event metadata: immutable additive revisions (REVISION
+  # items), the global revision head (HEAD), per-environment active pointers
+  # (ENV — the hot admission reads never share a partition with revision or
+  # audit traffic), and permanent mutation/audit records (AUDIT). Only
+  # stream-consumer marker items set the TTL attribute; revisions, pointers,
+  # and audit records are permanent. The NEW_IMAGE stream drives lifecycle
+  # emission from committed state.
+  MetadataConfigurationTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub "konductor-metadata-configuration"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
+  # Metadata administration: one conditional transaction per mutation, plus
+  # strongly consistent reads of revisions, head, and environment pointers.
+  MetadataAdminPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "konductor-metadata-admin"
+      Description: Metadata configuration administration (revision and pointer transactions, reads)
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:Query
+              - dynamodb:TransactWriteItems
+            Resource: !GetAtt MetadataConfigurationTable.Arn
+
+  # Admission's authoritative environment-pointer resolution: strongly
+  # consistent GetItem only, never writes.
+  MetadataPointerReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "konductor-metadata-pointer-read"
+      Description: Read-only metadata pointer resolution for publish admission
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+            Resource: !GetAtt MetadataConfigurationTable.Arn
+
   # ---- Dead Letter Queue (read Lambda functions) ----
   LambdaFailureDlq:
     Type: AWS::SQS::Queue
@@ -1838,6 +1906,44 @@ Resources:
             Path: /schemas/versions
             Method: POST
 
+  # ---- Metadata configuration bootstrap ----
+  # Deployment-time custom resource: conditionally seeds revision 1 (the
+  # protected-defaults baseline), the revision head, and every configured
+  # environment at legacy revision 0. Every write is conditioned on absence,
+  # so retries and redeployments never overwrite committed configuration,
+  # and stack deletion removes nothing.
+  MetadataBootstrapLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-metadata-bootstrap"
+      RetentionInDays: 30
+  MetadataBootstrapFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MetadataBootstrapLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-metadata-bootstrap"
+      CodeUri: ./event-streams/functions/metadata-bootstrap
+      Handler: bootstrap
+      Timeout: 60
+      Environment:
+        Variables:
+          METADATA_TABLE: !Ref MetadataConfigurationTable
+          ENVIRONMENTS: !Join [",", !Ref Environments]
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:PutItem]
+              Resource: !GetAtt MetadataConfigurationTable.Arn
+  MetadataBootstrap:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt MetadataBootstrapFunction.Arn
+
   # ---- Decide Registration Function ----
   DecideFunctionLogGroup:
     Type: AWS::Logs::LogGroup
@@ -3342,6 +3448,12 @@ Outputs:
   EntitlementsTableReadPolicyArn:
     Description: Reserved read-only entitlements-table managed policy (attach to coverage-decision consumers)
     Value: !Ref EntitlementsTableReadPolicy
+  MetadataConfigurationTableName:
+    Description: Platform metadata configuration DynamoDB table name (for future admission consumers)
+    Value: !Ref MetadataConfigurationTable
+  MetadataPointerReadPolicyArn:
+    Description: Reserved read-only metadata pointer resolution managed policy (attach to publish admission)
+    Value: !Ref MetadataPointerReadPolicy
   SubscriptionDeliveryRoleArn:
     Description: Role EventBridge assumes to deliver subscription events to app-side buses
     Value: !GetAtt SubscriptionDeliveryRole.Arn
