@@ -1944,6 +1944,34 @@ Resources:
     Properties:
       ServiceToken: !GetAtt MetadataBootstrapFunction.Arn
 
+  # ---- Metadata administration API ----
+  # Revision history reads (admin/auditor) and one conditional transaction
+  # per revision creation. OAuth-only routes are wired in the API definition;
+  # this surface is an intentional IAM-parity exception, like binding
+  # administration.
+  MetadataAdminLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-metadata-admin"
+      RetentionInDays: 30
+  MetadataAdminFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MetadataAdminLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-metadata-admin"
+      CodeUri: ./event-streams/functions/metadata-admin
+      Handler: bootstrap
+      Timeout: 29
+      Environment:
+        Variables:
+          METADATA_TABLE: !Ref MetadataConfigurationTable
+      Policies:
+        - !Ref MetadataAdminPolicy
+
   # ---- Decide Registration Function ----
   DecideFunctionLogGroup:
     Type: AWS::Logs::LogGroup

@@ -11,7 +11,7 @@ use support::{at, boolean, core_template, mapping, props, resource, seq, text};
 fn policy_actions(policy: &serde_yaml::Value) -> Vec<String> {
     let statements = seq(at(at(policy, "PolicyDocument"), "Statement"));
     assert_eq!(statements.len(), 1, "one statement per metadata policy");
-    seq(&at(&statements[0], "Action"))
+    seq(at(&statements[0], "Action"))
         .iter()
         .map(text)
         .map(String::from)
@@ -150,7 +150,7 @@ fn metadata_bootstrap_function_puts_to_the_table_only() {
     assert_eq!(policies.len(), 1);
     let statements = seq(at(&policies[0], "Statement"));
     assert_eq!(statements.len(), 1);
-    let actions = seq(&at(&statements[0], "Action"));
+    let actions = seq(at(&statements[0], "Action"));
     assert_eq!(
         actions.iter().map(text).collect::<Vec<_>>(),
         ["dynamodb:PutItem"]
@@ -186,5 +186,33 @@ fn stack_exposes_metadata_table_and_pointer_policy_outputs() {
     assert_eq!(
         text(at(at(outputs, "MetadataPointerReadPolicyArn"), "Value")),
         "MetadataPointerReadPolicy"
+    );
+}
+
+#[test]
+fn metadata_admin_function_reads_writes_through_the_admin_policy_only() {
+    let doc = core_template();
+    let function = resource(&doc, "MetadataAdminFunction");
+    assert_eq!(text(at(function, "Type")), "AWS::Serverless::Function");
+
+    let props = props(function);
+    assert_eq!(
+        text(at(props, "CodeUri")),
+        "./event-streams/functions/metadata-admin"
+    );
+    assert_eq!(text(at(props, "Handler")), "bootstrap");
+
+    let env = at(at(props, "Environment"), "Variables");
+    assert_eq!(
+        text(at(env, "METADATA_TABLE")),
+        "MetadataConfigurationTable"
+    );
+
+    // The function attaches the metadata admin managed policy; the policy
+    // resource stays attachable, never function-inline.
+    let policies = seq(at(props, "Policies"));
+    assert_eq!(
+        policies.iter().map(text).collect::<Vec<_>>(),
+        ["MetadataAdminPolicy"]
     );
 }

@@ -28,6 +28,7 @@ members = [
     "event-streams/functions/list-schemas",
     "event-streams/functions/describe-schema",
     "event-streams/functions/metadata-bootstrap",
+    "event-streams/functions/metadata-admin",
     "control-plane/functions/oauth-authorizer",
     "control-plane/functions/binding-admin",
     "control-plane/functions/entitlement-admin",
