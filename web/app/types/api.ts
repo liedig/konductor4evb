@@ -226,6 +226,64 @@ export interface ApiErrorBody {
   fieldList?: { name?: string, message?: string }[]
 }
 
+// ---- Composed contract discovery (`/schemas/*`) ----
+
+/** Read-only generator description attached to composed contracts. */
+export interface GeneratorDescription {
+  name?: string
+  generator?: string
+  source?: string
+  constraint?: string
+}
+
+/**
+ * The exact composed contract for one (business version, metadata revision)
+ * pair. `metadataSchema` and `composedDocument` are draft-4 documents
+ * serialized as strings; `composedDocument` validates the full detail
+ * object offline.
+ */
+export interface ComposedContract {
+  schemaName?: string
+  source?: string
+  detailType?: string
+  environment?: string
+  registry?: string
+  schemaVersion?: number
+  metadataRevision?: number
+  generation?: number | null
+  definitionDigest?: string | null
+  businessContent?: string
+  metadataSchema?: string
+  generators?: GeneratorDescription[]
+  composerFormat?: number
+  composedDocument?: string
+}
+
+/** Publisher-authorized preview of unsaved business content; registers nothing. */
+export interface ContractPreviewRequest {
+  domain: string
+  schemaName: string
+  environment: string
+  content: string
+  schemaVersion?: number
+}
+
+export interface ContractPreviewResponse {
+  schemaName?: string
+  source?: string
+  detailType?: string
+  environment?: string
+  schemaVersion?: number
+  metadataRevision?: number
+  generation?: number | null
+  metadataSchema?: string
+  generators?: GeneratorDescription[]
+  composerFormat?: number
+  composedDocument?: string
+  registered?: boolean
+  note?: string
+}
+
 // ---- Platform metadata administration (`/metadata/*`, OAuth surface) ----
 
 /** The supported generator catalogue (design.md, decision 2). */

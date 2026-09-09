@@ -166,7 +166,7 @@ onMounted(load)
         </dl>
       </NxCard>
 
-      <DomainSchemasPanel :domain="name" />
+      <DomainSchemasPanel :domain="name" :namespace="domain?.namespace" />
       <DomainSubscriptionsPanel :domain="name" />
       <DomainAccessPanel :domain="name" />
 

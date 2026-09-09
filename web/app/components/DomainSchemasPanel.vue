@@ -2,7 +2,7 @@
 import { ApiError } from '~/composables/useApi'
 import type { SchemaSummary } from '~/types/api'
 
-const props = defineProps<{ domain: string }>()
+const props = defineProps<{ domain: string, namespace?: string }>()
 
 const catalog = useCatalog()
 const toast = useToast()
@@ -15,6 +15,17 @@ const pending = ref(true)
 
 const formOpen = ref(false)
 const formEventName = ref<string | undefined>(undefined)
+const formAppendSchemaName = ref<string | undefined>(undefined)
+
+const contractOpen = ref(false)
+const contractSchema = ref<SchemaSummary | null>(null)
+
+const contractEnvironments = computed(() => Object.keys(contractSchema.value?.latestVersions ?? {}).sort())
+
+function openContract(schema: SchemaSummary) {
+  contractSchema.value = schema
+  contractOpen.value = true
+}
 
 // Appends target only the console's API stage environment. The catalog
 // merges every environment, so a schema that exists solely in another stage
@@ -51,11 +62,13 @@ async function load() {
 
 function openRegister() {
   formEventName.value = undefined
+  formAppendSchemaName.value = undefined
   formOpen.value = true
 }
 
 function openAppend(schema: SchemaSummary) {
   formEventName.value = schema.schemaName?.split('@')[1] ?? schema.schemaName
+  formAppendSchemaName.value = schema.schemaName
   formOpen.value = true
 }
 
@@ -91,9 +104,13 @@ onMounted(load)
           {{ schema.schemaName }}
         </NuxtLink>
         <span class="flex shrink-0 items-center gap-2">
-          <NxBadge v-for="(version, env) in schema.latestVersions" :key="env" tone="neutral">
-            {{ env }} v{{ version }}
-          </NxBadge>
+          <template v-for="(version, env) in schema.latestVersions" :key="env">
+            <NxBadge tone="neutral">{{ env }} v{{ version }}</NxBadge>
+            <NxBadge v-if="schema.metadataRevisions?.[env] !== undefined" tone="info">
+              {{ env }} M{{ schema.metadataRevisions[env] }}
+            </NxBadge>
+          </template>
+          <NxButton variant="ghost" size="sm" @click="openContract(schema)">Contract</NxButton>
           <NxButton v-if="appendable(schema)" variant="secondary" size="sm" @click="openAppend(schema)">New version</NxButton>
           <span v-else class="text-xs text-muted">Not registered in {{ targetEnvironment }} yet</span>
         </span>
@@ -103,9 +120,24 @@ onMounted(load)
     <SchemaAuthoringForm
       :open="formOpen"
       :domain="domain"
+      :namespace="namespace"
       :event-name="formEventName"
+      :append-schema-name="formAppendSchemaName"
       @close="formOpen = false"
       @saved="onSaved"
     />
+
+    <NxModal
+      :open="contractOpen"
+      :title="`Composed contract — ${contractSchema?.schemaName ?? ''}`"
+      @close="contractOpen = false"
+    >
+      <MetadataContractView
+        v-if="contractSchema"
+        :schema-name="contractSchema.schemaName ?? ''"
+        :producer-domain="contractSchema.producerDomain ?? domain"
+        :environments="contractEnvironments"
+      />
+    </NxModal>
   </NxCard>
 </template>

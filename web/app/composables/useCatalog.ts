@@ -1,6 +1,9 @@
 import type {
   AppendSchemaVersionRequest,
   CommandAccepted,
+  ComposedContract,
+  ContractPreviewRequest,
+  ContractPreviewResponse,
   CreateSchemaRequest,
   ListSchemasResponse,
   ListSubscriptionsResponse,
@@ -30,6 +33,25 @@ export function useCatalog() {
         consumerDomain: options.consumerDomain,
         domain: options.producerDomain,
       }),
+    /** Current or historical composed contract for one exact
+     * (business version, metadata revision) pair. Historical reads require
+     * both `schemaVersion` and `metadataRevision` — there is no
+     * current-metadata fallback for a historical business version. */
+    getContract: (
+      schemaName: string,
+      options: { domain: string, environment: string, consumerDomain?: string, schemaVersion?: number, metadataRevision?: number },
+    ) =>
+      api.get<ComposedContract>(`/schemas/${encodeURIComponent(schemaName)}/contract`, {
+        domain: options.domain,
+        environment: options.environment,
+        consumerDomain: options.consumerDomain,
+        schemaVersion: options.schemaVersion,
+        metadataRevision: options.metadataRevision,
+      }),
+    /** Publisher-authorized effective-contract preview of unsaved business
+     * content against the environment's active metadata. Registers nothing. */
+    previewContract: (body: ContractPreviewRequest) =>
+      api.post<ContractPreviewResponse>('/schemas/contract-preview', body),
     createSchema: (body: CreateSchemaRequest) =>
       api.post<SchemaMutationResponse>('/schemas', body),
     appendSchemaVersion: (body: AppendSchemaVersionRequest) =>

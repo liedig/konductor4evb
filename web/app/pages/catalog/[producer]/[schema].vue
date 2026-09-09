@@ -16,6 +16,7 @@ const schema = ref<SchemaDetail | null>(null)
 const uncovered = ref(false)
 const errorMessage = ref('')
 const pending = ref(true)
+const metadataRevisions = ref<Record<string, number>>({})
 
 const subscribeOpen = ref(false)
 const subscribing = ref(false)
@@ -30,6 +31,7 @@ async function load() {
       consumerDomain: consumerDomain.value || undefined,
       producerDomain,
     })
+    await loadMetadataRevisions()
   } catch (error) {
     if (error instanceof ApiError && error.status === 403) {
       uncovered.value = true
@@ -39,6 +41,19 @@ async function load() {
     }
   } finally {
     pending.value = false
+  }
+}
+
+// The detail response carries business versions only; the producer-scoped
+// catalog entry adds the independent metadata revision per environment.
+// A consumer without catalog scope keeps the business-only badges.
+async function loadMetadataRevisions() {
+  try {
+    const response = await catalog.listSchemas({ producerDomain })
+    const entry = (response.items ?? []).find(item => item.schemaName === schemaName)
+    metadataRevisions.value = entry?.metadataRevisions ?? {}
+  } catch {
+    metadataRevisions.value = {}
   }
 }
 
@@ -155,14 +170,26 @@ watch(consumerDomain, load)
     <template v-else-if="schema">
       <NxCard title="Latest version per environment">
         <div class="flex flex-wrap gap-2">
-          <NxBadge v-for="(version, env) in schema.latestVersions" :key="env" tone="info">
-            {{ env }} v{{ version }}
-          </NxBadge>
+          <template v-for="(version, env) in schema.latestVersions" :key="env">
+            <NxBadge tone="info">{{ env }} v{{ version }}</NxBadge>
+            <NxBadge v-if="metadataRevisions[env] !== undefined" tone="neutral">
+              {{ env }} M{{ metadataRevisions[env] }}
+            </NxBadge>
+          </template>
         </div>
       </NxCard>
 
       <NxCard title="Schema content">
         <pre class="overflow-x-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyContent }}</pre>
+      </NxCard>
+
+      <NxCard title="Composed contract">
+        <MetadataContractView
+          :schema-name="schemaName"
+          :producer-domain="producerDomain"
+          :environments="availableEnvironments"
+          :consumer-domain="consumerDomain"
+        />
       </NxCard>
 
       <NxCard v-if="pollState !== 'idle'" title="Subscription activation">
