@@ -1427,6 +1427,30 @@ Resources:
             RestApiId: !Ref KonductorIamApi
             Path: /schemas/{schemaName}
             Method: GET
+        ContractOAuthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /schemas/{schemaName}/contract
+            Method: GET
+        ContractIamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorIamApi
+            Path: /schemas/{schemaName}/contract
+            Method: GET
+        PreviewOAuthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /schemas/contract-preview
+            Method: POST
+        PreviewIamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorIamApi
+            Path: /schemas/contract-preview
+            Method: POST
 
   # ---- Command Handler Functions ----
   DomainRegistrationsLogGroup:

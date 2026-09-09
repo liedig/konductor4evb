@@ -304,6 +304,7 @@ mod tests {
     use konductor_common::entitlement_store::entitlement_to_item;
     use konductor_common::grant::{BindingPrincipal, RoleBinding};
     use konductor_common::grant_store::binding_to_item;
+    use konductor_common::metadata::composition::{validate_composed_detail, ComposedDocument};
 
     const SCHEMA: &str = "acme-orders@OrderNotification";
 
@@ -904,6 +905,94 @@ mod tests {
             Value::Null,
             "historical reads do not guess the generation that was active"
         );
+    }
+
+    #[tokio::test]
+    async fn returned_contract_documents_validate_details_offline() {
+        set_env();
+        let domain = domain_rule();
+        let pointer = metadata_pointer_rule(2, 4);
+        let revision = metadata_revision_rule(2, METADATA_DEFINITION, METADATA_SCHEMA_DOC);
+        let prod = describe_rule("prod", 3, BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&domain, &pointer, &revision], &[&prod]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({"domain": "orders", "environment": "prod"}),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp["statusCode"], 200);
+        let current = offline_contract(&body(&resp));
+        let current_detail = json!({
+            "metadata": {
+                "schemaVersion": 3,
+                "idempotencyKey": "key-123",
+                "publishedAt": "2026-07-30T10:30:00.123Z",
+                "metadataRevision": 2,
+                "eventId": "0f14d0ab-9605-4d62-bc3f-abcdef123456"
+            },
+            "data": {"orderId": 7}
+        });
+        assert!(validate_composed_detail(&current, &current_detail).is_ok());
+        assert!(validate_composed_detail(
+            &current,
+            &json!({"metadata": current_detail["metadata"], "data": {"orderId": "seven"}})
+        )
+        .is_err());
+
+        let domain = domain_rule();
+        let revision = metadata_revision_rule(1, METADATA_DEFINITION, METADATA_SCHEMA_DOC);
+        let old = versioned_describe_rule("prod", "2", OLD_BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&domain, &revision], &[&old]);
+        let resp = handle(
+            &ddb,
+            &schemas,
+            contract_request(
+                oauth_platform_context("platform-auditor"),
+                json!({
+                    "domain": "orders",
+                    "environment": "prod",
+                    "schemaVersion": "2",
+                    "metadataRevision": "1"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp["statusCode"], 200);
+        let historical = offline_contract(&body(&resp));
+        let historical_detail = json!({
+            "metadata": {
+                "schemaVersion": 2,
+                "idempotencyKey": "key-123",
+                "publishedAt": "2026-07-30T10:30:00.123Z",
+                "metadataRevision": 1,
+                "eventId": "0f14d0ab-9605-4d62-bc3f-abcdef123456"
+            },
+            "data": {"amount": 12.5}
+        });
+        assert!(validate_composed_detail(&historical, &historical_detail).is_ok());
+        assert!(
+            validate_composed_detail(&current, &historical_detail).is_err(),
+            "the current contract must reject details from the historical pair"
+        );
+        assert!(
+            validate_composed_detail(&historical, &current_detail).is_err(),
+            "the historical contract must reject details from the current pair"
+        );
+    }
+
+    fn offline_contract(response_body: &Value) -> ComposedDocument {
+        ComposedDocument {
+            composer_format: response_body["composerFormat"].as_u64().unwrap() as u32,
+            document: serde_json::from_str(response_body["composedDocument"].as_str().unwrap())
+                .unwrap(),
+        }
     }
 
     #[tokio::test]

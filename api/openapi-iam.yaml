@@ -809,6 +809,158 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
 
+  /schemas/{schemaName}/contract:
+    get:
+      operationId: GetSchemaContract
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      summary: Composed current or historical event contract
+      description: >
+        The exact composed contract for one (business version, metadata
+        revision) pair: raw business content, the exact metadata schema,
+        the generator catalogue, and an offline draft-4 composed document.
+        Without selectors the pair is the environment's current active one;
+        a historical read must pass both schemaVersion and metadataRevision
+        and never silently pairs a historical business version with the
+        active metadata revision. metadataRevision 0 is the legacy selector
+        for events predating metadata stamping. Authorization is catalog
+        visibility, checked against current bindings and entitlements,
+        not historical ones; an unreadable metadata pointer yields 503
+        rather than a composed guess.
+      parameters:
+        - name: schemaName
+          in: path
+          required: true
+          description: "Format: {source}@{detail-type}, URL-encoded"
+          schema:
+            type: string
+        - name: domain
+          in: query
+          required: true
+          description: The producer domain.
+          schema:
+            type: string
+        - name: environment
+          in: query
+          required: true
+          description: Environment whose active pair serves current reads.
+          schema:
+            type: string
+        - name: consumerDomain
+          in: query
+          required: false
+          description: The consumer domain whose coverage authorizes the read. Omit only as a platform role.
+          schema:
+            type: string
+        - name: schemaVersion
+          in: query
+          required: false
+          description: Historical business version; requires metadataRevision.
+          schema:
+            type: integer
+            minimum: 1
+        - name: metadataRevision
+          in: query
+          required: false
+          description: Exact metadata revision; 0 selects the legacy pre-stamping contract. Requires schemaVersion.
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Composed contract for the resolved pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposedContract"
+        "400":
+          description: Incomplete or invalid historical selectors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: No subscriber binding or no covering entitlement, or consumerDomain omitted without a platform role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain, environment, schema, or metadata revision not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The metadata pointer is unreadable, so the pair cannot be resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
+
+  /schemas/contract-preview:
+    post:
+      operationId: PreviewSchemaContract
+      x-amazon-apigateway-auth:
+        type: AWS_IAM
+      summary: Compose unsaved business content with the active metadata revision
+      description: >
+        Publisher-authorized effective-contract preview. Composes the
+        caller's unsaved draft business content with the environment's
+        active metadata revision and returns the same contract shape as
+        the contract read, marked registered false. Preview registers
+        nothing, publishes nothing, and grants no catalog visibility
+        beyond the publisher's own domain. schemaVersion pins the composed
+        document's version stamp; without it the environment's current
+        latest version is used (1 for a first draft).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContractPreviewRequest"
+      responses:
+        "200":
+          description: Composed preview contract; registered is false
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContractPreviewResponse"
+        "400":
+          description: Malformed request body or unresolvable reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller has no publisher binding for the domain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain or environment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The metadata pointer is unreadable, so the active metadata revision cannot be resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
+
 components:
   schemas:
     CommandAccepted:
@@ -1246,6 +1398,14 @@ components:
             dev: 5
             staging: 3
             prod: 3
+        metadataRevisions:
+          type: object
+          description: Active metadata revision per environment where the pointer was readable; an unreadable pointer omits the environment rather than guessing.
+          additionalProperties:
+            type: integer
+          example:
+            dev: 3
+            prod: 2
 
     SchemaDetail:
       allOf:
@@ -1255,6 +1415,125 @@ components:
             content:
               type: string
               description: Schema content of the highest latest version across environments.
+
+    GeneratorDescription:
+      type: object
+      required: [name, generator, source, constraint]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Dotted path of the platform-owned field in the detail object.
+        generator:
+          type: string
+          enum: [uuid-v4, utc-timestamp, utc-date, aws-region, organisation, environment]
+        source:
+          type: string
+          description: Where the platform sources the value.
+        constraint:
+          type: string
+          description: The generated value's type constraint.
+
+    ComposedContract:
+      type: object
+      properties:
+        schemaName:
+          type: string
+        source:
+          type: string
+        detailType:
+          type: string
+        environment:
+          type: string
+        registry:
+          type: string
+        schemaVersion:
+          type: integer
+          minimum: 1
+        metadataRevision:
+          type: integer
+          minimum: 0
+          description: 0 marks the legacy pre-stamping contract.
+        generation:
+          type: integer
+          nullable: true
+          description: Pointer generation for current reads; null on historical reads.
+        definitionDigest:
+          type: string
+          nullable: true
+          description: Digest of the exact metadata definition; null for the legacy revision.
+        businessContent:
+          type: string
+          description: The raw business document of the resolved pair.
+        metadataSchema:
+          type: string
+          description: The exact metadata revision's compiled draft-4 schema as a string.
+        generators:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeneratorDescription"
+        composerFormat:
+          type: integer
+        composedDocument:
+          type: string
+          description: Offline draft-4 document that validates the full detail object ({metadata, data}).
+
+    ContractPreviewRequest:
+      type: object
+      required: [domain, schemaName, environment, content]
+      additionalProperties: false
+      properties:
+        domain:
+          type: string
+          description: The publisher's own domain.
+        schemaName:
+          type: string
+          description: "Format: {source}@{detail-type}"
+        environment:
+          type: string
+        content:
+          type: string
+          description: The unsaved draft-4 business document as a string.
+        schemaVersion:
+          type: integer
+          minimum: 1
+          description: Pins the composed document's version stamp; defaults to the environment's latest version, or 1 for a first draft.
+
+    ContractPreviewResponse:
+      type: object
+      properties:
+        schemaName:
+          type: string
+        source:
+          type: string
+        detailType:
+          type: string
+        environment:
+          type: string
+        schemaVersion:
+          type: integer
+          minimum: 1
+        metadataRevision:
+          type: integer
+          minimum: 1
+        generation:
+          type: integer
+          nullable: true
+        metadataSchema:
+          type: string
+        generators:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeneratorDescription"
+        composerFormat:
+          type: integer
+        composedDocument:
+          type: string
+        registered:
+          type: boolean
+          description: Always false; the preview composes unsaved content.
+        note:
+          type: string
 
     ListSchemasResponse:
       type: object
