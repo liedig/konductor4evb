@@ -638,6 +638,14 @@ mod tests {
     }
 
     fn versioned_record(body: Value, attributes: Vec<(&'static str, String)>) -> Value {
+        versioned_record_named("msg-2", body, attributes)
+    }
+
+    fn versioned_record_named(
+        message_id: &str,
+        body: Value,
+        attributes: Vec<(&'static str, String)>,
+    ) -> Value {
         let message_attributes: serde_json::Map<String, Value> = attributes
             .into_iter()
             .map(|(k, v)| {
@@ -648,11 +656,17 @@ mod tests {
             })
             .collect();
         json!({
-            "messageId": "msg-2",
+            "messageId": message_id,
             "body": body.to_string(),
             "messageAttributes": Value::Object(message_attributes),
             "attributes": {"SentTimestamp": SENT_MS}
         })
+    }
+
+    fn ok_entry(event_id: &'static str) -> aws_sdk_eventbridge::types::PutEventsResultEntry {
+        aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+            .event_id(event_id)
+            .build()
     }
 
     fn composed_put_events_rule() -> Rule {
@@ -740,6 +754,126 @@ mod tests {
             &clients,
             &validators(),
             sqs_event(vec![versioned_record(body, admitted_attributes())]),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+    }
+
+    #[tokio::test]
+    async fn format_two_replay_re_delivers_identical_frozen_values() {
+        set_env();
+        // A replay (SQS redelivery of the same admitted command) delivers the
+        // frozen values and the recorded business schema version verbatim —
+        // subscription version matching stays anchored to what admission
+        // validated. At-least-once means the duplicate is expected; there is
+        // no cross-request deduplication to assert.
+        let rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                let detail: Value =
+                    serde_json::from_str(req.entries()[0].detail().unwrap()).unwrap();
+                detail["metadata"]["traceId"] == json!("trace-abc")
+                    && detail["metadata"]["requestSequence"] == json!(7)
+                    && detail["metadata"]["metadataRevision"] == json!(2)
+                    && detail["metadata"]["schemaVersion"] == json!(4)
+                    && detail["metadata"]["publishedAt"] == json!("2026-07-30T10:30:00.123Z")
+            })
+            .then_output(|| {
+                aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                    .failed_entry_count(0)
+                    .entries(ok_entry("evt-replay"))
+                    .build()
+            });
+        let clients = clients(vec![active_domain_rule()], vec![rule.clone()]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            sqs_event(vec![
+                versioned_record_named("msg-a", versioned_body(), admitted_attributes()),
+                versioned_record_named("msg-b", versioned_body(), admitted_attributes()),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+        assert_eq!(
+            rule.num_calls(),
+            2,
+            "the replayed message is delivered again with identical frozen values"
+        );
+    }
+
+    #[tokio::test]
+    async fn format_two_partial_put_events_failure_is_reported_for_retry() {
+        set_env();
+        // PutEvents fails for this entry: the record is reported for SQS
+        // retry; the later replay carries the same frozen values.
+        let failed_entry = mock!(aws_sdk_eventbridge::Client::put_events).then_output(|| {
+            aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                .failed_entry_count(1)
+                .entries(
+                    aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                        .error_code("InternalFailure")
+                        .error_message("boom")
+                        .build(),
+                )
+                .build()
+        });
+        let clients = clients(vec![active_domain_rule()], vec![failed_entry]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            sqs_event(vec![versioned_record(
+                versioned_body(),
+                admitted_attributes(),
+            )]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-2"]);
+    }
+
+    #[tokio::test]
+    async fn format_two_delivery_after_activation_and_configuration_outage_uses_recorded_state() {
+        set_env();
+        // The environment has since activated a new revision (the recorded
+        // generation 1 / revision 2 is now stale) and the configuration
+        // table is unreachable. Delivery never reads configuration, so the
+        // paused message still delivers exactly the recorded frozen values.
+        let rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                let detail: Value =
+                    serde_json::from_str(req.entries()[0].detail().unwrap()).unwrap();
+                detail["metadata"]
+                    == json!({
+                        "schemaVersion": 4,
+                        "idempotencyKey": "key-1",
+                        "publishedAt": "2026-07-30T10:30:00.123Z",
+                        "metadataRevision": 2,
+                        "traceId": "trace-abc",
+                        "requestSequence": 7
+                    })
+            })
+            .then_output(|| {
+                aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                    .failed_entry_count(0)
+                    .entries(ok_entry("evt-paused"))
+                    .build()
+            });
+        let clients = clients(vec![active_domain_rule()], vec![rule]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            sqs_event(vec![versioned_record(
+                versioned_body(),
+                admitted_attributes(),
+            )]),
         )
         .await
         .unwrap();

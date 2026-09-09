@@ -28,7 +28,7 @@
 - [x] 4.3 Add format-2 admitted queue models and dual-format parsing, then delivery support before enabling new writes. Verify new-format missing/inconsistent fields fail closed, actual legacy messages retain their original three-field output, and SQS retry fixtures preserve metadata values without configuration reads using `rtk cargo test -p publish-events`.
 - [x] 4.4 Generate and validate metadata before admission enqueue, and include frozen descriptors/identity in format-2 bodies. Verify 202 only follows queue acceptance, caller payload failures remain 422, platform generator failures are 503, and injected metadata fields are rejected with `rtk cargo test -p publish-events-admission`.
 - [x] 4.5 Preserve the `publishedAt` SQS-time rule and exact final-size preflight. Verify admission-time generator timestamps differ legitimately from queue time, delivery derives the original SQS timestamp, metadata can trigger a pre-queue 400, and queue serialization/descriptors also fit the supported SQS bound.
-- [ ] 4.6 Add end-to-end handler fixtures for pointer-read/activation races, paused delivery across activation, configuration outage after enqueue, partial PutEvents failure, replay, and separate publisher retries with the same idempotency key. Verify frozen values and subscription business-version matching without asserting cross-request deduplication.
+- [x] 4.6 Add end-to-end handler fixtures for pointer-read/activation races, paused delivery across activation, configuration outage after enqueue, partial PutEvents failure, replay, and separate publisher retries with the same idempotency key. Verify frozen values and subscription business-version matching without asserting cross-request deduplication.
 
 ## 5. Composed contract discovery and preview
 

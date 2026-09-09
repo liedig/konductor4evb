@@ -2005,6 +2005,32 @@ mod tests {
         serde_json::from_str(&captured.lock().unwrap().clone().unwrap()).unwrap()
     }
 
+    fn capture_all_send_rule(captured: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Rule {
+        let captured = std::sync::Arc::clone(captured);
+        mock!(aws_sdk_sqs::Client::send_message)
+            .match_requests(move |req| {
+                if let Some(body) = req.message_body() {
+                    captured.lock().unwrap().push(body.to_string());
+                }
+                req.queue_url() == Some(QUEUE_URL)
+            })
+            .then_output(|| {
+                aws_sdk_sqs::operation::send_message::SendMessageOutput::builder()
+                    .message_id("sqs-msg-1")
+                    .build()
+            })
+    }
+
+    /// Valid UUIDs that differ per call, proving a client retry is a new
+    /// admission with freshly generated metadata.
+    struct SequencedUuidSource(std::sync::atomic::AtomicUsize);
+    impl UuidSource for SequencedUuidSource {
+        fn uuid_v4(&self) -> String {
+            let index = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            format!("123e4567-e89b-42d3-a456-42661417400{index}")
+        }
+    }
+
     #[tokio::test]
     async fn format_two_publish_queues_a_versioned_command_with_frozen_metadata() {
         set_env();
@@ -2241,6 +2267,59 @@ mod tests {
         assert!(
             captured.lock().unwrap().is_none(),
             "nothing is enqueued when the queue message cannot fit"
+        );
+    }
+
+    #[tokio::test]
+    async fn publisher_retry_with_the_same_idempotency_key_generates_fresh_metadata() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let pointer = pointer_rule(2, 4);
+        let revision = format_two_revision_rule(uuid_definition());
+        let metadata_client = metadata(&[&pointer, &revision]);
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<String>>> = std::sync::Arc::default();
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(STRICT_SCHEMA, "3")],
+            &[capture_all_send_rule(&captured)],
+        );
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let uuid_source = SequencedUuidSource(std::sync::atomic::AtomicUsize::new(0));
+
+        for _ in 0..2 {
+            let resp = handle(
+                &clients,
+                &authorizer,
+                &cache(),
+                &validators(),
+                &metadata_client,
+                &uuid_source,
+                event(oauth_event(body.clone())),
+            )
+            .await
+            .unwrap();
+            assert_eq!(status(&resp), 202);
+        }
+
+        let messages: Vec<Value> = captured
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|body| serde_json::from_str(body).unwrap())
+            .collect();
+        assert_eq!(messages.len(), 2);
+        let first = &messages[0]["admission"];
+        let second = &messages[1]["admission"];
+        assert_eq!(
+            first["idempotencyKey"], second["idempotencyKey"],
+            "the caller's retry anchors on the same application deduplication key"
+        );
+        assert_ne!(
+            first["metadata"]["values"]["eventId"],
+            second["metadata"]["values"]["eventId"],
+            "a retry after an ambiguous outcome is a new admission: the platform generates fresh metadata and never deduplicates across requests"
         );
     }
 
