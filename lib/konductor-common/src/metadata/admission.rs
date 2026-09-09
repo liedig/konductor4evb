@@ -149,7 +149,6 @@ mod tests {
     }
 
     fn revision_item(revision: i64) -> GetItemOutput {
-        let sort_key = revision_sort_key(revision as u32);
         GetItemOutput::builder()
             .item("PK", s(REVISION_PARTITION))
             .item("SK", s(&revision_sort_key(revision as u32)))

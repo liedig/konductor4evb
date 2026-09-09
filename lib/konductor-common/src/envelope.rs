@@ -23,11 +23,73 @@ pub struct EventMetadata {
     pub published_at: DateTime<Utc>,
 }
 
+/// The composed new-format metadata block: the legacy built-ins plus the
+/// exact metadata revision and the frozen extension values admission
+/// generated. Serializes as one flat metadata object.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposedMetadata {
+    #[serde(flatten)]
+    pub builtins: EventMetadata,
+    pub metadata_revision: u32,
+    #[serde(flatten)]
+    pub values: serde_json::Map<String, Value>,
+}
+
+impl ComposedMetadata {
+    /// Rejects frozen values that shadow a reserved built-in. Configuration
+    /// already prevents redefinition; this re-check guards the queue format
+    /// itself, so a corrupt or hand-built message fails closed at delivery.
+    pub fn check_reserved(&self) -> Result<(), ControlPlaneError> {
+        for reserved in crate::metadata::definition::RESERVED_ROOT_FIELDS {
+            if self.values.contains_key(reserved) {
+                return Err(validation_error(
+                    "metadata",
+                    format!("frozen metadata value '{reserved}' shadows a reserved built-in"),
+                ));
+            }
+        }
+        if self.metadata_revision == 0 {
+            return Err(validation_error(
+                "metadataRevision",
+                "metadata revision must be a positive number".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The envelope's `detail.metadata` block. Composed blocks (which always
+/// carry `metadataRevision`) are tried first, so only an actual legacy
+/// three-field block parses as legacy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum MetadataBlock {
+    Composed(ComposedMetadata),
+    Legacy(EventMetadata),
+}
+
+impl MetadataBlock {
+    pub fn schema_version(&self) -> i64 {
+        match self {
+            MetadataBlock::Composed(block) => block.builtins.schema_version,
+            MetadataBlock::Legacy(metadata) => metadata.schema_version,
+        }
+    }
+
+    pub fn idempotency_key(&self) -> &str {
+        match self {
+            MetadataBlock::Composed(block) => &block.builtins.idempotency_key,
+            MetadataBlock::Legacy(metadata) => &metadata.idempotency_key,
+        }
+    }
+}
+
 /// The canonical envelope `detail`: platform-owned `metadata` plus the
 /// caller's business `data`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EnvelopeDetail {
-    pub metadata: EventMetadata,
+    pub metadata: MetadataBlock,
     pub data: Value,
 }
 
@@ -60,11 +122,50 @@ impl EventEnvelope {
             detail_type,
             event_bus_name,
             detail: EnvelopeDetail {
-                metadata: EventMetadata {
+                metadata: MetadataBlock::Legacy(EventMetadata {
                     schema_version,
                     idempotency_key,
                     published_at,
-                },
+                }),
+                data,
+            },
+        };
+        envelope.validate()?;
+        Ok(envelope)
+    }
+
+    /// Builds the new-format envelope: the legacy built-ins plus the exact
+    /// metadata revision and the frozen extension values admission stamped
+    /// on the queue message. The values are delivered exactly as recorded —
+    /// delivery never regenerates or extends them.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_composed(
+        source: String,
+        detail_type: String,
+        event_bus_name: String,
+        schema_version: i64,
+        idempotency_key: String,
+        published_at: DateTime<Utc>,
+        metadata_revision: u32,
+        values: serde_json::Map<String, Value>,
+        data: Value,
+    ) -> Result<Self, ControlPlaneError> {
+        let composed = ComposedMetadata {
+            builtins: EventMetadata {
+                schema_version,
+                idempotency_key,
+                published_at,
+            },
+            metadata_revision,
+            values,
+        };
+        composed.check_reserved()?;
+        let envelope = Self {
+            source,
+            detail_type,
+            event_bus_name,
+            detail: EnvelopeDetail {
+                metadata: MetadataBlock::Composed(composed),
                 data,
             },
         };
@@ -93,16 +194,16 @@ impl EventEnvelope {
                 "event bus name must not be empty".to_string(),
             ));
         }
-        if self.detail.metadata.schema_version <= 0 {
+        if self.detail.metadata.schema_version() <= 0 {
             return Err(validation_error(
                 "schemaVersion",
                 format!(
                     "schema version must be a positive number, got {}",
-                    self.detail.metadata.schema_version
+                    self.detail.metadata.schema_version()
                 ),
             ));
         }
-        if self.detail.metadata.idempotency_key.is_empty() {
+        if self.detail.metadata.idempotency_key().is_empty() {
             return Err(validation_error(
                 "idempotencyKey",
                 "idempotency key must not be empty".to_string(),
@@ -464,5 +565,82 @@ mod tests {
     fn sent_timestamp_rejects_malformed_input() {
         assert!(published_at_from_sent_timestamp("not-a-number").is_err());
         assert!(published_at_from_sent_timestamp("").is_err());
+    }
+
+    #[test]
+    fn composed_metadata_flattens_builtins_revision_and_values() {
+        let envelope = composed_envelope().unwrap();
+        let detail = serde_json::to_value(&envelope.detail).unwrap();
+        let metadata = detail["metadata"].as_object().unwrap();
+
+        assert_eq!(metadata["schemaVersion"], json!(4));
+        assert_eq!(metadata["idempotencyKey"], json!("key-123"));
+        assert_eq!(metadata["publishedAt"], json!("2026-07-30T10:30:00.123Z"));
+        assert_eq!(metadata["metadataRevision"], json!(2));
+        assert_eq!(metadata["traceId"], json!("trace-abc"));
+        assert_eq!(detail["data"], json!({"orderId": 123}));
+
+        let round_tripped: EnvelopeDetail = serde_json::from_value(detail).unwrap();
+        assert_eq!(round_tripped, envelope.detail);
+    }
+
+    #[test]
+    fn legacy_metadata_round_trips_as_legacy() {
+        let detail = serde_json::to_value(&sample_envelope().detail).unwrap();
+        let metadata = detail["metadata"].as_object().unwrap();
+        let mut keys: Vec<&String> = metadata.keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["idempotencyKey", "publishedAt", "schemaVersion"]);
+
+        let round_tripped: EnvelopeDetail = serde_json::from_value(detail).unwrap();
+        assert!(matches!(round_tripped.metadata, MetadataBlock::Legacy(_)));
+    }
+
+    #[test]
+    fn composed_envelope_rejects_reserved_shadows() {
+        let mut values = serde_json::Map::new();
+        values.insert("publishedAt".to_string(), json!("hand-stamped"));
+        let result = composed_envelope_with(values);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("reserved"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn composed_envelope_rejects_revision_zero() {
+        let result = EventEnvelope::new_composed(
+            "acme-orders".into(),
+            "OrderNotification".into(),
+            "acme-prod-orders-event-bus".into(),
+            4,
+            "key-123".into(),
+            DateTime::from_timestamp_millis(1785407400123).unwrap(),
+            0,
+            serde_json::Map::new(),
+            json!({}),
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("positive"), "unexpected error: {err}");
+    }
+
+    fn composed_envelope() -> Result<EventEnvelope, ControlPlaneError> {
+        let mut values = serde_json::Map::new();
+        values.insert("traceId".to_string(), json!("trace-abc"));
+        composed_envelope_with(values)
+    }
+
+    fn composed_envelope_with(
+        values: serde_json::Map<String, Value>,
+    ) -> Result<EventEnvelope, ControlPlaneError> {
+        EventEnvelope::new_composed(
+            "acme-orders".to_string(),
+            "OrderNotification".to_string(),
+            "acme-prod-orders-event-bus".to_string(),
+            4,
+            "key-123".to_string(),
+            DateTime::from_timestamp_millis(1785407400123).unwrap(),
+            2,
+            values,
+            json!({"orderId": 123}),
+        )
     }
 }
