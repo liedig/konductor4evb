@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import type { TableColumn } from '~/components/NxTable.vue'
 import { ApiError } from '~/composables/useApi'
-import type { MetadataEnvironmentState, MetadataNode, MetadataPreviewResponse, MetadataRevision } from '~/types/api'
+import type {
+  MetadataEnvironmentState,
+  MetadataNode,
+  MetadataPreviewResponse,
+  MetadataRevision,
+} from '~/types/api'
 
 definePageMeta({ middleware: 'persona' })
 
@@ -30,23 +34,15 @@ const savePending = ref(false)
 const saveError = ref('')
 const conflict = ref(false)
 
-const environmentColumns: TableColumn[] = [
-  { key: 'environment', label: 'Environment' },
-  { key: 'activeRevision', label: 'Active revision' },
-  { key: 'generation', label: 'Generation' },
-  { key: 'activatedBy', label: 'Activated by' },
-  { key: 'activatedAt', label: 'Activated at' },
-]
-
-function when(timestamp?: string): string {
-  if (!timestamp) return '—'
-  return new Date(timestamp).toLocaleString()
-}
-
-async function refreshRevisions(): Promise<void> {
-  const page = await metadata.listRevisions()
-  revisions.value = page.revisions ?? []
-  revisionsNextToken.value = page.nextToken
+/** Authoritative refresh after activation: environments and revision history. */
+async function refreshEnvironments(): Promise<void> {
+  const [environmentList, revisionPage] = await Promise.all([
+    metadata.listEnvironments(),
+    metadata.listRevisions(),
+  ])
+  environments.value = environmentList.environments ?? []
+  revisions.value = revisionPage.revisions ?? []
+  revisionsNextToken.value = revisionPage.nextToken
 }
 
 async function loadMoreRevisions() {
@@ -100,12 +96,12 @@ async function saveRevision(): Promise<void> {
     toast.success(`Revision M${saved.revision} saved; it is not activated`)
     previewResult.value = null
     conflict.value = false
-    await refreshRevisions()
+    await refreshEnvironments()
     editor.value?.reset()
   } catch (error) {
     if (error instanceof ApiError && error.status === 409) {
       conflict.value = true
-      await refreshRevisions()
+      await refreshEnvironments()
     } else {
       const fields = error instanceof ApiError && error.fieldList.length
         ? ` (${error.fieldList.map(field => `${field.name}: ${field.message}`).join('; ')})`
@@ -121,7 +117,7 @@ async function saveRevision(): Promise<void> {
 async function reloadAfterConflict(): Promise<void> {
   if (savePending.value) return
   try {
-    await refreshRevisions()
+    await refreshEnvironments()
     toast.info('History reloaded; your draft is kept for review')
   } catch (error) {
     errorMessage.value = error instanceof ApiError ? error.message : 'Failed to reload revisions'
@@ -217,31 +213,13 @@ onMounted(async () => {
       </p>
     </NxCard>
 
-    <NxCard title="Environments">
-      <NxTable
-        v-if="environments.length"
-        :columns="environmentColumns"
-        :items="(environments as unknown as Record<string, unknown>[])"
-      >
-        <template #cell-environment="{ item }">
-          <span class="font-medium">{{ item.environment }}</span>
-        </template>
-        <template #cell-activeRevision="{ item }">
-          <span class="inline-flex items-center gap-2">
-            {{ item.activeRevision }}
-            <NxBadge v-if="item.legacy" tone="warning">Legacy</NxBadge>
-          </span>
-        </template>
-        <template #cell-generation="{ item }">{{ item.generation ?? '—' }}</template>
-        <template #cell-activatedBy="{ item }">{{ item.activatedBy || '—' }}</template>
-        <template #cell-activatedAt="{ item }">{{ when(String(item.activatedAt ?? '')) }}</template>
-      </NxTable>
-      <NxEmptyState
-        v-else-if="!pending"
-        title="No environments configured"
-        body="Environment pointers appear once the platform's configured environments have active metadata."
-      />
-    </NxCard>
+    <MetadataEnvironmentPanel
+      :environments="environments"
+      :revisions="revisions"
+      :admin="session.isPlatformAdmin"
+      :pending="pending"
+      @changed="refreshEnvironments"
+    />
 
     <MetadataRevisionHistory
       :revisions="revisions"

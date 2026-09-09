@@ -122,6 +122,8 @@ export interface SchemaSummary {
   source?: string
   detailType?: string
   latestVersions?: Record<string, number>
+  /** Active metadata revision per environment, where the pointer was readable. */
+  metadataRevisions?: Record<string, number>
 }
 
 export interface SchemaDetail extends SchemaSummary {
