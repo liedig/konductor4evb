@@ -68,7 +68,11 @@ cache-cutover costs, and the per-handler side-effects classifications — are in
 - [ ] Model pointer-read cost and latency at representative publish volume
       (the strong pointer read runs on every admission) and the activation
       cold-start registry burst. Record the numbers; throttling fails closed
-      (503) and a TTL pointer cache is **not** an acceptable mitigation.
+      (503) and a TTL pointer cache is **not** an acceptable mitigation. The
+      modelled envelope and its limits are recorded in
+      [Service Quotas](../service-quotas.md); replace the assumption rows with
+      measurements from the in-region harness
+      (`metadata-benchmark-stack.yaml`) when a live run is authorized.
 
 ### Phase 2 — rehearsal in a sandbox
 

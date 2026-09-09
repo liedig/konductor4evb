@@ -144,6 +144,38 @@ Both quotas below are **regional and per account**, so the platform account is t
 
 Rule of thumb: total delivered events/sec across **all** domains and environments must fit inside the platform account's PutEvents quota. At 100 domains, if each averages just 15 delivered events/sec, you're at the default ceiling. Both quotas are adjustable — size them from your aggregate expected event rate with peak headroom, and revisit whenever a high-volume domain onboards.
 
+### Metadata pointer reads (admission hot key)
+
+Platform metadata composition adds one strongly consistent DynamoDB point
+read to **every admission**: the environment pointer item in
+`konductor-metadata-configuration` (`PK=ENV`, `SK=<environment>`). All of an
+environment's admissions read the same tiny item, so the pointer is a hot
+key whose ceiling is the partition's documented sustained read throughput:
+
+| Quantity | Value | Basis |
+|---|---|---|
+| RCU per admission | 1 | Strongly consistent read of an item ≤ 4 KB |
+| Read ceiling per environment | **3,000 admissions/s** | Documented 3,000 RCU/s per partition; the pointer item lives on one partition |
+| Modelled sustained rate (assumption) | 50 events/s per environment | 60× headroom under the ceiling |
+| Modelled peak rate (assumption) | 500 events/s per environment | 6× headroom under the ceiling |
+
+Reads above the ceiling throttle, and admission **fails closed** (503) — by
+design, never substituted by a TTL pointer cache. The sustained/peak rows are
+named modelling assumptions, not measurements: the repeatable in-region
+harness (`metadata-benchmark-stack.yaml`, deploy/invoke/teardown is
+separately authorized) samples the exact production read path
+(`MetadataStore::get_environment_pointer`) and replaces them with measured
+p50/p95/p99. The closed-form model itself is unit-tested in the
+`metadata-benchmark` crate (`cargo test -p metadata-benchmark`).
+
+**Activation cold-start burst.** After an activation advances the pointer's
+generation, the first publish of each schema refreshes its registry entry
+once — the burst is one `DescribeSchema` per schema in the registry (40 at
+the modelled catalog size), bounded by schema count and never multiplied by
+event rate. Confirm the schemas API quota in your region before activating a
+large catalog; the harness's `registry-describe-burst` probe measures the
+real burst over the environment's actual schema list.
+
 ## Control-plane throttling during provisioning
 
 These are TPS limits, not counts. `provision-domain` fans out over environments with unbounded Map concurrency, so parallel provisioning bursts against them. Every workflow SDK step retries throttling errors with exponential backoff and jitter (throttle-prone CloudWatch/Schemas calls get 5 attempts; standard control-plane calls get 3), so transient throttles are absorbed rather than failing the environment.

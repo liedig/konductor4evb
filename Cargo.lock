@@ -2570,6 +2570,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "metadata-benchmark"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-sdk-schemas",
+ "konductor-common",
+ "lambda_runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "metadata-bootstrap"
 version = "0.1.0"
 dependencies = [

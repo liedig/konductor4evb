@@ -1,0 +1,55 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  Throwaway in-region load/latency benchmark for platform metadata
+  composition (add-platform-metadata-composition task 7.4). Deploy, invoke,
+  tear down — this stack is not part of the platform. The function seeds its
+  own fixture environment pointer into the deployed
+  konductor-metadata-configuration table and removes it after each run; the
+  registry burst probe reads schemas only and fabricates no registry state.
+
+Globals:
+  Function:
+    Runtime: provided.al2023
+    Architectures: [arm64]
+    Timeout: 300
+    MemorySize: 256
+
+Resources:
+  MetadataBenchmarkFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-metadata-benchmark"
+      RetentionInDays: 7
+
+  MetadataBenchmarkFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MetadataBenchmarkFunctionLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-metadata-benchmark"
+      CodeUri: ./control-plane/functions/metadata-benchmark
+      Handler: bootstrap
+      Environment:
+        Variables:
+          METADATA_TABLE: konductor-metadata-configuration
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+              Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/konductor-metadata-configuration"
+            - Effect: Allow
+              Action: schemas:DescribeSchema
+              Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:*"
+
+Outputs:
+  MetadataBenchmarkFunctionName:
+    Description: Benchmark function to invoke
+    Value: !Ref MetadataBenchmarkFunction

@@ -37,6 +37,7 @@ members = [
     "control-plane/functions/entitlement-stream-consumer",
     "control-plane/functions/metadata-stream-consumer",
     "control-plane/functions/grant-benchmark",
+    "control-plane/functions/metadata-benchmark",
 ]
 
 [workspace.package]
