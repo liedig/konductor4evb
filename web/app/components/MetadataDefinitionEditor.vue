@@ -18,8 +18,37 @@ const props = withDefaults(defineProps<{
 
 const draft = ref<MetadataNode[]>(draftFromSaved(props.predecessor?.definition?.children))
 
-watch(() => props.predecessor?.revision, () => {
-  draft.value = draftFromSaved(props.predecessor?.definition?.children)
+/**
+ * `dirty` tracks whether the user edited the draft since it was cloned;
+ * a clean draft follows the head, a dirty one survives concurrent saves so
+ * conflict recovery can review the difference instead of losing edits.
+ */
+const dirty = ref(false)
+
+/** Content-level comparison for the page's empty-revision save guard. */
+const hasLocalChanges = computed(() =>
+  canonicalJson(draft.value) !== canonicalJson(savedChildren()),
+)
+
+function savedChildren(): MetadataNode[] {
+  return draftFromSaved(props.predecessor?.definition?.children)
+}
+
+function reset(): void {
+  draft.value = savedChildren()
+  dirty.value = false
+  predecessorAdvanced.value = false
+}
+
+const predecessorAdvanced = ref(false)
+
+watch(() => props.predecessor?.revision, (revision, previous) => {
+  if (revision === previous) return
+  if (dirty.value) {
+    predecessorAdvanced.value = true
+  } else {
+    reset()
+  }
 })
 
 /** Paths of nodes inherited from the saved predecessor; locked nodes cannot be renamed, so paths are stable. */
@@ -45,18 +74,23 @@ const valid = computed(() => violations.value.length === 0)
 const mutator: DraftMutations = {
   rename(node, value) {
     node.name = value
+    dirty.value = true
   },
   setGenerator(node, value) {
     if (node.kind === 'field') node.generator = value as MetadataGenerator
+    dirty.value = true
   },
   addField(parent) {
     childrenOf(parent).push({ kind: 'field', name: '', generator: 'uuid-v4' })
+    dirty.value = true
   },
   addObject(parent) {
     childrenOf(parent).push({ kind: 'object', name: '', children: [] })
+    dirty.value = true
   },
   remove(node) {
     detach(draft.value, null, node)
+    dirty.value = true
   },
   violation(path) {
     const exact = violations.value.find(v => v.name === path)
@@ -118,6 +152,8 @@ defineExpose({
   draft,
   violations,
   valid,
+  hasLocalChanges,
+  reset,
 })
 </script>
 
@@ -163,5 +199,10 @@ defineExpose({
         {{ violation.message }}
       </li>
     </ul>
+
+    <p v-if="predecessorAdvanced && hasLocalChanges" role="status" class="mt-4 rounded-lg border border-warning bg-warning/10 px-4 py-3 text-sm text-warning">
+      The head revision advanced while you were editing. Your unsaved draft is kept;
+      review the revision history for what changed before saving.
+    </p>
   </NxCard>
 </template>

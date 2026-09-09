@@ -196,3 +196,37 @@ export interface DraftMutations {
   isLocked(path: string): boolean
   busy(): boolean
 }
+
+/** Collects the dotted path of every node in an additive definition tree. */
+function collectPaths(nodes: MetadataNode[], parent: string, into: Set<string>): void {
+  for (const node of nodes) {
+    const path = parent ? `${parent}.${node.name}` : node.name
+    into.add(path)
+    if (node.kind === 'object') collectPaths(node.children ?? [], path, into)
+  }
+}
+
+/**
+ * Dotted paths of nodes present in `current` but absent from `predecessor`:
+ * what an additive revision adds. Saved revisions never change or remove
+ * existing nodes, so additions are the only difference a diff needs to show.
+ */
+export function addedPaths(predecessor: MetadataNode[], current: MetadataNode[]): string[] {
+  const existing = new Set<string>()
+  collectPaths(predecessor, '', existing)
+  const added: string[] = []
+  const walk = (nodes: MetadataNode[], parent: string) => {
+    for (const node of nodes) {
+      const path = parent ? `${parent}.${node.name}` : node.name
+      if (!existing.has(path)) added.push(path)
+      if (node.kind === 'object') walk(node.children ?? [], path)
+    }
+  }
+  walk(current, '')
+  return added
+}
+
+/** Compact canonical JSON for read-only display of definitions and schemas. */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, null, 2)
+}

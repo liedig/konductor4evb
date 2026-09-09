@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/NxTable.vue'
 import { ApiError } from '~/composables/useApi'
-import type { MetadataEnvironmentState, MetadataRevision } from '~/types/api'
+import type { MetadataEnvironmentState, MetadataNode, MetadataPreviewResponse, MetadataRevision } from '~/types/api'
 
 definePageMeta({ middleware: 'persona' })
 
 const metadata = useMetadata()
 const session = useSessionStore()
+const toast = useToast()
 
 const environments = ref<MetadataEnvironmentState[]>([])
 const revisions = ref<MetadataRevision[]>([])
@@ -15,8 +16,19 @@ const pending = ref(true)
 const pendingMore = ref(false)
 const errorMessage = ref('')
 
+const editor = useTemplateRef<{ draft: MetadataNode[], valid: boolean, hasLocalChanges: boolean, reset: () => void } | null>('metadataEditor')
+
 /** Newest revision is the additive head the editor extends. */
 const headRevision = computed(() => revisions.value[0] ?? null)
+
+// ---- Draft preview and save (platform-admin mutations) ----
+
+const previewResult = ref<MetadataPreviewResponse | null>(null)
+const previewPending = ref(false)
+const previewError = ref('')
+const savePending = ref(false)
+const saveError = ref('')
+const conflict = ref(false)
 
 const environmentColumns: TableColumn[] = [
   { key: 'environment', label: 'Environment' },
@@ -26,17 +38,15 @@ const environmentColumns: TableColumn[] = [
   { key: 'activatedAt', label: 'Activated at' },
 ]
 
-const revisionColumns: TableColumn[] = [
-  { key: 'revision', label: 'Revision' },
-  { key: 'predecessor', label: 'Predecessor' },
-  { key: 'definitionDigest', label: 'Definition digest' },
-  { key: 'createdBy', label: 'Author' },
-  { key: 'createdAt', label: 'Created' },
-]
-
 function when(timestamp?: string): string {
   if (!timestamp) return '—'
   return new Date(timestamp).toLocaleString()
+}
+
+async function refreshRevisions(): Promise<void> {
+  const page = await metadata.listRevisions()
+  revisions.value = page.revisions ?? []
+  revisionsNextToken.value = page.nextToken
 }
 
 async function loadMoreRevisions() {
@@ -49,6 +59,72 @@ async function loadMoreRevisions() {
     errorMessage.value = error instanceof ApiError ? error.message : 'Failed to load revisions'
   } finally {
     pendingMore.value = false
+  }
+}
+
+async function previewDraft(): Promise<void> {
+  if (!editor.value?.draft || previewPending.value || savePending.value) return
+  previewPending.value = true
+  previewError.value = ''
+  try {
+    previewResult.value = await metadata.preview({
+      definition: { children: editor.value.draft },
+    })
+  } catch (error) {
+    previewError.value = error instanceof ApiError ? error.message : 'Preview failed'
+    previewResult.value = null
+  } finally {
+    previewPending.value = false
+  }
+}
+
+async function saveRevision(): Promise<void> {
+  const draft = editor.value?.draft
+  if (!draft || !editor.value?.valid || savePending.value || previewPending.value) return
+  if (!headRevision.value) {
+    saveError.value = 'Revision 1 is created by deployment bootstrap; wait for the baseline to exist.'
+    return
+  }
+  if (!editor.value.hasLocalChanges) {
+    saveError.value = 'The draft matches the current head; a save would create an empty revision.'
+    return
+  }
+  savePending.value = true
+  saveError.value = ''
+  try {
+    const saved = await metadata.createRevision({
+      expectedHead: headRevision.value.revision,
+      operationId: crypto.randomUUID(),
+      definition: { children: draft },
+    })
+    toast.success(`Revision M${saved.revision} saved; it is not activated`)
+    previewResult.value = null
+    conflict.value = false
+    await refreshRevisions()
+    editor.value?.reset()
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) {
+      conflict.value = true
+      await refreshRevisions()
+    } else {
+      const fields = error instanceof ApiError && error.fieldList.length
+        ? ` (${error.fieldList.map(field => `${field.name}: ${field.message}`).join('; ')})`
+        : ''
+      saveError.value = (error instanceof ApiError ? error.message : 'Save failed') + fields
+    }
+  } finally {
+    savePending.value = false
+  }
+}
+
+/** Conflict recovery: reload authoritative history, keep the local draft. */
+async function reloadAfterConflict(): Promise<void> {
+  if (savePending.value) return
+  try {
+    await refreshRevisions()
+    toast.info('History reloaded; your draft is kept for review')
+  } catch (error) {
+    errorMessage.value = error instanceof ApiError ? error.message : 'Failed to reload revisions'
   }
 }
 
@@ -88,10 +164,52 @@ onMounted(async () => {
 
     <MetadataDefaultsPanel />
 
-    <MetadataDefinitionEditor
-      v-if="session.isPlatformAdmin"
-      :predecessor="headRevision"
-    />
+    <template v-if="session.isPlatformAdmin">
+      <MetadataDefinitionEditor ref="metadataEditor" :predecessor="headRevision" />
+
+      <NxCard title="Draft actions">
+        <div class="flex flex-wrap items-center gap-3">
+          <NxButton
+            variant="secondary"
+            :disabled="previewPending || savePending"
+            @click="previewDraft"
+          >
+            {{ previewPending ? 'Previewing…' : 'Preview draft' }}
+          </NxButton>
+          <NxButton
+            variant="primary"
+            :disabled="previewPending || savePending || !editor?.valid"
+            @click="saveRevision"
+          >
+            {{ savePending ? 'Saving…' : 'Save new revision' }}
+          </NxButton>
+          <span v-if="editor?.hasLocalChanges" class="text-xs text-faint">Draft has unsaved changes</span>
+          <span v-else class="text-xs text-faint">Draft matches the current head</span>
+        </div>
+        <p v-if="previewError" role="alert" class="mt-3 text-sm text-danger">{{ previewError }}</p>
+        <p v-else-if="saveError" role="alert" class="mt-3 text-sm text-danger">{{ saveError }}</p>
+
+        <div
+          v-if="conflict"
+          role="alert"
+          class="mt-4 rounded-lg border border-warning bg-warning/10 px-4 py-3 text-sm text-warning"
+        >
+          <p>
+            Another administrator saved a newer revision first. Your edits are kept
+            locally — nothing of theirs was overwritten.
+          </p>
+          <div class="mt-2 flex items-center gap-2">
+            <NxButton variant="secondary" size="sm" :disabled="savePending" @click="reloadAfterConflict">
+              Reload latest history
+            </NxButton>
+            <span class="text-xs">Then review the difference in the history below before saving again.</span>
+          </div>
+        </div>
+      </NxCard>
+
+      <MetadataPreviewPanel :preview="previewResult" :pending="previewPending" />
+    </template>
+
     <NxCard v-else title="Definition editor">
       <p class="text-sm text-muted">
         Configuration is read-only for auditors. Mutations require the
@@ -125,38 +243,11 @@ onMounted(async () => {
       />
     </NxCard>
 
-    <NxCard title="Revision history">
-      <template #actions>
-        <NxButton
-          v-if="revisionsNextToken"
-          variant="ghost"
-          size="sm"
-          :disabled="pendingMore"
-          @click="loadMoreRevisions"
-        >
-          {{ pendingMore ? 'Loading…' : 'Load more' }}
-        </NxButton>
-      </template>
-      <NxTable
-        v-if="revisions.length"
-        :columns="revisionColumns"
-        :items="(revisions as unknown as Record<string, unknown>[])"
-      >
-        <template #cell-revision="{ item }">
-          <span class="font-medium">M{{ item.revision }}</span>
-        </template>
-        <template #cell-predecessor="{ item }">M{{ item.predecessor }}</template>
-        <template #cell-definitionDigest="{ item }">
-          <span class="font-mono text-xs">{{ String(item.definitionDigest).slice(0, 12) }}</span>
-        </template>
-        <template #cell-createdBy="{ item }">{{ item.createdBy }}</template>
-        <template #cell-createdAt="{ item }">{{ when(String(item.createdAt ?? '')) }}</template>
-      </NxTable>
-      <NxEmptyState
-        v-else-if="!pending"
-        title="No revisions yet"
-        body="Saved configuration revisions are immutable and appear here, newest first."
-      />
-    </NxCard>
+    <MetadataRevisionHistory
+      :revisions="revisions"
+      :next-token="revisionsNextToken"
+      :pending-more="pendingMore"
+      @load-more="loadMoreRevisions"
+    />
   </div>
 </template>
