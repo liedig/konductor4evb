@@ -14,6 +14,7 @@ use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{rule_name, SchemaName};
 use konductor_common::error::ControlPlaneError;
 use konductor_common::grant_engine::actions;
+use konductor_common::metadata::composition::check_offline_composability;
 use konductor_common::models::{
     AppendSchemaVersionRequest, CreateSchemaRequest, DomainStatus, SchemaMutationResponse,
 };
@@ -107,6 +108,11 @@ async fn create_schema<A: ResourceAuthorizer>(
             format!("content is not a valid JSON Schema draft-4 document: {e}"),
         )));
     }
+    if let Err(e) = check_offline_composability(&request.content) {
+        return Ok(api::from_control_plane_error(&api::validation_error(
+            format!("content cannot participate in an offline composed contract: {e}"),
+        )));
+    }
     let target = match prepare(
         clients,
         authorizer,
@@ -185,6 +191,11 @@ async fn append_schema_version<A: ResourceAuthorizer>(
     if let Err(e) = check_draft4_document(&request.content) {
         return Ok(api::from_control_plane_error(&api::validation_error(
             format!("content is not a valid JSON Schema draft-4 document: {e}"),
+        )));
+    }
+    if let Err(e) = check_offline_composability(&request.content) {
+        return Ok(api::from_control_plane_error(&api::validation_error(
+            format!("content cannot participate in an offline composed contract: {e}"),
         )));
     }
     let target = match prepare(
@@ -877,6 +888,100 @@ mod tests {
         let resp = handle(&clients, &authorizer, event(payload)).await.unwrap();
 
         assert_eq!(status(&resp), 201);
+    }
+
+    #[tokio::test]
+    async fn create_schema_with_local_references_composes_and_is_stored_unchanged() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let local_ref_content = r##"{
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "type": "object",
+            "properties": {"item": {"$ref": "#/definitions/item"}},
+            "definitions": {"item": {"type": "object", "properties": {"sku": {"type": "string"}}, "required": ["sku"]}}
+        }"##;
+        let domain = active_domain_rule();
+        let create = mock!(aws_sdk_schemas::Client::create_schema)
+            .match_requests(move |req| {
+                req.registry_name() == Some("acme-prod-orders-schema-registry")
+                    && req.schema_name() == Some("acme-orders@OrderNotification")
+                    && req.content() == Some(local_ref_content)
+            })
+            .then_output(move || {
+                aws_sdk_schemas::operation::create_schema::CreateSchemaOutput::builder()
+                    .schema_version("1")
+                    .build()
+            });
+        let published = version_published_rule("prod", 1);
+        let clients = clients(&[&domain], &[&create], &[&published]);
+        let mut body = create_body();
+        body["content"] = json!(local_ref_content);
+
+        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", body)))
+            .await
+            .unwrap();
+
+        // The mock rule only matches when the stored content is exactly the
+        // submitted document: local references survive authoring.
+        assert_eq!(status(&resp), 201);
+    }
+
+    #[tokio::test]
+    async fn create_schema_with_external_references_returns_400_before_registry_access() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        // Zero rules: the composability gate precedes any SDK access.
+        let clients = clients(&[], &[], &[]);
+        let mut bad = create_body();
+        bad["content"] = json!(
+            r#"{"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "properties": {"x": {"$ref": "https://example.com/remote.json"}}}"#
+        );
+
+        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", bad)))
+            .await
+            .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let response_body = body(&resp);
+        let message = response_body["message"].as_str().unwrap();
+        // External references fail closed at authoring time — either the
+        // draft-4 compile gate or the composability gate rejects them, and
+        // both name the offending reference without any registry access.
+        assert!(
+            message.contains("example.com"),
+            "400 must name the offending reference: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_with_an_offline_unresolvable_reference_fails_the_composability_gate() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let clients = clients(&[], &[], &[]);
+        let mut bad = append_body();
+        // Compiles standalone — the vendor extension is ignored by the
+        // draft-4 compiler — but the composability gate conservatively
+        // rejects any reference that cannot resolve offline, wherever it
+        // appears in the document.
+        bad["content"] = json!(
+            r#"{"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "properties": {"orderId": {"type": "integer"}}, "x-examples": {"$ref": "https://example.com/dead-space.json"}}"#
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", bad)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let response_body = body(&resp);
+        let message = response_body["message"].as_str().unwrap();
+        assert!(
+            message.contains("offline composed contract"),
+            "400 must name the composability constraint: {message}"
+        );
     }
 
     #[tokio::test]
