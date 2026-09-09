@@ -184,7 +184,9 @@ fn stale_head_response(head: Option<HeadRecord>, candidate: u32) -> Value {
     api::from_control_plane_error(&ControlPlaneError::MetadataConflict { reason })
 }
 
-fn valid_operation_id(operation_id: &str) -> bool {
+/// Operation ids are printable, bounded request identity carried by every
+/// mutation; validation is shared by the revision and activation routes.
+pub fn valid_operation_id(operation_id: &str) -> bool {
     !operation_id.is_empty()
         && operation_id.len() <= MAX_OPERATION_ID_LEN
         && operation_id.chars().all(|c| !c.is_control())

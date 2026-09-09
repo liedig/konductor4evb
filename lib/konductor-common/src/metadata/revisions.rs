@@ -90,8 +90,8 @@ pub struct RevisionView {
 
 /// DynamoDB-backed access to the metadata configuration table.
 pub struct MetadataStore {
-    client: aws_sdk_dynamodb::Client,
-    table: String,
+    pub(crate) client: aws_sdk_dynamodb::Client,
+    pub(crate) table: String,
 }
 
 impl MetadataStore {

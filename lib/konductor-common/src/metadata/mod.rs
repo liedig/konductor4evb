@@ -10,6 +10,7 @@ pub mod additive;
 pub mod composition;
 pub mod definition;
 pub mod generation;
+pub mod pointers;
 pub mod revisions;
 pub mod schema;
 pub mod selector;

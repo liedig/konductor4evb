@@ -16,8 +16,10 @@ use konductor_common::metadata::revisions::{
 use konductor_common::principal::{AuthenticationMechanism, GlobalRole, TrustedPrincipal};
 use konductor_common::principal_context::log_principal;
 
+use crate::activation;
 use crate::context::AdminConfig;
 use crate::create;
+use crate::environments;
 use crate::pagination;
 use crate::preview;
 use crate::readiness;
@@ -97,6 +99,26 @@ pub async fn dispatch(
             }
             readiness::readiness(store, config, payload).await
         }
+        ("GET", "/metadata/environments") => {
+            if !can_read(&principal) {
+                return Ok(denied());
+            }
+            environments::list_environments(store, config).await
+        }
+        ("GET", "/metadata/activations") => {
+            if !can_read(&principal) {
+                return Ok(denied());
+            }
+            environments::list_activations(store, payload).await
+        }
+        // The pointer cutover: platform-admin only, readiness rechecked
+        // server-side, one conditional transaction.
+        ("POST", "/metadata/activations") => {
+            if !principal.is_platform_admin() {
+                return Ok(denied());
+            }
+            activation::activate(store, config, payload, &principal).await
+        }
         _ => Ok(api::error_response(
             404,
             konductor_common::models::ApiError {
@@ -133,24 +155,11 @@ struct RevisionListResponse {
 }
 
 async fn list_revisions(store: &MetadataStore, payload: &Value) -> Result<Value, Error> {
-    let limit = match api::query_param(payload, "limit") {
-        None => DEFAULT_PAGE_SIZE,
-        Some(raw) => match raw.parse::<i32>() {
-            Ok(v) if (1..=MAX_PAGE_SIZE).contains(&v) => v,
-            _ => {
-                return Ok(api::from_control_plane_error(&api::validation_error(
-                    format!("query parameter 'limit' must be between 1 and {MAX_PAGE_SIZE}"),
-                )))
-            }
-        },
-    };
-    let exclusive_start = match api::query_param(payload, "nextToken") {
-        None => None,
-        Some(raw) => match pagination::decode_revision_cursor(&raw) {
-            Ok(key) => Some(key),
-            Err(e) => return Ok(api::from_control_plane_error(&e)),
-        },
-    };
+    let (limit, exclusive_start) =
+        match pagination::page_request(payload, pagination::decode_revision_cursor) {
+            Ok(page) => page,
+            Err(response) => return Ok(response),
+        };
 
     let (records, last_evaluated) = match store.list_revisions(limit, exclusive_start).await {
         Ok(page) => page,
@@ -455,5 +464,35 @@ mod tests {
         let resp = invoke(&store, payload).await;
         assert_eq!(status(&resp), 404);
         assert_eq!(body(&resp)["code"], "ResourceNotFoundException");
+    }
+
+    #[tokio::test]
+    async fn auditor_reads_environment_state_but_cannot_activate() {
+        // Environment state is a read route: no SDK rule is needed for the
+        // denial half, and the read half needs only the pointer query.
+        let pointers = mock!(aws_sdk_dynamodb::Client::query).then_output(|| {
+            aws_sdk_dynamodb::operation::query::QueryOutput::builder()
+                .set_items(Some(Vec::new()))
+                .build()
+        });
+        let store = store_with(&[pointers]);
+
+        let auditor = context("[\"platform-auditor\"]", "[]");
+        let payload = event("GET", "/metadata/environments", auditor.clone());
+        // A configured environment without a pointer fails closed; what
+        // matters here is that the read itself is authorized.
+        let resp = invoke(&store, payload).await;
+        assert_eq!(status(&resp), 503);
+
+        let mut activation = event("POST", "/metadata/activations", auditor);
+        activation["body"] = json!(json!({
+            "revision": 2,
+            "environment": "dev",
+            "expectedActiveRevision": 1,
+            "operationId": "op-act-1"
+        })
+        .to_string());
+        let resp = invoke(&store, activation).await;
+        assert_eq!(status(&resp), 403, "activation is admin-only");
     }
 }

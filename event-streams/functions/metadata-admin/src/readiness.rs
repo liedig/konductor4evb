@@ -21,7 +21,6 @@ use konductor_common::metadata::schema::{
 use konductor_common::metadata::selector::MetadataRevision;
 
 use crate::context::AdminConfig;
-use crate::handler::store_failure;
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -32,21 +31,21 @@ struct ReadinessRequest {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ReadinessResponse {
-    revision: u32,
-    environment: String,
-    definition_digest: String,
-    compiler_format: u32,
-    checks: ChecksReport,
+pub struct ReadinessReport {
+    pub revision: u32,
+    pub environment: String,
+    pub definition_digest: String,
+    pub compiler_format: u32,
+    pub checks: ChecksReport,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ChecksReport {
-    definition_recompiles_exactly: bool,
-    generated_values_satisfy_contract: bool,
-    example_metadata_bytes: usize,
-    size_budget_bytes: usize,
+pub struct ChecksReport {
+    pub definition_recompiles_exactly: bool,
+    pub generated_values_satisfy_contract: bool,
+    pub example_metadata_bytes: usize,
+    pub size_budget_bytes: usize,
 }
 
 pub async fn readiness(
@@ -63,95 +62,102 @@ pub async fn readiness(
             "environment is not one of the configured deployment environments",
         )));
     }
+    match run_checks(store, config, request.revision, &request.environment).await {
+        Ok(report) => Ok(api::success_response(200, &report)),
+        Err(e) => Ok(api::from_control_plane_error(&e)),
+    }
+}
 
-    let record = match store.get_revision(request.revision).await {
+/// The authoritative readiness checks, re-run by activation before any
+/// pointer transaction: the revision must exist and recompile exactly
+/// under the current compiler, trusted context must be available, and the
+/// platform's own generated values must satisfy the revision's closed
+/// contract within the event size budget. Results are computed from
+/// server state, never from caller-supplied preflight claims.
+pub async fn run_checks(
+    store: &MetadataStore,
+    config: &AdminConfig,
+    revision: u32,
+    environment: &str,
+) -> Result<ReadinessReport, ControlPlaneError> {
+    let record = match store.get_revision(revision).await {
         Ok(Some(r)) => r,
-        Ok(None) => {
-            return Ok(api::from_control_plane_error(
-                &ControlPlaneError::MetadataRevisionNotFound {
-                    revision: request.revision,
-                },
-            ))
-        }
-        Err(e) => return Ok(store_failure("read revision for readiness", e)),
+        Ok(None) => return Err(ControlPlaneError::MetadataRevisionNotFound { revision }),
+        Err(e) => return Err(store_error("read revision for readiness", e)),
     };
     if record.compiler_format != METADATA_SCHEMA_COMPILER_FORMAT {
-        return Ok(api::from_control_plane_error(
-            &ControlPlaneError::MetadataConfigurationUnavailable {
-                reason: format!(
-                    "revision {} was compiled by compiler format {} but this deployment uses format {}",
-                    record.revision, record.compiler_format, METADATA_SCHEMA_COMPILER_FORMAT
-                ),
-            },
-        ));
+        return Err(ControlPlaneError::MetadataConfigurationUnavailable {
+            reason: format!(
+                "revision {} was compiled by compiler format {} but this deployment uses format {}",
+                record.revision, record.compiler_format, METADATA_SCHEMA_COMPILER_FORMAT
+            ),
+        });
     }
 
-    let definition = match parse_stored_definition(&record.definition) {
-        Ok(d) => d,
-        Err(e) => return Ok(api::from_control_plane_error(&e)),
-    };
-    let revision = match MetadataRevision::new(record.revision) {
-        Ok(r) => r,
-        Err(e) => return Ok(api::from_control_plane_error(&e)),
-    };
-    let compiled = match compile_metadata_schema(revision, &definition) {
-        Ok(c) => c,
-        Err(e) => return Ok(api::from_control_plane_error(&e)),
-    };
+    let definition = parse_stored_definition(&record.definition)?;
+    let revision = MetadataRevision::new(record.revision)?;
+    let compiled = compile_metadata_schema(revision, &definition)?;
     // An immutable revision must recompile to exactly the document it was
     // stored with; drift means a compiler change would silently reinterpret
     // saved configuration.
     if compiled.document_string() != record.metadata_schema {
-        return Ok(api::from_control_plane_error(
-            &ControlPlaneError::MetadataConfigurationUnavailable {
-                reason: format!(
-                    "revision {} no longer recompiles to its stored schema",
-                    record.revision
-                ),
-            },
-        ));
+        return Err(ControlPlaneError::MetadataConfigurationUnavailable {
+            reason: format!(
+                "revision {} no longer recompiles to its stored schema",
+                record.revision
+            ),
+        });
     }
 
-    let context = match config.generation_context(&request.environment) {
-        Ok(c) => c,
-        Err(e) => return Ok(api::from_control_plane_error(&e)),
-    };
-    let extensions = match generate_extensions(&definition, &context, &PlatformUuidSource) {
-        Ok(e) => e,
-        Err(e) => return Ok(api::from_control_plane_error(&e)),
-    };
+    let context = config.generation_context(environment)?;
+    let extensions = generate_extensions(&definition, &context, &PlatformUuidSource)?;
     let example = synthetic_metadata_block(record.revision, extensions);
-    if let Err(reason) = compiled.validate_block(&Value::Object(example.clone())) {
-        return Ok(api::from_control_plane_error(&api::validation_error(
-            format!("the saved revision does not accept the platform's generated values: {reason}"),
-        )));
-    }
+    compiled
+        .validate_block(&Value::Object(example.clone()))
+        .map_err(|reason| {
+            api::validation_error(format!(
+                "the saved revision does not accept the platform's generated values: {reason}"
+            ))
+        })?;
     let example_bytes = serde_json::to_vec(&example)
         .map_err(|e| ControlPlaneError::MetadataConfigurationUnavailable {
             reason: e.to_string(),
         })?
         .len();
     if example_bytes >= PUT_EVENTS_ENTRY_MAX_BYTES {
-        return Ok(api::from_control_plane_error(&api::validation_error(
+        return Err(api::validation_error(
             "the generated metadata block alone exceeds the event size budget",
-        )));
+        ));
     }
 
-    Ok(api::success_response(
-        200,
-        &ReadinessResponse {
-            revision: record.revision,
-            environment: request.environment,
-            definition_digest: record.definition_digest,
-            compiler_format: record.compiler_format,
-            checks: ChecksReport {
-                definition_recompiles_exactly: true,
-                generated_values_satisfy_contract: true,
-                example_metadata_bytes: example_bytes,
-                size_budget_bytes: PUT_EVENTS_ENTRY_MAX_BYTES,
-            },
+    Ok(ReadinessReport {
+        revision: record.revision,
+        environment: environment.to_string(),
+        definition_digest: record.definition_digest,
+        compiler_format: record.compiler_format,
+        checks: ChecksReport {
+            definition_recompiles_exactly: true,
+            generated_values_satisfy_contract: true,
+            example_metadata_bytes: example_bytes,
+            size_budget_bytes: PUT_EVENTS_ENTRY_MAX_BYTES,
         },
-    ))
+    })
+}
+
+/// Configuration store failures surface as unavailability (503), never as a
+/// silent pass of readiness.
+fn store_error(
+    operation: &str,
+    e: konductor_common::metadata::revisions::MetadataStoreError,
+) -> ControlPlaneError {
+    match e {
+        konductor_common::metadata::revisions::MetadataStoreError::CorruptItem(reason) => {
+            ControlPlaneError::MetadataConfigurationUnavailable {
+                reason: format!("stored configuration is corrupt: {reason}"),
+            }
+        }
+        other => ControlPlaneError::DynamoDb(format!("{operation}: {other}")),
+    }
 }
 
 /// The full metadata block the platform would stamp: the four protected
