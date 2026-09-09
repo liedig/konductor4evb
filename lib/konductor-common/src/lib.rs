@@ -9,6 +9,7 @@ pub mod grant;
 pub mod grant_engine;
 pub mod grant_store;
 pub mod html;
+pub mod metadata;
 pub mod models;
 pub mod namespace;
 pub mod principal;
