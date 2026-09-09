@@ -11,7 +11,11 @@ const navItems = computed(() => {
     { to: '/subscriptions', label: 'Subscriptions' },
   ]
   if (session.isPlatformRole) {
-    items.unshift({ to: '/admin', label: 'Approvals' }, { to: '/admin/domains', label: 'All domains' })
+    items.unshift(
+      { to: '/admin', label: 'Approvals' },
+      { to: '/admin/domains', label: 'All domains' },
+      { to: '/admin/metadata', label: 'Metadata' },
+    )
   }
   return items
 })

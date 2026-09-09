@@ -223,3 +223,151 @@ export interface ApiErrorBody {
   reason?: 'unknownOperation' | 'cannotParse' | 'fieldValidationFailed' | 'other'
   fieldList?: { name?: string, message?: string }[]
 }
+
+// ---- Platform metadata administration (`/metadata/*`, OAuth surface) ----
+
+/** The supported generator catalogue (design.md, decision 2). */
+export type MetadataGenerator =
+  | 'uuid-v4'
+  | 'utc-timestamp'
+  | 'utc-date'
+  | 'aws-region'
+  | 'organisation'
+  | 'environment'
+
+/** A generated leaf field in a metadata definition tree. */
+export interface MetadataFieldNode {
+  kind: 'field'
+  name: string
+  generator: MetadataGenerator
+}
+
+/** A nested object holding further definition nodes. */
+export interface MetadataObjectNode {
+  kind: 'object'
+  name: string
+  children: MetadataNode[]
+}
+
+export type MetadataNode = MetadataFieldNode | MetadataObjectNode
+
+/** Extension fields/objects only; built-ins are implicit in every revision. */
+export interface MetadataDefinition {
+  children?: MetadataNode[]
+}
+
+export interface CreateMetadataRevisionRequest {
+  expectedHead: number
+  operationId: string
+  definition: MetadataDefinition
+}
+
+/** Immutable revision summary/detail (`RevisionView`, camelCase on the wire). */
+export interface MetadataRevision {
+  revision: number
+  predecessor: number
+  definitionDigest: string
+  compilerFormat: number
+  createdBy: string
+  createdAt: string
+  definition?: MetadataDefinition
+  metadataSchema?: Record<string, unknown>
+}
+
+export interface ListMetadataRevisionsResponse {
+  revisions?: MetadataRevision[]
+  nextToken?: string
+}
+
+export interface MetadataPreviewRequest {
+  definition: MetadataDefinition
+  environment?: string
+}
+
+export interface MetadataGeneratorDescription {
+  path?: string
+  generator?: string
+  constraint?: string
+  source?: string
+}
+
+/** Preview bounds mirror the server-side additive limits. */
+export interface MetadataPreviewBounds {
+  extensionNodesUsed?: number
+  extensionNodesMax?: number
+  objectLevelsMax?: number
+  definitionBytesUsed?: number
+  definitionBytesMax?: number
+}
+
+export interface MetadataPreviewResponse {
+  candidateRevision?: number
+  metadataSchema?: Record<string, unknown>
+  bounds?: MetadataPreviewBounds
+  generators?: MetadataGeneratorDescription[]
+  example?: Record<string, unknown>
+}
+
+export interface MetadataReadinessRequest {
+  revision: number
+  environment: string
+}
+
+export interface MetadataReadinessReport {
+  revision?: number
+  environment?: string
+  definitionDigest?: string
+  compilerFormat?: number
+  checks?: {
+    definitionRecompilesExactly?: boolean
+    generatedValuesSatisfyContract?: boolean
+    exampleMetadataBytes?: number
+    sizeBudgetBytes?: number
+  }
+}
+
+/** Per-environment active pointer state; `activeRevision` 0 is the legacy baseline. */
+export interface MetadataEnvironmentState {
+  environment: string
+  activeRevision: number
+  generation?: number
+  legacy?: boolean
+  definitionDigest?: string
+  activatedBy?: string
+  activatedAt?: string
+}
+
+export interface MetadataEnvironmentList {
+  environments?: MetadataEnvironmentState[]
+}
+
+export interface ActivateMetadataRequest {
+  revision: number
+  environment: string
+  expectedActiveRevision: number
+  operationId: string
+}
+
+export interface MetadataActivationResponse {
+  environment: string
+  activeRevision: number
+  generation?: number
+  activatedBy: string
+  activatedAt: string
+  definitionDigest?: string
+  alreadyActive?: boolean
+}
+
+export interface MetadataActivationAudit {
+  operation?: string
+  actor?: string
+  beforeRevision?: number
+  afterRevision?: number
+  operationId?: string
+  occurredAt?: string
+}
+
+export interface MetadataActivationList {
+  activations?: MetadataActivationAudit[]
+  nextToken?: string
+}
