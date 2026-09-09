@@ -27,11 +27,17 @@ use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{EventEnvelope, SchemaName};
 use konductor_common::error::ControlPlaneError;
 use konductor_common::grant_engine::actions;
-use konductor_common::metadata::admission::MetadataAdmission;
+use konductor_common::metadata::admission::{
+    freeze_extension_values, validate_frozen_block, MetadataAdmission, MetadataSelection,
+};
+use konductor_common::metadata::generation::UuidSource;
 use konductor_common::models::{ApiError, DomainStatus, PublishRequest};
 use konductor_common::namespace::NamespaceResolver;
 use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
 use konductor_common::principal_context::log_principal;
+use konductor_common::publish_queue::{
+    AdmissionIdentity, FrozenMetadata, VersionedAdmission, QUEUE_FORMAT_VERSIONED,
+};
 use konductor_common::schema_validation::{
     LatestSchema, SchemaCache, SchemaCacheError, ValidationError, ValidatorCache,
 };
@@ -58,6 +64,7 @@ pub async fn handle<A: ResourceAuthorizer>(
     cache: &SchemaCache,
     validators: &ValidatorCache,
     metadata: &MetadataAdmission,
+    uuid_source: &dyn UuidSource,
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
     let payload = &event.payload;
@@ -83,7 +90,14 @@ pub async fn handle<A: ResourceAuthorizer>(
     match (method, resource) {
         ("POST", "/publish") => {
             admit(
-                clients, authorizer, cache, validators, metadata, payload, &principal,
+                clients,
+                authorizer,
+                cache,
+                validators,
+                metadata,
+                uuid_source,
+                payload,
+                &principal,
             )
             .await
         }
@@ -95,12 +109,16 @@ pub async fn handle<A: ResourceAuthorizer>(
     }
 }
 
+// The argument list mirrors the deployment wiring; bundling the platform
+// collaborators would hide which store serves which concern.
+#[allow(clippy::too_many_arguments)]
 async fn admit<A: ResourceAuthorizer>(
     clients: &Clients,
     authorizer: &A,
     cache: &SchemaCache,
     validators: &ValidatorCache,
     metadata: &MetadataAdmission,
+    uuid_source: &dyn UuidSource,
     payload: &Value,
     principal: &TrustedPrincipal,
 ) -> Result<Value, Error> {
@@ -157,44 +175,172 @@ async fn admit<A: ResourceAuthorizer>(
         Err(response) => return Ok(response),
     };
 
-    let idempotency_key = request
-        .idempotency_key
-        .clone()
-        .filter(|k| !k.is_empty())
-        .or_else(|| {
-            payload
-                .pointer("/requestContext/requestId")
-                .and_then(Value::as_str)
-                .map(String::from)
-        })
-        .unwrap_or_else(uuid_v4);
+    let idempotency_key = resolved_idempotency_key(&request, payload);
 
-    if let Err(response) = ensure_deliverable_envelope(
-        &resolver,
-        &stage,
-        &organization,
-        &request,
-        &schema_name,
-        latest.version,
-        &idempotency_key,
-    ) {
-        return Ok(response);
-    }
+    // A legacy pointer (revision 0) admits the legacy wrapper, byte-for-byte
+    // as before the dual-format rollout. An active revision admits the
+    // format-2 envelope with frozen generated values.
+    let caller_account_id = payload
+        .pointer("/requestContext/identity/accountId")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let bus_name = resolver.event_bus_name(&stage, &organization, &request.domain);
+    let message = match &metadata_selection {
+        Some(selection) => {
+            let context = AdmissionContext {
+                selection,
+                request: &request,
+                schema_name: &schema_name,
+                bus_name: &bus_name,
+                stage: &stage,
+                organization: &organization,
+                schema_version: latest.version,
+                idempotency_key: &idempotency_key,
+                caller_account_id: &caller_account_id,
+                uuid_source,
+            };
+            match format_two_message(&context) {
+                Ok(message) => message,
+                Err(response) => return Ok(response),
+            }
+        }
+        None => match legacy_queue_message(
+            &bus_name,
+            &request,
+            &raw_body,
+            &schema_name,
+            latest.version,
+            &idempotency_key,
+            &caller_account_id,
+        ) {
+            Ok(message) => message,
+            Err(response) => return Ok(response),
+        },
+    };
 
     let command = AdmittedCommand {
         request: &request,
-        raw_body: &raw_body,
+        message,
         stage: &stage,
         schema_version: latest.version,
         idempotency_key,
-        caller_account_id: payload
-            .pointer("/requestContext/identity/accountId")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string(),
     };
 
     Ok(queue_admitted(clients, principal, &command, started).await)
+}
+
+/// Everything the format-2 builder needs, bundled to keep the message
+/// construction readable.
+struct AdmissionContext<'a> {
+    selection: &'a MetadataSelection,
+    request: &'a PublishRequest,
+    schema_name: &'a SchemaName,
+    bus_name: &'a str,
+    stage: &'a str,
+    organization: &'a str,
+    schema_version: i64,
+    idempotency_key: &'a str,
+    caller_account_id: &'a str,
+    uuid_source: &'a dyn UuidSource,
+}
+
+/// Builds the format-2 queue message: generates the extension values once
+/// from trusted context, validates the composed metadata block against the
+/// revision's exact compiled contract (with a fixed-width placeholder for
+/// the late-bound `publishedAt`), preflights the composed envelope's final
+/// size, and freezes identity, values, and the carried contract on the
+/// message. Every platform-side failure is a 503 — nothing is queued.
+fn format_two_message(context: &AdmissionContext<'_>) -> Result<Value, Value> {
+    let region = match env::var("AWS_REGION") {
+        Ok(region) if !region.trim().is_empty() => region,
+        _ => return Err(temporarily_unavailable()),
+    };
+    let admission_instant = chrono::Utc::now();
+    let values = match freeze_extension_values(
+        &context.selection.revision,
+        context.stage,
+        context.organization,
+        &region,
+        admission_instant,
+        context.uuid_source,
+    ) {
+        Ok(values) => values,
+        Err(error) => {
+            tracing::error!(
+                metric = "PublishUnavailable",
+                environment = context.stage,
+                error = %error,
+                "metadata generation failed"
+            );
+            return Err(temporarily_unavailable());
+        }
+    };
+
+    let mut block = values.clone();
+    block.insert(
+        "schemaVersion".to_string(),
+        serde_json::json!(context.schema_version),
+    );
+    block.insert(
+        "idempotencyKey".to_string(),
+        serde_json::json!(context.idempotency_key),
+    );
+    block.insert(
+        "publishedAt".to_string(),
+        serde_json::json!(admission_instant.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+    );
+    block.insert(
+        "metadataRevision".to_string(),
+        serde_json::json!(context.selection.active_revision),
+    );
+    if let Err(violations) = validate_frozen_block(
+        &context.selection.revision,
+        &serde_json::Value::Object(block),
+    ) {
+        tracing::error!(
+            metric = "PublishUnavailable",
+            environment = context.stage,
+            violations,
+            "generated metadata block violates its revision contract"
+        );
+        return Err(temporarily_unavailable());
+    }
+
+    if let Err(error) = EventEnvelope::new_composed(
+        context.schema_name.source.clone(),
+        context.schema_name.detail_type.clone(),
+        context.bus_name.to_string(),
+        context.schema_version,
+        context.idempotency_key.to_string(),
+        admission_instant,
+        context.selection.active_revision,
+        values.clone(),
+        context.request.data.clone(),
+    ) {
+        return Err(api::from_control_plane_error(&error));
+    }
+
+    let message = VersionedAdmission {
+        format: QUEUE_FORMAT_VERSIONED,
+        caller_account_id: context.caller_account_id.to_string(),
+        body: context.request.clone(),
+        admission: AdmissionIdentity {
+            environment: context.stage.to_string(),
+            schema_name: context.schema_name.to_string(),
+            event_bus_name: context.bus_name.to_string(),
+            schema_version: context.schema_version,
+            idempotency_key: context.idempotency_key.to_string(),
+            metadata: FrozenMetadata {
+                metadata_revision: context.selection.active_revision,
+                definition_digest: context.selection.revision.definition_digest.clone(),
+                generation: context.selection.generation,
+                values,
+            },
+            metadata_schema: context.selection.revision.metadata_schema.clone(),
+        },
+    };
+    serde_json::to_value(&message).map_err(|_| temporarily_unavailable())
 }
 
 /// Resolves the stage environment's metadata selection. Authorization
@@ -292,16 +438,56 @@ async fn authorize_publish<A: ResourceAuthorizer>(
     }
 }
 
+/// The caller's idempotency key when supplied, else the API Gateway request
+/// ID: the retry-safety anchor SQS and delivery both carry.
+fn resolved_idempotency_key(request: &PublishRequest, payload: &Value) -> String {
+    request
+        .idempotency_key
+        .clone()
+        .filter(|k| !k.is_empty())
+        .or_else(|| {
+            payload
+                .pointer("/requestContext/requestId")
+                .and_then(Value::as_str)
+                .map(String::from)
+        })
+        .unwrap_or_else(uuid_v4)
+}
+
+/// Legacy pointer path: the legacy wrapper exactly as the pre-dual-format
+/// admission produced it, still preflighted so an undeliverable envelope
+/// answers 400 before anything is queued.
+fn legacy_queue_message(
+    bus_name: &str,
+    request: &PublishRequest,
+    raw_body: &Value,
+    schema_name: &SchemaName,
+    schema_version: i64,
+    idempotency_key: &str,
+    caller_account_id: &str,
+) -> Result<Value, Value> {
+    match ensure_deliverable_envelope(
+        bus_name,
+        request,
+        schema_name,
+        schema_version,
+        idempotency_key,
+    ) {
+        Err(response) => Err(response),
+        Ok(()) => Ok(json!({
+            "callerAccountId": caller_account_id,
+            "body": raw_body,
+        })),
+    }
+}
+
 /// A publish that can never be delivered must not be admitted: build the
 /// envelope now so structural or size violations answer 400 here instead of
 /// a 202 that retries deterministically into the DLQ. The placeholder
 /// timestamp stands in for the queue-stamped SentTimestamp; the
 /// ISO-8601-millis format is fixed-width, so the size check is exact.
-#[allow(clippy::too_many_arguments)]
 fn ensure_deliverable_envelope(
-    resolver: &NamespaceResolver,
-    stage: &str,
-    organization: &str,
+    bus_name: &str,
     request: &PublishRequest,
     schema_name: &SchemaName,
     schema_version: i64,
@@ -310,7 +496,7 @@ fn ensure_deliverable_envelope(
     EventEnvelope::new(
         schema_name.source.clone(),
         schema_name.detail_type.clone(),
-        resolver.event_bus_name(stage, organization, &request.domain),
+        bus_name.to_string(),
         schema_version,
         idempotency_key.to_string(),
         chrono::Utc::now(),
@@ -334,11 +520,10 @@ fn ensure_deliverable_envelope(
 /// or the API Gateway request ID.
 struct AdmittedCommand<'a> {
     request: &'a PublishRequest,
-    raw_body: &'a Value,
+    message: Value,
     stage: &'a str,
     schema_version: i64,
     idempotency_key: String,
-    caller_account_id: String,
 }
 
 /// Enqueues the admitted command and builds the 202 response; an enqueue
@@ -348,7 +533,8 @@ struct AdmittedCommand<'a> {
 /// The message matches the envelope the delivery consumer parses: principal
 /// attributes, `Environment`, `IdempotencyKey`, the admission-resolved
 /// `SchemaVersion` (so the stamped version can never drift from the validated
-/// definition), and a `callerAccountId` + `body` message body.
+/// definition), and a command body in whichever queue format the
+/// environment's pointer selects.
 async fn queue_admitted(
     clients: &Clients,
     principal: &TrustedPrincipal,
@@ -358,11 +544,7 @@ async fn queue_admitted(
     let Some(queue_url) = publish_queue_url() else {
         return temporarily_unavailable();
     };
-    let message_body = json!({
-        "callerAccountId": command.caller_account_id,
-        "body": command.raw_body,
-    })
-    .to_string();
+    let message_body = command.message.to_string();
 
     let attributes = match build_message_attributes(principal, command) {
         Ok(attributes) => attributes,
@@ -761,10 +943,25 @@ mod tests {
     const RELAXED_SCHEMA: &str =
         r#"{"$schema": "http://json-schema.org/draft-04/schema#", "type": "object"}"#;
 
+    struct FixedUuidSource;
+    impl UuidSource for FixedUuidSource {
+        fn uuid_v4(&self) -> String {
+            "123e4567-e89b-42d3-a456-426614174000".to_string()
+        }
+    }
+
+    struct BrokenUuidSource;
+    impl UuidSource for BrokenUuidSource {
+        fn uuid_v4(&self) -> String {
+            "not-a-uuid".to_string()
+        }
+    }
+
     fn set_env() {
         std::env::set_var("ORGANIZATION", "acme");
         std::env::set_var("DOMAINS_TABLE", "domains-test");
         std::env::set_var("PUBLISH_QUEUE_URL", QUEUE_URL);
+        std::env::set_var("AWS_REGION", "us-east-1");
     }
 
     fn publisher_binding(group: &str, domain: &str) -> RoleBinding {
@@ -1019,6 +1216,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(body)),
         )
         .await
@@ -1045,6 +1243,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1068,6 +1267,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1095,6 +1295,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1121,6 +1322,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1149,6 +1351,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"amount": 9.5})))),
         )
         .await
@@ -1189,6 +1392,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(body)),
         )
         .await
@@ -1214,6 +1418,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1247,6 +1452,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1279,6 +1485,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1301,6 +1508,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[]),
+            &FixedUuidSource,
             event(payload),
         )
         .await
@@ -1344,6 +1552,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(iam_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1379,6 +1588,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1407,6 +1617,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
             event(oauth_event(big)),
         )
         .await
@@ -1441,6 +1652,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata(&[]),
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1485,6 +1697,7 @@ mod tests {
                 &cache,
                 &validators(),
                 &metadata(&[&legacy_pointer_rule()]),
+                &FixedUuidSource,
                 event(oauth_event(body)),
             )
             .await
@@ -1521,6 +1734,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata,
+            &FixedUuidSource,
             event(oauth_event(body_one)),
         )
         .await
@@ -1531,6 +1745,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata,
+            &FixedUuidSource,
             event(oauth_event(body_two)),
         )
         .await
@@ -1569,6 +1784,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata,
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1596,6 +1812,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata,
+            &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
         )
         .await
@@ -1654,6 +1871,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata,
+            &FixedUuidSource,
             event(oauth_event(body_one)),
         )
         .await
@@ -1664,6 +1882,7 @@ mod tests {
             &cache(),
             &validators(),
             &metadata,
+            &FixedUuidSource,
             event(oauth_event(body_two)),
         )
         .await
@@ -1679,5 +1898,276 @@ mod tests {
             1,
             "the revision record is immutable and stays cached across the activation"
         );
+    }
+
+    /// A revision rule whose stored definition round-trips through
+    /// definition validation and compiles to the exact metadata schema that
+    /// `validate_frozen_block` accepts.
+    fn format_two_revision_rule(definition: &'static str) -> Rule {
+        let parsed: konductor_common::metadata::definition::MetadataDefinition =
+            serde_json::from_str(definition).unwrap();
+        let validated =
+            konductor_common::metadata::definition::ValidatedMetadataDefinition::validate(parsed)
+                .unwrap();
+        let compiled = konductor_common::metadata::schema::compile_metadata_schema(
+            konductor_common::metadata::selector::MetadataRevision::new(2).unwrap(),
+            &validated,
+        )
+        .unwrap();
+        let metadata_schema = compiled.document_string();
+        let sk = "r0000000002".to_string();
+
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                req.table_name() == Some("metadata-test")
+                    && req.key().and_then(|k| k.get("PK")) == Some(&s("REVISION"))
+                    && req.key().and_then(|k| k.get("SK")) == Some(&s(&sk))
+            })
+            .then_output(move || {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("PK", s("REVISION"))
+                    .item("SK", s("r0000000002"))
+                    .item("revision", n(2))
+                    .item("predecessor", n(1))
+                    .item("definition", s(definition))
+                    .item("metadataSchema", s(&metadata_schema))
+                    .item("definitionDigest", s("digest"))
+                    .item("compilerFormat", n(1))
+                    .item("createdBy", s("admin-sub"))
+                    .item("createdAt", s("2026-01-01T00:00:00.000Z"))
+                    .item("operationId", s("op"))
+                    .build()
+            })
+    }
+
+    fn uuid_definition() -> &'static str {
+        r#"{"children":[{"kind":"field","name":"eventId","generator":"uuid-v4"}]}"#
+    }
+
+    fn capture_send_rule(captured: &std::sync::Arc<std::sync::Mutex<Option<String>>>) -> Rule {
+        let captured = std::sync::Arc::clone(captured);
+        mock!(aws_sdk_sqs::Client::send_message)
+            .match_requests(move |req| {
+                *captured.lock().unwrap() = req.message_body().map(String::from);
+                req.queue_url() == Some(QUEUE_URL)
+            })
+            .then_output(|| {
+                aws_sdk_sqs::operation::send_message::SendMessageOutput::builder()
+                    .message_id("sqs-msg-1")
+                    .build()
+            })
+    }
+
+    fn captured_body(captured: &std::sync::Arc<std::sync::Mutex<Option<String>>>) -> Value {
+        serde_json::from_str(&captured.lock().unwrap().clone().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn format_two_publish_queues_a_versioned_command_with_frozen_metadata() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let pointer = pointer_rule(2, 4);
+        let revision = format_two_revision_rule(
+            r#"{"children":[
+                {"kind":"field","name":"eventId","generator":"uuid-v4"},
+                {"kind":"field","name":"emittedRegion","generator":"aws-region"}
+            ]}"#,
+        );
+        let metadata_client = metadata(&[&pointer, &revision]);
+        let captured: std::sync::Arc<std::sync::Mutex<Option<String>>> = std::sync::Arc::default();
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(STRICT_SCHEMA, "3")],
+            &[capture_send_rule(&captured)],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &metadata_client,
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 202);
+        let message = captured_body(&captured);
+        assert_eq!(message["format"], json!(2));
+        assert_eq!(message["body"]["domain"], json!("orders"));
+        assert_eq!(message["body"]["eventName"], json!("OrderNotification"));
+        assert_eq!(message["body"]["data"]["orderId"], json!(123));
+        let admission = &message["admission"];
+        assert_eq!(admission["environment"], json!("prod"));
+        assert_eq!(
+            admission["schemaName"],
+            json!("acme-orders@OrderNotification")
+        );
+        assert_eq!(
+            admission["eventBusName"],
+            json!("acme-prod-orders-event-bus")
+        );
+        assert_eq!(admission["schemaVersion"], json!(3));
+        assert_eq!(admission["idempotencyKey"], json!("key-1"));
+        let metadata = &admission["metadata"];
+        assert_eq!(metadata["metadataRevision"], json!(2));
+        assert_eq!(metadata["generation"], json!(4));
+        assert_eq!(
+            metadata["values"]["eventId"],
+            json!("123e4567-e89b-42d3-a456-426614174000")
+        );
+        assert_eq!(metadata["values"]["emittedRegion"], json!("us-east-1"));
+        let carried = admission["metadataSchema"].as_str().unwrap();
+        let carried: Value = serde_json::from_str(carried).unwrap();
+        assert!(carried["properties"]["eventId"]["pattern"].is_string());
+    }
+
+    #[tokio::test]
+    async fn format_two_with_a_legacy_pointer_queues_the_legacy_wrapper() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let pointer = legacy_pointer_rule();
+        let metadata_client = metadata(&[&pointer]);
+        let captured: std::sync::Arc<std::sync::Mutex<Option<String>>> = std::sync::Arc::default();
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(STRICT_SCHEMA, "3")],
+            &[capture_send_rule(&captured)],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &metadata_client,
+            &FixedUuidSource,
+            event(oauth_event(publish_body(json!({"orderId": 123})))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 202);
+        let message = captured_body(&captured);
+        assert!(
+            message.get("format").is_none(),
+            "legacy pointer admits the legacy wrapper without a format key"
+        );
+        assert!(
+            message.get("admission").is_none(),
+            "legacy pointer admits nothing but callerAccountId + body"
+        );
+        assert_eq!(message["body"]["data"]["orderId"], json!(123));
+    }
+
+    #[tokio::test]
+    async fn format_two_generator_failure_answers_503_without_queueing() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let pointer = pointer_rule(2, 4);
+        let revision = format_two_revision_rule(uuid_definition());
+        let metadata_client = metadata(&[&pointer, &revision]);
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(STRICT_SCHEMA, "3")],
+            &[],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &metadata_client,
+            &BrokenUuidSource,
+            event(oauth_event(publish_body(json!({"orderId": 123})))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 503);
+    }
+
+    #[tokio::test]
+    async fn format_two_unreadable_definition_answers_503_without_queueing() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let pointer = pointer_rule(2, 4);
+        // A revision record whose definition does not parse: compiled in the
+        // helper is impossible, so hand-build the item directly.
+        let sk = "r0000000002".to_string();
+        let unreadable = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                req.table_name() == Some("metadata-test")
+                    && req.key().and_then(|k| k.get("PK")) == Some(&s("REVISION"))
+                    && req.key().and_then(|k| k.get("SK")) == Some(&s(&sk))
+            })
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("PK", s("REVISION"))
+                    .item("SK", s("r0000000002"))
+                    .item("revision", n(2))
+                    .item("predecessor", n(1))
+                    .item("definition", s("not json"))
+                    .item("metadataSchema", s("{}"))
+                    .item("definitionDigest", s("digest"))
+                    .item("compilerFormat", n(1))
+                    .item("createdBy", s("admin-sub"))
+                    .item("createdAt", s("2026-01-01T00:00:00.000Z"))
+                    .item("operationId", s("op"))
+                    .build()
+            });
+
+        let metadata_client = metadata(&[&pointer, &unreadable]);
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(STRICT_SCHEMA, "3")],
+            &[],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &metadata_client,
+            &FixedUuidSource,
+            event(oauth_event(publish_body(json!({"orderId": 123})))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 503);
+    }
+
+    #[tokio::test]
+    async fn caller_supplied_metadata_field_is_rejected() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["metadata"] = json!({"eventId": "caller-chosen"});
+        let clients = clients(RuleMode::MatchAny, &[], &[], &[]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &metadata(&[]),
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
     }
 }

@@ -11,7 +11,12 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::error::ControlPlaneError;
+use crate::metadata::definition::{MetadataDefinition, ValidatedMetadataDefinition};
+use crate::metadata::generation::{generate_extensions, GenerationContext, UuidSource};
 use crate::metadata::revisions::{MetadataStore, MetadataStoreError, RevisionRecord};
+use crate::metadata::schema::CompiledMetadataSchema;
+use crate::metadata::selector::MetadataRevision;
 
 /// Default bound on cached revision records. Revisions are immutable and
 /// pointer reads select among a small recent window, so a modest bound
@@ -126,6 +131,57 @@ fn locked(
     entries
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Generates the frozen extension values for one admission from the
+/// revision's definition and trusted context only — there is no channel for
+/// producer-supplied values. Every failure here is a platform fault
+/// (unreadable definition, missing trusted context, a generator producing an
+/// invalid value): the admission 503s and nothing is queued.
+pub fn freeze_extension_values(
+    revision: &RevisionRecord,
+    environment: &str,
+    organization: &str,
+    region: &str,
+    at: chrono::DateTime<chrono::Utc>,
+    uuid_source: &dyn UuidSource,
+) -> Result<serde_json::Map<String, serde_json::Value>, ControlPlaneError> {
+    let definition: MetadataDefinition =
+        serde_json::from_str(&revision.definition).map_err(|e| {
+            ControlPlaneError::MetadataConfigurationUnavailable {
+                reason: format!("stored revision definition does not parse: {e}"),
+            }
+        })?;
+    let validated = ValidatedMetadataDefinition::validate(definition)?;
+    let context = GenerationContext::new(at, region, organization, environment)?;
+    generate_extensions(&validated, &context, uuid_source)
+}
+
+/// Reconstructs the revision's exact compiled metadata schema from what the
+/// immutable revision record carries. The same document travels on the
+/// queue message and validates the composed block at delivery.
+pub fn compiled_schema_for(revision: &RevisionRecord) -> Result<CompiledMetadataSchema, String> {
+    let document: serde_json::Value = serde_json::from_str(&revision.metadata_schema)
+        .map_err(|e| format!("stored metadata schema does not parse: {e}"))?;
+    let metadata_revision = MetadataRevision::new(revision.revision).map_err(|e| e.to_string())?;
+    Ok(CompiledMetadataSchema {
+        compiler_format: revision.compiler_format,
+        revision: metadata_revision,
+        document,
+    })
+}
+
+/// Validates the fully composed metadata block — the built-ins with a
+/// fixed-width placeholder for the late-bound `publishedAt`, plus the frozen
+/// extension values — against the revision's exact compiled contract. The
+/// placeholder is the same fixed-width representation the queue timestamp
+/// later produces, so the size and constraint checks are exact; no
+/// configurable constraint may depend on the timestamp's eventual value.
+pub fn validate_frozen_block(
+    revision: &RevisionRecord,
+    block: &serde_json::Value,
+) -> Result<(), String> {
+    compiled_schema_for(revision)?.validate_block(block)
 }
 
 #[cfg(test)]
