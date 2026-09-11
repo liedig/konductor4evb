@@ -190,10 +190,12 @@ What about the symmetric case — a payload that passes the stale schema but
 would fail the fresh one? Under the platform's additive-only evolution norm
 (new versions add fields and loosen constraints; they never remove), any
 payload valid under version N is valid under every later version, so stale
-*acceptance* cannot admit anything the current schema forbids. The norm itself
-is not yet enforced mechanically — the incident in §1 is the evidence that it
-should be, and an append-time compatibility check is parked as the follow-up
-change `gate-schema-promotion`.
+*acceptance* cannot admit anything the current schema forbids. The norm is
+enforced mechanically: `POST /schemas/versions` rejects any append that
+tightens relative to the current latest version (the append-time
+compatibility gate, `gate-schema-promotion`), so a stale cache entry can only
+ever lag behind on loosenings — exactly the direction the force-fetch on
+rejection already covers.
 
 One boundary is absolute: **the registry is the only authority on schema
 content.** The cache is an availability hedge, refreshed on any doubt; no

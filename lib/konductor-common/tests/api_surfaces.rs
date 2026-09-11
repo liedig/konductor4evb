@@ -448,9 +448,10 @@ fn schema_admin_has_least_privilege_permissions() {
             "dynamodb:GetItem",
             "events:PutEvents",
             "schemas:CreateSchema",
+            "schemas:DescribeSchema",
             "schemas:UpdateSchema"
         ],
-        "schema handlers: domain-state read, append-only schema writes, and the SchemaVersionPublished promotion signal (follow-schema-promotion)"
+        "schema handlers: domain-state read, append-only schema writes, the compatibility gate's latest-version read (gate-schema-promotion), and the SchemaVersionPublished promotion signal (follow-schema-promotion)"
     );
 }
 

@@ -18,8 +18,8 @@
 
 ## 4. API and user documentation
 
-- [ ] 4.1 Document the `400` compatibility rejection on `POST /schemas/versions` in `api/openapi-oauth.yaml` and `api/openapi-iam.yaml`; verify the api-surface parity tests (`rtk cargo test -p konductor-common api_surfaces`) pass
-- [ ] 4.2 Update `docs/development/publish-validation.md` (stale-acceptance now cites append-time enforcement instead of a parked follow-up) and `docs/publishing-events.md` (producer-facing evolution rules, including the new-event-name route for intentional breaks); verify the sections read consistently with the spec delta
+- [x] 4.1 Document the `400` compatibility rejection on `POST /schemas/versions` in `api/openapi-oauth.yaml` and `api/openapi-iam.yaml`; verify the api-surface parity tests (`rtk cargo test -p konductor-common api_surfaces`) pass
+- [x] 4.2 Update `docs/development/publish-validation.md` (stale-acceptance now cites append-time enforcement instead of a parked follow-up) and `docs/publishing-events.md` (producer-facing evolution rules, including the new-event-name route for intentional breaks); verify the sections read consistently with the spec delta
 - [x] 4.3 File the GitHub issue tracking semantic subset checking as the post-v1 refinement; verify the issue links the change and is labeled per `.github/labels.yml` — filed as [#30](https://github.com/sliedig/konductor4evb/issues/30) at proposal time
 
 ## 5. End-to-end validation
