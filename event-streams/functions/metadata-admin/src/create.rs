@@ -58,9 +58,11 @@ pub async fn create_revision(
     let predecessor = match store.get_revision(request.expected_head).await {
         Ok(Some(record)) => record,
         Ok(None) => {
-            return Ok(api::from_control_plane_error(&api::validation_error(
-                "expectedHead does not reference an existing revision",
-            )))
+            return Ok(api::from_control_plane_error(
+                &ControlPlaneError::MetadataRevisionNotFound {
+                    revision: request.expected_head,
+                },
+            ))
         }
         Err(e) => return Ok(store_failure("read expected head revision", e)),
     };
@@ -425,14 +427,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_expected_head_and_legacy_zero_are_400() {
+    async fn unknown_expected_head_is_404_and_legacy_zero_is_400() {
         let empty = store_with(&[get_rule_for("r0000000007", None)]);
         let (payload, principal) = event_with(json!({
             "expectedHead": 7,
             "operationId": "op-2",
             "definition": {"children": []}
         }));
-        assert_eq!(status(&invoke(&empty, payload, &principal).await), 400);
+        assert_eq!(status(&invoke(&empty, payload, &principal).await), 404);
 
         let store = store_with(&[]);
         let (payload, principal) = event_with(json!({

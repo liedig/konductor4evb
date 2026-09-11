@@ -86,7 +86,7 @@ async fn seed(clients: &Clients, config: &BootstrapConfig) -> Result<(), Control
 
     let mut created = 0usize;
     let mut preserved = 0usize;
-    for item in baseline_items(&definition, &compiled, &digest, &now, &config.environments) {
+    for item in baseline_items(&definition, &compiled, &digest, &now, &config.environments)? {
         if put_if_absent(
             clients
                 .ddb
@@ -116,14 +116,19 @@ fn baseline_items(
     digest: &str,
     now: &str,
     environments: &[String],
-) -> Vec<std::collections::HashMap<String, aws_sdk_dynamodb::types::AttributeValue>> {
+) -> Result<
+    Vec<std::collections::HashMap<String, aws_sdk_dynamodb::types::AttributeValue>>,
+    ControlPlaneError,
+> {
     let mut items = Vec::with_capacity(2 + environments.len());
     let definition_json = String::from_utf8(
         definition
             .canonical_bytes()
-            .expect("validated definitions serialize"),
+            .map_err(|e| ControlPlaneError::MetadataConfigurationUnavailable { reason: e })?,
     )
-    .expect("canonical JSON is UTF-8");
+    .map_err(|e| ControlPlaneError::MetadataConfigurationUnavailable {
+        reason: e.to_string(),
+    })?;
 
     items.push(revision_to_item(&RevisionRecord {
         revision: BASELINE_REVISION,
@@ -155,7 +160,7 @@ fn baseline_items(
         pointer.insert("activatedAt".to_string(), s(now));
         items.push(pointer);
     }
-    items
+    Ok(items)
 }
 
 /// Puts one item only when it does not exist. A conditional-check failure

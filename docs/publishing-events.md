@@ -124,7 +124,7 @@ The body accepts exactly `domain`, `eventName`, `data`, and an optional `idempot
 - `metadata.idempotencyKey` is your key, or the API Gateway request ID if you omit it.
 - `metadata.publishedAt` is when the platform accepted the event (the queue timestamp), not when it was delivered.
 
-When the platform's metadata configuration is active for the environment, Konductor also stamps `metadata.metadataRevision` and every field that revision generates (for example `eventId`, `geo.region`) — the platform supplies all metadata values from trusted context. Metadata fields are not yours to set: an injected `metadata` key or generated field in `data` is rejected with `422`. The generated values are frozen at admission, so delivery (and any delivery retry) emits exactly what was accepted; a revision activated between your admission and the delivery does not change your event.
+When the platform's metadata configuration is active for the environment, Konductor also stamps `metadata.metadataRevision` and every field that revision generates (for example `eventId`, `geo.region`) — the platform supplies all metadata values from trusted context. Metadata fields are not yours to set — the platform supplies every value from trusted context, and since the body accepts exactly the fields listed above, an injected top-level `metadata` key fails structural validation with `400`. The generated values are frozen at admission, so delivery (and any delivery retry) emits exactly what was accepted; a revision activated between your admission and the delivery does not change your event.
 
 Konductor validates your `data` against the schema's latest version **before** accepting the publish. A conforming payload gets `202`; a violating one gets `422` with the violations listed in `message` (for example, `-5 is less than the minimum of 0; "aud" does not match "^[A-Z]{3}$"`) — fix the payload and retry. Konductor also validates the envelope it generates (identity, numeric version, structure, EventBridge size limits) before delivery.
 
@@ -142,12 +142,11 @@ Konductor validates your `data` against the schema's latest version **before** a
 
 | Response | Cause | Action |
 |----------|-------|--------|
-| `400` | Body failed structural validation (missing field, unknown field, invalid event name); on schema writes, also `content` that is not a valid draft-4 document; on version appends, also content that tightens the current latest version — offending paths are listed in `message` | Fix the request body / schema document; for a rejected append, loosen the document or register a new event name instead |
+| `400` | Body failed structural validation (missing field, unknown field — including an injected top-level `metadata` key — invalid event name); on schema writes, also `content` that is not a valid draft-4 document; on version appends, also content that tightens the current latest version — offending paths are listed in `message` | Fix the request body / schema document; for a rejected append, loosen the document or register a new event name instead |
 | `403` | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
 | `404` | Domain missing/inactive, or no schema registered for this event in this environment | Check domain status; create the schema first |
 | `409` (create schema) | Schema already exists in this environment | Append a version instead |
 | `422` (publish) | `data` violates the schema's latest version — violations are listed in `message` | Fix the payload and retry; if you just appended a schema version, a plain retry picks it up |
-| `422` (publish) | Payload carries an injected metadata field (a `metadata` key or a platform-generated name) | Remove the injected key; the platform stamps all metadata values |
 | `503` (publish) | The platform could not evaluate the publish (schema registry or queue trouble, or metadata configuration missing/unreadable) | Retry with backoff; alert your platform team if it persists |
 | `202` then nothing arrives | Rare: the domain was disabled between admission and delivery, or EventBridge delivery is failing | The platform's publish DLQ holds exhausted messages — contact your platform team |
 

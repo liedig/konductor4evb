@@ -23,6 +23,19 @@ pub struct EventMetadata {
     pub published_at: DateTime<Utc>,
 }
 
+/// The pre-stamping `detail.metadata` shape: exactly the three platform
+/// built-ins. `deny_unknown_fields` keeps the untagged `MetadataBlock`
+/// fallback fail-closed — a drifted or corrupt block errors instead of
+/// silently parsing as legacy and dropping the extra fields.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegacyMetadata {
+    pub schema_version: i64,
+    pub idempotency_key: String,
+    #[serde(with = "iso8601_millis")]
+    pub published_at: DateTime<Utc>,
+}
+
 /// The composed new-format metadata block: the legacy built-ins plus the
 /// exact metadata revision and the frozen extension values admission
 /// generated. Serializes as one flat metadata object.
@@ -66,7 +79,7 @@ impl ComposedMetadata {
 #[serde(untagged)]
 pub enum MetadataBlock {
     Composed(ComposedMetadata),
-    Legacy(EventMetadata),
+    Legacy(LegacyMetadata),
 }
 
 impl MetadataBlock {
@@ -122,7 +135,7 @@ impl EventEnvelope {
             detail_type,
             event_bus_name,
             detail: EnvelopeDetail {
-                metadata: MetadataBlock::Legacy(EventMetadata {
+                metadata: MetadataBlock::Legacy(LegacyMetadata {
                     schema_version,
                     idempotency_key,
                     published_at,
@@ -594,6 +607,22 @@ mod tests {
 
         let round_tripped: EnvelopeDetail = serde_json::from_value(detail).unwrap();
         assert!(matches!(round_tripped.metadata, MetadataBlock::Legacy(_)));
+    }
+
+    #[test]
+    fn legacy_metadata_with_unknown_fields_fails_closed() {
+        // A drifted block (three legacy fields plus junk) must not parse as
+        // legacy and silently drop the extra fields.
+        let detail = json!({
+            "metadata": {
+                "schemaVersion": 4,
+                "idempotencyKey": "key-123",
+                "publishedAt": "2026-07-30T10:30:00.123Z",
+                "traceId": "drifted-in"
+            },
+            "data": {"orderId": 123}
+        });
+        assert!(serde_json::from_value::<EnvelopeDetail>(detail).is_err());
     }
 
     #[test]
