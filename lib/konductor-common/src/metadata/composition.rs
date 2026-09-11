@@ -684,4 +684,46 @@ mod tests {
             Err(CompositionError::BusinessUnusable(_))
         ));
     }
+
+    #[test]
+    fn composed_envelopes_across_metadata_revisions_are_not_gate_compatible() {
+        // Design decision 7 (gate-schema-promotion integration): the
+        // business compatibility gate compares publisher business documents
+        // only — never composed envelopes. This pins why: a metadata
+        // revision bump changes the wrapper (the pinned `metadataRevision`
+        // enum moves), which the conservative business checker reports as a
+        // tightening. If anyone ever routes composed documents through
+        // `check_compatible`, metadata updates would falsely reject.
+        let definition = ValidatedMetadataDefinition::validate(MetadataDefinition {
+            children: vec![MetadataNode::Field {
+                name: "eventId".to_string(),
+                generator: Generator::UuidV4,
+            }],
+        })
+        .unwrap();
+        let business = r#"{"type": "object", "properties": {"orderId": {"type": "integer"}}}"#;
+        let revision_one =
+            compile_metadata_schema(MetadataRevision::new(1).unwrap(), &definition).unwrap();
+        let revision_two =
+            compile_metadata_schema(MetadataRevision::new(2).unwrap(), &definition).unwrap();
+        let composed_one = compose_detail_schema(1, business, &revision_one).unwrap();
+        let composed_two = compose_detail_schema(1, business, &revision_two).unwrap();
+
+        let found = crate::schema_compatibility::check_compatible(
+            &composed_one.document,
+            &composed_two.document,
+        );
+        assert!(
+            found
+                .iter()
+                .any(|i| i.rule == crate::schema_compatibility::CompatibilityRule::ShrunkEnum),
+            "the metadata wrapper differs across revisions in ways the business gate must never police: {found:?}"
+        );
+        // The same pair of raw business documents is trivially compatible:
+        // identical input, no tightening. The gate's input contract holds.
+        let business_doc: Value = serde_json::from_str(business).unwrap();
+        assert!(
+            crate::schema_compatibility::check_compatible(&business_doc, &business_doc).is_empty()
+        );
+    }
 }

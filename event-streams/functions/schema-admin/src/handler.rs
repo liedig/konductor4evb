@@ -1288,7 +1288,7 @@ mod tests {
     #[tokio::test]
     async fn append_version_rejection_emits_the_promotion_rejected_metric() {
         use std::io::Write;
-        use std::sync::{Arc, Mutex};
+        use std::sync::{Arc, Mutex, Once, OnceLock};
 
         #[derive(Clone, Default)]
         struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -1308,18 +1308,78 @@ mod tests {
             }
         }
 
+        // Thread-local subscribers race with parallel tests: callsite
+        // interest is cached process-wide, so a thread running without a
+        // subscriber can mark the rejection callsite disabled mid-test.
+        // A global default is set exactly once and never removed, keeping
+        // every callsite enabled; the unique event name attributes the
+        // metric line to this test.
+        static LOGS: OnceLock<Capture> = OnceLock::new();
+        static INIT: Once = Once::new();
+        let capture = LOGS.get_or_init(Capture::default).clone();
+        INIT.call_once(|| {
+            let _ = tracing::subscriber::set_global_default(
+                tracing_subscriber::fmt()
+                    .with_writer(LOGS.get().unwrap().clone())
+                    .with_ansi(false)
+                    .finish(),
+            );
+        });
+
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
-        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let latest = "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}}}";
+        let describe = mock!(aws_sdk_schemas::Client::describe_schema)
+            .match_requests(|req| {
+                req.registry_name() == Some("acme-prod-orders-schema-registry")
+                    && req.schema_name() == Some("acme-orders@MetricProbeEvent")
+                    && req.schema_version().is_none()
+            })
+            .then_output(move || {
+                aws_sdk_schemas::operation::describe_schema::DescribeSchemaOutput::builder()
+                    .content(latest)
+                    .schema_version("4")
+                    .build()
+            });
         let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
-        let tightening = "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}},\"required\":[\"sku\"]}";
+        let tightening = json!({
+            "domain": "orders",
+            "eventName": "MetricProbeEvent",
+            "content": "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}},\"required\":[\"sku\"]}"
+        });
 
-        let capture = Capture::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(capture.clone())
-            .with_ansi(false)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", tightening)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.lines()
+                .any(|line| line.contains("SchemaPromotionRejected")
+                    && line.contains("MetricProbeEvent")),
+            "rejection must carry the metric field: {logs}"
+        );
+    }
+
+    // add-platform-metadata-composition task 2.3: with the metadata
+    // composability check sharing this handler, the business compatibility
+    // gate must still reject tightenings — including in documents that use
+    // the local-reference style the composer supports.
+    #[tokio::test]
+    async fn business_tightening_still_rejects_for_metadata_composable_content() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let latest = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"definitions\":{\"sku\":{\"type\":\"string\"}},\"properties\":{\"sku\":{\"$ref\":\"#/definitions/sku\"}}}";
+        let tightening = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"definitions\":{\"sku\":{\"type\":\"string\"}},\"properties\":{\"sku\":{\"$ref\":\"#/definitions/sku\"}},\"required\":[\"sku\"]}";
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", latest);
+        // No update rule: a rejected append must never reach UpdateSchema.
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+
         let resp = handle(
             &clients,
             &authorizer,
@@ -1328,14 +1388,14 @@ mod tests {
                 append_body_with(tightening),
             )),
         )
-        .await;
-        drop(_guard);
+        .await
+        .unwrap();
 
-        assert_eq!(status(&resp.unwrap()), 400);
-        let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(status(&resp), 400);
+        let message = body(&resp)["message"].as_str().unwrap().to_string();
         assert!(
-            logs.contains("SchemaPromotionRejected"),
-            "rejection must carry the metric field: {logs}"
+            message.contains("/sku") && message.contains("newly required"),
+            "the business gate, not the composability check, must name the tightening: {message}"
         );
     }
 }
