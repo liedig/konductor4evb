@@ -47,7 +47,7 @@ test('catalog detail panels stack and environment switching works at 375px', asy
   const preview = card(page, 'Schema preview')
   await expect(preview.getByText(/The contract events in dev validate against right now/)).toBeVisible()
 
-  // Side-by-side collapses to stacked below the xl breakpoint.
+  // The panels are stacked full-width at every viewport.
   const contentBox = await content.boundingBox()
   const previewBox = await preview.boundingBox()
   expect(contentBox).not.toBeNull()

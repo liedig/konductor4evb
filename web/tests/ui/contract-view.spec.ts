@@ -6,7 +6,8 @@ import { freshState, installApi, signIn } from './api'
  * Schema contract inspection (amended web-ui delta): per-environment badges
  * are selector links that drive one contract read per selection; the catalog
  * detail view shows Schema content (raw business document) and Schema preview
- * (in-force composed document) side by side from the same environment. The
+ * (in-force composed document) as stacked full-width panels from the same
+ * environment, each with a copy action for the rendered document. The
  * console exposes the current pair only — no historical selectors.
  */
 
@@ -69,6 +70,30 @@ test('metadata revisions follow catalog pagination when the schema is not on the
   const prod = card(page, 'Environment').getByRole('button', { name: /prod/ })
   await expect(prod).toBeVisible()
   await expect(prod.getByText('M4', { exact: true })).toBeVisible()
+})
+
+test('each schema view copies its rendered document to the clipboard', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await installApi(page)
+  await page.goto('/catalog/orders/acme-orders%40OrderNotification')
+
+  const content = card(page, 'Schema content')
+  await expect(content.getByText('"orderId"').first()).toBeVisible()
+  const copyContent = content.getByRole('button', { name: 'Copy schema content JSON' })
+  await copyContent.click()
+  await expect(copyContent).toHaveText('Copied')
+  const business = await page.evaluate(() => navigator.clipboard.readText())
+  expect(business).toContain('"orderId"')
+  expect(business).not.toContain('"eventId"')
+
+  const preview = card(page, 'Schema preview')
+  await expect(preview.getByText(/validate against right now/)).toBeVisible()
+  const copyPreview = preview.getByRole('button', { name: 'Copy composed contract JSON' })
+  await copyPreview.click()
+  await expect(copyPreview).toHaveText('Copied')
+  const composed = await page.evaluate(() => navigator.clipboard.readText())
+  expect(composed).toContain('"metadata"')
+  expect(composed).toContain('"eventId"')
 })
 
 test('the console exposes no historical pair selectors', async ({ page }) => {

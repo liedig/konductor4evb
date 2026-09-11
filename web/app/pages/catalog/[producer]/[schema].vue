@@ -171,6 +171,12 @@ const prettyComposed = computed(() => pretty(contract.value?.composedDocument))
 // registered version, since describe content is not environment-scoped.
 const prettyRegisteredContent = computed(() => pretty(schema.value?.content))
 
+// Copy mirrors exactly what each panel renders: on the degradation path the
+// business panel holds the registered document instead of contract content.
+const contentCopyText = computed(() => contractError.value ? prettyRegisteredContent.value : prettyBusiness.value)
+const { copied: contentCopied, copy: copyContent } = useCopyToClipboard()
+const { copied: previewCopied, copy: copyPreview } = useCopyToClipboard()
+
 // Entry points pass ?from=<internal path> so the back link returns to the
 // referring page; default is the consumer catalog. Internal paths only:
 // reject protocol-relative (//) and backslash forms — browsers normalize
@@ -252,14 +258,25 @@ watch(consumerDomain, load)
         This schema has no registered versions in any environment yet.
       </div>
 
-      <div v-else class="grid gap-6 xl:grid-cols-2">
+      <div v-else class="flex flex-col gap-6">
         <NxCard title="Schema content">
+          <template #actions>
+            <NxButton
+              variant="ghost"
+              size="sm"
+              aria-label="Copy schema content JSON"
+              :disabled="!contentCopyText"
+              @click="copyContent(contentCopyText)"
+            >
+              {{ contentCopied ? 'Copied' : 'Copy' }}
+            </NxButton>
+          </template>
           <template v-if="contractError">
             <p class="mb-3 text-xs text-faint">
               The latest registered business schema — the per-environment contract could not
               be loaded, so this is the highest version across environments.
             </p>
-            <pre v-if="prettyRegisteredContent" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyRegisteredContent }}</pre>
+            <pre v-if="prettyRegisteredContent" class="max-h-[36rem] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyRegisteredContent }}</pre>
             <p v-else class="text-sm text-muted">No registered content.</p>
           </template>
           <template v-else>
@@ -268,11 +285,22 @@ watch(consumerDomain, load)
               {{ selectedEnvironment }} v{{ contract?.schemaVersion }}.
             </p>
             <p v-if="contractPending" class="text-sm text-muted">Loading…</p>
-            <pre v-else-if="contract" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyBusiness }}</pre>
+            <pre v-else-if="contract" class="max-h-[36rem] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyBusiness }}</pre>
           </template>
         </NxCard>
 
         <NxCard title="Schema preview">
+          <template #actions>
+            <NxButton
+              variant="ghost"
+              size="sm"
+              aria-label="Copy composed contract JSON"
+              :disabled="!prettyComposed"
+              @click="copyPreview(prettyComposed)"
+            >
+              {{ previewCopied ? 'Copied' : 'Copy' }}
+            </NxButton>
+          </template>
           <p v-if="contractError" role="alert" class="text-sm text-danger">{{ contractError }}</p>
           <template v-else>
             <p class="mb-3 text-xs text-faint">
@@ -283,7 +311,7 @@ watch(consumerDomain, load)
               </template>.
             </p>
             <p v-if="contractPending" class="text-sm text-muted">Loading…</p>
-            <pre v-else-if="contract" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyComposed }}</pre>
+            <pre v-else-if="contract" class="max-h-[36rem] overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyComposed }}</pre>
           </template>
         </NxCard>
       </div>
