@@ -3,9 +3,11 @@ import { expect, test, type Page } from '@playwright/test'
 import { installApi, signIn } from './api'
 
 /**
- * Composed-contract inspection (spec 6.5): independent business/metadata
- * version badges, exact historical pairs (never a current-metadata
- * substitution), and publisher previews that stay business-only.
+ * Schema contract inspection (amended web-ui delta): per-environment badges
+ * are selector links that drive one contract read per selection; the catalog
+ * detail view shows Schema content (raw business document) and Schema preview
+ * (in-force composed document) side by side from the same environment. The
+ * console exposes the current pair only — no historical selectors.
  */
 
 function card(page: Page, title: string) {
@@ -18,57 +20,54 @@ test.beforeEach(async ({ page }) => {
   await signIn(page, ['platform-admin'])
 })
 
-test('catalog detail shows independent version and revision badges per environment', async ({ page }) => {
+test('environment indicators are selectable and carry per-environment version badges', async ({ page }) => {
   await installApi(page)
   await page.goto('/catalog/orders/acme-orders%40OrderNotification')
 
-  const badges = card(page, 'Latest version per environment')
-  await expect(badges.getByText('prod v3', { exact: true })).toBeVisible()
-  await expect(badges.getByText('dev v2', { exact: true })).toBeVisible()
-  await expect(badges.getByText('dev M2', { exact: true })).toBeVisible()
-  await expect(badges.getByText('prod M0', { exact: true })).toHaveCount(0)
+  const environments = card(page, 'Environment')
+  const dev = environments.getByRole('button', { name: /dev/ })
+  const prod = environments.getByRole('button', { name: /prod/ })
+  await expect(dev).toBeVisible()
+  await expect(dev.getByText('v2', { exact: true })).toBeVisible()
+  await expect(dev.getByText('M2', { exact: true })).toBeVisible()
+  await expect(prod.getByText('v3', { exact: true })).toBeVisible()
+  await expect(prod.getByText(/M\d/)).toHaveCount(0)
+
+  await expect(dev).toHaveAttribute('aria-pressed', 'true')
+  await expect(prod).toHaveAttribute('aria-pressed', 'false')
 })
 
-test('contract view auto-loads the current pair and exposes all three documents', async ({ page }) => {
+test('both panels load from the selected environment and follow selection changes', async ({ page }) => {
   await installApi(page)
   await page.goto('/catalog/orders/acme-orders%40OrderNotification')
 
-  const contract = card(page, 'Composed contract')
-  await expect(contract.getByText('dev V2', { exact: true })).toBeVisible()
-  await expect(contract.getByText('dev M2', { exact: true })).toBeVisible()
-  await expect(contract.getByText(/digest d{12}/)).toBeVisible()
+  const content = card(page, 'Schema content')
+  const preview = card(page, 'Schema preview')
 
-  await contract.getByRole('button', { name: 'Inherited metadata' }).click()
-  await expect(contract.getByText('read-only for every caller')).toBeVisible()
-  await contract.getByRole('button', { name: 'Raw business' }).click()
-  await expect(contract.getByText('The raw business document, unchanged by metadata activation')).toBeVisible()
-  await expect(contract.getByText('"metadata"')).toHaveCount(0)
+  // Default selection is the first environment (dev): business v2, M2.
+  await expect(content.getByText('The business schema published by orders at dev v2.')).toBeVisible()
+  await expect(content.getByText('"orderId"').first()).toBeVisible()
+  await expect(preview.getByText(/The contract events in dev validate against right now/)).toBeVisible()
+  await expect(preview.getByText(/business v2, metadata M2, digest d{12}/)).toBeVisible()
+  await expect(preview.getByText('The metadata block is platform-owned and read-only')).toBeVisible()
+
+  // Switch to prod: business v3 on legacy revision 0 — no digest, no generated fields.
+  await card(page, 'Environment').getByRole('button', { name: /prod/ }).click()
+  await expect(content.getByText('The business schema published by orders at prod v3.')).toBeVisible()
+  await expect(preview.getByText(/The contract events in prod validate against right now/)).toBeVisible()
+  await expect(preview.getByText(/business v3, metadata M0/)).toBeVisible()
+  await expect(preview.getByText(/digest/)).toHaveCount(0)
 })
 
-test('historical inspection demands both selectors and never substitutes current metadata', async ({ page }) => {
+test('the console exposes no historical pair selectors', async ({ page }) => {
   await installApi(page)
   await page.goto('/catalog/orders/acme-orders%40OrderNotification')
 
-  const contract = card(page, 'Composed contract')
-  await page.getByLabel('Historical pair').check()
-  await page.getByLabel('Business version').fill('2')
-  await contract.getByRole('button', { name: 'Load contract' }).click()
-  await expect(contract.getByText('Historical inspection needs both the business version and the metadata revision (0 is the legacy selector).')).toBeVisible()
-
-  await page.getByLabel('Business version').fill('')
-  await contract.getByRole('button', { name: 'Load contract' }).click()
-  await expect(contract.getByText('Enter the business version and metadata revision, or switch back to the current pair.')).toBeVisible()
-
-  await page.getByLabel('Business version').fill('2')
-  await page.getByLabel('Metadata revision').fill('0')
-  await contract.getByRole('button', { name: 'Load contract' }).click()
-  await expect(contract.getByText('dev V2', { exact: true })).toBeVisible()
-  await expect(contract.getByText('dev M0', { exact: true })).toBeVisible()
-  await expect(contract.getByText('Historical — explicit selection')).toBeVisible()
-
-  await page.getByLabel('Business version').fill('9')
-  await contract.getByRole('button', { name: 'Load contract' }).click()
-  await expect(contract.getByText('No historical contract for v9 M0 in dev')).toBeVisible()
+  await expect(card(page, 'Schema preview').getByText(/validate against right now/)).toBeVisible()
+  await expect(page.getByLabel('Historical pair')).toHaveCount(0)
+  await expect(page.getByLabel('Business version')).toHaveCount(0)
+  await expect(page.getByLabel('Metadata revision')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Load contract' })).toHaveCount(0)
 })
 
 test('authoring preview composes unsaved business content without envelope fields', async ({ page }) => {
@@ -91,13 +90,14 @@ test('authoring preview composes unsaved business content without envelope field
   await expect(dialog.getByRole('button', { name: 'Append version' })).toBeEnabled()
 })
 
-test('domain panel opens the composed-contract modal from the schemas list', async ({ page }) => {
+test('domain panel links each schema to its catalog detail page instead of a modal', async ({ page }) => {
   await installApi(page)
   await page.goto('/domains/orders')
 
   await expect(page.getByText('dev M2', { exact: true }).first()).toBeVisible()
-  await page.getByRole('button', { name: 'Contract', exact: true }).first().click()
-  const dialog = page.getByRole('dialog')
-  await expect(dialog.getByText('Composed contract — acme-orders@OrderNotification')).toBeVisible()
-  await expect(dialog.getByText('dev V2', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Contract', exact: true })).toHaveCount(0)
+
+  await page.getByRole('link', { name: 'acme-orders@OrderNotification' }).click()
+  await expect(page).toHaveURL(/\/catalog\/orders\/acme-orders/)
+  await expect(card(page, 'Schema preview').getByText(/validate against right now/)).toBeVisible()
 })

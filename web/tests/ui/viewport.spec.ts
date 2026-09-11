@@ -40,13 +40,22 @@ test('metadata administration stays operable at 375px; the horizontal overflow i
   await expect(page.getByRole('dialog').getByText('Revision M2')).toBeVisible()
 })
 
-test('catalog detail remains readable and contract-switchable at 375px', async ({ page }) => {
+test('catalog detail panels stack and environment switching works at 375px', async ({ page }) => {
   await page.goto('/catalog/orders/acme-orders%40OrderNotification')
 
-  const contract = card(page, 'Composed contract')
-  await expect(contract.getByText('dev V2', { exact: true })).toBeVisible()
-  await contract.getByRole('button', { name: 'Inherited metadata' }).click()
-  await expect(contract.getByText('read-only for every caller')).toBeVisible()
+  const content = card(page, 'Schema content')
+  const preview = card(page, 'Schema preview')
+  await expect(preview.getByText(/The contract events in dev validate against right now/)).toBeVisible()
+
+  // Side-by-side collapses to stacked below the xl breakpoint.
+  const contentBox = await content.boundingBox()
+  const previewBox = await preview.boundingBox()
+  expect(contentBox).not.toBeNull()
+  expect(previewBox).not.toBeNull()
+  expect(previewBox!.y).toBeGreaterThan(contentBox!.y)
+
+  await card(page, 'Environment').getByRole('button', { name: /prod/ }).click()
+  await expect(preview.getByText(/The contract events in prod validate against right now/)).toBeVisible()
 })
 
 test('the domain panel actions remain reachable at 375px', async ({ page }) => {

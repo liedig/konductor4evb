@@ -17,16 +17,6 @@ const formOpen = ref(false)
 const formEventName = ref<string | undefined>(undefined)
 const formAppendSchemaName = ref<string | undefined>(undefined)
 
-const contractOpen = ref(false)
-const contractSchema = ref<SchemaSummary | null>(null)
-
-const contractEnvironments = computed(() => Object.keys(contractSchema.value?.latestVersions ?? {}).sort())
-
-function openContract(schema: SchemaSummary) {
-  contractSchema.value = schema
-  contractOpen.value = true
-}
-
 // Appends target only the console's API stage environment. The catalog
 // merges every environment, so a schema that exists solely in another stage
 // would deterministically 404 — offer append only when it exists here.
@@ -110,7 +100,6 @@ onMounted(load)
               {{ env }} M{{ schema.metadataRevisions[env] }}
             </NxBadge>
           </template>
-          <NxButton variant="ghost" size="sm" @click="openContract(schema)">Contract</NxButton>
           <NxButton v-if="appendable(schema)" variant="secondary" size="sm" @click="openAppend(schema)">New version</NxButton>
           <span v-else class="text-xs text-muted">Not registered in {{ targetEnvironment }} yet</span>
         </span>
@@ -126,18 +115,5 @@ onMounted(load)
       @close="formOpen = false"
       @saved="onSaved"
     />
-
-    <NxModal
-      :open="contractOpen"
-      :title="`Composed contract — ${contractSchema?.schemaName ?? ''}`"
-      @close="contractOpen = false"
-    >
-      <MetadataContractView
-        v-if="contractSchema"
-        :schema-name="contractSchema.schemaName ?? ''"
-        :producer-domain="contractSchema.producerDomain ?? domain"
-        :environments="contractEnvironments"
-      />
-    </NxModal>
   </NxCard>
 </template>
