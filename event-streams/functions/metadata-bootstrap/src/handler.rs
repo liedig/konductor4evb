@@ -13,16 +13,16 @@ use serde_json::Value;
 use konductor_common::dynamodb::{n, s};
 use konductor_common::error::ControlPlaneError;
 use konductor_common::metadata::definition::{MetadataDefinition, ValidatedMetadataDefinition};
+use konductor_common::metadata::revisions::{revision_to_item, RevisionRecord};
 use konductor_common::metadata::schema::{
     compile_metadata_schema, CompiledMetadataSchema, METADATA_SCHEMA_COMPILER_FORMAT,
 };
 use konductor_common::metadata::selector::MetadataRevision;
-use konductor_common::metadata::store::{
-    revision_sort_key, ENVIRONMENT_PARTITION, HEAD_PARTITION, HEAD_SORT_KEY, REVISION_PARTITION,
-};
+use konductor_common::metadata::store::{ENVIRONMENT_PARTITION, HEAD_PARTITION, HEAD_SORT_KEY};
 
 const BASELINE_REVISION: u32 = 1;
 const BOOTSTRAP_ACTOR: &str = "system-bootstrap";
+const BOOTSTRAP_OPERATION_ID: &str = "bootstrap-baseline";
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
@@ -125,21 +125,17 @@ fn baseline_items(
     )
     .expect("canonical JSON is UTF-8");
 
-    let mut revision = std::collections::HashMap::new();
-    revision.insert("PK".to_string(), s(REVISION_PARTITION));
-    revision.insert("SK".to_string(), s(&revision_sort_key(BASELINE_REVISION)));
-    revision.insert("revision".to_string(), n(BASELINE_REVISION as i64));
-    revision.insert("predecessor".to_string(), n(0));
-    revision.insert("definition".to_string(), s(&definition_json));
-    revision.insert("metadataSchema".to_string(), s(&compiled.document_string()));
-    revision.insert("definitionDigest".to_string(), s(digest));
-    revision.insert(
-        "compilerFormat".to_string(),
-        n(METADATA_SCHEMA_COMPILER_FORMAT as i64),
-    );
-    revision.insert("createdBy".to_string(), s(BOOTSTRAP_ACTOR));
-    revision.insert("createdAt".to_string(), s(now));
-    items.push(revision);
+    items.push(revision_to_item(&RevisionRecord {
+        revision: BASELINE_REVISION,
+        predecessor: 0,
+        definition: definition_json,
+        metadata_schema: compiled.document_string(),
+        definition_digest: digest.to_string(),
+        compiler_format: METADATA_SCHEMA_COMPILER_FORMAT,
+        created_by: BOOTSTRAP_ACTOR.to_string(),
+        created_at: now.to_string(),
+        operation_id: BOOTSTRAP_OPERATION_ID.to_string(),
+    }));
 
     let mut head = std::collections::HashMap::new();
     head.insert("PK".to_string(), s(HEAD_PARTITION));
@@ -247,6 +243,7 @@ mod tests {
                     && item_str(req, "definitionDigest").len() == 64
                     && item_num(req, "compilerFormat") == "1"
                     && item_str(req, "createdBy") == "system-bootstrap"
+                    && item_str(req, "operationId") == "bootstrap-baseline"
             })
             .then_output(|| {
                 aws_sdk_dynamodb::operation::put_item::PutItemOutput::builder().build()

@@ -245,7 +245,10 @@ fn get_n(item: &HashMap<String, AttributeValue>, key: &str) -> Option<i64> {
         .and_then(|raw| raw.parse().ok())
 }
 
-fn revision_to_item(record: &RevisionRecord) -> HashMap<String, AttributeValue> {
+/// Serializes a revision record into its DynamoDB item. Writers outside the
+/// store (the baseline bootstrap) must go through this builder so seeded
+/// records can never drift from what [`item_to_revision`] requires.
+pub fn revision_to_item(record: &RevisionRecord) -> HashMap<String, AttributeValue> {
     let mut item = HashMap::new();
     item.insert("PK".to_string(), s(REVISION_PARTITION));
     item.insert("SK".to_string(), s(&revision_sort_key(record.revision)));
