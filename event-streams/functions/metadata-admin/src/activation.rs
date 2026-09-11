@@ -38,6 +38,7 @@ struct ActivationRequest {
 struct ActivationResponse {
     environment: String,
     active_revision: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     generation: Option<u64>,
     activated_by: String,
     activated_at: String,
@@ -97,6 +98,25 @@ pub async fn activate(
         ));
     }
 
+    // The success response reports the bumped generation, so the pre-transaction
+    // value is read here. The transaction condition pins activeRevision to the
+    // expected value and activation moves forward only, so a commit means this
+    // read is exactly the state the transaction incremented.
+    let pointer = match store.get_environment_pointer(&request.environment).await {
+        Ok(Some(pointer)) => pointer,
+        Ok(None) => {
+            return Ok(api::from_control_plane_error(
+                &ControlPlaneError::MetadataConfigurationUnavailable {
+                    reason: format!(
+                        "environment '{}' has no active pointer",
+                        request.environment
+                    ),
+                },
+            ))
+        }
+        Err(e) => return Ok(store_failure("read pointer before activation", e)),
+    };
+
     let now = Utc::now();
     let audit = MutationAuditRecord {
         operation: AUDIT_OPERATION_ENVIRONMENT_ACTIVATED.to_string(),
@@ -121,7 +141,7 @@ pub async fn activate(
             &ActivationResponse {
                 environment: request.environment,
                 active_revision: request.revision,
-                generation: None,
+                generation: Some(pointer.generation + 1),
                 activated_by: principal.principal_id().to_string(),
                 activated_at: now.to_rfc3339(),
                 definition_digest: Some(report.definition_digest),
@@ -216,7 +236,7 @@ fn already_active_response(pointer: &EnvironmentPointer) -> Value {
         &ActivationResponse {
             environment: pointer.environment.clone(),
             active_revision: pointer.active_revision,
-            generation: Some(pointer.generation),
+            generation: None,
             activated_by: pointer.activated_by.clone(),
             activated_at: pointer.activated_at.clone(),
             definition_digest: None,
@@ -434,12 +454,13 @@ mod tests {
     #[tokio::test]
     async fn activation_moves_the_pointer_and_commits_audit_together() {
         let transact = transact_ok(1, 2, "dev");
-        let store = store_with(&[revision_rule(2), transact]);
+        let store = store_with(&[revision_rule(2), pointer_rule("dev", 1, 4), transact]);
         let resp = invoke(&store, payload(2, "dev", 1)).await;
         assert_eq!(status(&resp), 200, "{:?}", body(&resp));
         let activated = body(&resp);
         assert_eq!(activated["activeRevision"], 2);
         assert_eq!(activated["alreadyActive"], false);
+        assert_eq!(activated["generation"], 5);
         assert_eq!(activated["definitionDigest"].as_str().unwrap().len(), 64);
     }
 
@@ -452,7 +473,7 @@ mod tests {
         let no_op = body(&resp);
         assert_eq!(no_op["alreadyActive"], true);
         assert_eq!(no_op["activeRevision"], 2);
-        assert_eq!(no_op["generation"], 4);
+        assert!(no_op.get("generation").is_none());
     }
 
     #[tokio::test]
@@ -478,6 +499,7 @@ mod tests {
         // authoritative current state.
         let store = store_with(&[
             revision_rule(3),
+            pointer_rule("dev", 1, 4),
             transact_conditional_failure(),
             pointer_rule("dev", 1, 4),
         ]);
@@ -494,6 +516,7 @@ mod tests {
         // forward-only means our move cannot land.
         let store = store_with(&[
             revision_rule(2),
+            pointer_rule("dev", 5, 2),
             transact_conditional_failure(),
             pointer_rule("dev", 5, 2),
         ]);
@@ -507,6 +530,7 @@ mod tests {
     async fn race_won_by_the_same_revision_is_an_idempotent_noop() {
         let store = store_with(&[
             revision_rule(2),
+            pointer_rule("dev", 2, 5),
             transact_conditional_failure(),
             pointer_rule("dev", 2, 5),
         ]);
@@ -514,7 +538,7 @@ mod tests {
         assert_eq!(status(&resp), 200);
         let no_op = body(&resp);
         assert_eq!(no_op["alreadyActive"], true);
-        assert_eq!(no_op["generation"], 5);
+        assert!(no_op.get("generation").is_none());
     }
 
     #[tokio::test]

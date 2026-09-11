@@ -246,13 +246,16 @@ export async function installApi(page: Page, state: MockState = freshState()): P
           operationId: payload.operationId,
           occurredAt: '2026-09-22T08:30:00.000Z',
         })
+        // Mirrors the API contract: a read-only no-op omits generation; a
+        // committed activation reports the bumped value.
+        const alreadyActive = before === payload.revision
         return fulfillJson(route, 200, {
           environment: environment.environment,
           activeRevision: environment.activeRevision,
-          generation: environment.generation,
+          ...(alreadyActive ? {} : { generation: environment.generation }),
           activatedBy: environment.activatedBy,
           activatedAt: environment.activatedAt,
-          alreadyActive: before === payload.revision,
+          alreadyActive,
         })
       }
       if (path === '/schemas/contract-preview') {

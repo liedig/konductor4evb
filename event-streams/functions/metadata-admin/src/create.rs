@@ -146,7 +146,10 @@ async fn resolve_conflict(
     match store.get_revision(candidate_revision).await {
         Ok(Some(existing)) => {
             if existing.operation_id != operation_id {
-                let head = store.get_head().await.ok().flatten();
+                let head = match store.get_head().await {
+                    Ok(head) => head,
+                    Err(e) => return Ok(store_failure("re-read head after conflict", e)),
+                };
                 return Ok(stale_head_response(head, candidate_revision));
             }
             if existing.definition_digest != candidate_digest {

@@ -74,14 +74,14 @@ pub fn page_request(
     payload: &serde_json::Value,
     decode: fn(&str) -> Result<HashMap<String, AttributeValue>, ControlPlaneError>,
 ) -> Result<(i32, Option<HashMap<String, AttributeValue>>), serde_json::Value> {
-    let limit = match api::query_param(payload, "limit") {
+    let limit = match api::query_param(payload, "maxResults") {
         None => crate::handler::DEFAULT_PAGE_SIZE,
         Some(raw) => match raw.parse::<i32>() {
             Ok(v) if (1..=crate::handler::MAX_PAGE_SIZE).contains(&v) => v,
             _ => {
                 return Err(api::from_control_plane_error(&api::validation_error(
                     format!(
-                        "query parameter 'limit' must be between 1 and {}",
+                        "query parameter 'maxResults' must be between 1 and {}",
                         crate::handler::MAX_PAGE_SIZE
                     ),
                 )))

@@ -266,7 +266,7 @@ mod tests {
         );
         let store = store_with(&[first, second]);
 
-        let mut page_one = json!({"queryStringParameters": {"limit": "2"}});
+        let mut page_one = json!({"queryStringParameters": {"maxResults": "2"}});
         let resp = list_activations(&store, &page_one).await.unwrap();
         assert_eq!(status(&resp), 200);
         let listed = body(&resp);
@@ -277,7 +277,7 @@ mod tests {
         assert_eq!(activations[1]["beforeRevision"], 0);
         let token = listed["nextToken"].as_str().unwrap().to_string();
 
-        page_one["queryStringParameters"] = json!({"limit": "2", "nextToken": token});
+        page_one["queryStringParameters"] = json!({"maxResults": "2", "nextToken": token});
         let resp = list_activations(&store, &page_one).await.unwrap();
         assert_eq!(status(&resp), 200);
         let listed = body(&resp);
@@ -288,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_paging_parameters_are_rejected() {
         let store = store_with(&[]);
-        let payload = json!({"queryStringParameters": {"limit": "0"}});
+        let payload = json!({"queryStringParameters": {"maxResults": "0"}});
         let resp = list_activations(&store, &payload).await.unwrap();
         assert_eq!(status(&resp), 400);
 

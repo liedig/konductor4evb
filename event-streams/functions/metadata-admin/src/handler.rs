@@ -421,7 +421,7 @@ mod tests {
 
         let store = store_with(&[first_page, second_page]);
         let mut payload = event("GET", "/metadata/revisions", admin_context());
-        payload["queryStringParameters"] = json!({"limit": "2"});
+        payload["queryStringParameters"] = json!({"maxResults": "2"});
         let resp = invoke(&store, payload).await;
         assert_eq!(status(&resp), 200);
         let listed = body(&resp);
@@ -437,7 +437,7 @@ mod tests {
         let token = listed["nextToken"].as_str().unwrap().to_string();
 
         let mut next = event("GET", "/metadata/revisions", admin_context());
-        next["queryStringParameters"] = json!({"limit": "2", "nextToken": token});
+        next["queryStringParameters"] = json!({"maxResults": "2", "nextToken": token});
         let resp = invoke(&store, next).await;
         assert_eq!(status(&resp), 200);
         let listed = body(&resp);
@@ -449,7 +449,7 @@ mod tests {
     async fn invalid_limit_and_token_are_rejected() {
         let store = store_with(&[]);
         let mut payload = event("GET", "/metadata/revisions", admin_context());
-        payload["queryStringParameters"] = json!({"limit": "0"});
+        payload["queryStringParameters"] = json!({"maxResults": "0"});
         assert_eq!(status(&invoke(&store, payload).await), 400);
 
         let mut payload = event("GET", "/metadata/revisions", admin_context());
