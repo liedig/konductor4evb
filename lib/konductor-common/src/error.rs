@@ -72,6 +72,18 @@ pub enum ControlPlaneError {
     #[error("Schemas error: {0}")]
     Schemas(String),
 
+    #[error("metadata generation failed: {reason}")]
+    MetadataGenerationFailed { reason: String },
+
+    #[error("metadata revision not found: {revision}")]
+    MetadataRevisionNotFound { revision: u32 },
+
+    #[error("metadata conflict: {reason}")]
+    MetadataConflict { reason: String },
+
+    #[error("metadata configuration unavailable: {reason}")]
+    MetadataConfigurationUnavailable { reason: String },
+
     #[error("SQS error: {0}")]
     Sqs(String),
 }

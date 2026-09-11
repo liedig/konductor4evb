@@ -21,6 +21,7 @@ async fn main() -> Result<(), Error> {
     let bindings_table = std::env::var("BINDINGS_TABLE").expect("BINDINGS_TABLE not set");
     let entitlements_table =
         std::env::var("ENTITLEMENTS_TABLE").expect("ENTITLEMENTS_TABLE not set");
+    let metadata_table = std::env::var("METADATA_TABLE").expect("METADATA_TABLE not set");
     let authorizer = konductor_common::grant_engine::DynamoGrantEngine::new(
         konductor_common::grant_store::BindingStore::new(clients.ddb.clone(), bindings_table),
         konductor_common::entitlement_store::EntitlementStore::new(
@@ -35,12 +36,32 @@ async fn main() -> Result<(), Error> {
         .unwrap_or(DEFAULT_SCHEMA_CACHE_TTL_MS);
     let cache =
         konductor_common::schema_validation::SchemaCache::new(Duration::from_millis(cache_ttl_ms));
+    let metadata = konductor_common::metadata::admission::MetadataAdmission::new(
+        clients.ddb.clone(),
+        metadata_table,
+    );
+    let validators = konductor_common::schema_validation::ValidatorCache::new(
+        konductor_common::schema_validation::DEFAULT_VALIDATOR_CACHE_CAPACITY,
+    );
+    let uuid_source = konductor_common::metadata::generation::PlatformUuidSource;
 
     let clients_ref = &clients;
     let authorizer_ref = &authorizer;
     let cache_ref = &cache;
+    let validators_ref = &validators;
+    let metadata_ref = &metadata;
+    let uuid_ref = &uuid_source;
     lambda_runtime::run(service_fn(move |event| async move {
-        handler::handle(clients_ref, authorizer_ref, cache_ref, event).await
+        handler::handle(
+            clients_ref,
+            authorizer_ref,
+            cache_ref,
+            validators_ref,
+            metadata_ref,
+            uuid_ref,
+            event,
+        )
+        .await
     }))
     .await
 }

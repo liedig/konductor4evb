@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ApiError } from '~/composables/useApi'
-import type { SchemaMutationResponse } from '~/types/api'
+import type { ContractPreviewResponse, SchemaMutationResponse } from '~/types/api'
 
 const props = defineProps<{
   open: boolean
   domain: string
   eventName?: string
+  namespace?: string
+  appendSchemaName?: string
 }>()
 
 const emit = defineEmits<{
@@ -23,9 +25,34 @@ const busy = ref(false)
 const formError = ref('')
 const contentError = ref('')
 const contentTouched = ref(false)
+const preview = ref<ContractPreviewResponse | null>(null)
+const previewBusy = ref(false)
+const previewError = ref('')
 
 const isAppend = computed(() => props.eventName !== undefined)
 const title = computed(() => isAppend.value ? `New version — ${props.eventName}` : 'Register schema')
+
+// The preview names the registry schema exactly as the server does:
+// `{source}@{detail-type}`. Appends reuse the existing schema's name; a new
+// registration derives the source from the domain's namespace.
+const previewSchemaName = computed(() =>
+  isAppend.value
+    ? (props.appendSchemaName ?? (props.namespace ? `${props.namespace}@${props.eventName}` : undefined))
+    : (props.namespace ? `${props.namespace}@${eventNameInput.value.trim()}` : undefined))
+
+const canPreview = computed(() =>
+  content.value.trim() !== ''
+  && previewSchemaName.value !== undefined
+  && (isAppend.value || eventNameInput.value.trim() !== ''))
+
+const prettyPreview = computed(() => {
+  if (!preview.value?.composedDocument) return ''
+  try {
+    return JSON.stringify(JSON.parse(preview.value.composedDocument), null, 2)
+  } catch {
+    return preview.value.composedDocument
+  }
+})
 
 // The stage segment of the API base URL is the target environment; the
 // console never lets the caller choose it.
@@ -41,6 +68,8 @@ watch(() => props.open, (open) => {
     formError.value = ''
     contentError.value = ''
     contentTouched.value = false
+    preview.value = null
+    previewError.value = ''
   }
 })
 
@@ -105,7 +134,28 @@ async function submit() {
   }
 }
 
-const canSubmit = computed(() => content.value.trim() !== '' && (isAppend.value || eventNameInput.value.trim() !== ''))
+// Effective-contract preview: composes the unsaved business content with the
+// environment's active metadata — the producer never authors envelope fields
+// (design decision 4). Registers nothing.
+async function runPreview() {
+  contentTouched.value = true
+  if (!checkContent()) return
+  previewBusy.value = true
+  previewError.value = ''
+  preview.value = null
+  try {
+    preview.value = await catalog.previewContract({
+      domain: props.domain,
+      schemaName: previewSchemaName.value ?? '',
+      environment: targetEnvironment.value,
+      content: content.value,
+    })
+  } catch (error) {
+    previewError.value = describeError(error)
+  } finally {
+    previewBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -146,11 +196,32 @@ const canSubmit = computed(() => content.value.trim() !== '' && (isAppend.value 
         <p v-if="contentError" class="text-sm text-danger">{{ contentError }}</p>
         <p v-else class="text-sm text-faint">Draft-4 JSON Schema describing the event payload. Format pretty-prints valid JSON.</p>
       </div>
+      <div class="flex flex-col gap-2">
+        <NxButton variant="secondary" size="sm" :disabled="!canPreview || previewBusy" @click="runPreview">
+          {{ previewBusy ? 'Previewing…' : 'Preview effective contract' }}
+        </NxButton>
+        <p class="text-xs text-faint">
+          Composes this unsaved business document with the active metadata in
+          {{ targetEnvironment }} — nothing is registered.
+        </p>
+        <template v-if="preview">
+          <div class="flex flex-wrap items-center gap-2">
+            <NxBadge tone="info">{{ preview.environment }} V{{ preview.schemaVersion }}</NxBadge>
+            <NxBadge tone="neutral">{{ preview.environment }} M{{ preview.metadataRevision }}</NxBadge>
+            <NxBadge tone="warning">Not registered</NxBadge>
+          </div>
+          <pre class="max-h-60 overflow-auto rounded-lg border border-border bg-surface-raised p-3 text-xs">{{ prettyPreview }}</pre>
+          <p class="text-xs text-faint">
+            The metadata block is platform-owned: it stays read-only here and on every revision.
+          </p>
+        </template>
+        <p v-if="previewError" role="alert" class="text-sm text-danger">{{ previewError }}</p>
+      </div>
       <p v-if="formError" class="text-sm text-danger">{{ formError }}</p>
     </div>
     <template #actions>
       <NxButton variant="secondary" :disabled="busy" @click="emit('close')">Cancel</NxButton>
-      <NxButton :loading="busy" :disabled="!canSubmit" @click="submit">
+      <NxButton :loading="busy" :disabled="!canPreview" @click="submit">
         {{ isAppend ? 'Append version' : 'Register' }}
       </NxButton>
     </template>

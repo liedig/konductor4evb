@@ -244,6 +244,15 @@ handshake for browser apps; store tokens in `sessionStorage`, not
 | POST | `/bindings` | admin | Create a role binding (idempotent); `owner` bindings transfer domain ownership |
 | GET | `/bindings?domain=…` | admin | List role bindings for a domain |
 | DELETE | `/bindings/{bindingId}` | admin | Revoke a role binding (durable) |
+| GET | `/schemas/{schemaName}/contract?domain=…&environment=…` | existing catalog authorization | Composed contract for the exact current pair, or an explicit historical pair (`schemaVersion` **and** `metadataRevision` together; 0 is the legacy selector; 404 for unknown pairs, 400 for half-selected pairs) |
+| POST | `/schemas/contract-preview` | publisher binding on the domain | Compose unsaved business content against the environment's active metadata; registers nothing |
+| GET | `/metadata/revisions` | platform roles | Immutable metadata revision history (newest first, paginated) |
+| POST | `/metadata/revisions` | platform-admin | Create the next additive revision (stale head → 409; never activates) |
+| POST | `/metadata/preview` | platform roles | Non-persisting synthetic preview of a draft definition (candidate revision, generated fields, bounds) |
+| GET | `/metadata/environments` | platform roles | Active metadata pointer per environment (legacy flag until activated) |
+| POST | `/metadata/readiness` | platform roles | Non-persisting readiness report for a candidate revision in an environment |
+| GET | `/metadata/activations` | platform roles | Activation audit history (paginated) |
+| POST | `/metadata/activations` | platform-admin | Activate a revision for one environment (expected-current condition; forward-only; stale state → 409) |
 | POST | `/entitlements` | admin | Create a subscriber entitlement (deterministic key, idempotent) |
 | GET | `/entitlements?consumerDomain=…` | admin | List entitlements by consumer or producer domain |
 | DELETE | `/entitlements/{entitlementId}` | admin | Revoke an entitlement (converges subscriptions via the revocation pipeline) |

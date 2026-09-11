@@ -27,13 +27,17 @@ members = [
     "event-streams/functions/describe-subscription",
     "event-streams/functions/list-schemas",
     "event-streams/functions/describe-schema",
+    "event-streams/functions/metadata-bootstrap",
+    "event-streams/functions/metadata-admin",
     "control-plane/functions/oauth-authorizer",
     "control-plane/functions/binding-admin",
     "control-plane/functions/entitlement-admin",
     "control-plane/functions/entitlement-coverage-sweep",
     "control-plane/functions/entitlement-revocation-worker",
     "control-plane/functions/entitlement-stream-consumer",
+    "control-plane/functions/metadata-stream-consumer",
     "control-plane/functions/grant-benchmark",
+    "control-plane/functions/metadata-benchmark",
 ]
 
 [workspace.package]

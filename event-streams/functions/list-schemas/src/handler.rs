@@ -25,6 +25,7 @@ pub async fn handle(
     let bindings_table = env::var("BINDINGS_TABLE").context("BINDINGS_TABLE not set")?;
     let entitlements_table =
         env::var("ENTITLEMENTS_TABLE").context("ENTITLEMENTS_TABLE not set")?;
+    let metadata_table = env::var("METADATA_TABLE").context("METADATA_TABLE not set")?;
 
     let request_context = event.payload.get("requestContext").unwrap_or(&Value::Null);
     let principal = match log_principal(request_context) {
@@ -82,7 +83,9 @@ pub async fn handle(
         watermark,
     };
     Ok(
-        match catalog::list_catalog(ddb, schemas, &organization, &scope, &query).await {
+        match catalog::list_catalog(ddb, schemas, &metadata_table, &organization, &scope, &query)
+            .await
+        {
             Ok(page) => render_page(&page, filter_hash),
             Err(e) => {
                 tracing::error!(error = %e, "catalog expansion failed");
@@ -227,6 +230,7 @@ fn catalog_item(entry: &catalog::CatalogEntry) -> Value {
         "source": source,
         "detailType": detail_type,
         "latestVersions": entry.latest_versions,
+        "metadataRevisions": entry.metadata_revisions,
     })
 }
 
@@ -263,6 +267,38 @@ mod tests {
         std::env::set_var("DOMAINS_TABLE", "domains");
         std::env::set_var("BINDINGS_TABLE", "bindings");
         std::env::set_var("ENTITLEMENTS_TABLE", "entitlements");
+        std::env::set_var("METADATA_TABLE", "metadata");
+    }
+
+    fn metadata_pointer_rule(environment: &'static str, revision: i64) -> Rule {
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                req.table_name() == Some("metadata")
+                    && req.consistent_read() == Some(true)
+                    && req
+                        .key()
+                        .and_then(|k| k.get("SK"))
+                        .and_then(|v| v.as_s().ok())
+                        .map(|v| v.as_str() == environment)
+                        == Some(true)
+            })
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .item("PK", konductor_common::dynamodb::s("ENV"))
+                    .item("SK", konductor_common::dynamodb::s(environment))
+                    .item("activeRevision", konductor_common::dynamodb::n(revision))
+                    .item("generation", konductor_common::dynamodb::n(4))
+                    .item(
+                        "definitionDigest",
+                        konductor_common::dynamodb::s("digest-2"),
+                    )
+                    .item("activatedBy", konductor_common::dynamodb::s("admin-sub"))
+                    .item(
+                        "activatedAt",
+                        konductor_common::dynamodb::s("2026-01-01T00:00:00.000Z"),
+                    )
+                    .build()
+            })
     }
 
     fn iam_context(account_id: &str) -> Value {
@@ -412,8 +448,17 @@ mod tests {
         ddb_rules: &[&Rule],
         schemas_rules: &[&Rule],
     ) -> (aws_sdk_dynamodb::Client, aws_sdk_schemas::Client) {
+        // Trailing fallback: a metadata-table read with no pointer omits that
+        // environment's summary instead of failing the catalog. Tests that
+        // want real revisions pass a pointer rule first — MatchAny picks the
+        // first matching rule in order.
+        let absent_pointer = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("metadata"))
+            .then_output(|| GetItemOutput::builder().build());
+        let mut rules: Vec<&Rule> = ddb_rules.to_vec();
+        rules.push(&absent_pointer);
         (
-            mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, ddb_rules),
+            mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, &rules),
             mock_client!(aws_sdk_schemas, RuleMode::MatchAny, schemas_rules),
         )
     }
@@ -901,6 +946,94 @@ mod tests {
                 "teamGroups": format!("[\"{group}\"]"),
             }
         })
+    }
+
+    #[tokio::test]
+    async fn catalog_summaries_include_active_metadata_revisions() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule("orders", vec!["prod"]);
+        let registry = registry_rule(
+            "acme-prod-orders-schema-registry",
+            vec!["acme-orders@OrderNotification", "acme-orders@InternalAudit"],
+        );
+        let d1 = describe_rule(
+            "acme-prod-orders-schema-registry",
+            "acme-orders@OrderNotification",
+            3,
+        );
+        let d2 = describe_rule(
+            "acme-prod-orders-schema-registry",
+            "acme-orders@InternalAudit",
+            1,
+        );
+        let pointer = metadata_pointer_rule("prod", 2);
+        let (ddb, schemas) = clients(&[&binding, &domain, &pointer], &[&registry, &d1, &d2]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let items = body(&resp)["items"].clone();
+        for item in items.as_array().unwrap() {
+            assert_eq!(
+                item["metadataRevisions"],
+                json!({"prod": 2}),
+                "every entry in the environment carries the active revision"
+            );
+        }
+        assert_eq!(
+            pointer.num_calls(),
+            1,
+            "one pointer read per environment per page, shared by all entries"
+        );
+    }
+
+    #[tokio::test]
+    async fn unavailable_metadata_pointer_omits_the_summary_without_failing_the_catalog() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule("orders", vec!["prod"]);
+        let registry = registry_rule(
+            "acme-prod-orders-schema-registry",
+            vec!["acme-orders@OrderNotification"],
+        );
+        let d1 = describe_rule(
+            "acme-prod-orders-schema-registry",
+            "acme-orders@OrderNotification",
+            3,
+        );
+        // No pointer rule: the trailing fallback answers an empty pointer,
+        // and the catalog must stay usable — the summary is simply omitted.
+        let (ddb, schemas) = clients(&[&binding, &domain], &[&registry, &d1]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let items = body(&resp)["items"].clone();
+        assert_eq!(items.as_array().unwrap().len(), 1);
+        assert_eq!(
+            items[0]["metadataRevisions"],
+            json!({}),
+            "an unreadable pointer omits the summary; it never reports a guessed legacy revision"
+        );
     }
 
     #[tokio::test]

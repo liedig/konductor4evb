@@ -14,12 +14,14 @@ use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{rule_name, SchemaName};
 use konductor_common::error::ControlPlaneError;
 use konductor_common::grant_engine::actions;
+use konductor_common::metadata::composition::check_offline_composability;
 use konductor_common::models::{
     AppendSchemaVersionRequest, CreateSchemaRequest, DomainStatus, SchemaMutationResponse,
 };
 use konductor_common::namespace::NamespaceResolver;
 use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
 use konductor_common::principal_context::log_principal;
+use konductor_common::schema_compatibility::{check_compatible, Incompatibility};
 use konductor_common::schema_validation::check_draft4_document;
 
 use aws_sdk_schemas::error::ProvideErrorMetadata;
@@ -107,6 +109,11 @@ async fn create_schema<A: ResourceAuthorizer>(
             format!("content is not a valid JSON Schema draft-4 document: {e}"),
         )));
     }
+    if let Err(e) = check_offline_composability(&request.content) {
+        return Ok(api::from_control_plane_error(&api::validation_error(
+            format!("content cannot participate in an offline composed contract: {e}"),
+        )));
+    }
     let target = match prepare(
         clients,
         authorizer,
@@ -187,6 +194,11 @@ async fn append_schema_version<A: ResourceAuthorizer>(
             format!("content is not a valid JSON Schema draft-4 document: {e}"),
         )));
     }
+    if let Err(e) = check_offline_composability(&request.content) {
+        return Ok(api::from_control_plane_error(&api::validation_error(
+            format!("content cannot participate in an offline composed contract: {e}"),
+        )));
+    }
     let target = match prepare(
         clients,
         authorizer,
@@ -201,6 +213,35 @@ async fn append_schema_version<A: ResourceAuthorizer>(
         Ok(t) => t,
         Err(e) => return Ok(api::from_control_plane_error(&e)),
     };
+
+    // The promotion gate: the append may only loosen the current latest
+    // version, never tighten it. The version-less describe doubles as the
+    // existence check; `UpdateSchema`'s NotFound mapping stays as defense.
+    let predecessor = match latest_schema_document(clients, &target).await {
+        Ok(content) => content,
+        Err(e) => return Ok(api::from_control_plane_error(&e)),
+    };
+    let candidate: Value = match serde_json::from_str(&request.content) {
+        Ok(document) => document,
+        Err(e) => {
+            return Ok(api::from_control_plane_error(&ControlPlaneError::Schemas(
+                format!("validated content failed to re-parse: {e}"),
+            )))
+        }
+    };
+    let incompatibilities = check_compatible(&predecessor, &candidate);
+    if !incompatibilities.is_empty() {
+        tracing::info!(
+            metric = "SchemaPromotionRejected",
+            schema = %target.schema_name,
+            environment = %target.environment,
+            count = incompatibilities.len(),
+            "schema version append rejected by the compatibility gate"
+        );
+        return Ok(api::from_control_plane_error(&api::validation_error(
+            incompatibility_message(&incompatibilities),
+        )));
+    }
 
     let result = clients
         .schemas
@@ -235,6 +276,75 @@ async fn append_schema_version<A: ResourceAuthorizer>(
             };
             Ok(api::from_control_plane_error(&mapped))
         }
+    }
+}
+
+/// How many incompatibilities make it into a `400` message before truncation.
+const MAX_REPORTED_INCOMPATIBILITIES: usize = 10;
+
+/// Fetches the current latest version's document from the stage-selected
+/// registry. The gate never caches: a stale predecessor read would weaken it,
+/// and appends are rare.
+async fn latest_schema_document(
+    clients: &Clients,
+    target: &SchemaTarget,
+) -> Result<Value, ControlPlaneError> {
+    let output = clients
+        .schemas
+        .describe_schema()
+        .registry_name(&target.registry)
+        .schema_name(target.schema_name.to_string())
+        .send()
+        .await
+        .map_err(|e| {
+            use aws_sdk_schemas::operation::describe_schema::DescribeSchemaError;
+            let service_err = e.into_service_error();
+            match &service_err {
+                DescribeSchemaError::NotFoundException(_) => ControlPlaneError::SchemaNotFound {
+                    schema_name: target.schema_name.to_string(),
+                },
+                other => {
+                    tracing::error!(error = %other, "describe latest schema failed");
+                    ControlPlaneError::Schemas(other.to_string())
+                }
+            }
+        })?;
+    let content = output.content().ok_or_else(|| {
+        ControlPlaneError::Schemas("describe schema carried no content".to_string())
+    })?;
+    serde_json::from_str(content).map_err(|e| {
+        ControlPlaneError::Schemas(format!("stored latest schema is not parseable JSON: {e}"))
+    })
+}
+
+/// Renders the rejection message: each offending path with the rule it
+/// violates, capped so a wholesale rewrite cannot produce an unbounded body.
+fn incompatibility_message(incompatibilities: &[Incompatibility]) -> String {
+    let mut message =
+        String::from("content is not backward compatible with the current latest version: ");
+    let mut shown = incompatibilities
+        .iter()
+        .take(MAX_REPORTED_INCOMPATIBILITIES);
+    if let Some(first) = shown.next() {
+        message.push_str(&format!("{}: {}", display_path(&first.path), first.rule));
+        for entry in shown {
+            message.push_str(&format!("; {}: {}", display_path(&entry.path), entry.rule));
+        }
+    }
+    if incompatibilities.len() > MAX_REPORTED_INCOMPATIBILITIES {
+        message.push_str(&format!(
+            "; … and {} more",
+            incompatibilities.len() - MAX_REPORTED_INCOMPATIBILITIES
+        ));
+    }
+    message
+}
+
+fn display_path(path: &str) -> String {
+    if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
     }
 }
 
@@ -543,15 +653,38 @@ mod tests {
     }
 
     fn update_schema_rule(registry: &'static str, version: &'static str) -> Rule {
+        update_schema_rule_for(registry, CONTENT, version)
+    }
+
+    fn update_schema_rule_for(
+        registry: &'static str,
+        content: &'static str,
+        version: &'static str,
+    ) -> Rule {
         mock!(aws_sdk_schemas::Client::update_schema)
             .match_requests(move |req| {
                 req.registry_name() == Some(registry)
                     && req.schema_name() == Some("acme-orders@OrderNotification")
-                    && req.content() == Some(CONTENT)
+                    && req.content() == Some(content)
             })
             .then_output(move || {
                 aws_sdk_schemas::operation::update_schema::UpdateSchemaOutput::builder()
                     .schema_version(version)
+                    .build()
+            })
+    }
+
+    fn describe_latest_rule(registry: &'static str, content: &'static str) -> Rule {
+        mock!(aws_sdk_schemas::Client::describe_schema)
+            .match_requests(move |req| {
+                req.registry_name() == Some(registry)
+                    && req.schema_name() == Some("acme-orders@OrderNotification")
+                    && req.schema_version().is_none()
+            })
+            .then_output(move || {
+                aws_sdk_schemas::operation::describe_schema::DescribeSchemaOutput::builder()
+                    .content(content)
+                    .schema_version("4")
                     .build()
             })
     }
@@ -747,9 +880,10 @@ mod tests {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
         let domain = active_domain_rule();
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", CONTENT);
         let update = update_schema_rule("acme-prod-orders-schema-registry", "5");
         let published = version_published_rule("prod", 5);
-        let clients = clients(&[&domain], &[&update], &[&published]);
+        let clients = clients(&[&domain], &[&describe, &update], &[&published]);
 
         let resp = handle(
             &clients,
@@ -772,6 +906,31 @@ mod tests {
     async fn append_version_for_missing_schema_returns_404() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let not_found = mock!(aws_sdk_schemas::Client::describe_schema).then_error(|| {
+            aws_sdk_schemas::operation::describe_schema::DescribeSchemaError::NotFoundException(
+                aws_sdk_schemas::types::error::NotFoundException::builder()
+                    .message("not found")
+                    .build(),
+            )
+        });
+        let clients = clients(&[&active_domain_rule()], &[&not_found], &[]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", append_body())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 404);
+    }
+
+    #[tokio::test]
+    async fn append_version_update_not_found_still_maps_to_404() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", CONTENT);
         let not_found = mock!(aws_sdk_schemas::Client::update_schema).then_error(|| {
             aws_sdk_schemas::operation::update_schema::UpdateSchemaError::NotFoundException(
                 aws_sdk_schemas::types::error::NotFoundException::builder()
@@ -779,7 +938,7 @@ mod tests {
                     .build(),
             )
         });
-        let clients = clients(&[&active_domain_rule()], &[&not_found], &[]);
+        let clients = clients(&[&active_domain_rule()], &[&describe, &not_found], &[]);
 
         let resp = handle(
             &clients,
@@ -868,9 +1027,10 @@ mod tests {
         std::env::set_var("ORGANIZATION", "acme");
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
         let domain = active_domain_rule();
+        let describe = describe_latest_rule("acme-staging-orders-schema-registry", CONTENT);
         let update = update_schema_rule("acme-staging-orders-schema-registry", "2");
         let published = version_published_rule("staging", 2);
-        let clients = clients(&[&domain], &[&update], &[&published]);
+        let clients = clients(&[&domain], &[&describe, &update], &[&published]);
         let mut payload = oauth_event("/schemas/versions", append_body());
         payload["requestContext"]["stage"] = json!("staging");
 
@@ -880,10 +1040,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_schema_with_local_references_composes_and_is_stored_unchanged() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let local_ref_content = r##"{
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "type": "object",
+            "properties": {"item": {"$ref": "#/definitions/item"}},
+            "definitions": {"item": {"type": "object", "properties": {"sku": {"type": "string"}}, "required": ["sku"]}}
+        }"##;
+        let domain = active_domain_rule();
+        let create = mock!(aws_sdk_schemas::Client::create_schema)
+            .match_requests(move |req| {
+                req.registry_name() == Some("acme-prod-orders-schema-registry")
+                    && req.schema_name() == Some("acme-orders@OrderNotification")
+                    && req.content() == Some(local_ref_content)
+            })
+            .then_output(move || {
+                aws_sdk_schemas::operation::create_schema::CreateSchemaOutput::builder()
+                    .schema_version("1")
+                    .build()
+            });
+        let published = version_published_rule("prod", 1);
+        let clients = clients(&[&domain], &[&create], &[&published]);
+        let mut body = create_body();
+        body["content"] = json!(local_ref_content);
+
+        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", body)))
+            .await
+            .unwrap();
+
+        // The mock rule only matches when the stored content is exactly the
+        // submitted document: local references survive authoring.
+        assert_eq!(status(&resp), 201);
+    }
+
+    #[tokio::test]
+    async fn create_schema_with_external_references_returns_400_before_registry_access() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        // Zero rules: the composability gate precedes any SDK access.
+        let clients = clients(&[], &[], &[]);
+        let mut bad = create_body();
+        bad["content"] = json!(
+            r#"{"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "properties": {"x": {"$ref": "https://example.com/remote.json"}}}"#
+        );
+
+        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", bad)))
+            .await
+            .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let response_body = body(&resp);
+        let message = response_body["message"].as_str().unwrap();
+        // External references fail closed at authoring time — either the
+        // draft-4 compile gate or the composability gate rejects them, and
+        // both name the offending reference without any registry access.
+        assert!(
+            message.contains("example.com"),
+            "400 must name the offending reference: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_with_an_offline_unresolvable_reference_fails_the_composability_gate() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let clients = clients(&[], &[], &[]);
+        let mut bad = append_body();
+        // Compiles standalone — the vendor extension is ignored by the
+        // draft-4 compiler — but the composability gate conservatively
+        // rejects any reference that cannot resolve offline, wherever it
+        // appears in the document.
+        bad["content"] = json!(
+            r#"{"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "properties": {"orderId": {"type": "integer"}}, "x-examples": {"$ref": "https://example.com/dead-space.json"}}"#
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", bad)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let response_body = body(&resp);
+        let message = response_body["message"].as_str().unwrap();
+        assert!(
+            message.contains("offline composed contract"),
+            "400 must name the composability constraint: {message}"
+        );
+    }
+
+    #[tokio::test]
     async fn emission_failure_does_not_fail_the_committed_mutation() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
         let domain = active_domain_rule();
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", CONTENT);
         let update = update_schema_rule("acme-prod-orders-schema-registry", "6");
         let bus_down = mock!(aws_sdk_eventbridge::Client::put_events).then_error(|| {
             aws_sdk_eventbridge::operation::put_events::PutEventsError::InternalException(
@@ -892,7 +1147,7 @@ mod tests {
                     .build(),
             )
         });
-        let clients = clients(&[&domain], &[&update], &[&bus_down]);
+        let clients = clients(&[&domain], &[&describe, &update], &[&bus_down]);
 
         let resp = handle(
             &clients,
@@ -906,5 +1161,241 @@ mod tests {
         // reports success even though the promotion signal could not be sent.
         assert_eq!(status(&resp), 201);
         assert_eq!(body(&resp)["schemaVersion"], 6);
+    }
+
+    const LATEST_V4: &str = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}}}";
+
+    fn append_body_with(content: &str) -> Value {
+        json!({
+            "domain": "orders",
+            "eventName": "OrderNotification",
+            "content": content
+        })
+    }
+
+    #[tokio::test]
+    async fn append_version_newly_requiring_a_property_returns_400_naming_the_path() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+        let tightening = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}},\"required\":[\"sku\"]}";
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event(
+                "/schemas/versions",
+                append_body_with(tightening),
+            )),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let message = body(&resp)["message"].as_str().unwrap().to_string();
+        assert!(
+            message.contains("/sku"),
+            "400 must name the offending path: {message}"
+        );
+        assert!(
+            message.contains("newly required"),
+            "400 must name the violated rule: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_removing_a_declared_property_returns_400() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let with_legacy = "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"},\"legacy\":{\"type\":\"string\"}}}";
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", with_legacy);
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event(
+                "/schemas/versions",
+                append_body_with(LATEST_V4),
+            )),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        assert!(body(&resp)["message"].as_str().unwrap().contains("/legacy"));
+    }
+
+    #[tokio::test]
+    async fn append_version_adding_an_optional_property_appends() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let additive = "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"},\"quantity\":{\"type\":\"integer\"}}}";
+        let update = update_schema_rule_for("acme-prod-orders-schema-registry", additive, "5");
+        let published = version_published_rule("prod", 5);
+        let clients = clients(
+            &[&active_domain_rule()],
+            &[&describe, &update],
+            &[&published],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", append_body_with(additive))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 201);
+        assert_eq!(body(&resp)["schemaVersion"], 5);
+    }
+
+    #[tokio::test]
+    async fn append_version_is_judged_against_the_latest_version_only() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let update = update_schema_rule_for("acme-prod-orders-schema-registry", LATEST_V4, "5");
+        let published = version_published_rule("prod", 5);
+        let clients = clients(
+            &[&active_domain_rule()],
+            &[&describe, &update],
+            &[&published],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event(
+                "/schemas/versions",
+                append_body_with(LATEST_V4),
+            )),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 201);
+        assert_eq!(
+            describe.num_calls(),
+            1,
+            "exactly one version-less describe fetches the latest"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_rejection_emits_the_promotion_rejected_metric() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex, Once, OnceLock};
+
+        #[derive(Clone, Default)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+            type Writer = Capture;
+            fn make_writer(&'a self) -> Capture {
+                self.clone()
+            }
+        }
+
+        // Thread-local subscribers race with parallel tests: callsite
+        // interest is cached process-wide, so a thread running without a
+        // subscriber can mark the rejection callsite disabled mid-test.
+        // A global default is set exactly once and never removed, keeping
+        // every callsite enabled; the unique event name attributes the
+        // metric line to this test.
+        static LOGS: OnceLock<Capture> = OnceLock::new();
+        static INIT: Once = Once::new();
+        let capture = LOGS.get_or_init(Capture::default).clone();
+        INIT.call_once(|| {
+            let _ = tracing::subscriber::set_global_default(
+                tracing_subscriber::fmt()
+                    .with_writer(LOGS.get().unwrap().clone())
+                    .with_ansi(false)
+                    .finish(),
+            );
+        });
+
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let latest = "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}}}";
+        let describe = mock!(aws_sdk_schemas::Client::describe_schema)
+            .match_requests(|req| {
+                req.registry_name() == Some("acme-prod-orders-schema-registry")
+                    && req.schema_name() == Some("acme-orders@MetricProbeEvent")
+                    && req.schema_version().is_none()
+            })
+            .then_output(move || {
+                aws_sdk_schemas::operation::describe_schema::DescribeSchemaOutput::builder()
+                    .content(latest)
+                    .schema_version("4")
+                    .build()
+            });
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+        let tightening = json!({
+            "domain": "orders",
+            "eventName": "MetricProbeEvent",
+            "content": "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}},\"required\":[\"sku\"]}"
+        });
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", tightening)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.lines()
+                .any(|line| line.contains("SchemaPromotionRejected")
+                    && line.contains("MetricProbeEvent")),
+            "rejection must carry the metric field: {logs}"
+        );
+    }
+
+    // add-platform-metadata-composition task 2.3: with the metadata
+    // composability check sharing this handler, the business compatibility
+    // gate must still reject tightenings — including in documents that use
+    // the local-reference style the composer supports.
+    #[tokio::test]
+    async fn business_tightening_still_rejects_for_metadata_composable_content() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let latest = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"definitions\":{\"sku\":{\"type\":\"string\"}},\"properties\":{\"sku\":{\"$ref\":\"#/definitions/sku\"}}}";
+        let tightening = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"definitions\":{\"sku\":{\"type\":\"string\"}},\"properties\":{\"sku\":{\"$ref\":\"#/definitions/sku\"}},\"required\":[\"sku\"]}";
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", latest);
+        // No update rule: a rejected append must never reach UpdateSchema.
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event(
+                "/schemas/versions",
+                append_body_with(tightening),
+            )),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let message = body(&resp)["message"].as_str().unwrap().to_string();
+        assert!(
+            message.contains("/sku") && message.contains("newly required"),
+            "the business gate, not the composability check, must name the tightening: {message}"
+        );
     }
 }

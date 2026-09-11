@@ -59,6 +59,7 @@ flowchart LR
 |------|----------|---------|---------|
 | Unit Tests | `src/*.rs` (inline `#[cfg(test)]` modules) | `cargo test --workspace` | Test isolated logic within each crate |
 | Handler Tests | `src/*.rs` (inline `#[cfg(test)]` with smithy-mocks) | `cargo test --workspace` | Test handler behavior with mocked AWS SDK clients |
+| Browser UI Tests | `web/tests/ui/*.spec.ts` | `pnpm test:ui` (from `web/`) | Isolated-browser journeys against the dev server with route-mocked APIs |
 | Full Suite | — | `make test` | Run all tests across the workspace |
 
 ## Commands
@@ -78,7 +79,35 @@ cargo test --workspace -- --nocapture
 
 # Check compilation without running tests
 make check
+
+# Web console: lint, types, isolated-browser UI tests, production build (from web/)
+rtk pnpm lint && rtk pnpm typecheck && rtk pnpm test:ui && rtk pnpm build
 ```
+
+## Browser UI Tests (Playwright)
+
+The web console has an isolated-browser suite (`pnpm test:ui` from `web/`) with
+no dependency on a deployed stack:
+
+- **Identity**: the dev-only `konductorTestSession` sessionStorage seam
+  (`web/app/stores/session.ts`) mirrors a Cognito ID-token payload, letting a
+  test run as `platform-admin`, `platform-auditor`, or a team group. The seam
+  is compiled out of production (`import.meta.env.DEV` is statically false).
+- **API**: every `/dev/**` call is fulfilled by the in-test route mock
+  (`web/tests/ui/api.ts`) — per-test mutable state drives conflicts, stale
+  activations, delayed busy states, and error modes deterministically. The
+  mock mirrors the real OpenAPI surface (`code` + `message` on errors).
+- **Server**: Playwright starts `nuxi dev --host 127.0.0.1 --port 3100`
+  itself; bind IPv4 explicitly (the default binds IPv6-only on macOS, which
+  defeats the readiness poll).
+- **Scope**: journey flows (create → preview → save → conflict → activate →
+  inspect), role restrictions, error/loading/empty states, narrow viewports,
+  and keyboard/dialog focus. Known accessibility gaps are recorded in the
+  change's task notes rather than asserted as passing.
+
+Write UI tests with role/label locators (`getByRole`, `getByLabel`) and scope
+by card heading — visible text repeats across panels. Prefer the strict-mode
+failure over brittle CSS selectors.
 
 ## Keeping `target/` Small
 

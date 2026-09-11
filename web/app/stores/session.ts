@@ -14,6 +14,19 @@ type SessionStatus = 'unknown' | 'signed-in' | 'signed-out'
 
 export type Persona = 'platform' | 'owner'
 
+declare global {
+  interface Window {
+    /**
+     * Synthetic session flag for isolated browser tests (dev server only):
+     * `konductorTestSession` in sessionStorage mirrors a Cognito ID-token
+     * payload, letting the harness exercise role-gated UI without real
+     * credentials. `import.meta.env.DEV` is statically false in production
+     * builds, so this seam never ships.
+     */
+    __konductorTestSession?: boolean
+  }
+}
+
 export const useSessionStore = defineStore('session', () => {
   const status = ref<SessionStatus>('unknown')
   const username = ref<string | null>(null)
@@ -37,6 +50,13 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function restore(): Promise<boolean> {
+    if (import.meta.env.DEV) {
+      const synthetic = sessionStorage.getItem('konductorTestSession')
+      if (synthetic) {
+        applySession(JSON.parse(synthetic) as Record<string, unknown>)
+        return true
+      }
+    }
     try {
       const { tokens } = await fetchAuthSession()
       const payload = tokens?.idToken?.payload
@@ -72,6 +92,9 @@ export const useSessionStore = defineStore('session', () => {
 
   /** Access token for API calls; Amplify renews expired tokens transparently. */
   async function accessToken(forceRefresh = false): Promise<string> {
+    if (import.meta.env.DEV && sessionStorage.getItem('konductorTestSession')) {
+      return 'synthetic-dev-token'
+    }
     const { tokens } = await fetchAuthSession({ forceRefresh })
     const token = tokens?.accessToken?.toString()
     if (!token) {

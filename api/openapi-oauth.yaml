@@ -841,7 +841,12 @@ paths:
       description: >
         Flat append-only version registration mirroring EventBridge
         UpdateSchema. Existing versions remain immutable. Requires a publisher
-        binding for the domain.
+        binding for the domain. The appended document must be backward
+        compatible with the current latest version: it may add optional
+        properties and loosen or remove constraints, but never remove a
+        declared property, newly require a property, narrow a type, or tighten
+        a constraint. Intentional breaking evolution is expressed as a new
+        schema under a new event name.
       x-amazon-apigateway-request-validator: validate-body
       requestBody:
         required: true
@@ -857,7 +862,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/SchemaMutationResponse"
         "400":
-          description: Validation error
+          description: >
+            Validation error: the document is not valid JSON Schema draft-4,
+            or it is not backward compatible with the current latest version
+            (the message identifies the offending paths and rules)
           content:
             application/json:
               schema:
@@ -939,6 +947,547 @@ paths:
         httpMethod: POST
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
+
+  /schemas/{schemaName}/contract:
+    get:
+      operationId: GetSchemaContract
+      summary: Composed current or historical event contract
+      description: >
+        The exact composed contract for one (business version, metadata
+        revision) pair: raw business content, the exact metadata schema,
+        the generator catalogue, and an offline draft-4 composed document.
+        Without selectors the pair is the environment's current active one;
+        a historical read must pass both schemaVersion and metadataRevision
+        and never silently pairs a historical business version with the
+        active metadata revision. metadataRevision 0 is the legacy selector
+        for events predating metadata stamping. Authorization is catalog
+        visibility, checked against current bindings and entitlements,
+        not historical ones; an unreadable metadata pointer yields 503
+        rather than a composed guess.
+      parameters:
+        - name: schemaName
+          in: path
+          required: true
+          description: "Format: {source}@{detail-type}, URL-encoded"
+          schema:
+            type: string
+        - name: domain
+          in: query
+          required: true
+          description: The producer domain.
+          schema:
+            type: string
+        - name: environment
+          in: query
+          required: true
+          description: Environment whose active pair serves current reads.
+          schema:
+            type: string
+        - name: consumerDomain
+          in: query
+          required: false
+          description: The consumer domain whose coverage authorizes the read. Omit only as a platform role.
+          schema:
+            type: string
+        - name: schemaVersion
+          in: query
+          required: false
+          description: Historical business version; requires metadataRevision.
+          schema:
+            type: integer
+            minimum: 1
+        - name: metadataRevision
+          in: query
+          required: false
+          description: Exact metadata revision; 0 selects the legacy pre-stamping contract. Requires schemaVersion.
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Composed contract for the resolved pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComposedContract"
+        "400":
+          description: Incomplete or invalid historical selectors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: No subscriber binding or no covering entitlement, or consumerDomain omitted without a platform role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain, environment, schema, or metadata revision not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The metadata pointer is unreadable, so the pair cannot be resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
+
+  /schemas/contract-preview:
+    post:
+      operationId: PreviewSchemaContract
+      summary: Compose unsaved business content with the active metadata revision
+      description: >
+        Publisher-authorized effective-contract preview. Composes the
+        caller's unsaved draft business content with the environment's
+        active metadata revision and returns the same contract shape as
+        the contract read, marked registered false. Preview registers
+        nothing, publishes nothing, and grants no catalog visibility
+        beyond the publisher's own domain. schemaVersion pins the composed
+        document's version stamp; without it the environment's current
+        latest version is used (1 for a first draft).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContractPreviewRequest"
+      responses:
+        "200":
+          description: Composed preview contract; registered is false
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContractPreviewResponse"
+        "400":
+          description: Malformed request body or unresolvable reference
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller has no publisher binding for the domain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain or environment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: The metadata pointer is unreadable, so the active metadata revision cannot be resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
+
+  /metadata/revisions:
+    get:
+      operationId: ListMetadataRevisions
+      summary: List metadata configuration revisions (platform roles only)
+      description: >
+        Immutable revision history, newest first. Reads are open to
+        platform-admin and platform-auditor OAuth principals; every other
+        identity receives 403 before any configuration is read. Pagination
+        uses an opaque continuation token bound to the revision partition.
+      parameters:
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: maxResults
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            maximum: 50
+      responses:
+        "200":
+          description: Revision history page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListMetadataRevisionsResponse"
+        "400":
+          description: Validation error (malformed continuation token)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (not a platform role)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MetadataAdminFunction.Arn}/invocations"
+    post:
+      operationId: CreateMetadataRevision
+      summary: Create a metadata configuration revision (platform-admin only)
+      description: >
+        Appends an immutable revision: the additive definition check, the
+        compiled schema, and the head move commit in one conditional
+        transaction. `expectedHead` must equal the current head; a stale
+        or raced create fails 409 with the current state. Replaying an
+        identical `operationId` with an identical definition returns the
+        recorded outcome (200) instead of duplicating the revision;
+        replaying with different content fails 409.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMetadataRevisionRequest"
+      responses:
+        "200":
+          description: An identical replay already recorded this revision
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataRevision"
+        "201":
+          description: Revision created and head moved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataRevision"
+        "400":
+          description: Validation error (invalid operationId or non-additive definition)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (not a platform-admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: The expected head revision does not exist
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Stale head, conflicting replay, or a lost race; the response carries the current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Metadata configuration unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MetadataAdminFunction.Arn}/invocations"
+
+  /metadata/revisions/{revision}:
+    get:
+      operationId: GetMetadataRevision
+      summary: Describe one metadata configuration revision (platform roles only)
+      parameters:
+        - name: revision
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Revision detail with the stored definition and compiled schema
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataRevision"
+        "403":
+          description: Access denied (not a platform role)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Revision not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MetadataAdminFunction.Arn}/invocations"
+
+  /metadata/preview:
+    post:
+      operationId: PreviewMetadataRevision
+      summary: Validate a draft definition without persisting anything (platform roles only)
+      description: >
+        Read-only probe: compiles the draft against the current head,
+        reports the candidate revision identity, compiled metadata schema,
+        structural bounds, flattened generator views, and a synthetic
+        example metadata block. Nothing is persisted, activated, or
+        published.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MetadataPreviewRequest"
+      responses:
+        "200":
+          description: Draft validation report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataPreviewResponse"
+        "400":
+          description: Validation error (invalid draft or unknown environment)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (not a platform role)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Metadata configuration unavailable (no head revision)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MetadataAdminFunction.Arn}/invocations"
+
+  /metadata/readiness:
+    post:
+      operationId: CheckMetadataReadiness
+      summary: Report whether a revision is ready to activate in an environment (platform roles only)
+      description: >
+        Read-only probe: recompiles the stored revision exactly, resolves
+        the generation context, validates the generated values against the
+        compiled contract, and checks the composed size budget. Activation
+        recomputes these checks server-side; a client-ready report is never
+        trusted as authorization to cut over.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MetadataReadinessRequest"
+      responses:
+        "200":
+          description: Readiness report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataReadinessReport"
+        "400":
+          description: Validation error (unknown environment)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (not a platform role)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Revision not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Metadata configuration or generation context unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MetadataAdminFunction.Arn}/invocations"
+
+  /metadata/environments:
+    get:
+      operationId: ListMetadataEnvironments
+      summary: Report every configured environment's active metadata pointer (platform roles only)
+      responses:
+        "200":
+          description: Per-environment pointer state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataEnvironmentList"
+        "403":
+          description: Access denied (not a platform role)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Metadata configuration unavailable (a configured environment has no pointer)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MetadataAdminFunction.Arn}/invocations"
+
+  /metadata/activations:
+    get:
+      operationId: ListMetadataActivations
+      summary: Page the durable activation audit history (platform roles only)
+      description: >
+        Committed activation records only, newest first. An activation that
+        lost its race never committed and never entered this history.
+        Pagination uses an opaque continuation token bound to the audit
+        partition.
+      parameters:
+        - name: nextToken
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: maxResults
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            maximum: 50
+      responses:
+        "200":
+          description: Activation audit page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetadataActivationList"
+        "400":
+          description: Validation error (malformed continuation token)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (not a platform role)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MetadataAdminFunction.Arn}/invocations"
+    post:
+      operationId: ActivateMetadataRevision
+      summary: Move an environment's active metadata pointer to a revision (platform-admin only)
+      description: >
+        The pointer cutover. Readiness is recomputed from server state
+        first; the pointer then moves forward only, conditioned on the
+        caller's expected active revision, bumping the generation
+        (invalidating generation-scoped caches) and committing the audit
+        record in one transaction. Reapplying the already-active revision
+        is a read-only no-op answering with current state; a stale
+        expectation or a lost race fails 409 with the current state.
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ActivateMetadataRequest"
+      responses:
+        "200":
+          description: Pointer state after the activation (or the read-only no-op)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivateMetadataResponse"
+        "400":
+          description: Validation error (unknown environment or invalid operationId)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Access denied (not a platform-admin)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Backward move, stale expected-active revision, lost race, or failed server-side readiness recheck
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Metadata configuration unavailable (no pointer for the environment)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MetadataAdminFunction.Arn}/invocations"
 
   /bindings:
     post:
@@ -1842,6 +2391,14 @@ components:
             dev: 5
             staging: 3
             prod: 3
+        metadataRevisions:
+          type: object
+          description: Active metadata revision per environment where the pointer was readable; an unreadable pointer omits the environment rather than guessing.
+          additionalProperties:
+            type: integer
+          example:
+            dev: 3
+            prod: 2
 
     SchemaDetail:
       allOf:
@@ -1851,6 +2408,379 @@ components:
             content:
               type: string
               description: Schema content of the highest latest version across environments.
+
+    GeneratorDescription:
+      type: object
+      required: [name, generator, source, constraint]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: Dotted path of the platform-owned field in the detail object.
+        generator:
+          type: string
+          enum: [uuid-v4, utc-timestamp, utc-date, aws-region, organisation, environment]
+        source:
+          type: string
+          description: Where the platform sources the value.
+        constraint:
+          type: string
+          description: The generated value's type constraint.
+
+    ComposedContract:
+      type: object
+      properties:
+        schemaName:
+          type: string
+        source:
+          type: string
+        detailType:
+          type: string
+        environment:
+          type: string
+        registry:
+          type: string
+        schemaVersion:
+          type: integer
+          minimum: 1
+        metadataRevision:
+          type: integer
+          minimum: 0
+          description: 0 marks the legacy pre-stamping contract.
+        generation:
+          type: integer
+          nullable: true
+          description: Pointer generation for current reads; null on historical reads.
+        definitionDigest:
+          type: string
+          nullable: true
+          description: Digest of the exact metadata definition; null for the legacy revision.
+        businessContent:
+          type: string
+          description: The raw business document of the resolved pair.
+        metadataSchema:
+          type: string
+          description: The exact metadata revision's compiled draft-4 schema as a string.
+        generators:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeneratorDescription"
+        composerFormat:
+          type: integer
+        composedDocument:
+          type: string
+          description: Offline draft-4 document that validates the full detail object ({metadata, data}).
+
+    ContractPreviewRequest:
+      type: object
+      required: [domain, schemaName, environment, content]
+      additionalProperties: false
+      properties:
+        domain:
+          type: string
+          description: The publisher's own domain.
+        schemaName:
+          type: string
+          description: "Format: {source}@{detail-type}"
+        environment:
+          type: string
+        content:
+          type: string
+          description: The unsaved draft-4 business document as a string.
+        schemaVersion:
+          type: integer
+          minimum: 1
+          description: Pins the composed document's version stamp; defaults to the environment's latest version, or 1 for a first draft.
+
+    ContractPreviewResponse:
+      type: object
+      properties:
+        schemaName:
+          type: string
+        source:
+          type: string
+        detailType:
+          type: string
+        environment:
+          type: string
+        schemaVersion:
+          type: integer
+          minimum: 1
+        metadataRevision:
+          type: integer
+          minimum: 0
+          description: Active metadata revision of the selected environment; 0 on the legacy baseline.
+        generation:
+          type: integer
+          nullable: true
+        metadataSchema:
+          type: string
+        generators:
+          type: array
+          items:
+            $ref: "#/components/schemas/GeneratorDescription"
+        composerFormat:
+          type: integer
+        composedDocument:
+          type: string
+        registered:
+          type: boolean
+          description: Always false; the preview composes unsaved content.
+        note:
+          type: string
+
+    CreateMetadataRevisionRequest:
+      type: object
+      required: [expectedHead, operationId, definition]
+      additionalProperties: false
+      properties:
+        expectedHead:
+          type: integer
+          minimum: 1
+          description: The revision the caller believes is the head; the create fails 409 if it is not.
+        operationId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Caller-chosen idempotency identity; an identical replay returns the recorded outcome.
+        definition:
+          type: object
+          description: >
+            The next metadata definition document. Platform-supplied fields
+            (generated values) are declared here; the server owns their
+            content. Must be additive-only relative to the expected head.
+      example:
+        expectedHead: 4
+        operationId: add-region-metadata
+        definition:
+          fields:
+            - name: traceId
+              platformOwned: true
+
+    MetadataRevision:
+      type: object
+      properties:
+        revision:
+          type: integer
+        predecessor:
+          type: integer
+        definitionDigest:
+          type: string
+          description: SHA-256 digest of the canonical definition document.
+        compilerFormat:
+          type: integer
+          description: Metadata schema compiler format the revision was compiled with.
+        createdBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        definition:
+          type: object
+          description: The stored canonical definition document.
+        metadataSchema:
+          type: object
+          description: The compiled JSON Schema contract for composed metadata blocks.
+
+    ListMetadataRevisionsResponse:
+      type: object
+      properties:
+        revisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetadataRevision"
+        nextToken:
+          type: string
+          description: Opaque continuation token, bound to the revision partition.
+
+    MetadataPreviewRequest:
+      type: object
+      required: [definition]
+      additionalProperties: false
+      properties:
+        definition:
+          type: object
+          description: Draft metadata definition; validated but never persisted.
+        environment:
+          type: string
+          description: Environment whose generation context the synthetic example reflects; defaults to the first configured environment.
+
+    MetadataPreviewResponse:
+      type: object
+      properties:
+        candidateRevision:
+          type: integer
+          description: The revision this draft would become if created against the current head.
+        metadataSchema:
+          type: object
+          description: The draft's compiled JSON Schema contract.
+        bounds:
+          type: object
+          properties:
+            extensionNodesUsed:
+              type: integer
+            extensionNodesMax:
+              type: integer
+            objectLevelsMax:
+              type: integer
+            definitionBytesUsed:
+              type: integer
+            definitionBytesMax:
+              type: integer
+        generators:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              generator:
+                type: string
+              constraint:
+                type: string
+              source:
+                type: string
+                description: Where the platform sources the value (e.g., platform context, derived state).
+        example:
+          type: object
+          description: A synthetic composed metadata block produced from the generation context.
+
+    MetadataReadinessRequest:
+      type: object
+      required: [revision, environment]
+      additionalProperties: false
+      properties:
+        revision:
+          type: integer
+          minimum: 1
+        environment:
+          type: string
+
+    MetadataReadinessReport:
+      type: object
+      properties:
+        revision:
+          type: integer
+        environment:
+          type: string
+        definitionDigest:
+          type: string
+        compilerFormat:
+          type: integer
+        checks:
+          type: object
+          properties:
+            definitionRecompilesExactly:
+              type: boolean
+            generatedValuesSatisfyContract:
+              type: boolean
+            exampleMetadataBytes:
+              type: integer
+            sizeBudgetBytes:
+              type: integer
+
+    MetadataEnvironmentState:
+      type: object
+      properties:
+        environment:
+          type: string
+        activeRevision:
+          type: integer
+          description: 0 means the legacy baseline pointer — no platform metadata is active yet.
+        generation:
+          type: integer
+          description: Monotonic per-environment counter; every activation bumps it, invalidating generation-scoped caches.
+        definitionDigest:
+          type: string
+        activatedBy:
+          type: string
+        activatedAt:
+          type: string
+          format: date-time
+
+    MetadataEnvironmentList:
+      type: object
+      properties:
+        environments:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetadataEnvironmentState"
+
+    MetadataActivationAudit:
+      type: object
+      properties:
+        operation:
+          type: string
+          description: The mutation-record operation marker (environment-activated).
+        actor:
+          type: string
+        beforeRevision:
+          type: integer
+        afterRevision:
+          type: integer
+        operationId:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+
+    MetadataActivationList:
+      type: object
+      properties:
+        activations:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetadataActivationAudit"
+        nextToken:
+          type: string
+          description: Opaque continuation token, bound to the audit partition.
+
+    ActivateMetadataRequest:
+      type: object
+      required: [revision, environment, expectedActiveRevision, operationId]
+      additionalProperties: false
+      properties:
+        revision:
+          type: integer
+          minimum: 1
+          description: The candidate revision; activation moves forward only.
+        environment:
+          type: string
+          description: One of the platform's configured environments.
+        expectedActiveRevision:
+          type: integer
+          minimum: 0
+          description: The pointer's current active revision; the cutover fails 409 if it moved.
+        operationId:
+          type: string
+          minLength: 1
+          maxLength: 128
+      example:
+        revision: 5
+        environment: prod
+        expectedActiveRevision: 4
+        operationId: rollout-region-metadata-prod
+
+    ActivateMetadataResponse:
+      type: object
+      properties:
+        environment:
+          type: string
+        activeRevision:
+          type: integer
+        generation:
+          type: integer
+          description: Absent on a read-only no-op response.
+        activatedBy:
+          type: string
+        activatedAt:
+          type: string
+          format: date-time
+        definitionDigest:
+          type: string
+        alreadyActive:
+          type: boolean
+          description: True when the request reapplied the active revision and nothing was committed.
 
     ListSchemasResponse:
       type: object
