@@ -1,10 +1,10 @@
 ## 1. Compatibility checker (`konductor-common`)
 
-- [ ] 1.1 Add `schema_compatibility` module with `check_compatible(predecessor: &Value, candidate: &Value) -> Vec<Incompatibility>` (each carrying instance path + violated rule); verify `cargo build -p konductor-common` succeeds
-- [ ] 1.2 Test-first the `required`/`properties` rules: newly required property rejects, dropped `required` entry passes, removed declared property rejects, new optional property passes, nested `properties` recurse — verify the new unit tests pass with `rtk cargo test -p konductor-common schema_compatibility`
-- [ ] 1.3 Test-first the scalar-constraint rules: `type` set widening, `enum` superset, `minimum`/`maximum`/`exclusiveMinimum` under draft-4 boolean semantics, `minLength`/`maxLength`, `minItems`/`maxItems`, `multipleOf` containment — verify the unit tests pass
-- [ ] 1.4 Test-first the conservative rules: `pattern` identical-or-removed, `additionalProperties` true→false rejects / false→true passes, combinator (`allOf`/`anyOf`/`oneOf`/`not`) and `$ref` subtrees deep-equal or reject — verify the unit tests pass
-- [ ] 1.5 Verify `rtk cargo clippy -p konductor-common --all-targets` reports no issues and the checker module stays within the file-size conventions in AGENTS.md
+- [x] 1.1 Add `schema_compatibility` module with `check_compatible(predecessor: &Value, candidate: &Value) -> Vec<Incompatibility>` (each carrying instance path + violated rule); verify `cargo build -p konductor-common` succeeds
+- [x] 1.2 Test-first the `required`/`properties` rules: newly required property rejects, dropped `required` entry passes, removed declared property rejects, new optional property passes, nested `properties` recurse — verify the new unit tests pass with `rtk cargo test -p konductor-common schema_compatibility`
+- [x] 1.3 Test-first the scalar-constraint rules: `type` set widening, `enum` superset, `minimum`/`maximum`/`exclusiveMinimum` under draft-4 boolean semantics, `minLength`/`maxLength`, `minItems`/`maxItems`, `multipleOf` containment — verify the unit tests pass
+- [x] 1.4 Test-first the conservative rules: `pattern` identical-or-removed, `additionalProperties` true→false rejects / false→true passes, combinator (`allOf`/`anyOf`/`oneOf`/`not`) and `$ref` subtrees deep-equal or reject — verify the unit tests pass
+- [x] 1.5 Verify `rtk cargo clippy -p konductor-common --all-targets` reports no issues and the checker module stays within the file-size conventions in AGENTS.md
 
 ## 2. Gate wiring (`schema-admin`)
 

@@ -13,6 +13,7 @@ pub mod models;
 pub mod namespace;
 pub mod principal;
 pub mod principal_context;
+pub mod schema_compatibility;
 pub mod schema_validation;
 pub mod ses;
 pub mod streams;
