@@ -21,6 +21,7 @@ use konductor_common::models::{
 use konductor_common::namespace::NamespaceResolver;
 use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
 use konductor_common::principal_context::log_principal;
+use konductor_common::schema_compatibility::{check_compatible, Incompatibility};
 use konductor_common::schema_validation::check_draft4_document;
 
 use aws_sdk_schemas::error::ProvideErrorMetadata;
@@ -213,6 +214,35 @@ async fn append_schema_version<A: ResourceAuthorizer>(
         Err(e) => return Ok(api::from_control_plane_error(&e)),
     };
 
+    // The promotion gate: the append may only loosen the current latest
+    // version, never tighten it. The version-less describe doubles as the
+    // existence check; `UpdateSchema`'s NotFound mapping stays as defense.
+    let predecessor = match latest_schema_document(clients, &target).await {
+        Ok(content) => content,
+        Err(e) => return Ok(api::from_control_plane_error(&e)),
+    };
+    let candidate: Value = match serde_json::from_str(&request.content) {
+        Ok(document) => document,
+        Err(e) => {
+            return Ok(api::from_control_plane_error(&ControlPlaneError::Schemas(
+                format!("validated content failed to re-parse: {e}"),
+            )))
+        }
+    };
+    let incompatibilities = check_compatible(&predecessor, &candidate);
+    if !incompatibilities.is_empty() {
+        tracing::info!(
+            metric = "SchemaPromotionRejected",
+            schema = %target.schema_name,
+            environment = %target.environment,
+            count = incompatibilities.len(),
+            "schema version append rejected by the compatibility gate"
+        );
+        return Ok(api::from_control_plane_error(&api::validation_error(
+            incompatibility_message(&incompatibilities),
+        )));
+    }
+
     let result = clients
         .schemas
         .update_schema()
@@ -246,6 +276,75 @@ async fn append_schema_version<A: ResourceAuthorizer>(
             };
             Ok(api::from_control_plane_error(&mapped))
         }
+    }
+}
+
+/// How many incompatibilities make it into a `400` message before truncation.
+const MAX_REPORTED_INCOMPATIBILITIES: usize = 10;
+
+/// Fetches the current latest version's document from the stage-selected
+/// registry. The gate never caches: a stale predecessor read would weaken it,
+/// and appends are rare.
+async fn latest_schema_document(
+    clients: &Clients,
+    target: &SchemaTarget,
+) -> Result<Value, ControlPlaneError> {
+    let output = clients
+        .schemas
+        .describe_schema()
+        .registry_name(&target.registry)
+        .schema_name(target.schema_name.to_string())
+        .send()
+        .await
+        .map_err(|e| {
+            use aws_sdk_schemas::operation::describe_schema::DescribeSchemaError;
+            let service_err = e.into_service_error();
+            match &service_err {
+                DescribeSchemaError::NotFoundException(_) => ControlPlaneError::SchemaNotFound {
+                    schema_name: target.schema_name.to_string(),
+                },
+                other => {
+                    tracing::error!(error = %other, "describe latest schema failed");
+                    ControlPlaneError::Schemas(other.to_string())
+                }
+            }
+        })?;
+    let content = output.content().ok_or_else(|| {
+        ControlPlaneError::Schemas("describe schema carried no content".to_string())
+    })?;
+    serde_json::from_str(content).map_err(|e| {
+        ControlPlaneError::Schemas(format!("stored latest schema is not parseable JSON: {e}"))
+    })
+}
+
+/// Renders the rejection message: each offending path with the rule it
+/// violates, capped so a wholesale rewrite cannot produce an unbounded body.
+fn incompatibility_message(incompatibilities: &[Incompatibility]) -> String {
+    let mut message =
+        String::from("content is not backward compatible with the current latest version: ");
+    let mut shown = incompatibilities
+        .iter()
+        .take(MAX_REPORTED_INCOMPATIBILITIES);
+    if let Some(first) = shown.next() {
+        message.push_str(&format!("{}: {}", display_path(&first.path), first.rule));
+        for entry in shown {
+            message.push_str(&format!("; {}: {}", display_path(&entry.path), entry.rule));
+        }
+    }
+    if incompatibilities.len() > MAX_REPORTED_INCOMPATIBILITIES {
+        message.push_str(&format!(
+            "; … and {} more",
+            incompatibilities.len() - MAX_REPORTED_INCOMPATIBILITIES
+        ));
+    }
+    message
+}
+
+fn display_path(path: &str) -> String {
+    if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
     }
 }
 
@@ -554,15 +653,38 @@ mod tests {
     }
 
     fn update_schema_rule(registry: &'static str, version: &'static str) -> Rule {
+        update_schema_rule_for(registry, CONTENT, version)
+    }
+
+    fn update_schema_rule_for(
+        registry: &'static str,
+        content: &'static str,
+        version: &'static str,
+    ) -> Rule {
         mock!(aws_sdk_schemas::Client::update_schema)
             .match_requests(move |req| {
                 req.registry_name() == Some(registry)
                     && req.schema_name() == Some("acme-orders@OrderNotification")
-                    && req.content() == Some(CONTENT)
+                    && req.content() == Some(content)
             })
             .then_output(move || {
                 aws_sdk_schemas::operation::update_schema::UpdateSchemaOutput::builder()
                     .schema_version(version)
+                    .build()
+            })
+    }
+
+    fn describe_latest_rule(registry: &'static str, content: &'static str) -> Rule {
+        mock!(aws_sdk_schemas::Client::describe_schema)
+            .match_requests(move |req| {
+                req.registry_name() == Some(registry)
+                    && req.schema_name() == Some("acme-orders@OrderNotification")
+                    && req.schema_version().is_none()
+            })
+            .then_output(move || {
+                aws_sdk_schemas::operation::describe_schema::DescribeSchemaOutput::builder()
+                    .content(content)
+                    .schema_version("4")
                     .build()
             })
     }
@@ -758,9 +880,10 @@ mod tests {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
         let domain = active_domain_rule();
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", CONTENT);
         let update = update_schema_rule("acme-prod-orders-schema-registry", "5");
         let published = version_published_rule("prod", 5);
-        let clients = clients(&[&domain], &[&update], &[&published]);
+        let clients = clients(&[&domain], &[&describe, &update], &[&published]);
 
         let resp = handle(
             &clients,
@@ -783,6 +906,31 @@ mod tests {
     async fn append_version_for_missing_schema_returns_404() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let not_found = mock!(aws_sdk_schemas::Client::describe_schema).then_error(|| {
+            aws_sdk_schemas::operation::describe_schema::DescribeSchemaError::NotFoundException(
+                aws_sdk_schemas::types::error::NotFoundException::builder()
+                    .message("not found")
+                    .build(),
+            )
+        });
+        let clients = clients(&[&active_domain_rule()], &[&not_found], &[]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", append_body())),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 404);
+    }
+
+    #[tokio::test]
+    async fn append_version_update_not_found_still_maps_to_404() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", CONTENT);
         let not_found = mock!(aws_sdk_schemas::Client::update_schema).then_error(|| {
             aws_sdk_schemas::operation::update_schema::UpdateSchemaError::NotFoundException(
                 aws_sdk_schemas::types::error::NotFoundException::builder()
@@ -790,7 +938,7 @@ mod tests {
                     .build(),
             )
         });
-        let clients = clients(&[&active_domain_rule()], &[&not_found], &[]);
+        let clients = clients(&[&active_domain_rule()], &[&describe, &not_found], &[]);
 
         let resp = handle(
             &clients,
@@ -879,9 +1027,10 @@ mod tests {
         std::env::set_var("ORGANIZATION", "acme");
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
         let domain = active_domain_rule();
+        let describe = describe_latest_rule("acme-staging-orders-schema-registry", CONTENT);
         let update = update_schema_rule("acme-staging-orders-schema-registry", "2");
         let published = version_published_rule("staging", 2);
-        let clients = clients(&[&domain], &[&update], &[&published]);
+        let clients = clients(&[&domain], &[&describe, &update], &[&published]);
         let mut payload = oauth_event("/schemas/versions", append_body());
         payload["requestContext"]["stage"] = json!("staging");
 
@@ -989,6 +1138,7 @@ mod tests {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
         let domain = active_domain_rule();
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", CONTENT);
         let update = update_schema_rule("acme-prod-orders-schema-registry", "6");
         let bus_down = mock!(aws_sdk_eventbridge::Client::put_events).then_error(|| {
             aws_sdk_eventbridge::operation::put_events::PutEventsError::InternalException(
@@ -997,7 +1147,7 @@ mod tests {
                     .build(),
             )
         });
-        let clients = clients(&[&domain], &[&update], &[&bus_down]);
+        let clients = clients(&[&domain], &[&describe, &update], &[&bus_down]);
 
         let resp = handle(
             &clients,
@@ -1011,5 +1161,181 @@ mod tests {
         // reports success even though the promotion signal could not be sent.
         assert_eq!(status(&resp), 201);
         assert_eq!(body(&resp)["schemaVersion"], 6);
+    }
+
+    const LATEST_V4: &str = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}}}";
+
+    fn append_body_with(content: &str) -> Value {
+        json!({
+            "domain": "orders",
+            "eventName": "OrderNotification",
+            "content": content
+        })
+    }
+
+    #[tokio::test]
+    async fn append_version_newly_requiring_a_property_returns_400_naming_the_path() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+        let tightening = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}},\"required\":[\"sku\"]}";
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event(
+                "/schemas/versions",
+                append_body_with(tightening),
+            )),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let message = body(&resp)["message"].as_str().unwrap().to_string();
+        assert!(
+            message.contains("/sku"),
+            "400 must name the offending path: {message}"
+        );
+        assert!(
+            message.contains("newly required"),
+            "400 must name the violated rule: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_removing_a_declared_property_returns_400() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let with_legacy = "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"},\"legacy\":{\"type\":\"string\"}}}";
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", with_legacy);
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event(
+                "/schemas/versions",
+                append_body_with(LATEST_V4),
+            )),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        assert!(body(&resp)["message"].as_str().unwrap().contains("/legacy"));
+    }
+
+    #[tokio::test]
+    async fn append_version_adding_an_optional_property_appends() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let additive = "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"},\"quantity\":{\"type\":\"integer\"}}}";
+        let update = update_schema_rule_for("acme-prod-orders-schema-registry", additive, "5");
+        let published = version_published_rule("prod", 5);
+        let clients = clients(
+            &[&active_domain_rule()],
+            &[&describe, &update],
+            &[&published],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", append_body_with(additive))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 201);
+        assert_eq!(body(&resp)["schemaVersion"], 5);
+    }
+
+    #[tokio::test]
+    async fn append_version_is_judged_against_the_latest_version_only() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let update = update_schema_rule_for("acme-prod-orders-schema-registry", LATEST_V4, "5");
+        let published = version_published_rule("prod", 5);
+        let clients = clients(
+            &[&active_domain_rule()],
+            &[&describe, &update],
+            &[&published],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event(
+                "/schemas/versions",
+                append_body_with(LATEST_V4),
+            )),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 201);
+        assert_eq!(
+            describe.num_calls(),
+            1,
+            "exactly one version-less describe fetches the latest"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_rejection_emits_the_promotion_rejected_metric() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
+            type Writer = Capture;
+            fn make_writer(&'a self) -> Capture {
+                self.clone()
+            }
+        }
+
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+        let tightening = "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}},\"required\":[\"sku\"]}";
+
+        let capture = Capture::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event(
+                "/schemas/versions",
+                append_body_with(tightening),
+            )),
+        )
+        .await;
+        drop(_guard);
+
+        assert_eq!(status(&resp.unwrap()), 400);
+        let logs = String::from_utf8(capture.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.contains("SchemaPromotionRejected"),
+            "rejection must carry the metric field: {logs}"
+        );
     }
 }

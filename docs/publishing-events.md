@@ -78,6 +78,13 @@ awscurl -X POST "${API_URL}/schemas/versions" --region ${AWS_REGION} \
 
 This returns `201` with the next version number (`404` if the schema does not exist in that environment). Schemas are **append-only**: there is no delete, retire, replace, or version deletion — earlier versions remain immutable so existing consumers keep a valid contract.
 
+Appends are also **backward compatible only**. The new document is checked against the current latest version, and anything that would reject a payload the latest version accepts fails with `400 Bad Request` naming the offending paths. In practice:
+
+- **Allowed:** adding optional properties, dropping entries from `required`, widening a `type` (for example `"integer"` to `["integer", "string"]`), growing an `enum`, loosening or removing constraints (`minimum`, `maxLength`, `pattern`, and so on).
+- **Rejected:** removing a declared property, newly requiring a property, narrowing a `type` or `enum`, raising `minimum`, lowering `maximum`, flipping `additionalProperties` from `true` to `false`, and any combinator or `$ref` edit the checker cannot prove safe.
+
+Compatibility is judged against the current latest version only, never historical ones, and the gate is absolute — no flag or role bypasses it. If you need a genuinely breaking change (renaming a field, tightening a constraint), register it as a **new schema under a new event name** and migrate consumers explicitly; that keeps every version of an event safe for existing consumers forever.
+
 ## Step 3: Publish an event
 
 ```bash
@@ -135,7 +142,7 @@ Konductor validates your `data` against the schema's latest version **before** a
 
 | Response | Cause | Action |
 |----------|-------|--------|
-| `400` | Body failed structural validation (missing field, unknown field, invalid event name); on schema writes, also `content` that is not a valid draft-4 document | Fix the request body / schema document |
+| `400` | Body failed structural validation (missing field, unknown field, invalid event name); on schema writes, also `content` that is not a valid draft-4 document; on version appends, also content that tightens the current latest version — offending paths are listed in `message` | Fix the request body / schema document; for a rejected append, loosen the document or register a new event name instead |
 | `403` | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
 | `404` | Domain missing/inactive, or no schema registered for this event in this environment | Check domain status; create the schema first |
 | `409` (create schema) | Schema already exists in this environment | Append a version instead |
