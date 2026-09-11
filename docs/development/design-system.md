@@ -68,7 +68,7 @@ All primitives live in `web/app/components/` and are auto-imported (`<NxButton /
 - **Notification**: polite announcements do not move focus. Press **F8** to reach the viewport, then Tab to navigate notifications and dismiss controls. Each message expires after six seconds of unpaused display time. Hover, keyboard focus, and window inactivity pause expiry; it resumes only when all conditions clear. `composables/useToastLifetime.ts` owns the single timer per rendered item, with Reka expiry disabled. This avoids Reka 2.10.4's focus-out/hover overlap bug. Removal cleans up the timer.
 - **Form control**: labels and displayed hints/errors have stable ID associations. Inputs/selects expose `aria-invalid`; errors take precedence over hints. Selects remain native, including empty-valued “All…” filters and required placeholders.
 
-The gallery demonstrates error/disabled/loading states, awaiting-promotion status, long dialogs, a removed opener, simulated confirmation failure/retry, and multiple notifications. Demo components live in `components/gallery/` and never perform service writes. See [testing.md](./testing.md#web-component-behavior) for browser checks and manual accessibility review.
+The gallery demonstrates error/disabled/loading states, awaiting-promotion status, long dialogs, a removed opener, simulated confirmation failure/retry, and multiple notifications. Demo components live in `components/gallery/` and never perform service writes. See [testing.md](./testing.md#browser-ui-tests-playwright) for browser checks and manual accessibility review.
 
 ## Page patterns
 

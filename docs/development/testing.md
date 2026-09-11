@@ -100,7 +100,7 @@ pnpm build
 
 No Cognito account, real data, or authentication bypass is needed. Tests must never submit operations against a live service.
 
-Write UI tests with role/label locators (`getByRole`, `getByLabel`) and scope by card heading — visible text repeats across panels. Prefer the strict-mode failure over brittle CSS selectors.
+Write UI tests with role/label locators (`getByRole`, `getByLabel`) and scope by card heading — visible text repeats across panels. Prefer the strict-mode failure over brittle CSS selectors. Toast text appears twice in the DOM — Reka's aria-hidden announce copy plus the visible toast — so always assert toast messages with `{ exact: true }`.
 
 For manual review, `make web-dev` keeps its AWS-backed configuration and API proxy, then opens `/design-system` in the default browser when Nuxt starts. It uses Nuxt's actual port (normally 3000). Plain `pnpm dev` does not automatically open a browser. Gallery demos make no service writes, but other pages connect to the live backend.
 
