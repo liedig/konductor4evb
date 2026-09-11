@@ -8,9 +8,9 @@
 
 ## 2. Gate wiring (`schema-admin`)
 
-- [ ] 2.1 In `append_schema_version`, after `check_draft4_document` and `prepare`, fetch the current latest version with a version-less `DescribeSchema` on the target registry, mapping `NotFoundException` to the established 404 (keeping the `UpdateSchema` NotFound mapping as defense); verify existing append tests still pass with `rtk cargo test -p schema-admin`
-- [ ] 2.2 Run `check_compatible` against the fetched document and reject tightenings with `400 Bad Request` listing offending paths (capped like `MAX_REPORTED_VIOLATIONS`); verify with handler tests: tightening-required → 400 naming the path, removed property → 400, additive append → 201, compatibility judged against latest only
-- [ ] 2.3 Add the `SchemaPromotionRejected` metric to the rejection log line; verify the field appears in the handler test's tracing assertions (or a targeted log capture)
+- [x] 2.1 In `append_schema_version`, after `check_draft4_document` and `prepare`, fetch the current latest version with a version-less `DescribeSchema` on the target registry, mapping `NotFoundException` to the established 404 (keeping the `UpdateSchema` NotFound mapping as defense); verify existing append tests still pass with `rtk cargo test -p schema-admin`
+- [x] 2.2 Run `check_compatible` against the fetched document and reject tightenings with `400 Bad Request` listing offending paths (capped like `MAX_REPORTED_VIOLATIONS`); verify with handler tests: tightening-required → 400 naming the path, removed property → 400, additive append → 201, compatibility judged against latest only
+- [x] 2.3 Add the `SchemaPromotionRejected` metric to the rejection log line; verify the field appears in the handler test's tracing assertions (or a targeted log capture)
 
 ## 3. Infrastructure
 
