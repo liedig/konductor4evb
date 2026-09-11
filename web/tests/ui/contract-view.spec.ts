@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 
-import { installApi, signIn } from './api'
+import { freshState, installApi, signIn } from './api'
 
 /**
  * Schema contract inspection (amended web-ui delta): per-environment badges
@@ -68,6 +68,22 @@ test('the console exposes no historical pair selectors', async ({ page }) => {
   await expect(page.getByLabel('Business version')).toHaveCount(0)
   await expect(page.getByLabel('Metadata revision')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Load contract' })).toHaveCount(0)
+})
+
+test('a failed contract read degrades: registered content stays, preview reports the error', async ({ page }) => {
+  // API stage predating the contract route (or a metadata 503): the page
+  // must not blank the business document it can still show.
+  const state = freshState()
+  state.failContract = true
+  await installApi(page, state)
+  await page.goto('/catalog/orders/acme-orders%40OrderNotification')
+
+  const content = card(page, 'Schema content')
+  await expect(content.getByText(/the highest version across environments/)).toBeVisible()
+  await expect(content.getByText('"orderId"').first()).toBeVisible()
+
+  const preview = card(page, 'Schema preview')
+  await expect(preview.getByRole('alert')).toContainText('Request failed with status 403')
 })
 
 test('authoring preview composes unsaved business content without envelope fields', async ({ page }) => {

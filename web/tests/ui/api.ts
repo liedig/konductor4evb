@@ -23,6 +23,9 @@ export interface MockState {
   conflictNextSave: boolean
   activationDelayMs: number
   failEnvironments: boolean
+  /** Simulates an API stage that predates the contract route: API Gateway
+   * answers 403 with a non-ErrorResponse body before the Lambda runs. */
+  failContract: boolean
   environments: MockEnvironment[]
   audits: Record<string, unknown>[]
   activationMode: 'ok' | 'stale' | 'backward'
@@ -91,6 +94,7 @@ export function freshState(): MockState {
     conflictNextSave: false,
     activationDelayMs: 0,
     failEnvironments: false,
+    failContract: false,
     environments: [
       { environment: 'dev', activeRevision: 2, generation: 3, activatedBy: 'platform-admin@example.com', activatedAt: '2026-09-20T10:05:00.000Z', legacy: false },
       { environment: 'prod', activeRevision: 0, generation: 0, activatedBy: '', activatedAt: '', legacy: true },
@@ -280,6 +284,9 @@ function contractRoute(
   query: URLSearchParams,
   state: MockState,
 ) {
+  if (state.failContract) {
+    return fulfillJson(route, 403, { message: 'Missing Authentication Token' })
+  }
   const schemaName = path.slice('/schemas/'.length, -'/contract'.length)
   const schema = SCHEMAS.find(item => item.schemaName === schemaName)
   const environmentName = query.get('environment')

@@ -154,6 +154,11 @@ function pretty(value?: string): string {
 
 const prettyBusiness = computed(() => pretty(contract.value?.businessContent))
 const prettyComposed = computed(() => pretty(contract.value?.composedDocument))
+// Degradation path: when the contract read fails (for example a metadata
+// 503, or an API stage predating the contract route), the raw business
+// document from describe-schema still renders — labelled as the latest
+// registered version, since describe content is not environment-scoped.
+const prettyRegisteredContent = computed(() => pretty(schema.value?.content))
 
 // Entry points pass ?from=<internal path> so the back link returns to the
 // referring page; default is the consumer catalog. Internal paths only:
@@ -232,32 +237,43 @@ watch(consumerDomain, load)
         </div>
       </NxCard>
 
-      <p v-if="contractError" role="alert" class="text-sm text-danger">{{ contractError }}</p>
-
-      <div v-else-if="availableEnvironments.length === 0" class="text-sm text-muted">
+      <div v-if="availableEnvironments.length === 0" class="text-sm text-muted">
         This schema has no registered versions in any environment yet.
       </div>
 
       <div v-else class="grid gap-6 xl:grid-cols-2">
         <NxCard title="Schema content">
-          <p class="mb-3 text-xs text-faint">
-            The business schema published by {{ producerDomain }} at
-            {{ selectedEnvironment }} v{{ contract?.schemaVersion }}.
-          </p>
-          <p v-if="contractPending" class="text-sm text-muted">Loading…</p>
-          <pre v-else-if="contract" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyBusiness }}</pre>
+          <template v-if="contractError">
+            <p class="mb-3 text-xs text-faint">
+              The latest registered business schema — the per-environment contract could not
+              be loaded, so this is the highest version across environments.
+            </p>
+            <pre v-if="prettyRegisteredContent" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyRegisteredContent }}</pre>
+            <p v-else class="text-sm text-muted">No registered content.</p>
+          </template>
+          <template v-else>
+            <p class="mb-3 text-xs text-faint">
+              The business schema published by {{ producerDomain }} at
+              {{ selectedEnvironment }} v{{ contract?.schemaVersion }}.
+            </p>
+            <p v-if="contractPending" class="text-sm text-muted">Loading…</p>
+            <pre v-else-if="contract" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyBusiness }}</pre>
+          </template>
         </NxCard>
 
         <NxCard title="Schema preview">
-          <p class="mb-3 text-xs text-faint">
-            The contract events in {{ selectedEnvironment }} validate against right now —
-            business v{{ contract?.schemaVersion }}, metadata M{{ contract?.metadataRevision }}<template v-if="contract?.definitionDigest">, digest {{ contract.definitionDigest.slice(0, 12) }}</template>.
-            The metadata block is platform-owned and read-only<template v-if="contract?.generators?.length">; generated fields:
-              <span class="font-mono">{{ contract.generators.map(generator => generator.name).join(', ') }}</span>
-            </template>.
-          </p>
-          <p v-if="contractPending" class="text-sm text-muted">Loading…</p>
-          <pre v-else-if="contract" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyComposed }}</pre>
+          <p v-if="contractError" role="alert" class="text-sm text-danger">{{ contractError }}</p>
+          <template v-else>
+            <p class="mb-3 text-xs text-faint">
+              The contract events in {{ selectedEnvironment }} validate against right now —
+              business v{{ contract?.schemaVersion }}, metadata M{{ contract?.metadataRevision }}<template v-if="contract?.definitionDigest">, digest {{ contract.definitionDigest.slice(0, 12) }}</template>.
+              The metadata block is platform-owned and read-only<template v-if="contract?.generators?.length">; generated fields:
+                <span class="font-mono">{{ contract.generators.map(generator => generator.name).join(', ') }}</span>
+              </template>.
+            </p>
+            <p v-if="contractPending" class="text-sm text-muted">Loading…</p>
+            <pre v-else-if="contract" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyComposed }}</pre>
+          </template>
         </NxCard>
       </div>
 
