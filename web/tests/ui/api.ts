@@ -64,6 +64,14 @@ export const SCHEMAS: MockSchemaSummary[] = [
   { schemaName: 'acme-loyalty@MemberUpdated', producerDomain: 'loyalty', source: 'acme-loyalty', detailType: 'MemberUpdated', latestVersions: { prod: 1 }, metadataRevisions: {} },
 ]
 
+/** Plain GET /domains returns the platform-wide set (mirrors the deployed
+ * scoping: platform roles get the full listing). The My domains page must
+ * not render this as an ownership list for platform roles. */
+export const DOMAINS = [
+  { domainName: 'orders', status: 'ACTIVE', description: 'Order lifecycle events', ownerEmail: 'owner@example.com', ownerAccountId: '111122223333', createdAt: '2026-08-01T09:00:00.000Z' },
+  { domainName: 'billing', status: 'ACTIVE', description: 'Invoicing and payments', ownerEmail: 'billing@example.com', ownerAccountId: '444455556666', createdAt: '2026-08-12T09:00:00.000Z' },
+]
+
 const BUSINESS_CONTENT = {
   $schema: 'http://json-schema.org/draft-04/schema#',
   type: 'object',
@@ -147,6 +155,14 @@ export async function installApi(page: Page, state: MockState = freshState()): P
       if (path === '/metadata/activations') {
         const page_ = query.get('nextToken') ? state.audits.slice(2) : state.audits.slice(0, 2)
         return fulfillJson(route, 200, { activations: page_ })
+      }
+      if (path === '/domains') {
+        // The directory projection stays empty: DomainAccessPanel tests predate
+        // this fixture and assert against an empty picker.
+        if (query.get('view') === 'directory') {
+          return fulfillJson(route, 200, {})
+        }
+        return fulfillJson(route, 200, { domains: DOMAINS })
       }
       if (path === '/schemas') {
         if (query.get('nextToken')) {

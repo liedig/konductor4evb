@@ -18,12 +18,18 @@ test('platform header groups All domains under Domains and Metadata under Settin
   await expect(nav.getByRole('link', { name: 'All domains' })).toHaveCount(0)
   await expect(nav.getByRole('link', { name: 'Metadata' })).toHaveCount(0)
 
+  // The API hands platform roles the full listing, but My domains is an
+  // ownership view: it explains instead of rendering those rows as "mine".
+  await expect(page.getByRole('heading', { name: 'No owned domains' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'orders', exact: true })).toHaveCount(0)
+
   // Section tabs appear inside the Domains section and switch views.
   const tabs = page.getByRole('navigation', { name: 'Domains sections' })
   await expect(tabs.getByRole('link', { name: 'My domains' })).toBeVisible()
   await tabs.getByRole('link', { name: 'All domains' }).click()
   await expect(page).toHaveURL(/\/admin\/domains/)
   await expect(page.getByRole('heading', { name: 'All domains' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'orders', exact: true })).toBeVisible()
   await expect(nav.getByRole('link', { name: 'Domains' })).toHaveClass(/bg-surface-raised/)
 
   // The Settings gear opens the menu; Metadata navigates and closes it.
@@ -69,4 +75,7 @@ test('team users see neither the gear nor the section tabs', async ({ page }) =>
   await expect(page.getByRole('button', { name: 'Settings' })).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: 'Domains sections' })).toHaveCount(0)
   await expect(page.getByText('owner', { exact: true }).first()).toBeVisible()
+
+  // Team users keep their ownership list on the same screen.
+  await expect(page.getByRole('link', { name: 'orders', exact: true })).toBeVisible()
 })
