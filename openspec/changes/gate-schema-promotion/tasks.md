@@ -24,5 +24,5 @@
 
 ## 5. End-to-end validation
 
-- [ ] 5.1 Run `rtk cargo test -p schema-admin -p konductor-common` and `rtk cargo clippy --workspace -- -D warnings`; verify all green
-- [ ] 5.2 Run `openspec validate gate-schema-promotion --strict` (with the repo's openspec invocation); verify the change validates
+- [x] 5.1 Run `rtk cargo test -p schema-admin -p konductor-common` and `rtk cargo clippy --workspace -- -D warnings`; verify all green — 343 tests pass; workspace clippy reports exactly the warnings already on `main` (4 redundant closures + 1 too-many-lines in the `api_surfaces` test target, 1 unused import in binding-admin tests), zero hits attributable to this change
+- [x] 5.2 Run `openspec validate gate-schema-promotion --strict` (with the repo's openspec invocation); verify the change validates — `Change 'gate-schema-promotion' is valid`
