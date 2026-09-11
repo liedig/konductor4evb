@@ -34,7 +34,7 @@ pub const PREVIEW_RESOURCE: &str = "/schemas/contract-preview";
 /// composed document's version stamp; without it the preview uses the
 /// environment's current latest version (or 1 for a first draft).
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PreviewRequest {
     domain: String,
     schema_name: String,

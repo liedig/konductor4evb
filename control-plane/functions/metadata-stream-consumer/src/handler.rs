@@ -53,7 +53,7 @@ impl ConsumerConfig {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
             table: std::env::var("METADATA_TABLE").context("METADATA_TABLE not set")?,
-            bus: std::env::var("KONDUCTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?,
+            bus: std::env::var("KONDUKTOR_EVENT_BUS").context("KONDUKTOR_EVENT_BUS not set")?,
         })
     }
 }

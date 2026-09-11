@@ -58,10 +58,20 @@ async function load() {
 // catalog entry adds the independent metadata revision per environment.
 // A consumer without catalog scope keeps the business-only badges.
 async function loadMetadataRevisions() {
+  // /schemas is paginated: keep paging until the schema is found or the
+  // listing is exhausted, otherwise large producers silently lose the badges.
   try {
-    const response = await catalog.listSchemas({ producerDomain })
-    const entry = (response.items ?? []).find(item => item.schemaName === schemaName)
-    metadataRevisions.value = entry?.metadataRevisions ?? {}
+    let nextToken: string | undefined
+    do {
+      const listed = await catalog.listSchemas({ producerDomain, nextToken })
+      const entry = (listed.items ?? []).find(item => item.schemaName === schemaName)
+      if (entry) {
+        metadataRevisions.value = entry.metadataRevisions ?? {}
+        return
+      }
+      nextToken = listed.nextToken
+    } while (nextToken)
+    metadataRevisions.value = {}
   } catch {
     metadataRevisions.value = {}
   }

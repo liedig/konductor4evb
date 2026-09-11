@@ -60,7 +60,7 @@ export interface MockSchemaSummary {
 export const SCHEMAS: MockSchemaSummary[] = [
   { schemaName: 'acme-orders@OrderNotification', producerDomain: 'orders', source: 'acme-orders', detailType: 'OrderNotification', latestVersions: { prod: 3, dev: 2 }, metadataRevisions: { dev: 2 } },
   { schemaName: 'acme-billing@InvoiceIssued', producerDomain: 'billing', source: 'acme-billing', detailType: 'InvoiceIssued', latestVersions: { prod: 5 }, metadataRevisions: {} },
-  { schemaName: 'acme-shipping@ParcelScanned', producerDomain: 'shipping', source: 'acme-shipping', detailType: 'ParcelScanned', latestVersions: { prod: 2 }, metadataRevisions: {} },
+  { schemaName: 'acme-shipping@ParcelScanned', producerDomain: 'shipping', source: 'acme-shipping', detailType: 'ParcelScanned', latestVersions: { prod: 2 }, metadataRevisions: { prod: 4 } },
   { schemaName: 'acme-loyalty@MemberUpdated', producerDomain: 'loyalty', source: 'acme-loyalty', detailType: 'MemberUpdated', latestVersions: { prod: 1 }, metadataRevisions: {} },
 ]
 

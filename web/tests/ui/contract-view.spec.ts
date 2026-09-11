@@ -59,6 +59,18 @@ test('both panels load from the selected environment and follow selection change
   await expect(preview.getByText(/digest/)).toHaveCount(0)
 })
 
+test('metadata revisions follow catalog pagination when the schema is not on the first page', async ({ page }) => {
+  // /schemas is paginated; the mock puts ParcelScanned on page 2. The detail
+  // page must keep paging until it finds the entry, otherwise the badge is
+  // silently dropped for large producers.
+  await installApi(page)
+  await page.goto('/catalog/shipping/acme-shipping%40ParcelScanned')
+
+  const prod = card(page, 'Environment').getByRole('button', { name: /prod/ })
+  await expect(prod).toBeVisible()
+  await expect(prod.getByText('M4', { exact: true })).toBeVisible()
+})
+
 test('the console exposes no historical pair selectors', async ({ page }) => {
   await installApi(page)
   await page.goto('/catalog/orders/acme-orders%40OrderNotification')
