@@ -15,12 +15,18 @@ const { restoreFocus, focusContent } = useDialogFocus(() => props.open)
   <DialogRoot :open="open" @update:open="value => { if (!value) emit('close') }">
     <DialogPortal>
       <DialogOverlay class="nx-overlay" @click.self="emit('close')" />
+      <!-- Reka's outside-interaction dismissal is suppressed so backdrop clicks
+           close only via the overlay handler above: relying on Reka alone is
+           flaky across rapid close/reopen cycles (its document listener
+           registers on a deferred timer), and keeping both paths would emit
+           close twice per click. -->
       <DialogContent
         class="nx-dialog"
         aria-modal="true"
         :aria-describedby="undefined"
         @open-auto-focus="focusContent"
         @close-auto-focus="restoreFocus"
+        @pointer-down-outside.prevent
       >
         <header class="mb-4 flex items-start justify-between gap-4">
           <DialogTitle class="text-lg font-semibold">{{ title }}</DialogTitle>

@@ -23,6 +23,9 @@ test('modal contains focus, isolates background and restores the opener', async 
   await page.getByRole('button', { name: 'Close', exact: true }).click()
   await expect(opener).toBeFocused()
   await opener.click()
+  // Wait for the dialog to be fully mounted before the click-away so the
+  // overlay's dismissal handler is in place.
+  await expect(dialog).toBeVisible()
   await page.mouse.click(5, 5)
   await expect(dialog).not.toBeVisible()
   await expect(opener).toBeFocused()

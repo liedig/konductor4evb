@@ -83,7 +83,7 @@ The console is a statically generated Nuxt/Vue SPA served through S3 and CloudFr
 
 Pages own modal open state and asynchronous work. `NxModal` and `NxConfirm` adapt controlled state and focus restoration, with confirmations preventing user dismissal while busy. `useToast` owns the app-wide queue; one `NxToasts` provider/viewport renders it. Each rendered item owns one local lifetime timer, paused by the union of hover, focus, and window inactivity. Reka automatic expiry is disabled to avoid overlapping-pause behavior in version 2.10.4.
 
-The `/design-system` gallery is the shared review surface. Focused Playwright tests exercise the kit without authenticated service calls. See [design-system.md](./design-system.md) and [testing.md](./testing.md#web-component-behavior).
+The `/design-system` gallery is the shared review surface. Focused Playwright tests exercise the kit without authenticated service calls. See [design-system.md](./design-system.md) and [testing.md](./testing.md#browser-ui-tests-playwright).
 
 ### Key Design Decisions
 

@@ -9,7 +9,6 @@
     "lint": "eslint .",
     "test:ui": "playwright test",
     "typecheck": "nuxi typecheck",
-    "test:ui": "playwright test",
     "postinstall": "nuxi prepare"
   },
   "dependencies": {
