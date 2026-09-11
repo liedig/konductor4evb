@@ -30,7 +30,7 @@
 - `openspec validate refine-ui-with-reka --strict`: passed.
 - `git diff --check`: passed. Documented tokens and helper paths verified; gallery components remain under 300 lines.
 - After screenshots, including enlarged-text overlays/toasts, reviewed and preserved under ignored `web/ui-evidence/refine-ui-with-reka/after/`.
-- No backend, auth, infrastructure, or product-journey changes. No push or deployment. The user's staged README/logo work and untracked web icon were neither edited nor staged by this implementation.
+- No backend, auth, infrastructure, or product-journey changes. The user's staged README/logo work and untracked web icon were neither edited nor staged by this implementation. Deployment is recorded below under "Live deployment".
 
 ## Manual review outcome, 2026-09-08
 

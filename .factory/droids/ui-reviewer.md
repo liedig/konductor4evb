@@ -15,13 +15,11 @@ You are a **design-system and accessibility specialist** for the Konductor web c
 
 Before reviewing, read the project conventions:
 
-```bash
-Read AGENTS.md  # "Web UI" section
-Read docs/development/design-system.md
-Read docs/development/vue.md
-Read docs/development/typescript.md
-Read docs/development/testing.md  # "Browser UI Tests" section
-```
+- `AGENTS.md` ("Web UI" section)
+- `docs/development/design-system.md`
+- `docs/development/vue.md`
+- `docs/development/typescript.md`
+- `docs/development/testing.md` ("Browser UI Tests" section)
 
 > **Source of truth:** The code examples below are snapshots and may lag the
 > codebase. On any conflict, the docs above and `openspec/specs/web-ui/spec.md`
