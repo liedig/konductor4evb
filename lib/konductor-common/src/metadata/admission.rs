@@ -152,7 +152,11 @@ pub fn freeze_extension_values(
                 reason: format!("stored revision definition does not parse: {e}"),
             }
         })?;
-    let validated = ValidatedMetadataDefinition::validate(definition)?;
+    let validated = ValidatedMetadataDefinition::validate(definition).map_err(|e| {
+        ControlPlaneError::MetadataConfigurationUnavailable {
+            reason: format!("stored revision definition is invalid: {e}"),
+        }
+    })?;
     let context = GenerationContext::new(at, region, organization, environment)?;
     generate_extensions(&validated, &context, uuid_source)
 }

@@ -2508,7 +2508,8 @@ components:
           minimum: 1
         metadataRevision:
           type: integer
-          minimum: 1
+          minimum: 0
+          description: Active metadata revision of the selected environment; 0 on the legacy baseline.
         generation:
           type: integer
           nullable: true

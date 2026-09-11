@@ -148,16 +148,21 @@ Rule of thumb: total delivered events/sec across **all** domains and environment
 
 Platform metadata composition adds one strongly consistent DynamoDB point
 read to **every admission**: the environment pointer item in
-`konductor-metadata-configuration` (`PK=ENV`, `SK=<environment>`). All of an
-environment's admissions read the same tiny item, so the pointer is a hot
-key whose ceiling is the partition's documented sustained read throughput:
+`konductor-metadata-configuration` (`PK=ENV`, `SK=<environment>`). Because
+the partition key is the constant `ENV`, **all** environment pointers live
+on the same DynamoDB partition, so the partition's documented sustained read
+throughput is a single ceiling shared by every environment's admissions:
 
 | Quantity | Value | Basis |
 |---|---|---|
 | RCU per admission | 1 | Strongly consistent read of an item ≤ 4 KB |
-| Read ceiling per environment | **3,000 admissions/s** | Documented 3,000 RCU/s per partition; the pointer item lives on one partition |
-| Modelled sustained rate (assumption) | 50 events/s per environment | 60× headroom under the ceiling |
-| Modelled peak rate (assumption) | 500 events/s per environment | 6× headroom under the ceiling |
+| Read ceiling, shared across environments | **3,000 admissions/s** | Documented 3,000 RCU/s per partition; every pointer item sits on the one `ENV` partition |
+| Modelled sustained rate (assumption) | 50 events/s per environment (150/s at three environments) | 20× headroom under the shared ceiling |
+| Modelled peak rate (assumption) | 500 events/s per environment (1,500/s at three environments) | 2× headroom under the shared ceiling |
+
+A genuinely per-environment ceiling would require a per-environment
+partition key (or pointer sharding) — a schema change to the table, not a
+configuration knob; revisit if aggregate admissions approach the ceiling.
 
 Reads above the ceiling throttle, and admission **fails closed** (503) — by
 design, never substituted by a TTL pointer cache. The sustained/peak rows are

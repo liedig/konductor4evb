@@ -19,7 +19,9 @@ async fn main() -> Result<(), Error> {
     let clients = handler::Clients {
         ddb: aws_sdk_dynamodb::Client::new(&config),
     };
-    let http = reqwest::Client::new();
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?;
     let clients_ref = &clients;
     let http_ref = &http;
 
@@ -58,10 +60,49 @@ async fn respond(http: &reqwest::Client, event: &Value, status: &str) -> Result<
         .get("ResponseURL")
         .and_then(Value::as_str)
         .ok_or("custom resource event is missing ResponseURL")?;
-    http.put(url)
+    http.put(checked_response_url(url)?)
         .json(&response)
         .send()
         .await?
         .error_for_status()?;
     Ok(())
+}
+
+/// Custom-resource response URLs are presigned S3 URLs on AWS hosts; a
+/// forged invoke could otherwise aim the PUT (and its redirects) anywhere.
+fn checked_response_url(raw: &str) -> Result<&str, Error> {
+    let parsed = reqwest::Url::parse(raw).map_err(|e| format!("invalid ResponseURL: {e}"))?;
+    let host = parsed.host_str().unwrap_or("");
+    if parsed.scheme() != "https" || !host.ends_with(".amazonaws.com") {
+        return Err(format!("ResponseURL host '{host}' is not an AWS endpoint").into());
+    }
+    Ok(raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checked_response_url;
+
+    #[test]
+    fn accepts_cloudformation_response_url() {
+        let url = "https://cloudformation-customresource-response-apsoutheast2.s3.ap-southeast-2.amazonaws.com/arn:aws:cloudformation:ap-southeast-2:123456789012:stack/konductor-core/guid?X-Amz-Signature=abc";
+        assert_eq!(checked_response_url(url).unwrap(), url);
+    }
+
+    #[test]
+    fn rejects_non_https() {
+        assert!(checked_response_url("http://s3.ap-southeast-2.amazonaws.com/x").is_err());
+    }
+
+    #[test]
+    fn rejects_non_aws_host() {
+        assert!(checked_response_url("https://169.254.169.254/latest/meta-data").is_err());
+        assert!(checked_response_url("https://example.com/x").is_err());
+    }
+
+    #[test]
+    fn rejects_aws_lookalike_host() {
+        assert!(checked_response_url("https://amazonaws.com.evil.com/x").is_err());
+        assert!(checked_response_url("https://notamazonaws.com/x").is_err());
+    }
 }

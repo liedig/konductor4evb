@@ -31,6 +31,7 @@ const failureReason = ref('')
 async function load() {
   pending.value = true
   uncovered.value = false
+  errorMessage.value = ''
   try {
     schema.value = await catalog.describeSchema(schemaName, {
       consumerDomain: consumerDomain.value || undefined,

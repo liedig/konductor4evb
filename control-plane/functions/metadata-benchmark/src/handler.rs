@@ -142,6 +142,9 @@ async fn probe_pointer_hot_key(
     seconds: u64,
     target_rps: f64,
 ) -> Result<ProbeReport> {
+    if !target_rps.is_finite() || target_rps <= 0.0 {
+        anyhow::bail!("hotKeyTargetRps must be a finite number greater than 0");
+    }
     let mut latencies = Vec::new();
     let mut errors = 0;
     let interval = Duration::from_secs_f64(1.0 / target_rps);
