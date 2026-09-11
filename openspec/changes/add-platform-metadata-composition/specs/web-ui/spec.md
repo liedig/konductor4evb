@@ -54,9 +54,9 @@ Activation SHALL use an explicit confirmation dialog naming the environment and 
 - **THEN** the UI SHALL reload authoritative activation state and require review before another submission
 - **AND THEN** it SHALL not silently overwrite the other administrator's activation
 
-### Requirement: Composed schema inspection in the console
+### Requirement: Schema contract inspection in the console
 
-Domain schema and catalog detail views SHALL show business versions and metadata revisions independently per environment. Authorized readers SHALL be able to inspect the raw business schema, inherited metadata, and complete composed contract. Historical inspection SHALL require an explicit business version and metadata revision or the documented legacy selector, and SHALL label the selected combination clearly. Producer schema editors SHALL keep metadata read-only and SHALL provide an effective-contract preview without requiring producers to author envelope fields.
+Domain schema and catalog detail views SHALL show business versions and metadata revisions independently per environment. On the catalog detail view, each environment indicator SHALL be a selectable link that loads that environment's current contract, and the view SHALL present the raw business schema ("Schema content") and the complete composed document ("Schema preview") side by side, both resolved from the same selected environment. The Schema preview SHALL be captioned as the in-force contract that events in the selected environment validate against, identifying the business version, metadata revision, and definition digest. The console SHALL NOT expose historical pair selectors at this stage; historical inspection remains an API capability via the documented explicit `schemaVersion`/`metadataRevision` selectors. Producer schema editors SHALL keep metadata read-only and SHALL provide an effective-contract preview without requiring producers to author envelope fields, labelled as provisional and unregistered so it cannot be confused with the in-force Schema preview.
 
 #### Scenario: Current schema reflects metadata activation
 
@@ -64,11 +64,17 @@ Domain schema and catalog detail views SHALL show business versions and metadata
 - **THEN** the refreshed schema view SHALL display V3/M2 and the added metadata
 - **AND THEN** it SHALL not claim that a business schema version was appended
 
-#### Scenario: Inspect an older event contract
+#### Scenario: Environment selection drives both panels
 
-- **WHEN** a user selects V2/M1 after V3/M2 becomes current
-- **THEN** the UI SHALL show the V2/M1 composed document
-- **AND THEN** it SHALL not silently substitute M2
+- **WHEN** a reader selects a different environment indicator on the catalog detail view
+- **THEN** the Schema content and Schema preview panels SHALL reload from that environment's current contract
+- **AND THEN** the displayed business version and metadata revision SHALL be that environment's active pair
+
+#### Scenario: In-force preview is not a provisional preview
+
+- **WHEN** a reader views the catalog Schema preview panel
+- **THEN** it SHALL be identified as the contract events in the selected environment currently validate against
+- **AND THEN** the producer authoring preview SHALL remain labelled as unregistered and distinct from it
 
 #### Scenario: Existing journeys retain behavior
 

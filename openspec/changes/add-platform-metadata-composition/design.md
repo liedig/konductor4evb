@@ -178,7 +178,7 @@ Add `/admin/metadata` and a platform navigation entry. Build small components us
 
 Use a thin `useMetadata` composable over `useApi` and shared API types. Keep draft edits local and preserve them on errors; do not persist credentials, business payload examples, or unsaved drafts into configuration audit logs.
 
-Extend `DomainSchemasPanel`, `SchemaAuthoringForm`, and catalog detail with independent version badges and business/metadata/composed views. Schema authoring still submits only business content to its stage. Historical view requires explicit selectors; no “latest” substitution for an old event.
+Extend `DomainSchemasPanel` and catalog detail with independent per-environment version badges. On the catalog detail view the environment indicators are selectable links that drive one contract read per selection, rendering the raw business schema (“Schema content”) and the composed document (“Schema preview”) side by side from the same environment. Schema authoring still submits only business content to its stage, and its effective-contract preview is labelled provisional/unregistered. The console exposes the environment's current pair only — no historical selectors at this stage; historical inspection stays an API capability addressed by the event's recorded tuple, with no “latest” substitution for an old event.
 
 Auditors see read-only history and environment status; platform admins see mutations; domain users see only authorized composed contracts. Test server authorization as well as hidden controls. Browser tests use synthetic configuration/API data and cannot call live publish or management endpoints.
 
