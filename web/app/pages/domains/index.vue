@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/NxTable.vue'
 import { ApiError } from '~/composables/useApi'
+import { useSessionStore } from '~/stores/session'
 import type { DomainSummary } from '~/types/api'
 
 definePageMeta({ middleware: 'auth' })
 
+const session = useSessionStore()
 const domainsApi = useDomains()
 
 const domains = ref<DomainSummary[]>([])
@@ -43,7 +45,13 @@ function hasDetail(status?: string) {
   return status !== 'PENDING_APPROVAL' && status !== 'REJECTED'
 }
 
-onMounted(loadMore)
+onMounted(() => {
+  if (session.isPlatformRole) {
+    pending.value = false
+    return
+  }
+  loadMore()
+})
 </script>
 
 <template>
@@ -61,7 +69,19 @@ onMounted(loadMore)
     <p v-if="errorMessage" role="alert" class="text-sm text-danger">{{ errorMessage }}</p>
 
     <NxEmptyState
-      v-if="!pending && domains.length === 0 && !errorMessage"
+      v-if="session.isPlatformRole"
+      title="No owned domains"
+      body="Platform roles administer domains rather than own them, so there is no ownership list here. The platform-wide view is under All domains."
+    >
+      <template #actions>
+        <NuxtLink to="/admin/domains">
+          <NxButton>All domains</NxButton>
+        </NuxtLink>
+      </template>
+    </NxEmptyState>
+
+    <NxEmptyState
+      v-else-if="!pending && domains.length === 0 && !errorMessage"
       title="No domains yet"
       body="Request a domain to start publishing and subscribing to events through the Konductor. Approval is a platform-team decision."
     >

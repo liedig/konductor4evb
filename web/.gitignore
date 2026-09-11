@@ -5,6 +5,6 @@ node_modules
 dist
 *.log
 .DS_Store
-test-results/
-playwright-report/
-ui-evidence/
+test-results
+playwright-report
+ui-evidence

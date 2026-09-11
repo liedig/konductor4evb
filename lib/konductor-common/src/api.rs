@@ -31,7 +31,8 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
         | ControlPlaneError::RequestNotFound { .. }
         | ControlPlaneError::BindingNotFound { .. }
         | ControlPlaneError::EntitlementNotFound { .. }
-        | ControlPlaneError::SchemaNotFound { .. } => error_response(
+        | ControlPlaneError::SchemaNotFound { .. }
+        | ControlPlaneError::MetadataRevisionNotFound { .. } => error_response(
             404,
             ApiError {
                 code: "ResourceNotFoundException".to_string(),
@@ -45,7 +46,8 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
         | ControlPlaneError::DomainLimitExceeded { .. }
         | ControlPlaneError::BindingConflict { .. }
         | ControlPlaneError::EntitlementConflict { .. }
-        | ControlPlaneError::SchemaAlreadyExists { .. } => error_response(
+        | ControlPlaneError::SchemaAlreadyExists { .. }
+        | ControlPlaneError::MetadataConflict { .. } => error_response(
             409,
             ApiError {
                 code: "ConflictException".to_string(),
@@ -83,6 +85,16 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
             409,
             ApiError {
                 code: "ConflictException".to_string(),
+                message: err.to_string(),
+                request_id: None,
+                reason: None,
+                field_list: None,
+            },
+        ),
+        ControlPlaneError::MetadataConfigurationUnavailable { .. } => error_response(
+            503,
+            ApiError {
+                code: "ServiceUnavailableException".to_string(),
                 message: err.to_string(),
                 request_id: None,
                 reason: None,

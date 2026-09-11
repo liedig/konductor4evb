@@ -374,8 +374,12 @@ fn publish_admission_has_least_privilege_permissions() {
     let (mut actions, managed) = function_policy_shape(&doc, "PublishEventsAdmissionFunction");
     assert_eq!(
         managed,
-        ["BindingsTableReadPolicy", "EntitlementsTableReadPolicy"],
-        "authorization decisions read bindings and entitlements through the reserved policies"
+        [
+            "BindingsTableReadPolicy",
+            "EntitlementsTableReadPolicy",
+            "MetadataPointerReadPolicy",
+        ],
+        "authorization decisions read bindings, entitlements, and the metadata pointer through the reserved policies"
     );
     actions.sort();
     assert_eq!(
@@ -448,9 +452,10 @@ fn schema_admin_has_least_privilege_permissions() {
             "dynamodb:GetItem",
             "events:PutEvents",
             "schemas:CreateSchema",
+            "schemas:DescribeSchema",
             "schemas:UpdateSchema"
         ],
-        "schema handlers: domain-state read, append-only schema writes, and the SchemaVersionPublished promotion signal (follow-schema-promotion)"
+        "schema handlers: domain-state read, append-only schema writes, the compatibility gate's latest-version read (gate-schema-promotion), and the SchemaVersionPublished promotion signal (follow-schema-promotion)"
     );
 }
 
@@ -807,6 +812,59 @@ fn entitlement_admin_function_is_wired_to_the_oauth_surface_only() {
 }
 
 #[test]
+fn metadata_administration_routes_are_oauth_only() {
+    let oauth = operations(&oauth_contract());
+    let iam = operations(&iam_contract());
+
+    let mut oauth_ops: Vec<(&str, &str)> = oauth
+        .iter()
+        .filter(|op| op.path.starts_with("/metadata"))
+        .map(|op| (op.method.as_str(), op.path.as_str()))
+        .collect();
+    oauth_ops.sort();
+    assert_eq!(
+        oauth_ops,
+        [
+            ("get", "/metadata/activations"),
+            ("get", "/metadata/environments"),
+            ("get", "/metadata/revisions"),
+            ("get", "/metadata/revisions/{revision}"),
+            ("post", "/metadata/activations"),
+            ("post", "/metadata/preview"),
+            ("post", "/metadata/readiness"),
+            ("post", "/metadata/revisions"),
+        ],
+        "OAuth surface must expose exactly the eight metadata administration operations"
+    );
+
+    assert!(
+        iam.iter().all(|op| !op.path.starts_with("/metadata")),
+        "IAM surface must not expose metadata administration"
+    );
+}
+
+#[test]
+fn metadata_admin_function_is_wired_to_the_oauth_surface_only() {
+    let doc = core_template();
+    let func = resource(&doc, "MetadataAdminFunction");
+    let events = mapping(at(props(func), "Events"));
+    assert_eq!(
+        events.len(),
+        8,
+        "metadata admin must have exactly the eight route events"
+    );
+    for (name, event) in events {
+        let event_props = at(event, "Properties");
+        assert_eq!(
+            text(at(event_props, "RestApiId")),
+            "KonductorOAuthApi",
+            "event {:?} must target the OAuth API",
+            name
+        );
+    }
+}
+
+#[test]
 fn entitlements_table_matches_documented_schema() {
     let doc = core_template();
     let table = resource(&doc, "AuthorizationEntitlementsTable");
@@ -1108,6 +1166,198 @@ fn schema_detail_requires_coverage_or_a_platform_role() {
                 "detail must distinguish uncovered ({code}) from absent"
             );
         }
+    }
+}
+
+#[test]
+fn composed_contract_routes_are_on_both_surfaces() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let contract = at(
+            at(at(&doc, "paths"), "/schemas/{schemaName}/contract"),
+            "get",
+        );
+        assert_eq!(text(at(contract, "operationId")), "GetSchemaContract");
+        let params = seq(at(contract, "parameters"));
+        let mut names: Vec<&str> = params.iter().map(|p| text(at(p, "name"))).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            [
+                "consumerDomain",
+                "domain",
+                "environment",
+                "metadataRevision",
+                "schemaName",
+                "schemaVersion"
+            ],
+            "the contract read authorizes like detail and carries all-or-nothing historical selectors"
+        );
+        let mut required: Vec<&str> = params
+            .iter()
+            .filter(|p| boolean(at(p, "required")))
+            .map(|p| text(at(p, "name")))
+            .collect();
+        required.sort_unstable();
+        assert_eq!(
+            required,
+            ["domain", "environment", "schemaName"],
+            "historical selectors are optional; their absence selects the current pair"
+        );
+        let responses = mapping(at(contract, "responses"));
+        for code in ["200", "400", "403", "404", "503"] {
+            assert!(
+                responses.contains_key(code),
+                "the contract read must document {code}"
+            );
+        }
+
+        let preview = at(at(at(&doc, "paths"), "/schemas/contract-preview"), "post");
+        assert_eq!(text(at(preview, "operationId")), "PreviewSchemaContract");
+        let body_ref = at(
+            at(
+                at(
+                    at(at(preview, "requestBody"), "content"),
+                    "application/json",
+                ),
+                "schema",
+            ),
+            "$ref",
+        );
+        assert_eq!(
+            text(body_ref),
+            "#/components/schemas/ContractPreviewRequest"
+        );
+        let responses = mapping(at(preview, "responses"));
+        for code in ["200", "400", "403", "404", "503"] {
+            assert!(
+                responses.contains_key(code),
+                "the contract preview must document {code}"
+            );
+        }
+    }
+}
+
+#[test]
+fn contract_routes_are_lambda_proxy_integrations_on_both_surfaces() {
+    for doc in [oauth_contract(), iam_contract()] {
+        for (path, method, operation) in [
+            ("/schemas/{schemaName}/contract", "get", "GetSchemaContract"),
+            ("/schemas/contract-preview", "post", "PreviewSchemaContract"),
+        ] {
+            let op = at(at(at(&doc, "paths"), path), method);
+            let integration = at(op, "x-amazon-apigateway-integration");
+            assert_eq!(text(at(integration, "type")), "aws_proxy");
+            assert!(
+                text(at(at(integration, "uri"), "Fn::Sub"))
+                    .contains("${DescribeSchemaFunction.Arn}"),
+                "{operation} must integrate with the describe-schema function"
+            );
+        }
+    }
+}
+
+#[test]
+fn contract_routes_are_wired_to_both_apis_in_sam() {
+    let doc = core_template();
+    let events = mapping(at(
+        props(resource(&doc, "DescribeSchemaFunction")),
+        "Events",
+    ));
+    for (name, path, method, rest_api) in [
+        (
+            "ContractOAuthApi",
+            "/schemas/{schemaName}/contract",
+            "GET",
+            "KonductorOAuthApi",
+        ),
+        (
+            "ContractIamApi",
+            "/schemas/{schemaName}/contract",
+            "GET",
+            "KonductorIamApi",
+        ),
+        (
+            "PreviewOAuthApi",
+            "/schemas/contract-preview",
+            "POST",
+            "KonductorOAuthApi",
+        ),
+        (
+            "PreviewIamApi",
+            "/schemas/contract-preview",
+            "POST",
+            "KonductorIamApi",
+        ),
+    ] {
+        let event = events
+            .get(name)
+            .unwrap_or_else(|| panic!("DescribeSchemaFunction missing {name} event"));
+        let properties = at(event, "Properties");
+        assert_eq!(text(at(properties, "Path")), path);
+        assert_eq!(text(at(properties, "Method")), method);
+        assert_eq!(text(at(properties, "RestApiId")), rest_api);
+    }
+}
+
+#[test]
+fn contract_preview_request_is_closed_and_carries_no_metadata_fields() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let schemas = at(at(&doc, "components"), "schemas");
+        let request = at(schemas, "ContractPreviewRequest");
+        assert!(
+            !boolean(at(request, "additionalProperties")),
+            "ContractPreviewRequest must reject unknown (platform-owned) fields"
+        );
+        let mut required: Vec<&str> = seq(at(request, "required")).iter().map(text).collect();
+        required.sort_unstable();
+        assert_eq!(
+            required,
+            ["content", "domain", "environment", "schemaName"],
+            "schemaVersion is optional and pins the composed stamp"
+        );
+        assert!(
+            !mapping(at(request, "properties")).contains_key("metadata"),
+            "the platform owns metadata; a preview body cannot stamp it"
+        );
+
+        let preview_response = at(schemas, "ContractPreviewResponse");
+        assert!(
+            mapping(at(preview_response, "properties")).contains_key("registered"),
+            "the preview response must be distinguishable from a registered contract"
+        );
+    }
+}
+
+#[test]
+fn composed_contract_schema_exposes_the_document_for_offline_use() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let contract = at(at(at(&doc, "components"), "schemas"), "ComposedContract");
+        let properties = mapping(at(contract, "properties"));
+        for key in [
+            "businessContent",
+            "metadataSchema",
+            "generators",
+            "composerFormat",
+            "composedDocument",
+        ] {
+            assert!(
+                properties.contains_key(key),
+                "ComposedContract must expose {key} for offline validation"
+            );
+        }
+    }
+}
+
+#[test]
+fn catalog_summary_reports_active_metadata_revisions() {
+    for doc in [oauth_contract(), iam_contract()] {
+        let summary = at(at(at(&doc, "components"), "schemas"), "SchemaSummary");
+        let revisions = at(at(summary, "properties"), "metadataRevisions");
+        assert_eq!(
+            text(at(at(revisions, "additionalProperties"), "type")),
+            "integer",
+            "metadataRevisions maps environment names to active revisions"
+        );
     }
 }
 

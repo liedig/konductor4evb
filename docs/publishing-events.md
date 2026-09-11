@@ -78,6 +78,13 @@ awscurl -X POST "${API_URL}/schemas/versions" --region ${AWS_REGION} \
 
 This returns `201` with the next version number (`404` if the schema does not exist in that environment). Schemas are **append-only**: there is no delete, retire, replace, or version deletion — earlier versions remain immutable so existing consumers keep a valid contract.
 
+Appends are also **backward compatible only**. The new document is checked against the current latest version, and anything that would reject a payload the latest version accepts fails with `400 Bad Request` naming the offending paths. In practice:
+
+- **Allowed:** adding optional properties, dropping entries from `required`, widening a `type` (for example `"integer"` to `["integer", "string"]`), growing an `enum`, loosening or removing constraints (`minimum`, `maxLength`, `pattern`, and so on).
+- **Rejected:** removing a declared property, newly requiring a property, narrowing a `type` or `enum`, raising `minimum`, lowering `maximum`, flipping `additionalProperties` from `true` to `false`, and any combinator or `$ref` edit the checker cannot prove safe.
+
+Compatibility is judged against the current latest version only, never historical ones, and the gate is absolute — no flag or role bypasses it. If you need a genuinely breaking change (renaming a field, tightening a constraint), register it as a **new schema under a new event name** and migrate consumers explicitly; that keeps every version of an event safe for existing consumers forever.
+
 ## Step 3: Publish an event
 
 ```bash
@@ -117,6 +124,8 @@ The body accepts exactly `domain`, `eventName`, `data`, and an optional `idempot
 - `metadata.idempotencyKey` is your key, or the API Gateway request ID if you omit it.
 - `metadata.publishedAt` is when the platform accepted the event (the queue timestamp), not when it was delivered.
 
+When the platform's metadata configuration is active for the environment, Konductor also stamps `metadata.metadataRevision` and every field that revision generates (for example `eventId`, `geo.region`) — the platform supplies all metadata values from trusted context. Metadata fields are not yours to set — the platform supplies every value from trusted context, and since the body accepts exactly the fields listed above, an injected top-level `metadata` key fails structural validation with `400`. The generated values are frozen at admission, so delivery (and any delivery retry) emits exactly what was accepted; a revision activated between your admission and the delivery does not change your event.
+
 Konductor validates your `data` against the schema's latest version **before** accepting the publish. A conforming payload gets `202`; a violating one gets `422` with the violations listed in `message` (for example, `-5 is less than the minimum of 0; "aud" does not match "^[A-Z]{3}$"`) — fix the payload and retry. Konductor also validates the envelope it generates (identity, numeric version, structure, EventBridge size limits) before delivery.
 
 ## Durability, retries, and idempotency
@@ -127,22 +136,29 @@ Konductor validates your `data` against the schema's latest version **before** a
 - **Retries exhaust to a DLQ.** After the queue's redrive limit, the message lands in the platform's publish DLQ with all attributes intact for operator inspection.
 - **Rejected publishes never reach the queue.** Authorization (`403`), a missing or inactive domain or schema (`404`), and payload violations (`422`) are answered synchronously — nothing is queued, so there is nothing to retry. Fix the cause and republish.
 - **The caller does not learn the delivery outcome.** `202` covers admission and durable queueing; if you need delivery confirmation, subscribe to your own domain's bus and observe your events.
+- **A retry after an ambiguous outcome is a new admission.** If your client times out after sending the request (you never saw the `202`), a retry may enqueue a second event — the idempotency key supports *your* consumer-side deduplication, and a newly generated `eventId` will differ. UUID metadata is not an exactly-once guarantee.
 
 ## Error reference
 
 | Response | Cause | Action |
 |----------|-------|--------|
-| `400` | Body failed structural validation (missing field, unknown field, invalid event name); on schema writes, also `content` that is not a valid draft-4 document | Fix the request body / schema document |
+| `400` | Body failed structural validation (missing field, unknown field — including an injected top-level `metadata` key — invalid event name); on schema writes, also `content` that is not a valid draft-4 document; on version appends, also content that tightens the current latest version — offending paths are listed in `message` | Fix the request body / schema document; for a rejected append, loosen the document or register a new event name instead |
 | `403` | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
 | `404` | Domain missing/inactive, or no schema registered for this event in this environment | Check domain status; create the schema first |
 | `409` (create schema) | Schema already exists in this environment | Append a version instead |
 | `422` (publish) | `data` violates the schema's latest version — violations are listed in `message` | Fix the payload and retry; if you just appended a schema version, a plain retry picks it up |
-| `503` (publish) | The platform could not evaluate the publish (schema registry or queue trouble) | Retry with backoff; alert your platform team if it persists |
+| `503` (publish) | The platform could not evaluate the publish (schema registry or queue trouble, or metadata configuration missing/unreadable) | Retry with backoff; alert your platform team if it persists |
 | `202` then nothing arrives | Rare: the domain was disabled between admission and delivery, or EventBridge delivery is failing | The platform's publish DLQ holds exhausted messages — contact your platform team |
 
 ## Discovering schemas
 
 `GET /schemas?consumerDomain={domain}` is the subscriber catalog: it expands that consumer domain's entitlements into the covered schemas with the latest version per environment — every listed entry is currently subscribable. `GET /schemas/{schemaName}?consumerDomain={domain}&domain={producer}` returns detail including content; uncovered targets answer `403`. Platform roles omit `consumerDomain` for the platform-wide view. See [Domain Management Guide — Discovering schemas](domain-management.md#discovering-schemas).
+
+## Inspecting composed contracts
+
+`GET /schemas/{schemaName}/contract?domain={yourDomain}&environment={env}` returns the exact composed contract the environment currently serves: the raw business document, the platform-owned metadata schema, generator descriptions, and a composed draft-4 document that validates the full `detail` object offline. Historical inspection is explicit: pass **both** `schemaVersion` and `metadataRevision` (revision `0` is the documented legacy selector for pre-stamping events) — the active metadata revision is never silently substituted for a historical business version, and an unknown pair answers `404`. A historical composition is inspection, not evidence that pair was ever emitted — provenance is each event's own recorded tuple. `POST /schemas/contract-preview` composes **unsaved** business content against the environment's active metadata so you can see the effective contract before appending a version; it registers nothing.
+
+In the console, the catalog schema page serves the current pair per environment: each environment badge is a link that loads that environment's contract into a side-by-side view — **Schema content** (the raw business document) and **Schema preview** (the in-force composed document, captioned with its business version, metadata revision, and definition digest). Historical pairs are an API capability for clients holding an event's recorded tuple; the console does not expose historical selectors. The producer authoring form's *Preview effective contract* is distinct: it composes unsaved content, is labelled unregistered, and registers nothing.
 
 ## Deep dive
 

@@ -80,9 +80,14 @@ cargo test --workspace -- --nocapture
 make check
 ```
 
-## Web Component Behavior
+## Browser UI Tests (Playwright)
 
-The focused Playwright suite in `web/tests/ui/` exercises real rendered `Nx*` wrappers on `/design-system`: labels and states, modal focus/dismissal, confirmation busy/retry behavior, notification timing and overlapping pause conditions, narrow viewports, enlarged text, and reduced motion. It also verifies that protected routes still redirect to sign-in.
+The web console has an isolated-browser suite (`pnpm test:ui` from `web/`) with no dependency on a deployed stack:
+
+- **Identity**: the dev-only `konductorTestSession` sessionStorage seam (`web/app/stores/session.ts`) mirrors a Cognito ID-token payload, letting a test run as `platform-admin`, `platform-auditor`, or a team group. The seam is compiled out of production (`import.meta.env.DEV` is statically false).
+- **API**: feature-flow tests fulfill every `/dev/**` call with the in-test route mock (`web/tests/ui/api.ts`) — per-test mutable state drives conflicts, stale activations, delayed busy states, and error modes deterministically. The mock mirrors the real OpenAPI surface (`code` + `message` on errors). Component/gallery specs use the isolation fixture (`web/tests/ui/fixtures.ts`), which stubs `config.json` and blocks external traffic and same-origin API calls instead.
+- **Server**: Playwright starts `nuxi dev --host 127.0.0.1 --port 3100` itself; bind IPv4 explicitly (the default binds IPv6-only on macOS, which defeats the readiness poll).
+- **Scope**: journey flows (create → preview → save → conflict → activate → inspect), role restrictions, error/loading/empty states, narrow viewports, keyboard/dialog focus, plus rendered `Nx*` wrapper behavior on `/design-system` (labels and states, modal focus/dismissal, confirmation busy/retry, notification timing and overlapping pause conditions, enlarged text, reduced motion) and protected-route redirects to sign-in. Known accessibility gaps are recorded in the change's task notes rather than asserted as passing.
 
 ```bash
 cd web
@@ -93,7 +98,9 @@ pnpm typecheck
 pnpm build
 ```
 
-`playwright.config.ts` starts an isolated Nuxt server on `127.0.0.1:3107`; close any process using that port before running. Fresh browser contexts intercept `config.json` with non-secret test values and block external traffic and same-origin API calls. No Cognito account, real data, or authentication bypass is needed. Tests must never submit operations against a live service.
+No Cognito account, real data, or authentication bypass is needed. Tests must never submit operations against a live service.
+
+Write UI tests with role/label locators (`getByRole`, `getByLabel`) and scope by card heading — visible text repeats across panels. Prefer the strict-mode failure over brittle CSS selectors.
 
 For manual review, `make web-dev` keeps its AWS-backed configuration and API proxy, then opens `/design-system` in the default browser when Nuxt starts. It uses Nuxt's actual port (normally 3000). Plain `pnpm dev` does not automatically open a browser. Gallery demos make no service writes, but other pages connect to the live backend.
 

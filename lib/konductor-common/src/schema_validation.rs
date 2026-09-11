@@ -9,10 +9,21 @@
 //! - [`validate_against_latest`]: JSON Schema draft-4 compilation and payload
 //!   validation, with every error classified as either a platform-side
 //!   unusable schema (503) or a caller-side conformance failure (422)
-//! - [`SchemaCache`]: an in-memory per-(registry, schema) cache that bounds
-//!   registry reads to one per TTL per warm instance and supports a forced
-//!   refresh before a rejection, so a publish racing a schema append is never
-//!   rejected against a definition the caller could not have known
+//! - [`SchemaCache`]: an in-memory per-(registry, schema, metadata
+//!   generation) cache that bounds registry reads to one per TTL per warm
+//!   instance and supports a forced refresh before a rejection, so a
+//!   publish racing a schema append is never rejected against a definition
+//!   the caller could not have known
+//! - [`ValidatorCache`]: a bounded cache of compiled draft-4 validators
+//!   keyed by the exact document content — the component's identity — so
+//!   warm publishes skip recompilation and no compiled contract is ever
+//!   shared across different documents
+//!
+//! Entries are keyed by the environment pointer's metadata generation: an
+//! activation bumps the generation, so a warm instance's cached entries for
+//! the previous generation become unreachable immediately (and are evicted
+//! when the new generation's entry lands). A failed registry read inserts
+//! nothing, so it can never stamp an expired contract under a live key.
 //!
 //! The cache is deliberately process-local: stale entries younger than the
 //! TTL serve validation, refresh-before-reject bounds the false-rejection
@@ -23,8 +34,8 @@
 //! closure, so this module never owns an SDK client and stays mockable
 //! without `aws-smithy-mocks` rule plumbing.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard};
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -121,6 +132,15 @@ pub fn check_draft4_document(content: &str) -> Result<(), ValidationError> {
 /// Compiles `latest.content` as JSON Schema draft-4 and validates `data`.
 pub fn validate_against_latest(latest: &LatestSchema, data: &Value) -> Result<(), ValidationError> {
     let validator = compile_draft4(&latest.content)?;
+    collect_violations(&validator, data)
+}
+
+/// Runs a compiled validator over the payload, folding the first handful of
+/// violations into one 422 message.
+fn collect_violations(
+    validator: &jsonschema::Validator,
+    data: &Value,
+) -> Result<(), ValidationError> {
     let mut violations = validator
         .iter_errors(data)
         .take(MAX_REPORTED_VIOLATIONS)
@@ -147,12 +167,15 @@ struct CachedEntry {
 }
 
 /// Process-local cache of latest-schema lookups, keyed by `(registry, schema
-/// name)`. `None` is never cached: an absent schema always hits the registry,
-/// so a publish immediately after schema creation cannot be rejected on a
-/// stale negative.
+/// name, metadata generation)`. `None` is never cached: an absent schema
+/// always hits the registry, so a publish immediately after schema creation
+/// cannot be rejected on a stale negative. Inserting an entry for a newer
+/// metadata generation evicts the same schema's older-generation entries, so
+/// a warm instance holds at most one generation per schema and an activation
+/// takes effect on the very next publish.
 pub struct SchemaCache {
     ttl: Duration,
-    entries: Mutex<HashMap<(String, String), CachedEntry>>,
+    entries: Mutex<HashMap<(String, String, u64), CachedEntry>>,
 }
 
 impl SchemaCache {
@@ -164,8 +187,26 @@ impl SchemaCache {
         }
     }
 
-    fn entries(&self) -> MutexGuard<'_, HashMap<(String, String), CachedEntry>> {
+    fn entries(&self) -> MutexGuard<'_, HashMap<(String, String, u64), CachedEntry>> {
         self.entries.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Stores an entry under its generation key, evicting the same
+    /// `(registry, schema)` entries from older generations.
+    fn store(
+        entries: &mut HashMap<(String, String, u64), CachedEntry>,
+        key: (String, String, u64),
+        latest: &LatestSchema,
+    ) {
+        entries.retain(|(registry, schema, _), _| registry != &key.0 || schema != &key.1);
+        entries.insert(
+            key,
+            CachedEntry {
+                content: latest.content.clone(),
+                version: latest.version,
+                fetched_at: Instant::now(),
+            },
+        );
     }
 
     /// Returns the cached latest schema when fresh, otherwise fetches via
@@ -174,13 +215,14 @@ impl SchemaCache {
         &self,
         registry: &str,
         schema_name: &str,
+        generation: u64,
         fetch: F,
     ) -> Result<LatestSchema, SchemaCacheError>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<LatestSchema, SchemaCacheError>>,
     {
-        let key = (registry.to_string(), schema_name.to_string());
+        let key = (registry.to_string(), schema_name.to_string(), generation);
         if let Some(entry) = self.entries().get(&key) {
             if entry.fetched_at.elapsed() < self.ttl {
                 tracing::info!(
@@ -202,14 +244,8 @@ impl SchemaCache {
             "schema cache miss"
         );
         let latest = fetch().await?;
-        self.entries().insert(
-            key,
-            CachedEntry {
-                content: latest.content.clone(),
-                version: latest.version,
-                fetched_at: Instant::now(),
-            },
-        );
+        let mut entries = self.entries();
+        Self::store(&mut entries, key, &latest);
         Ok(latest)
     }
 
@@ -220,23 +256,71 @@ impl SchemaCache {
         &self,
         registry: &str,
         schema_name: &str,
+        generation: u64,
         fetch: F,
     ) -> Result<LatestSchema, SchemaCacheError>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<LatestSchema, SchemaCacheError>>,
     {
-        let key = (registry.to_string(), schema_name.to_string());
+        let key = (registry.to_string(), schema_name.to_string(), generation);
         let latest = fetch().await?;
-        self.entries().insert(
-            key,
-            CachedEntry {
-                content: latest.content.clone(),
-                version: latest.version,
-                fetched_at: Instant::now(),
-            },
-        );
+        let mut entries = self.entries();
+        Self::store(&mut entries, key, &latest);
         Ok(latest)
+    }
+}
+
+/// Default bound on compiled validators. Warm instances validate against a
+/// small recent window of schema documents, one per schema per generation.
+pub const DEFAULT_VALIDATOR_CACHE_CAPACITY: usize = 64;
+
+/// Bounded process-local cache of compiled draft-4 validators, keyed by the
+/// exact document content — the component's identity. Compilation is pure in
+/// the content, so entries never invalidate; the bound only caps memory, and
+/// two different documents can never share a compiled contract.
+pub struct ValidatorCache {
+    capacity: usize,
+    entries: Mutex<BTreeMap<String, Arc<jsonschema::Validator>>>,
+}
+
+impl ValidatorCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            entries: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn entries(&self) -> MutexGuard<'_, BTreeMap<String, Arc<jsonschema::Validator>>> {
+        self.entries.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Returns the compiled validator for `content`, compiling at most once
+    /// per distinct document. A document that does not compile is never
+    /// cached: the defect reports on every request until it is fixed.
+    pub fn get_or_compile(
+        &self,
+        content: &str,
+    ) -> Result<Arc<jsonschema::Validator>, ValidationError> {
+        if let Some(hit) = self.entries().get(content) {
+            return Ok(hit.clone());
+        }
+        let validator = Arc::new(compile_draft4(content)?);
+        let mut entries = self.entries();
+        entries.insert(content.to_string(), validator.clone());
+        while entries.len() > self.capacity {
+            entries.pop_first();
+        }
+        Ok(validator)
+    }
+
+    /// Validates `data` against `content` through the compiled-validator
+    /// cache. Identical to [`validate_against_latest`] in outcome; warm
+    /// documents skip recompilation.
+    pub fn validate(&self, content: &str, data: &Value) -> Result<(), ValidationError> {
+        let validator = self.get_or_compile(content)?;
+        collect_violations(&validator, data)
     }
 }
 
@@ -372,11 +456,11 @@ mod tests {
         let cache = SchemaCache::new(Duration::from_secs(60));
         let calls = AtomicUsize::new(0);
         let first = cache
-            .get_or_fetch("reg", "schema", counter_fetch(&calls, 1))
+            .get_or_fetch("reg", "schema", 0, counter_fetch(&calls, 1))
             .await
             .unwrap();
         let second = cache
-            .get_or_fetch("reg", "schema", counter_fetch(&calls, 1))
+            .get_or_fetch("reg", "schema", 0, counter_fetch(&calls, 1))
             .await
             .unwrap();
         assert_eq!(first.version, 1);
@@ -393,11 +477,11 @@ mod tests {
         let cache = SchemaCache::new(Duration::ZERO);
         let calls = AtomicUsize::new(0);
         cache
-            .get_or_fetch("reg", "schema", counter_fetch(&calls, 1))
+            .get_or_fetch("reg", "schema", 0, counter_fetch(&calls, 1))
             .await
             .unwrap();
         let latest = cache
-            .get_or_fetch("reg", "schema", counter_fetch(&calls, 2))
+            .get_or_fetch("reg", "schema", 0, counter_fetch(&calls, 2))
             .await
             .unwrap();
         assert_eq!(latest.version, 2);
@@ -413,17 +497,17 @@ mod tests {
         let cache = SchemaCache::new(Duration::from_secs(60));
         let calls = AtomicUsize::new(0);
         cache
-            .get_or_fetch("reg", "schema", counter_fetch(&calls, 1))
+            .get_or_fetch("reg", "schema", 0, counter_fetch(&calls, 1))
             .await
             .unwrap();
         let latest = cache
-            .force_fetch("reg", "schema", counter_fetch(&calls, 2))
+            .force_fetch("reg", "schema", 0, counter_fetch(&calls, 2))
             .await
             .unwrap();
         assert_eq!(latest.version, 2, "force fetch bypasses the TTL");
 
         let cached = cache
-            .get_or_fetch("reg", "schema", counter_fetch(&calls, 99))
+            .get_or_fetch("reg", "schema", 0, counter_fetch(&calls, 99))
             .await
             .unwrap();
         assert_eq!(cached.version, 2, "force fetch updates the cached entry");
@@ -434,21 +518,117 @@ mod tests {
         let cache = SchemaCache::new(Duration::from_secs(60));
         let calls = AtomicUsize::new(0);
         cache
-            .get_or_fetch("reg-a", "schema", counter_fetch(&calls, 1))
+            .get_or_fetch("reg-a", "schema", 0, counter_fetch(&calls, 1))
             .await
             .unwrap();
         cache
-            .get_or_fetch("reg-b", "schema", counter_fetch(&calls, 2))
+            .get_or_fetch("reg-b", "schema", 0, counter_fetch(&calls, 2))
             .await
             .unwrap();
         cache
-            .get_or_fetch("reg-a", "other", counter_fetch(&calls, 3))
+            .get_or_fetch("reg-a", "other", 0, counter_fetch(&calls, 3))
             .await
             .unwrap();
         assert_eq!(
             calls.load(Ordering::SeqCst),
             3,
             "distinct keys miss independently"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_generation_bump_makes_older_entries_unusable() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cache = SchemaCache::new(Duration::from_secs(60));
+
+        cache
+            .get_or_fetch("reg", "schema", 1, counter_fetch(&calls, 1))
+            .await
+            .unwrap();
+        cache
+            .get_or_fetch("reg", "schema", 1, counter_fetch(&calls, 1))
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "same generation is a hit");
+
+        // M1 -> M2 activation: the new generation fetches fresh, evicting the
+        // old entry, so even a request that re-observes the old generation
+        // can never be served the stale contract.
+        cache
+            .get_or_fetch("reg", "schema", 2, counter_fetch(&calls, 2))
+            .await
+            .unwrap();
+        cache
+            .get_or_fetch("reg", "schema", 1, counter_fetch(&calls, 3))
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "old-generation entries were evicted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_registry_read_never_stamps_a_live_key() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cache = SchemaCache::new(Duration::from_secs(60));
+
+        cache
+            .get_or_fetch("reg", "schema", 1, counter_fetch(&calls, 1))
+            .await
+            .unwrap();
+
+        let failing = || async { Err(SchemaCacheError::RegistryUnavailable("outage".to_string())) };
+        assert!(cache
+            .force_fetch("reg", "schema", 2, failing)
+            .await
+            .is_err());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the failed refresh inserted nothing under the new generation"
+        );
+
+        cache
+            .get_or_fetch("reg", "schema", 2, counter_fetch(&calls, 2))
+            .await
+            .unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the failed refresh left no expired contract to serve"
+        );
+    }
+
+    #[test]
+    fn compiled_validators_are_shared_per_exact_document() {
+        let cache = ValidatorCache::new(DEFAULT_VALIDATOR_CACHE_CAPACITY);
+        let first = cache.get_or_compile(SCHEMA).unwrap();
+        let second = cache.get_or_compile(SCHEMA).unwrap();
+        assert!(
+            std::ptr::eq(Arc::as_ptr(&first), Arc::as_ptr(&second)),
+            "the same document compiles once and is shared"
+        );
+        assert!(
+            cache
+                .validate(SCHEMA, &serde_json::json!({"orderId": 7}))
+                .is_ok(),
+            "cached validation keeps the same outcome as direct compilation"
+        );
+    }
+
+    #[test]
+    fn the_validator_cache_is_bounded_and_documents_never_share() {
+        let cache = ValidatorCache::new(2);
+        let first = cache.get_or_compile(SCHEMA).unwrap();
+        cache.get_or_compile(r#"{"type": "object"}"#).unwrap();
+        cache.get_or_compile(r#"{"type": "array"}"#).unwrap();
+
+        let recompiled = cache.get_or_compile(SCHEMA).unwrap();
+        assert!(
+            !std::ptr::eq(Arc::as_ptr(&first), Arc::as_ptr(&recompiled)),
+            "the evicted document compiles again rather than sharing a contract"
         );
     }
 }

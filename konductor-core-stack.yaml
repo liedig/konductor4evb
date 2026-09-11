@@ -322,6 +322,74 @@ Resources:
               - dynamodb:Query
             Resource: !GetAtt AuthorizationEntitlementsTable.Arn
 
+  # ---- DynamoDB (metadata configuration) ----
+  # Platform-owned event metadata: immutable additive revisions (REVISION
+  # items), the global revision head (HEAD), per-environment active pointers
+  # (ENV — the hot admission reads never share a partition with revision or
+  # audit traffic), and permanent mutation/audit records (AUDIT). Only
+  # stream-consumer marker items set the TTL attribute; revisions, pointers,
+  # and audit records are permanent. The NEW_IMAGE stream drives lifecycle
+  # emission from committed state.
+  MetadataConfigurationTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub "konductor-metadata-configuration"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+
+  # Metadata administration: one conditional transaction per mutation, plus
+  # strongly consistent reads of revisions, head, and environment pointers.
+  MetadataAdminPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "konductor-metadata-admin"
+      Description: Metadata configuration administration (revision and pointer transactions, reads)
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:Query
+              - dynamodb:TransactWriteItems
+            Resource: !GetAtt MetadataConfigurationTable.Arn
+
+  # Admission's authoritative environment-pointer resolution: strongly
+  # consistent GetItem only, never writes.
+  MetadataPointerReadPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub "konductor-metadata-pointer-read"
+      Description: Read-only metadata pointer resolution for publish admission
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:GetItem
+            Resource: !GetAtt MetadataConfigurationTable.Arn
+
   # ---- Dead Letter Queue (read Lambda functions) ----
   LambdaFailureDlq:
     Type: AWS::SQS::Queue
@@ -515,6 +583,23 @@ Resources:
       Dimensions:
         - Name: FunctionName
           Value: !Ref EntitlementStreamConsumerFunction
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 60000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  MetadataStreamConsumerIteratorAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-metadata-stream-consumer-iterator-age-alarm"
+      AlarmDescription: Metadata stream consumer falling behind — lifecycle events delayed; recover before the 24-hour stream window closes
+      Namespace: AWS/Lambda
+      MetricName: IteratorAge
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MetadataStreamConsumerFunction
       Statistic: Maximum
       Period: 300
       EvaluationPeriods: 2
@@ -1253,11 +1338,14 @@ Resources:
         Variables:
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
           ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+          METADATA_TABLE: !Ref MetadataConfigurationTable
       Policies:
         # Catalog authorization: subscriber-binding point read plus the
         # strongly consistent consumer-partition entitlement query.
         - !Ref BindingsTableReadPolicy
         - !Ref EntitlementsTableReadPolicy
+        # Per-environment active metadata revision summaries: pointer reads only.
+        - !Ref MetadataPointerReadPolicy
         - Version: '2012-10-17'
           Statement:
             # ACTIVE-domain expansion reads; Scan serves the platform-wide
@@ -1308,11 +1396,14 @@ Resources:
         Variables:
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
           ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+          METADATA_TABLE: !Ref MetadataConfigurationTable
       Policies:
         # Detail authorization: subscriber-binding point read plus the
         # coverage query on the consumer entitlement partition.
         - !Ref BindingsTableReadPolicy
         - !Ref EntitlementsTableReadPolicy
+        # Composed-contract discovery: pointer and revision reads only.
+        - !Ref MetadataPointerReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
@@ -1336,6 +1427,30 @@ Resources:
             RestApiId: !Ref KonductorIamApi
             Path: /schemas/{schemaName}
             Method: GET
+        ContractOAuthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /schemas/{schemaName}/contract
+            Method: GET
+        ContractIamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorIamApi
+            Path: /schemas/{schemaName}/contract
+            Method: GET
+        PreviewOAuthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /schemas/contract-preview
+            Method: POST
+        PreviewIamApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorIamApi
+            Path: /schemas/contract-preview
+            Method: POST
 
   # ---- Command Handler Functions ----
   DomainRegistrationsLogGroup:
@@ -1713,9 +1828,11 @@ Resources:
           ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
           PUBLISH_QUEUE_URL: !Ref PublishQueue
           SCHEMA_CACHE_TTL_MS: "60000"
+          METADATA_TABLE: !Ref MetadataConfigurationTable
       Policies:
         - !Ref BindingsTableReadPolicy
         - !Ref EntitlementsTableReadPolicy
+        - !Ref MetadataPointerReadPolicy
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
@@ -1803,7 +1920,7 @@ Resources:
               Action: [dynamodb:GetItem]
               Resource: !GetAtt DomainsTable.Arn
             - Effect: Allow
-              Action: [schemas:CreateSchema, schemas:UpdateSchema]
+              Action: [schemas:CreateSchema, schemas:UpdateSchema, schemas:DescribeSchema]
               Resource:
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
@@ -1837,6 +1954,172 @@ Resources:
             RestApiId: !Ref KonductorIamApi
             Path: /schemas/versions
             Method: POST
+
+  # ---- Metadata configuration bootstrap ----
+  # Deployment-time custom resource: conditionally seeds revision 1 (the
+  # protected-defaults baseline), the revision head, and every configured
+  # environment at legacy revision 0. Every write is conditioned on absence,
+  # so retries and redeployments never overwrite committed configuration,
+  # and stack deletion removes nothing.
+  MetadataBootstrapLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-metadata-bootstrap"
+      RetentionInDays: 30
+  MetadataBootstrapFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MetadataBootstrapLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-metadata-bootstrap"
+      CodeUri: ./event-streams/functions/metadata-bootstrap
+      Handler: bootstrap
+      Timeout: 60
+      Environment:
+        Variables:
+          METADATA_TABLE: !Ref MetadataConfigurationTable
+          ENVIRONMENTS: !Join [",", !Ref Environments]
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:PutItem]
+              Resource: !GetAtt MetadataConfigurationTable.Arn
+  MetadataBootstrap:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt MetadataBootstrapFunction.Arn
+
+  # ---- Metadata administration API ----
+  # Revision history reads (admin/auditor) and one conditional transaction
+  # per revision creation. OAuth-only routes are wired in the API definition;
+  # this surface is an intentional IAM-parity exception, like binding
+  # administration.
+  MetadataAdminLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-metadata-admin"
+      RetentionInDays: 30
+  MetadataAdminFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MetadataAdminLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-metadata-admin"
+      CodeUri: ./event-streams/functions/metadata-admin
+      Handler: bootstrap
+      Timeout: 29
+      Environment:
+        Variables:
+          METADATA_TABLE: !Ref MetadataConfigurationTable
+          ORGANIZATION: !Ref Organization
+          ENVIRONMENTS: !Join [",", !Ref Environments]
+      Policies:
+        - !Ref MetadataAdminPolicy
+      Events:
+        ListMetadataRevisions:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/revisions
+            Method: GET
+        CreateMetadataRevision:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/revisions
+            Method: POST
+        GetMetadataRevision:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/revisions/{revision}
+            Method: GET
+        PreviewMetadataRevision:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/preview
+            Method: POST
+        CheckMetadataReadiness:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/readiness
+            Method: POST
+        ListMetadataEnvironments:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/environments
+            Method: GET
+        ListMetadataActivations:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/activations
+            Method: GET
+        ActivateMetadataRevision:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /metadata/activations
+            Method: POST
+
+  MetadataStreamConsumerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-metadata-stream-consumer"
+      RetentionInDays: 30
+  MetadataStreamConsumerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: MetadataStreamConsumerLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-metadata-stream-consumer"
+      CodeUri: ./control-plane/functions/metadata-stream-consumer
+      Handler: bootstrap
+      Environment:
+        Variables:
+          METADATA_TABLE: !Ref MetadataConfigurationTable
+          KONDUKTOR_EVENT_BUS: !Ref KonductorEventBus
+      Policies:
+        # Idempotency markers are conditional puts (and best-effort
+        # releases) on the metadata table itself; lifecycle events publish
+        # to the control-plane bus.
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+              Resource: !GetAtt MetadataConfigurationTable.Arn
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !GetAtt KonductorEventBus.Arn
+      Events:
+        MetadataStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt MetadataConfigurationTable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 100
+            BisectBatchOnFunctionError: true
+            MaximumRetryAttempts: 3
+            DestinationConfig:
+              OnFailure:
+                Type: SQS
+                Destination: !GetAtt LambdaFailureDlq.Arn
 
   # ---- Decide Registration Function ----
   DecideFunctionLogGroup:
@@ -3342,6 +3625,12 @@ Outputs:
   EntitlementsTableReadPolicyArn:
     Description: Reserved read-only entitlements-table managed policy (attach to coverage-decision consumers)
     Value: !Ref EntitlementsTableReadPolicy
+  MetadataConfigurationTableName:
+    Description: Platform metadata configuration DynamoDB table name (for future admission consumers)
+    Value: !Ref MetadataConfigurationTable
+  MetadataPointerReadPolicyArn:
+    Description: Reserved read-only metadata pointer resolution managed policy (attach to publish admission)
+    Value: !Ref MetadataPointerReadPolicy
   SubscriptionDeliveryRoleArn:
     Description: Role EventBridge assumes to deliver subscription events to app-side buses
     Value: !GetAtt SubscriptionDeliveryRole.Arn

@@ -7,6 +7,7 @@
     "dev": "nuxi dev --port 3000",
     "build": "nuxi generate && node scripts/externalize-inline-scripts.mjs",
     "lint": "eslint .",
+    "test:ui": "playwright test",
     "typecheck": "nuxi typecheck",
     "test:ui": "playwright test",
     "postinstall": "nuxi prepare"

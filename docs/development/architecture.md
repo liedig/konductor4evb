@@ -600,6 +600,16 @@ The subscription rule Konductor materializes to match it — EventBridge event p
 }
 ```
 
+With platform metadata active, the `metadata` block additionally carries the stamped `metadataRevision` and every field the active metadata revision generates (`eventId`, `geo.region`, …) — the platform supplies all metadata values, and caller-supplied injected fields are rejected at admission. The stamped block is exactly the active revision's compiled schema; consumers validating it exactly must tolerate additive revisions (a revision bump is a new contract, not a guarantee that old readers accept new fields):
+
+```json
+{
+  "Source": "acme-orders",
+  "DetailType": "OrderNotification",
+  "Detail": "{\"metadata\":{\"schemaVersion\":3,\"metadataRevision\":2,\"idempotencyKey\":\"key-123\",\"publishedAt\":\"2026-07-30T10:30:00.123Z\",\"eventId\":\"0b9e6c21-7f4a-4d8e-9f1b-3c2d5e4f6a7b\",\"geo\":{\"region\":\"ap-southeast-2\"}},\"data\":{\"orderId\":\"o-123\"}}"
+}
+```
+
 Producers publish through `POST /publish`; Konductor stamps the entire envelope. Direct `PutEvents` to a domain bus remains possible for domain-internal events, but mis-stamped events fail closed (no rule matches — non-delivery, never misdelivery).
 
 ### Event Publishing (Validate-at-Ingest)
@@ -627,6 +637,16 @@ The full design rationale — the failure mode this removes, the status taxonomy
 ### Schema Management (Append-Only)
 
 Publishers manage schemas through two synchronous endpoints mirroring the EventBridge Schemas API: `POST /schemas` (like `CreateSchema` — creates `{namespaceIdentity}@{eventName}` in the stage-selected environment's registry as version 1, 409 on duplicates) and `POST /schemas/versions` (like `UpdateSchema` — appends the next version, existing versions immutable, 404 when the schema does not exist). Both require a `publisher` binding for the domain (`schema:create` / `schema:version-append` actions), require an `ACTIVE` domain, and infer the environment from the API stage. Schemas are **JSON Schema draft-4 only**: any other `schemaType` is a 400, and `content` that does not compile as a draft-4 document is rejected (400) before any registry write, so nothing in a registry is ever unvalidatable. Schemas are append-only: no delete, retire, replace, or version-deletion operations exist, and publisher permissions cover only `CreateSchema`/`UpdateSchema` inside org-namespaced registries — registry lifecycle and policy administration remain platform-admin operations.
+
+### Platform Metadata Composition
+
+Every admitted event carries a platform-generated metadata block alongside the publisher's business `data`. The two components version **independently**: an exact contract is `(organisation, environment, schemaName, businessVersion, metadataRevision)` — metadata revisions never move business versions, and business schema appends never touch metadata. `konductor-metadata-configuration` stores immutable additive revisions (protected defaults `schemaVersion`, `idempotencyKey`, `publishedAt`, `metadataRevision` plus generated extension fields from a bounded generator catalogue) and per-environment active pointers. Revision 0 is the read-only legacy selector for events predating metadata stamping.
+
+Admission resolves the environment pointer **strongly, once, after authorization** — that read is the event's metadata selection boundary. A request reading before an activation commit may complete under the old revision; one reading after gets the new revision; no cross-store atomicity between DynamoDB and SQS is promised. Generated values (UUIDs, timestamps, region/organisation/environment from trusted context) are frozen into a **format-2 queue envelope** that carries the resolved business/schema identity, target, metadata revision/digest, the compiled metadata schema or bounded descriptor, and the generated extension values — everything delivery needs with **zero configuration reads**, so retries cannot drift. `publishedAt` remains the queue-time exception: SQS's acceptance time, unknowable before acceptance, represented fixed-width for preflight with no constraint allowed to depend on it, derived at delivery from the recorded queue message. Format-2 messages with missing or inconsistent fields fail closed; only actual legacy wrappers take the old three-field path. A retry after an ambiguous enqueue is a new admission — the UUID is not an exactly-once guarantee.
+
+Metadata administration is OAuth-only (`/metadata/*`, platform roles): additive revision creation with stale-head conflict detection (409), non-persisting preview/readiness, and per-environment activation with explicit expected-current conditions, forward-only moves, server-side re-checks, and an append-only activation audit. Both write paths are stream-native — one conditional transaction commits the record plus its mutation audit, and the `MetadataConfigurationTable` stream consumer emits `MetadataRevisionCreated`/`MetadataRevisionActivated` from committed images with stream-event-id marker dedup (full records in the [decision log](decisions.md)). Activation deliberately imposes no dev/staging/prod ordering; each environment moves explicitly, and skipping intermediate additive revisions is valid.
+
+Composed contracts are discoverable without mutating anything: `GET /schemas/{schemaName}/contract` returns the exact current pair or an **explicitly selected** historical pair (both `schemaVersion` and `metadataRevision` required together — the active revision is never substituted for a historical business version), with raw business content, the generated metadata schema, generator descriptions, and an offline-usable composed draft-4 document. `POST /schemas/contract-preview` composes **unsaved** business content for publishers without registering. Catalog summaries carry the active metadata revision per environment; the raw registry documents remain business-only. Provenance remains the event's own recorded tuple — a historical composition is inspection, not evidence the pair was ever emitted.
 
 ### Subscription Materialization
 

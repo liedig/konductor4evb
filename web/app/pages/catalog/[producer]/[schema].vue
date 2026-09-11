@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ApiError } from '~/composables/useApi'
-import type { SchemaDetail } from '~/types/api'
+import type { ComposedContract, SchemaDetail } from '~/types/api'
 
 definePageMeta({ middleware: 'auth' })
 
@@ -16,6 +16,12 @@ const schema = ref<SchemaDetail | null>(null)
 const uncovered = ref(false)
 const errorMessage = ref('')
 const pending = ref(true)
+const metadataRevisions = ref<Record<string, number>>({})
+
+const selectedEnvironment = ref('')
+const contract = ref<ComposedContract | null>(null)
+const contractPending = ref(false)
+const contractError = ref('')
 
 const subscribeOpen = ref(false)
 const subscribing = ref(false)
@@ -25,11 +31,17 @@ const failureReason = ref('')
 async function load() {
   pending.value = true
   uncovered.value = false
+  errorMessage.value = ''
   try {
     schema.value = await catalog.describeSchema(schemaName, {
       consumerDomain: consumerDomain.value || undefined,
       producerDomain,
     })
+    await loadMetadataRevisions()
+    if (!selectedEnvironment.value || !availableEnvironments.value.includes(selectedEnvironment.value)) {
+      selectedEnvironment.value = availableEnvironments.value[0] ?? ''
+    }
+    await loadContract()
   } catch (error) {
     if (error instanceof ApiError && error.status === 403) {
       uncovered.value = true
@@ -40,6 +52,56 @@ async function load() {
   } finally {
     pending.value = false
   }
+}
+
+// The detail response carries business versions only; the producer-scoped
+// catalog entry adds the independent metadata revision per environment.
+// A consumer without catalog scope keeps the business-only badges.
+async function loadMetadataRevisions() {
+  // /schemas is paginated: keep paging until the schema is found or the
+  // listing is exhausted, otherwise large producers silently lose the badges.
+  try {
+    let nextToken: string | undefined
+    do {
+      const listed = await catalog.listSchemas({ producerDomain, nextToken })
+      const entry = (listed.items ?? []).find(item => item.schemaName === schemaName)
+      if (entry) {
+        metadataRevisions.value = entry.metadataRevisions ?? {}
+        return
+      }
+      nextToken = listed.nextToken
+    } while (nextToken)
+    metadataRevisions.value = {}
+  } catch {
+    metadataRevisions.value = {}
+  }
+}
+
+// One contract read per selection feeds both panels: the raw business
+// document and the composed document always come from the same environment's
+// current pair (design.md, section 9).
+async function loadContract() {
+  contract.value = null
+  contractError.value = ''
+  if (!selectedEnvironment.value) return
+  contractPending.value = true
+  try {
+    contract.value = await catalog.getContract(schemaName, {
+      domain: producerDomain,
+      environment: selectedEnvironment.value,
+      consumerDomain: consumerDomain.value || undefined,
+    })
+  } catch (error) {
+    contractError.value = error instanceof ApiError ? error.message : 'Failed to load the contract'
+  } finally {
+    contractPending.value = false
+  }
+}
+
+function selectEnvironment(env: string) {
+  if (env === selectedEnvironment.value || contractPending.value) return
+  selectedEnvironment.value = env
+  loadContract()
 }
 
 async function confirmSubscribe() {
@@ -92,14 +154,22 @@ async function pollSubscription(subscriptionId: string) {
 // producer's remaining environments follow on promotion (awaiting promotion).
 const availableEnvironments = computed(() => Object.keys(schema.value?.latestVersions ?? {}).sort())
 
-const prettyContent = computed(() => {
-  if (!schema.value?.content) return ''
+function pretty(value?: string): string {
+  if (!value) return ''
   try {
-    return JSON.stringify(JSON.parse(schema.value.content), null, 2)
+    return JSON.stringify(JSON.parse(value), null, 2)
   } catch {
-    return schema.value.content
+    return value
   }
-})
+}
+
+const prettyBusiness = computed(() => pretty(contract.value?.businessContent))
+const prettyComposed = computed(() => pretty(contract.value?.composedDocument))
+// Degradation path: when the contract read fails (for example a metadata
+// 503, or an API stage predating the contract route), the raw business
+// document from describe-schema still renders — labelled as the latest
+// registered version, since describe content is not environment-scoped.
+const prettyRegisteredContent = computed(() => pretty(schema.value?.content))
 
 // Entry points pass ?from=<internal path> so the back link returns to the
 // referring page; default is the consumer catalog. Internal paths only:
@@ -153,17 +223,70 @@ watch(consumerDomain, load)
     <p v-else-if="errorMessage" role="alert" class="text-sm text-danger">{{ errorMessage }}</p>
 
     <template v-else-if="schema">
-      <NxCard title="Latest version per environment">
-        <div class="flex flex-wrap gap-2">
-          <NxBadge v-for="(version, env) in schema.latestVersions" :key="env" tone="info">
-            {{ env }} v{{ version }}
-          </NxBadge>
+      <NxCard title="Environment">
+        <p class="mb-3 text-xs text-faint">
+          Select an environment to load the contract it currently serves.
+        </p>
+        <div class="flex flex-wrap gap-2" role="group" aria-label="Environment">
+          <button
+            v-for="env in availableEnvironments"
+            :key="env"
+            type="button"
+            :aria-pressed="selectedEnvironment === env"
+            class="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors"
+            :class="selectedEnvironment === env
+              ? 'border-accent bg-accent/10 text-foreground'
+              : 'border-border bg-surface text-muted hover:border-accent/50 hover:text-foreground'"
+            @click="selectEnvironment(env)"
+          >
+            <span class="font-medium">{{ env }}</span>
+            <NxBadge tone="info">v{{ schema.latestVersions?.[env] }}</NxBadge>
+            <NxBadge v-if="metadataRevisions[env] !== undefined" tone="neutral">
+              M{{ metadataRevisions[env] }}
+            </NxBadge>
+          </button>
         </div>
       </NxCard>
 
-      <NxCard title="Schema content">
-        <pre class="overflow-x-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyContent }}</pre>
-      </NxCard>
+      <div v-if="availableEnvironments.length === 0" class="text-sm text-muted">
+        This schema has no registered versions in any environment yet.
+      </div>
+
+      <div v-else class="grid gap-6 xl:grid-cols-2">
+        <NxCard title="Schema content">
+          <template v-if="contractError">
+            <p class="mb-3 text-xs text-faint">
+              The latest registered business schema — the per-environment contract could not
+              be loaded, so this is the highest version across environments.
+            </p>
+            <pre v-if="prettyRegisteredContent" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyRegisteredContent }}</pre>
+            <p v-else class="text-sm text-muted">No registered content.</p>
+          </template>
+          <template v-else>
+            <p class="mb-3 text-xs text-faint">
+              The business schema published by {{ producerDomain }} at
+              {{ selectedEnvironment }} v{{ contract?.schemaVersion }}.
+            </p>
+            <p v-if="contractPending" class="text-sm text-muted">Loading…</p>
+            <pre v-else-if="contract" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyBusiness }}</pre>
+          </template>
+        </NxCard>
+
+        <NxCard title="Schema preview">
+          <p v-if="contractError" role="alert" class="text-sm text-danger">{{ contractError }}</p>
+          <template v-else>
+            <p class="mb-3 text-xs text-faint">
+              The contract events in {{ selectedEnvironment }} validate against right now —
+              business v{{ contract?.schemaVersion }}, metadata M{{ contract?.metadataRevision }}<template v-if="contract?.definitionDigest">, digest {{ contract.definitionDigest.slice(0, 12) }}</template>.
+              The metadata block is platform-owned and read-only<template v-if="contract?.generators?.length">; generated fields:
+                <span class="font-mono">{{ contract.generators.map(generator => generator.name).join(', ') }}</span>
+              </template>.
+            </p>
+            <p v-if="contractPending" class="text-sm text-muted">Loading…</p>
+            <pre v-else-if="contract" class="max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs">{{ prettyComposed }}</pre>
+          </template>
+        </NxCard>
+      </div>
 
       <NxCard v-if="pollState !== 'idle'" title="Subscription activation">
         <p v-if="pollState === 'polling'" class="text-sm text-info">Subscription accepted — activating…</p>
