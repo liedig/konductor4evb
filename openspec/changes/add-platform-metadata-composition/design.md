@@ -167,7 +167,7 @@ Record these handler classifications in `docs/development/decisions.md` during i
 
 ### 9. Console composition and permissions
 
-Add `/admin/metadata` and a platform navigation entry. Build small components using the current `NxCard`, inputs/selects, tables, modal/confirm, badges, and toasts, rather than introducing a raw JSON-only administration experience.
+Add `/admin/metadata` under a Settings gear menu in the platform header (not a top-level navigation entry; All domains similarly groups under Domains as section tabs). Build small components using the current `NxCard`, inputs/selects, tables, modal/confirm, badges, and toasts, rather than introducing a raw JSON-only administration experience.
 
 - `MetadataDefaultsPanel`: locked defaults with type/source explanations and the idempotency exception.
 - `MetadataDefinitionEditor`: additive object/field tree, supported-generator selector, derived constraints, bounds and errors.
