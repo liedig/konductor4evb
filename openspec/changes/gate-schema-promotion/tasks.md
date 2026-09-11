@@ -14,7 +14,7 @@
 
 ## 3. Infrastructure
 
-- [ ] 3.1 Add `schemas:DescribeSchema` to the `SchemaAdminFunction` policy in `konductor-core-stack.yaml`, scoped to `${Organization}-*` registries/schemas like the sibling statements; verify `cfn-lint` (or the repo's template check in `make check`) passes
+- [x] 3.1 Add `schemas:DescribeSchema` to the `SchemaAdminFunction` policy in `konductor-core-stack.yaml`, scoped to `${Organization}-*` registries/schemas like the sibling statements; verify `cfn-lint` (or the repo's template check in `make check`) passes
 
 ## 4. API and user documentation
 

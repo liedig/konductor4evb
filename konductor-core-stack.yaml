@@ -1803,7 +1803,7 @@ Resources:
               Action: [dynamodb:GetItem]
               Resource: !GetAtt DomainsTable.Arn
             - Effect: Allow
-              Action: [schemas:CreateSchema, schemas:UpdateSchema]
+              Action: [schemas:CreateSchema, schemas:UpdateSchema, schemas:DescribeSchema]
               Resource:
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
