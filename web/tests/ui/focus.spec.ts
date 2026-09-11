@@ -3,10 +3,11 @@ import { expect, test } from '@playwright/test'
 import { installApi, signIn } from './api'
 
 /**
- * Keyboard and dialog focus. Asserts what the components implement today
- * (Escape dismissal, keyboard activation, dialog roles); the known gaps —
- * no focus trap in NxModal, no focus restore on close — are recorded in the
- * task notes rather than marked passed.
+ * Keyboard and dialog focus on the metadata admin flows: Escape dismissal,
+ * keyboard activation, dialog roles. NxModal's focus trap and
+ * restore-to-opener come from the Reka Dialog primitives and are covered on
+ * the gallery (tests/ui/overlays.spec.ts); these specs assert the admin
+ * flows wire them up correctly.
  */
 
 test.beforeEach(async ({ page }) => {
@@ -33,7 +34,7 @@ test('activation controls are keyboard-operable end to end', async ({ page }) =>
   await page.keyboard.press('Space')
   await confirm.getByRole('button', { name: 'Activate M2 for prod' }).focus()
   await page.keyboard.press('Enter')
-  await expect(page.getByText('prod is now active at M2')).toBeVisible()
+  await expect(page.getByText('prod is now active at M2', { exact: true })).toBeVisible()
 })
 
 test('Escape closes the prepare dialog while idle', async ({ page }) => {
