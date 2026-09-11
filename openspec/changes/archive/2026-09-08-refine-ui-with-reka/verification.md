@@ -45,7 +45,7 @@ At the user's request, `make web-dev` now opts into opening `/design-system` thr
 ## Live deployment, 2026-09-08
 
 - Predeployment checks passed: six opener tests, clean lint, typecheck, and 18/18 browser tests.
-- Deployed through `AWS_REGION=ap-southeast-2 rtk make deploy-web` to `s3://acme-konductor-web-444433332222-ap-southeast-2` and CloudFront distribution `E14B1M2TL5VJHP`.
-- CloudFront invalidation `I56CR99L4AWLUNJ1BADH9BVUY0` completed.
+- Deployed through `AWS_REGION=ap-southeast-2 rtk make deploy-web` to the acme-konductor-web S3 bucket and its CloudFront distribution (exact bucket, distribution, and account identifiers redacted; see deployment logs).
+- CloudFront invalidation completed (invalidation ID redacted; see deployment logs).
 - Live `/config.json` returned the expected same-origin API and Cognito runtime configuration. Live `/design-system` returned 200 and rendered the refined gallery in an isolated browser session with the new brand icon, without page or resource errors.
 - True browser-zoom review was completed by the user on the live site; the screen-reader check was explicitly waived (see "Manual review outcome").
