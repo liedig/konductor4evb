@@ -1,5 +1,7 @@
 <script setup lang="ts">
-export type BadgeTone = 'success' | 'info' | 'warning' | 'danger' | 'neutral'
+import type { BadgeTone } from '~/types/ui'
+
+export type { BadgeTone } from '~/types/ui'
 
 withDefaults(defineProps<{ tone?: BadgeTone }>(), { tone: 'neutral' })
 
@@ -14,7 +16,7 @@ const tones: Record<BadgeTone, string> = {
 
 <template>
   <span
-    class="inline-flex items-center gap-1.5 rounded-lg px-2 py-0.5 text-xs font-medium"
+    class="inline-flex items-center gap-1.5 rounded-lg border border-current/20 px-2 py-0.5 text-xs font-medium leading-5"
     :class="tones[tone]"
   >
     <slot />

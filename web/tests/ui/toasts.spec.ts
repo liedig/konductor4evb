@@ -1,0 +1,91 @@
+import { test, expect } from './fixtures'
+
+test.beforeEach(async ({ page }) => {
+  await page.goto('/design-system')
+})
+
+test('notifications announce politely, preserve focus and expire', async ({ page }) => {
+  await page.clock.install()
+  const button = page.getByRole('button', { name: 'Success', exact: true })
+  await button.click()
+  const toast = page.locator('[data-state="open"]').filter({ hasText: 'Registration request accepted' })
+  await expect(toast).toBeVisible()
+  await expect(button).toBeFocused()
+  await expect(page.locator('[aria-live="polite"]').filter({ hasText: 'Registration request accepted' })).toHaveCount(1)
+  await page.clock.runFor(5900)
+  await expect(toast).toBeVisible()
+  await page.clock.runFor(200)
+  await expect(toast).toHaveCount(0)
+})
+
+for (const interaction of ['hover', 'focus', 'window'] as const) {
+  test(`notification expiry pauses for ${interaction} and resumes`, async ({ page }) => {
+    await page.clock.install()
+    await page.getByRole('button', { name: 'Success', exact: true }).click()
+    const toast = page.locator('[data-state="open"]').filter({ hasText: 'Registration request accepted' })
+    await expect(toast).toBeVisible()
+    await page.clock.runFor(1000)
+    if (interaction === 'hover') await toast.hover()
+    if (interaction === 'focus') await page.keyboard.press('F8')
+    if (interaction === 'window') await page.evaluate(() => window.dispatchEvent(new Event('blur')))
+    await page.clock.runFor(7000)
+    await expect(toast).toBeVisible()
+    if (interaction === 'hover') await page.mouse.move(0, 0)
+    if (interaction === 'focus') await page.getByRole('button', { name: 'Success', exact: true }).focus()
+    if (interaction === 'window') await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await page.clock.runFor(5100)
+    await expect(toast).toHaveCount(0)
+  })
+}
+
+test('keyboard dismissal removes only its message and narrow messages fit', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 })
+  await page.getByRole('button', { name: 'Success', exact: true }).click()
+  await page.getByRole('button', { name: 'Long notification', exact: true }).click()
+  const toasts = page.locator('[data-state="open"]')
+  await expect(toasts).toHaveCount(2)
+  for (const toast of await toasts.all()) {
+    const bounds = await toast.boundingBox()
+    expect(bounds!.x).toBeGreaterThanOrEqual(0)
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390)
+  }
+  await page.keyboard.press('F8')
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: 'Dismiss notification' }).last()).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(toasts).toHaveCount(1)
+  await expect(toasts).toContainText('Registration request accepted')
+})
+
+test('leaving keyboard focus does not resume expiry while still hovered', async ({ page }) => {
+  await page.clock.install()
+  const opener = page.getByRole('button', { name: 'Success', exact: true })
+  await opener.click()
+  const toast = page.locator('[data-state="open"]').filter({ hasText: 'Registration request accepted' })
+  await expect(toast).toBeVisible()
+  await toast.hover()
+  await page.keyboard.press('F8')
+  await opener.focus()
+  await page.clock.runFor(7000)
+  await expect(toast).toBeVisible()
+  await page.mouse.move(0, 0)
+  await page.clock.runFor(6100)
+  await expect(toast).toHaveCount(0)
+})
+
+test('notifications added while paused receive their full lifetime on resume', async ({ page }) => {
+  await page.clock.install()
+  await page.getByRole('button', { name: 'Success', exact: true }).click()
+  await page.keyboard.press('F8')
+  await page.clock.runFor(7000)
+  await page.getByRole('button', { name: 'Information', exact: true }).dispatchEvent('click')
+  const toast = page.locator('[data-state="open"]').filter({ hasText: 'Subscription is enabling' })
+  await expect(toast).toBeVisible()
+  await page.clock.runFor(7000)
+  await page.getByRole('button', { name: 'Information', exact: true }).focus()
+  await page.clock.runFor(5900)
+  await expect(toast).toBeVisible()
+  await page.clock.runFor(200)
+  await expect(toast).toHaveCount(0)
+})

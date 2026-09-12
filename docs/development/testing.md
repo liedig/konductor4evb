@@ -59,7 +59,6 @@ flowchart LR
 |------|----------|---------|---------|
 | Unit Tests | `src/*.rs` (inline `#[cfg(test)]` modules) | `cargo test --workspace` | Test isolated logic within each crate |
 | Handler Tests | `src/*.rs` (inline `#[cfg(test)]` with smithy-mocks) | `cargo test --workspace` | Test handler behavior with mocked AWS SDK clients |
-| Browser UI Tests | `web/tests/ui/*.spec.ts` | `pnpm test:ui` (from `web/`) | Isolated-browser journeys against the dev server with route-mocked APIs |
 | Full Suite | — | `make test` | Run all tests across the workspace |
 
 ## Commands
@@ -79,35 +78,37 @@ cargo test --workspace -- --nocapture
 
 # Check compilation without running tests
 make check
-
-# Web console: lint, types, isolated-browser UI tests, production build (from web/)
-rtk pnpm lint && rtk pnpm typecheck && rtk pnpm test:ui && rtk pnpm build
 ```
 
 ## Browser UI Tests (Playwright)
 
-The web console has an isolated-browser suite (`pnpm test:ui` from `web/`) with
-no dependency on a deployed stack:
+The web console has an isolated-browser suite (`pnpm test:ui` from `web/`) with no dependency on a deployed stack:
 
-- **Identity**: the dev-only `konductorTestSession` sessionStorage seam
-  (`web/app/stores/session.ts`) mirrors a Cognito ID-token payload, letting a
-  test run as `platform-admin`, `platform-auditor`, or a team group. The seam
-  is compiled out of production (`import.meta.env.DEV` is statically false).
-- **API**: every `/dev/**` call is fulfilled by the in-test route mock
-  (`web/tests/ui/api.ts`) — per-test mutable state drives conflicts, stale
-  activations, delayed busy states, and error modes deterministically. The
-  mock mirrors the real OpenAPI surface (`code` + `message` on errors).
-- **Server**: Playwright starts `nuxi dev --host 127.0.0.1 --port 3100`
-  itself; bind IPv4 explicitly (the default binds IPv6-only on macOS, which
-  defeats the readiness poll).
-- **Scope**: journey flows (create → preview → save → conflict → activate →
-  inspect), role restrictions, error/loading/empty states, narrow viewports,
-  and keyboard/dialog focus. Known accessibility gaps are recorded in the
-  change's task notes rather than asserted as passing.
+- **Identity**: the dev-only `konductorTestSession` sessionStorage seam (`web/app/stores/session.ts`) mirrors a Cognito ID-token payload, letting a test run as `platform-admin`, `platform-auditor`, or a team group. The seam is compiled out of production (`import.meta.env.DEV` is statically false).
+- **API**: feature-flow tests fulfill every `/dev/**` call with the in-test route mock (`web/tests/ui/api.ts`) — per-test mutable state drives conflicts, stale activations, delayed busy states, and error modes deterministically. The mock mirrors the real OpenAPI surface (`code` + `message` on errors). Component/gallery specs use the isolation fixture (`web/tests/ui/fixtures.ts`), which stubs `config.json` and blocks external traffic and same-origin API calls instead.
+- **Server**: Playwright starts `nuxi dev --host 127.0.0.1 --port 3100` itself; bind IPv4 explicitly (the default binds IPv6-only on macOS, which defeats the readiness poll).
+- **Scope**: journey flows (create → preview → save → conflict → activate → inspect), role restrictions, error/loading/empty states, narrow viewports, keyboard/dialog focus, plus rendered `Nx*` wrapper behavior on `/design-system` (labels and states, modal focus/dismissal, confirmation busy/retry, notification timing and overlapping pause conditions, enlarged text, reduced motion) and protected-route redirects to sign-in. Known accessibility gaps are recorded in the change's task notes rather than asserted as passing.
 
-Write UI tests with role/label locators (`getByRole`, `getByLabel`) and scope
-by card heading — visible text repeats across panels. Prefer the strict-mode
-failure over brittle CSS selectors.
+```bash
+cd web
+pnpm exec playwright install chromium
+pnpm test:ui
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+No Cognito account, real data, or authentication bypass is needed. Tests must never submit operations against a live service.
+
+Write UI tests with role/label locators (`getByRole`, `getByLabel`) and scope by card heading — visible text repeats across panels. Prefer the strict-mode failure over brittle CSS selectors. Toast text appears twice in the DOM — Reka's aria-hidden announce copy plus the visible toast — so always assert toast messages with `{ exact: true }`.
+
+For manual review, `make web-dev` keeps its AWS-backed configuration and API proxy, then opens `/design-system` in the default browser when Nuxt starts. It uses Nuxt's actual port (normally 3000). Plain `pnpm dev` does not automatically open a browser. Gallery demos make no service writes, but other pages connect to the live backend.
+
+The browser-opener helper has separate dependency-free tests: run `node --test tests/dev/open-gallery.test.mjs` from `web/`. These stub the browser launch and verify platform commands, the actual port, opt-in behavior, and graceful failure without opening a real browser.
+
+Screenshots/traces go to ignored `web/test-results/`; preserve review evidence in ignored `web/ui-evidence/` before another run clears results. Capture the gallery at 390px and 1440px before and after visual changes. Inspect the images rather than treating screenshot creation as visual approval.
+
+Automated accessible-name/description checks are not a screen-reader audit. Before acceptance, review the gallery with a screen reader, true browser zoom, keyboard-only operation, and reduced motion. The automated 200% root-font-size case covers enlarged text, not browser zoom. Verify modal focus entry/restoration and confinement, confirmation Cancel-first/busy states, F8 notification navigation, polite announcements, and independent dismissal. Record unavailable tooling or authentication-blocked consumer checks explicitly; do not claim those checks passed.
 
 ## Keeping `target/` Small
 

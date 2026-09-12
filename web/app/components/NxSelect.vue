@@ -11,6 +11,11 @@ withDefaults(defineProps<{
 }>(), {
   required: false,
   disabled: false,
+  label: undefined,
+  hint: undefined,
+  error: undefined,
+  placeholder: undefined,
+  id: undefined,
 })
 
 const model = defineModel<string>({ default: '' })
@@ -28,15 +33,16 @@ const uid = useId()
       :required="required"
       :disabled="disabled"
       :aria-invalid="!!error"
-      class="rounded-lg border bg-surface px-3 py-2 text-sm text-foreground disabled:opacity-50"
-      :class="error ? 'border-danger' : 'border-border-strong'"
+      :aria-describedby="error || hint ? `${id ?? uid}-description` : undefined"
+      class="min-w-0 rounded-lg border bg-background px-3 py-2.5 text-sm text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+      :class="error ? 'border-danger' : 'border-border-strong enabled:hover:border-muted focus:border-focus'"
     >
       <option v-if="placeholder" value="" disabled>{{ placeholder }}</option>
       <option v-for="option in options" :key="option.value" :value="option.value">
         {{ option.label }}
       </option>
     </select>
-    <p v-if="error" class="text-sm text-danger">{{ error }}</p>
-    <p v-else-if="hint" class="text-sm text-faint">{{ hint }}</p>
+    <p v-if="error" :id="`${id ?? uid}-description`" class="text-sm text-danger">{{ error }}</p>
+    <p v-else-if="hint" :id="`${id ?? uid}-description`" class="text-sm text-muted">{{ hint }}</p>
   </div>
 </template>

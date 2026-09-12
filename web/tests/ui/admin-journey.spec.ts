@@ -90,7 +90,7 @@ test('save publishes M3 to the history and resets the draft', async ({ page }) =
   await addedField(page).fill('traceId')
   await page.getByRole('button', { name: 'Save new revision' }).click()
 
-  await expect(page.getByText('Revision M3 saved; it is not activated')).toBeVisible()
+  await expect(page.getByText('Revision M3 saved; it is not activated', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Inspect revision M3' })).toBeVisible()
   await expect(page.getByText('Draft matches the current head')).toBeVisible()
 })
@@ -102,7 +102,7 @@ test('concurrent save keeps local edits behind a conflict banner', async ({ page
   await page.getByRole('button', { name: 'Add field', exact: true }).last().click()
   await addedField(page).fill('traceId')
   await page.getByRole('button', { name: 'Save new revision' }).click()
-  await expect(page.getByText('Revision M3 saved; it is not activated')).toBeVisible()
+  await expect(page.getByText('Revision M3 saved; it is not activated', { exact: true })).toBeVisible()
 
   await page.getByRole('button', { name: 'Add field', exact: true }).last().click()
   const second = addedField(page)
@@ -143,7 +143,7 @@ test('activation runs readiness, inventory, explicit acknowledgement, and audit'
   await confirm.getByRole('checkbox').check()
   await activate.click()
 
-  await expect(page.getByText('prod is now active at M2')).toBeVisible()
+  await expect(page.getByText('prod is now active at M2', { exact: true })).toBeVisible()
   const prodRow = card(page, 'Environments').getByRole('row').filter({ hasText: 'prod' })
   await expect(prodRow.getByRole('cell', { name: '2', exact: true })).toBeVisible()
   await expect(prodRow.getByText('Legacy', { exact: true })).toHaveCount(0)
@@ -167,7 +167,7 @@ test('in-flight activation refuses Escape and click-away dismissal', async ({ pa
   await expect(confirm).toBeVisible()
 
   await expect(confirm).toBeHidden({ timeout: 10_000 })
-  await expect(page.getByText('prod is now active at M2')).toBeVisible()
+  await expect(page.getByText('prod is now active at M2', { exact: true })).toBeVisible()
 })
 
 test('stale activation closes the confirm, shows the banner, and refreshes identity', async ({ page }) => {

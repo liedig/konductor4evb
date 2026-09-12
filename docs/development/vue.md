@@ -122,11 +122,11 @@ const model = defineModel<string>({ default: '' })
 </script>
 ```
 
-Small shared types are exported from the component that owns them (`BadgeTone` from `NxBadge.vue`) and imported as types elsewhere.
+Component-only types can be exported by their owner (`TableColumn` from `NxTable.vue`). Types also used by composables belong in `app/types/` so plain TypeScript checks do not need to resolve Vue files. `BadgeTone` lives in `types/ui.ts`, with a compatibility re-export from `NxBadge.vue`.
 
 ## The Nx\* Component Kit
 
-There is **no UI component library dependency**. Build pages from the kit in `app/components/` — `NxButton`, `NxCard`, `NxInput`, `NxSelect`, `NxModal`, `NxConfirm`, `NxBadge`, `NxStatusPill`, `NxTable`, `NxEmptyState`, `NxToasts` — composed with Tailwind utilities and design tokens (`bg-surface`, `text-muted`, `border-border-strong`, `text-danger`, `bg-accent`, ...).
+Build pages from the kit in `app/components/` — `NxButton`, `NxCard`, `NxInput`, `NxSelect`, `NxModal`, `NxConfirm`, `NxBadge`, `NxStatusPill`, `NxTable`, `NxEmptyState`, `NxToasts` — composed with Tailwind utilities and design tokens (`bg-surface`, `text-muted`, `border-border-strong`, `text-danger`, `bg-accent`, ...). **Reka UI is an internal dependency of the overlay and notification wrappers**, not a second page-facing kit. Import its primitives explicitly only inside those wrappers. Buttons, inputs, and simple selects remain native.
 
 ```vue
 <template>
@@ -146,6 +146,7 @@ There is **no UI component library dependency**. Build pages from the kit in `ap
 - Tables: `NxTable` with `columns`/`items` and `#cell-{key}` / `#empty` slots.
 - Variant/tone styling lives in the component as a `Record<Tone, string>` map keyed by the prop (see `NxBadge`, `NxButton`).
 - Navigation is `NuxtLink`; actions are `NxButton`. Forms use `@submit.prevent` and a submit-type `NxButton` with `:loading="busy"`.
+- Modals use controlled `open` and emit `close`. Confirmations emit `confirm`/`cancel` and never own the API request. Set `busy` during async confirmation work; busy prevents user dismissal and duplicate actions. Confirmations focus Cancel first and never dismiss on backdrop clicks.
 
 ## Forms
 
@@ -165,7 +166,7 @@ toast.success('Subscription requested')
 toast.error(error instanceof ApiError ? error.message : 'Request failed')
 ```
 
-Toasts are app-wide transient notifications rendered once by `<NxToasts />` in `app.vue`. Use `NxConfirm`/`NxModal` for destructive or blocking interactions instead of `confirm()`.
+Toasts are app-wide transient notifications rendered once by `<NxToasts />` in `app.vue`. `useToast` owns only the queue; each `NxToastItem` uses `useToastLifetime` for six seconds of unpaused display time. Hover, focus, or window inactivity pauses expiry until all conditions clear. Do not add a competing queue timeout. Use `NxConfirm`/`NxModal` for destructive or blocking interactions instead of `confirm()`.
 
 ## Routing and Guards
 

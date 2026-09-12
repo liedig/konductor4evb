@@ -11,6 +11,24 @@
 - No `unwrap()`/`expect()` in handler code paths — handle the `Option`/`Result`; panicking is acceptable only in tests
 - No `unsafe`. If a future need arises, it requires a `// SAFETY:` comment and review sign-off
 
+## Web UI
+
+The console (`web/`) conventions are documented under `docs/development/` and apply to every new page, component, and interaction:
+
+- `design-system.md` — tokens, the `Nx*` primitive kit, and interaction contracts (modal focus, busy confirmation, toast lifetime). Changing a token or primitive ⇒ update this doc in the same change
+- `vue.md` — SPA shape (no SSR), runtime config via `useKonductorConfig()`, all API traffic through `useApi()`, the single session store
+- `typescript.md` — toolchain and gates: `pnpm lint`, `pnpm typecheck`, `pnpm build` (all run in CI's Web job)
+- `testing.md` → *Browser UI Tests* — the Playwright harness (`tests/ui/api.ts` mocks for feature flows, `tests/ui/fixtures.ts` isolation for gallery/component specs)
+
+Hard rules for new UI content:
+
+- Compose `Nx*` primitives; raw HTML controls only where no primitive fits (e.g., toggle-button groups with `aria-pressed`, checkboxes) — match the accessibility semantics of the existing examples
+- Semantic token utilities (`bg-surface`, `text-muted`, `border-border`, …), never raw palette values; `rounded-lg`/`rounded-xl` and `shadow-sm` only; three surface layers, never a fourth
+- Async action outcomes surface via `useToast()` with `error instanceof ApiError ? error.message : '…'` fallbacks; copy affordances confirm inline via `useCopyToClipboard()`
+- Overlays keep their contracts: confirmation is Cancel-first and blocks dismissal while busy; modals restore focus to the opener
+- New interactive surfaces ship Playwright coverage: role/label locators scoped by card heading, viewport set per test, toast text asserted with `{ exact: true }` (Reka renders an aria-hidden announce duplicate)
+- User-visible behavior changes sync `openspec/specs/web-ui/spec.md`
+
 ## Side Effects and Durability
 
 Classify every new handler write path at authoring time against the stream-driven side-effects rubric (per-handler records: `docs/development/decisions.md`, "Stream-Driven Side-Effects Audit"). When a handler commits a DynamoDB write and performs any other side effect (EventBridge, SQS, SNS, Step Functions, SES, rule mutations), answer:

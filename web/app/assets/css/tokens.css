@@ -7,22 +7,22 @@
  */
 @theme {
   /* Layered depth: background → surface (cards) → surface-raised (interactive) */
-  --color-background: #0b0f13;
-  --color-surface: #12171d;
-  --color-surface-raised: #1a2129;
+  --color-background: #0c1017;
+  --color-surface: #131a24;
+  --color-surface-raised: #1c2633;
 
   /* Text */
-  --color-foreground: #e7ecf2;
-  --color-muted: #9aa7b4;
-  --color-faint: #6b7885;
+  --color-foreground: #edf2f8;
+  --color-muted: #a8b6c8;
+  --color-faint: #8493a7;
 
   /* Borders */
-  --color-border: #232c38;
-  --color-border-strong: #2f3a49;
+  --color-border: #283446;
+  --color-border-strong: #40516a;
 
   /* Accent */
-  --color-accent: #3b82f6;
-  --color-accent-strong: #2563eb;
+  --color-accent: #2563eb;
+  --color-accent-strong: #1d4ed8;
   --color-on-accent: #ffffff;
 
   /* Status semantics: green = ready, blue = active, red = urgent */

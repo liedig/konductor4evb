@@ -1,48 +1,44 @@
 <script setup lang="ts">
-const props = withDefaults(defineProps<{
+import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
+
+const props = defineProps<{
   open: boolean
   title: string
-}>(), {})
+}>()
 
 const emit = defineEmits<{ close: [] }>()
 
-watch(() => props.open, (open) => {
-  if (!open) return
-  const onKey = (event: KeyboardEvent) => {
-    if (event.key === 'Escape') emit('close')
-  }
-  window.addEventListener('keydown', onKey)
-  onWatcherCleanup(() => window.removeEventListener('keydown', onKey))
-})
+const { restoreFocus, focusContent } = useDialogFocus(() => props.open)
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      v-if="open"
-      class="fixed inset-0 z-50 flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
-      :aria-label="title"
-    >
-      <div class="absolute inset-0 bg-background/80" @click="emit('close')" />
-      <div class="relative w-full max-w-lg rounded-xl border border-border bg-surface p-6 shadow-sm">
+  <DialogRoot :open="open" @update:open="value => { if (!value) emit('close') }">
+    <DialogPortal>
+      <DialogOverlay class="nx-overlay" @click.self="emit('close')" />
+      <!-- Reka's outside-interaction dismissal is suppressed so backdrop clicks
+           close only via the overlay handler above: relying on Reka alone is
+           flaky across rapid close/reopen cycles (its document listener
+           registers on a deferred timer), and keeping both paths would emit
+           close twice per click. -->
+      <DialogContent
+        class="nx-dialog"
+        aria-modal="true"
+        :aria-describedby="undefined"
+        @open-auto-focus="focusContent"
+        @close-auto-focus="restoreFocus"
+        @pointer-down-outside.prevent
+      >
         <header class="mb-4 flex items-start justify-between gap-4">
-          <h2 class="text-base font-semibold">{{ title }}</h2>
-          <button
-            type="button"
-            class="text-faint transition-colors hover:text-foreground"
-            aria-label="Close"
-            @click="emit('close')"
-          >
-            ✕
-          </button>
+          <DialogTitle class="text-lg font-semibold">{{ title }}</DialogTitle>
+          <NxButton variant="ghost" size="sm" aria-label="Close" @click="emit('close')">
+            <span aria-hidden="true">✕</span>
+          </NxButton>
         </header>
         <slot />
-        <footer v-if="$slots.actions" class="mt-6 flex justify-end gap-2">
+        <footer v-if="$slots.actions" class="mt-6 flex flex-wrap justify-end gap-2 border-t border-border pt-4">
           <slot name="actions" />
         </footer>
-      </div>
-    </div>
-  </Teleport>
+      </DialogContent>
+    </DialogPortal>
+  </DialogRoot>
 </template>

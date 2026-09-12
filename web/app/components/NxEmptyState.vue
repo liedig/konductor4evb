@@ -6,7 +6,7 @@ defineProps<{
 </script>
 
 <template>
-  <div class="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border-strong px-6 py-12 text-center">
+  <div class="flex flex-col items-center gap-3 rounded-xl border border-dashed border-border-strong bg-background/40 px-6 py-12 text-center">
     <div class="text-3xl text-faint" aria-hidden="true">
       <slot name="icon">◌</slot>
     </div>

@@ -1,32 +1,56 @@
 <script setup lang="ts">
+import { ToastProvider, ToastViewport } from 'reka-ui'
+
 const { toasts, dismiss } = useToast()
 
-const toneClasses = {
-  success: 'border-success/40 text-success',
-  info: 'border-info/40 text-info',
-  warning: 'border-warning/40 text-warning',
-  danger: 'border-danger/40 text-danger',
-  neutral: 'border-border-strong text-muted',
+const host = useTemplateRef<HTMLElement>('host')
+const hovered = ref(false)
+const focused = ref(false)
+const inactive = ref(false)
+const paused = computed(() => hovered.value || focused.value || inactive.value)
+
+function focusOut(event: FocusEvent) {
+  focused.value = event.relatedTarget instanceof Node && !!host.value?.contains(event.relatedTarget)
 }
+
+function windowBlur() { inactive.value = true }
+function windowFocus() { inactive.value = false }
+
+onMounted(() => {
+  inactive.value = !document.hasFocus()
+  window.addEventListener('blur', windowBlur)
+  window.addEventListener('focus', windowFocus)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('blur', windowBlur)
+  window.removeEventListener('focus', windowFocus)
+})
+
+watch(() => toasts.value.length, async () => {
+  await nextTick()
+  hovered.value = !!toasts.value.length && !!host.value?.matches(':hover')
+  focused.value = !!host.value?.contains(document.activeElement)
+})
 </script>
 
 <template>
-  <div class="pointer-events-none fixed right-4 bottom-4 z-50 flex w-96 max-w-full flex-col gap-2" aria-live="polite">
-    <div
+  <ToastProvider :duration="Infinity">
+    <NxToastItem
       v-for="toast in toasts"
       :key="toast.id"
-      class="pointer-events-auto flex items-start justify-between gap-3 rounded-lg border bg-surface-raised px-4 py-3 text-sm shadow-sm"
-      :class="toneClasses[toast.tone]"
+      :toast="toast"
+      :paused="paused"
+      @dismiss="dismiss(toast.id)"
+    />
+    <div
+      ref="host"
+      @pointerenter="hovered = true"
+      @pointerleave="hovered = false"
+      @focusin="focused = true"
+      @focusout="focusOut"
     >
-      <span class="text-foreground">{{ toast.message }}</span>
-      <button
-        type="button"
-        class="shrink-0 text-faint transition-colors hover:text-foreground"
-        aria-label="Dismiss"
-        @click="dismiss(toast.id)"
-      >
-        ✕
-      </button>
+      <ToastViewport class="fixed right-4 bottom-4 z-[60] flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-sm list-none flex-col gap-3 overflow-y-auto" />
     </div>
-  </div>
+  </ToastProvider>
 </template>

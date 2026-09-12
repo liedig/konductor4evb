@@ -1,4 +1,4 @@
-import type { BadgeTone } from '~/components/NxBadge.vue'
+import type { BadgeTone } from '~/types/ui'
 
 export interface Toast {
   id: number
@@ -14,7 +14,6 @@ export function useToast() {
   function push(tone: BadgeTone, message: string) {
     const id = ++nextId
     toasts.value.push({ id, tone, message })
-    setTimeout(() => dismiss(id), 6000)
   }
 
   function dismiss(id: number) {
