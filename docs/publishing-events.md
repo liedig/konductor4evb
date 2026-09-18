@@ -78,12 +78,13 @@ awscurl -X POST "${API_URL}/schemas/versions" --region ${AWS_REGION} \
 
 This returns `201` with the next version number (`404` if the schema does not exist in that environment). Schemas are **append-only**: there is no delete, retire, replace, or version deletion — earlier versions remain immutable so existing consumers keep a valid contract.
 
-Appends are also **backward compatible only**. The new document is checked against the current latest version, and anything that would reject a payload the latest version accepts fails with `400 Bad Request` naming the offending paths. In practice:
+Appends are also **backward compatible only**. The new document is checked against the current latest version with a bounded proof that every previously accepted payload stays accepted. Anything that visibly restricts the contract — or that the proof cannot establish — fails with `400 Bad Request` naming the relevant paths and reasons. In practice:
 
-- **Allowed:** adding optional properties, dropping entries from `required`, widening a `type` (for example `"integer"` to `["integer", "string"]`), growing an `enum`, loosening or removing constraints (`minimum`, `maxLength`, `pattern`, and so on).
-- **Rejected:** removing a declared property, newly requiring a property, narrowing a `type` or `enum`, raising `minimum`, lowering `maximum`, flipping `additionalProperties` from `true` to `false`, and any combinator or `$ref` edit the checker cannot prove safe.
+- **Allowed:** dropping entries from `required`, widening a `type` (for example `"integer"` to `["integer", "string"]`), growing an `enum`, loosening or removing constraints (`minimum`, `maxLength`, `pattern`, and so on), and adding an optional property whose constraint provably accepts every value the predecessor allowed for that name — any constraint when the predecessor closed the object with `additionalProperties: false`, an unconstrained `{}` when it did not.
+- **Rejected:** removing a declared property, newly requiring a property, narrowing a `type` or `enum`, raising `minimum`, lowering `maximum`, flipping `additionalProperties` from `true` to `false`, and constraining a previously unrestricted property name on an open object (for example adding `"note": {"type": "string"}` to a schema that accepted any `note` value).
+- **Also rejected, as unproven rather than demonstrably breaking:** any change to a document carrying schema-bearing `$ref`s, edits to combinators or `patternProperties`, `id`/`format` changes, numeric comparisons that cannot be made exactly, and documents whose comparison exceeds the gate's work budget. These rejections mean the bounded proof could not establish compatibility, not that a breaking payload was found.
 
-Compatibility is judged against the current latest version only, never historical ones, and the gate is absolute — no flag or role bypasses it. If you need a genuinely breaking change (renaming a field, tightening a constraint), register it as a **new schema under a new event name** and migrate consumers explicitly; that keeps every version of an event safe for existing consumers forever.
+Compatibility is judged against the current latest version only, never historical ones, and the gate is absolute — no flag or role bypasses it. If you need a genuinely breaking change (renaming a field, tightening a constraint), register it as a **new schema under a new event name** and migrate consumers explicitly; that keeps every accepted version of an event safe for consumers validated against its predecessors.
 
 ## Step 3: Publish an event
 

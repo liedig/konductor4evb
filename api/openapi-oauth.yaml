@@ -841,12 +841,17 @@ paths:
       description: >
         Flat append-only version registration mirroring EventBridge
         UpdateSchema. Existing versions remain immutable. Requires a publisher
-        binding for the domain. The appended document must be backward
-        compatible with the current latest version: it may add optional
-        properties and loosen or remove constraints, but never remove a
-        declared property, newly require a property, narrow a type, or tighten
-        a constraint. Intentional breaking evolution is expressed as a new
-        schema under a new event name.
+        binding for the domain. The appended document must provably preserve
+        every payload the current latest version accepts, under a bounded
+        syntactic proof: it may loosen or remove constraints, and it may add
+        an optional property only where the predecessor's property policy
+        allows it (any constraint on a previously prohibited name, or an
+        unconstrained one on an open object). It must never remove a declared
+        property, newly require a property, narrow a type, or tighten a
+        constraint. Changes to documents carrying schema-bearing $refs,
+        comparisons that cannot be made exactly, and proofs that exceed the
+        comparison budget fail closed as unproven. Intentional breaking
+        evolution is expressed as a new schema under a new event name.
       x-amazon-apigateway-request-validator: validate-body
       requestBody:
         required: true
@@ -864,8 +869,10 @@ paths:
         "400":
           description: >
             Validation error: the document is not valid JSON Schema draft-4,
-            or it is not backward compatible with the current latest version
-            (the message identifies the offending paths and rules)
+            or backward compatibility with the current latest version could
+            not be established (the message identifies the relevant paths,
+            distinguishing observed constraint restrictions from changes
+            the bounded proof does not support)
           content:
             application/json:
               schema:

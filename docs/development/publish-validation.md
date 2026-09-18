@@ -191,11 +191,22 @@ would fail the fresh one? Under the platform's additive-only evolution norm
 (new versions add fields and loosen constraints; they never remove), any
 payload valid under version N is valid under every later version, so stale
 *acceptance* cannot admit anything the current schema forbids. The norm is
-enforced mechanically: `POST /schemas/versions` rejects any append that
-tightens relative to the current latest version (the append-time
-compatibility gate, `gate-schema-promotion`), so a stale cache entry can only
-ever lag behind on loosenings — exactly the direction the force-fetch on
-rejection already covers.
+enforced mechanically: `POST /schemas/versions` only appends a candidate
+that provably accepts every payload the current latest version accepts
+(the append-time compatibility gate, `gate-schema-promotion`, hardened by
+`harden-schema-compatibility-checker` to fail closed on anything its
+bounded proof cannot establish), so a stale cache entry can only ever lag
+behind on loosenings — exactly the direction the force-fetch on rejection
+already covers.
+
+One scope limit matters: the gate's proof is *pairwise*. It compares the
+candidate against the latest version the append handler read, and that read
+is not atomically bound to the registry write. Two appends racing the same
+schema could each prove compatibility against the same predecessor and
+commit in an order whose combined transition was never proven. This cache
+argument assumes the pairwise invariant holds per append; serializing
+competing appends (or an equivalent conditional-commit protocol) is tracked
+as separate follow-up work, not provided by the gate.
 
 One boundary is absolute: **the registry is the only authority on schema
 content.** The cache is an availability hedge, refreshed on any doubt; no

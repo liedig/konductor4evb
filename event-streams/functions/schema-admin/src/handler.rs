@@ -21,7 +21,9 @@ use konductor_common::models::{
 use konductor_common::namespace::NamespaceResolver;
 use konductor_common::principal::{AuthorizationDecision, ResourceAuthorizer, TrustedPrincipal};
 use konductor_common::principal_context::log_principal;
-use konductor_common::schema_compatibility::{check_compatible, Incompatibility};
+use konductor_common::schema_compatibility::{
+    check_compatible, CompatibilityCheck, Incompatibility, RejectionKind,
+};
 use konductor_common::schema_validation::check_draft4_document;
 
 use aws_sdk_schemas::error::ProvideErrorMetadata;
@@ -229,17 +231,23 @@ async fn append_schema_version<A: ResourceAuthorizer>(
             )))
         }
     };
-    let incompatibilities = check_compatible(&predecessor, &candidate);
-    if !incompatibilities.is_empty() {
+    if let CompatibilityCheck::NotEstablished(reasons) = check_compatible(&predecessor, &candidate)
+    {
+        let restrictions = reasons
+            .iter()
+            .filter(|r| r.rule.kind() == RejectionKind::LocalRestriction)
+            .count();
         tracing::info!(
             metric = "SchemaPromotionRejected",
             schema = %target.schema_name,
             environment = %target.environment,
-            count = incompatibilities.len(),
+            count = reasons.len(),
+            restrictions,
+            unsupported = reasons.len() - restrictions,
             "schema version append rejected by the compatibility gate"
         );
         return Ok(api::from_control_plane_error(&api::validation_error(
-            incompatibility_message(&incompatibilities),
+            incompatibility_message(&reasons),
         )));
     }
 
@@ -317,17 +325,35 @@ async fn latest_schema_document(
     })
 }
 
-/// Renders the rejection message: each offending path with the rule it
-/// violates, capped so a wholesale rewrite cannot produce an unbounded body.
+/// Renders the rejection message: each relevant path with its reason,
+/// capped so a wholesale rewrite cannot produce an unbounded body. Local
+/// restrictions sort ahead of unsupported proofs so the actionable
+/// tightenings are never crowded out of the cap. The prefix stays
+/// neutral — the gate reports that compatibility could not be established,
+/// which covers both observed local restrictions and changes the bounded
+/// proof does not support.
 fn incompatibility_message(incompatibilities: &[Incompatibility]) -> String {
-    let mut message =
-        String::from("content is not backward compatible with the current latest version: ");
-    let mut shown = incompatibilities
+    use konductor_common::schema_compatibility::RejectionKind;
+
+    let mut message = String::from(
+        "backward compatibility with the current latest version could not be established: ",
+    );
+    let mut ordered: Vec<&Incompatibility> = incompatibilities
         .iter()
-        .take(MAX_REPORTED_INCOMPATIBILITIES);
-    if let Some(first) = shown.next() {
+        .filter(|i| i.rule.kind() == RejectionKind::LocalRestriction)
+        .chain(
+            incompatibilities
+                .iter()
+                .filter(|i| i.rule.kind() == RejectionKind::UnsupportedProof),
+        )
+        .collect();
+    let shown: Vec<&Incompatibility> = ordered
+        .drain(..)
+        .take(MAX_REPORTED_INCOMPATIBILITIES)
+        .collect();
+    if let Some(first) = shown.first() {
         message.push_str(&format!("{}: {}", display_path(&first.path), first.rule));
-        for entry in shown {
+        for entry in &shown[1..] {
             message.push_str(&format!("; {}: {}", display_path(&entry.path), entry.rule));
         }
     }
@@ -1228,11 +1254,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn append_version_adding_an_optional_property_appends() {
+    async fn append_version_adding_an_optional_property_to_a_closed_object_appends() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
-        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
-        let additive = "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"},\"quantity\":{\"type\":\"integer\"}}}";
+        let closed = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}},\"additionalProperties\":false}";
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", closed);
+        let additive = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"},\"quantity\":{\"type\":\"integer\"}},\"additionalProperties\":false}";
         let update = update_schema_rule_for("acme-prod-orders-schema-registry", additive, "5");
         let published = version_published_rule("prod", 5);
         let clients = clients(
@@ -1251,6 +1278,148 @@ mod tests {
 
         assert_eq!(status(&resp), 201);
         assert_eq!(body(&resp)["schemaVersion"], 5);
+    }
+
+    #[tokio::test]
+    async fn append_version_optional_property_constraint_in_open_object_returns_400() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        // No update or event rules: a rejected append must never reach
+        // UpdateSchema or emit a publication event.
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+        let additive = "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"},\"quantity\":{\"type\":\"integer\"}}}";
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", append_body_with(additive))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let message = body(&resp)["message"].as_str().unwrap().to_string();
+        assert!(
+            message.contains("/quantity"),
+            "the rejection must name the new property: {message}"
+        );
+        assert!(
+            message.contains("not proven to accept previously allowed values"),
+            "the rejection must explain the unproven constraint: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_beyond_the_proof_budget_returns_400() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        // A wide flat document stays under the JSON parser's recursion
+        // limit but exceeds the checker's node-visit budget.
+        let mut wide = String::from("{\"type\":\"object\",\"properties\":{");
+        for i in 0..4_500 {
+            if i > 0 {
+                wide.push(',');
+            }
+            wide.push_str(&format!("\"p{i}\":{{}}"));
+        }
+        wide.push_str("}}");
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", append_body_with(&wide))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let message = body(&resp)["message"].as_str().unwrap().to_string();
+        assert!(
+            message.contains("could not be established"),
+            "budget exhaustion must not claim demonstrated incompatibility: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_gate_admits_no_platform_admin_override() {
+        set_env();
+        let admin = json!({
+            "httpMethod": "POST",
+            "resource": "/schemas/versions",
+            "requestContext": {
+                "stage": "prod",
+                "authorizer": {
+                    "authenticationMechanism": "oauth",
+                    "principalId": "sub-admin",
+                    "issuer": ISSUER,
+                    "clientId": "client-1",
+                    "globalRoles": "[\"platform-admin\"]",
+                    "teamGroups": "[\"team-orders\"]"
+                }
+            },
+            "body": append_body_with(
+                "{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}},\"required\":[\"sku\"]}"
+            ).to_string()
+        });
+        // Authorized (publisher binding) and platform-admin: neither
+        // standing bypasses the gate.
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+
+        let resp = handle(&clients, &authorizer, event(admin)).await.unwrap();
+
+        assert_eq!(
+            status(&resp),
+            400,
+            "no role bypasses the compatibility gate: {}",
+            body(&resp)["message"]
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_rejection_surfaces_local_restrictions_first() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        // Twelve unsupported proof cases (pattern changes) crowd the
+        // traversal-order reasons past the message cap, while one
+        // actionable local tightening (a newly required property) must
+        // still be reported first.
+        let mut candidate =
+            String::from("{\"type\":\"object\",\"properties\":{\"sku\":{\"type\":\"string\"}");
+        for i in 0..12 {
+            candidate.push_str(&format!(
+                ",\"p{i}\":{{\"type\":\"string\",\"pattern\":\"^{i}\"}}"
+            ));
+        }
+        candidate.push_str("},\"required\":[\"sku\"]}");
+        let describe = describe_latest_rule("acme-prod-orders-schema-registry", LATEST_V4);
+        let clients = clients(&[&active_domain_rule()], &[&describe], &[]);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event(
+                "/schemas/versions",
+                append_body_with(&candidate),
+            )),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let message = body(&resp)["message"].as_str().unwrap().to_string();
+        assert!(
+            message.contains("property newly required"),
+            "the local restriction must survive the message cap: {message}"
+        );
+        assert!(
+            message.contains("… and 3 more"),
+            "10 of the 13 reasons are reported: {message}"
+        );
     }
 
     #[tokio::test]
@@ -1369,7 +1538,8 @@ mod tests {
     // add-platform-metadata-composition task 2.3: with the metadata
     // composability check sharing this handler, the business compatibility
     // gate must still reject tightenings — including in documents that use
-    // the local-reference style the composer supports.
+    // the local-reference style the composer supports. Reference-bearing
+    // changes fail closed on the gate's reference guard before local rules.
     #[tokio::test]
     async fn business_tightening_still_rejects_for_metadata_composable_content() {
         set_env();
@@ -1394,8 +1564,8 @@ mod tests {
         assert_eq!(status(&resp), 400);
         let message = body(&resp)["message"].as_str().unwrap().to_string();
         assert!(
-            message.contains("/sku") && message.contains("newly required"),
-            "the business gate, not the composability check, must name the tightening: {message}"
+            message.contains("reference-dependent change is unsupported"),
+            "the business gate, not the composability check, must reject the change: {message}"
         );
     }
 }

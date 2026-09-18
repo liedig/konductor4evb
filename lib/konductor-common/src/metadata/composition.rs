@@ -714,16 +714,15 @@ mod tests {
             &composed_two.document,
         );
         assert!(
-            found
-                .iter()
-                .any(|i| i.rule == crate::schema_compatibility::CompatibilityRule::ShrunkEnum),
+            !found.is_accepted(),
             "the metadata wrapper differs across revisions in ways the business gate must never police: {found:?}"
         );
         // The same pair of raw business documents is trivially compatible:
         // identical input, no tightening. The gate's input contract holds.
         let business_doc: Value = serde_json::from_str(business).unwrap();
         assert!(
-            crate::schema_compatibility::check_compatible(&business_doc, &business_doc).is_empty()
+            crate::schema_compatibility::check_compatible(&business_doc, &business_doc)
+                .is_accepted()
         );
     }
 }
