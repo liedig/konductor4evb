@@ -87,7 +87,7 @@ The `/design-system` gallery is the shared review surface. Focused Playwright te
 
 ### Key Design Decisions
 
-- **Three-stack deployment model**: `notifications-stack.yaml` (optional, SES identities), `konductor-core-stack.yaml` (core platform resources, with conditional notification resources), and `trust-stack.yaml` (per domain account)
+- **Three-stack deployment model**: `notifications-stack.yaml` (optional, SES identities), `konductor-core-stack.yaml` (core platform resources, with conditional notification resources), and `trust-stack.yaml` (per domain account). A fourth, separately authorized package — `guardrail-stack.yaml` (organization-admin SCPs) — exists outside the ordinary deployment path; see [Organization Guardrails](#organization-guardrails-scp-ceiling).
 - **Konductor is a singleton per org** — one deployment of `konductor-core-stack.yaml` per AWS Organization. Platform resources use the fixed `konductor-*` naming (no org or env segment). The domain-account trust role is the one exception (`{org}-konductor-trust-role`, org-scoped for cross-org uniqueness). Domain resources use `{org}-{env}-{domain}-*` and are provisioned per environment from the platform-configured `Environments` list.
 - **One Lambda per API operation** — small, focused functions with least-privilege IAM
 - **Reads are synchronous** (API Gateway -> Lambda -> DynamoDB); writes are asynchronous (API Gateway -> SQS -> Lambda -> EventBridge)
@@ -471,6 +471,42 @@ The condition form (rather than role-ARN principals) is deliberate: IAM pins rol
 3. The trust role is immediately available for Konductor to assume
 
 > See [trust-stack-deployment.md](../trust-stack-deployment.md) for step-by-step onboarding instructions.
+
+### Organization Guardrails (SCP Ceiling)
+
+The trust stack alone is an **allow grant**: it authorizes Konductor's platform roles to manage `{org}-*` resources in the domain account, but it does nothing to stop a domain-account administrator from deleting or reconfiguring those same resources. The guardrail stack (`guardrail-stack.yaml`, deployed separately by the organization administrator) adds the missing **deny ceiling** via three Service Control Policies attached to member-account targets.
+
+**Two-account resource map.** Konductor-managed infrastructure splits across the two account types:
+
+| Account | Resources | Console-linkable from domain page |
+|---|---|---|
+| Platform account | Platform event bus, schema registry, subscription DLQ, CloudWatch dashboard (all `konductor-*` or `{org}-{env}-{domain}-*` in the platform account) | No — text-only, even in a co-located deployment |
+| Domain account | Application event bus, integration DLQ (`{org}-{env}-{domain}-*` in the owner's account) | Yes, when the identifier parses to the domain's `ownerAccountId` |
+
+**IAM grants vs SCP ceilings.** These are independent layers and both are required:
+
+- **IAM grants** (identity-based policies, the trust stack, team roles) say what a principal *can* do. Without a grant, the action is denied regardless of SCPs.
+- **SCP ceilings** say what *any* principal in the covered account may do at most. An SCP `Deny` beats every identity-based `Allow`, including `AdministratorAccess` on the member account.
+
+The guardrail SCPs protect exactly four surfaces on `{org}-*` resources: EventBridge bus lifecycle/policy/tagging, SQS queue lifecycle/configuration/purge/tagging, IAM manipulation of the exact trust-role and recovery-role ARNs (no wildcards), and `organizations:LeaveOrganization`. Team-owned operations — integration rule/target management on the app bus, DLQ message receive/delete/visibility — are deliberately **not** denied; team IAM continues to gate them. The full action-by-action contract lives in the change's `enforcement-matrix.md`.
+
+**Recovery-first bootstrap.** The recovery role is the only principal exempt from every SCP deny, and it is the designated maintenance path for the trust role (the trust role cannot modify itself). Therefore the recovery role must exist, be assumable from its central principal, and be tested **before** the guardrails attach. Attaching first risks a lockout with no in-model repair path; the ultimate fallback is central SCP detachment by the organization administrator.
+
+**Staged attachment.** Never attach guardrails broadly on first deployment:
+
+1. Attach to an isolated sandbox account/OU.
+2. Run the authorized sandbox acceptance procedure (positive team operations, denied administrator operations, Konductor provisioning/compensation/retagging, recovery path) and retain the evidence.
+3. Only after a documented sandbox pass, attach to production OUs/accounts in stages with explicit organization-admin approval at each stage.
+
+**Rollback procedure.** If a guardrail breaks a legitimate operation:
+
+1. **Detach** the affected SCP from the affected target (this immediately restores the pre-SCP permission posture for that target).
+2. **Repair** through the protected maintenance path — fix the SCP content, the exception ARNs, or the resource in question using the recovery role.
+3. **Re-attach** the validated policy version.
+
+Do **not** delete protected resources as a rollback strategy — deletion destroys the infrastructure the guardrail exists to protect, and the trust role's provisioning path will not recreate a hand-deleted resource outside a provisioning/compensation cycle. Record the temporary protection gap while a policy is detached.
+
+**Documented coverage limits.** SCPs do not apply to the AWS Organizations management account, and service-linked-role sessions are exempt from SCP evaluation for actions the SLR is designed to perform. Organization administrators remain trusted. The guardrails claim nothing about those paths. Likewise, console links in the web UI are navigation conveniences — they are not an authorization mechanism and imply nothing about what the viewer may do in the AWS console.
 
 ---
 

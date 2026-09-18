@@ -1,0 +1,288 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Konductor Organization Guardrails — SCPs protecting Konductor-managed
+  resources (event buses, SQS queues, IAM roles) from unauthorized
+  modification by member-account principals. SCPs are a deny ceiling, not
+  a grant. Management account and service-linked roles are excluded.
+  Deploy from the organization management account or a delegated
+  administrator. Attach to target OUs and/or accounts.
+
+  SCOPE AND EXCLUSIONS:
+  - SCPs do NOT apply to the AWS Organizations management account.
+  - Service-linked roles (SLRs) are excluded per AWS documentation.
+  - Trust role and recovery role ARNs are exact-match exceptions.
+
+Parameters:
+  Organization:
+    Type: String
+    Description: >-
+      Organization identifier prefix used in all Konductor-managed resource names
+      (e.g., "acme" for resources named "acme-prod-payments").
+    MinLength: 1
+    MaxLength: 32
+    AllowedPattern: '^[a-z][a-z0-9-]*$'
+
+  KonductorTrustRoleArn:
+    Type: String
+    Description: >-
+      Exact ARN of the Konductor trust role to protect and exempt from resource
+      management denies. Must be the full ARN, not a wildcard.
+    AllowedPattern: '^arn:aws[a-z-]*:iam::\d{12}:role/.+$'
+
+  RecoveryRoleArn:
+    Type: String
+    Description: >-
+      Exact ARN of the centrally controlled recovery/maintenance role. This role
+      is exempt from all SCP denies and is the designated maintenance path for
+      the trust role.
+    AllowedPattern: '^arn:aws[a-z-]*:iam::\d{12}:role/.+$'
+
+  TargetOuIds:
+    Type: CommaDelimitedList
+    Description: >-
+      Comma-delimited list of AWS Organizations OU IDs (ou-xxxx-xxxxxxxx) to
+      attach the SCPs to. Provide at least one of TargetOuIds or
+      TargetAccountIds.
+    Default: ''
+
+  TargetAccountIds:
+    Type: CommaDelimitedList
+    Description: >-
+      Comma-delimited list of individual AWS account IDs (12-digit) to attach
+      the SCPs to, for accounts not covered by TargetOuIds. Provide at least
+      one of TargetOuIds or TargetAccountIds.
+    Default: ''
+
+# NOTE: At least one of TargetOuIds or TargetAccountIds must be non-empty.
+# CloudFormation Rules do not support the intrinsic functions needed to
+# express this constraint on CommaDelimitedList parameters, so this is
+# enforced by the deployment runbook and the fixture harness instead.
+
+Conditions:
+  HasTargetOus: !Not [!Equals [!Select [0, !Ref TargetOuIds], '']]
+  HasTargetAccounts: !Not [!Equals [!Select [0, !Ref TargetAccountIds], '']]
+  HasBothTargets: !And [!Condition HasTargetOus, !Condition HasTargetAccounts]
+
+Resources:
+  # ==========================================================================
+  # SCP 1: KonductorProtectedResources
+  #
+  # Denies infrastructure mutations on {org}-* EventBridge event buses and SQS
+  # queues. Team-owned rule/target management and queue messaging are NOT
+  # denied — only lifecycle and configuration changes that would destroy or
+  # reconfigure the managed infrastructure.
+  # ==========================================================================
+  KonductorProtectedResourcesPolicy:
+    Type: AWS::Organizations::Policy
+    Properties:
+      Name: KonductorProtectedResources
+      Description: >-
+        Denies EventBridge and SQS infrastructure mutations on Konductor-managed
+        {org}-* resources. Trust role and recovery role are exempt.
+      Type: SERVICE_CONTROL_POLICY
+      TargetIds: !If
+        - HasBothTargets
+        - !Split [',', !Join [',', [!Join [',', !Ref TargetOuIds], !Join [',', !Ref TargetAccountIds]]]]
+        - !If
+          - HasTargetOus
+          - !Ref TargetOuIds
+          - !Ref TargetAccountIds
+      Content:
+        Version: '2012-10-17'
+        Statement:
+          # --- EventBridge event-bus lifecycle and configuration ---
+          - Sid: DenyEventBusInfrastructureMutations
+            Effect: Deny
+            Action:
+              - events:CreateEventBus
+              - events:DeleteEventBus
+              - events:PutPermission
+              - events:RemovePermission
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:events:*:${AWS::AccountId}:event-bus/${Organization}-*'
+            Condition:
+              StringNotEquals:
+                aws:PrincipalArn:
+                  - !Ref KonductorTrustRoleArn
+                  - !Ref RecoveryRoleArn
+
+          # --- EventBridge event-bus tagging ---
+          - Sid: DenyEventBusTagMutations
+            Effect: Deny
+            Action:
+              - events:TagResource
+              - events:UntagResource
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:events:*:${AWS::AccountId}:event-bus/${Organization}-*'
+            Condition:
+              StringNotEquals:
+                aws:PrincipalArn:
+                  - !Ref KonductorTrustRoleArn
+                  - !Ref RecoveryRoleArn
+
+          # --- SQS queue lifecycle and configuration ---
+          - Sid: DenyQueueInfrastructureMutations
+            Effect: Deny
+            Action:
+              - sqs:CreateQueue
+              - sqs:DeleteQueue
+              - sqs:SetQueueAttributes
+              - sqs:PurgeQueue
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:sqs:*:${AWS::AccountId}:${Organization}-*'
+            Condition:
+              StringNotEquals:
+                aws:PrincipalArn:
+                  - !Ref KonductorTrustRoleArn
+                  - !Ref RecoveryRoleArn
+
+          # --- SQS queue tagging ---
+          - Sid: DenyQueueTagMutations
+            Effect: Deny
+            Action:
+              - sqs:TagQueue
+              - sqs:UntagQueue
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:sqs:*:${AWS::AccountId}:${Organization}-*'
+            Condition:
+              StringNotEquals:
+                aws:PrincipalArn:
+                  - !Ref KonductorTrustRoleArn
+                  - !Ref RecoveryRoleArn
+
+  # ==========================================================================
+  # SCP 2: KonductorProtectedIdentities
+  #
+  # Denies IAM role manipulation on the trust role and recovery role. Only
+  # the recovery role can perform maintenance on the trust role. The trust
+  # role itself is NOT exempt — it cannot modify its own trust policy or
+  # permissions.
+  # ==========================================================================
+  KonductorProtectedIdentitiesPolicy:
+    Type: AWS::Organizations::Policy
+    Properties:
+      Name: KonductorProtectedIdentities
+      Description: >-
+        Denies IAM role manipulation on the Konductor trust role and recovery
+        role. Only the recovery role can perform maintenance.
+      Type: SERVICE_CONTROL_POLICY
+      TargetIds: !If
+        - HasBothTargets
+        - !Split [',', !Join [',', [!Join [',', !Ref TargetOuIds], !Join [',', !Ref TargetAccountIds]]]]
+        - !If
+          - HasTargetOus
+          - !Ref TargetOuIds
+          - !Ref TargetAccountIds
+      Content:
+        Version: '2012-10-17'
+        Statement:
+          # --- Protect trust role from modification ---
+          # Recovery role is exempt (maintenance path). Trust role is NOT
+          # exempt — it must not modify itself.
+          - Sid: DenyTrustRoleModification
+            Effect: Deny
+            Action:
+              - iam:UpdateAssumeRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:PutRolePermissionsBoundary
+              - iam:DeleteRole
+              - iam:PassRole
+            Resource:
+              - !Ref KonductorTrustRoleArn
+            Condition:
+              StringNotEquals:
+                aws:PrincipalArn:
+                  - !Ref RecoveryRoleArn
+
+          # --- Protect trust-role name from recreation ---
+          # Prevents delete-then-recreate by denying CreateRole on the exact
+          # trust-role name and any look-alike with the trust-role name as
+          # prefix. The trust role is NOT exempt — recreation goes through
+          # central recovery only.
+          - Sid: DenyTrustRoleRecreation
+            Effect: Deny
+            Action:
+              - iam:CreateRole
+            Resource:
+              - !Ref KonductorTrustRoleArn
+              - !Sub '${KonductorTrustRoleArn}-*'
+            Condition:
+              StringNotEquals:
+                aws:PrincipalArn:
+                  - !Ref RecoveryRoleArn
+
+          # --- Protect recovery role from modification ---
+          # No exception — no principal in the member account should modify
+          # the recovery role.
+          - Sid: DenyRecoveryRoleModification
+            Effect: Deny
+            Action:
+              - iam:UpdateAssumeRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:PutRolePermissionsBoundary
+              - iam:DeleteRole
+              - iam:PassRole
+            Resource:
+              - !Ref RecoveryRoleArn
+
+          # --- Protect recovery-role name from recreation ---
+          - Sid: DenyRecoveryRoleRecreation
+            Effect: Deny
+            Action:
+              - iam:CreateRole
+            Resource:
+              - !Ref RecoveryRoleArn
+              - !Sub '${RecoveryRoleArn}-*'
+
+          # --- Deny SetDefaultPolicyVersion on Konductor-owned policies ---
+          - Sid: DenyPolicyVersionRollback
+            Effect: Deny
+            Action:
+              - iam:SetDefaultPolicyVersion
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/${Organization}-konductor-*'
+            Condition:
+              StringNotEquals:
+                aws:PrincipalArn:
+                  - !Ref RecoveryRoleArn
+
+  # ==========================================================================
+  # SCP 3: KonductorOrganizationProtection
+  #
+  # Denies member accounts from leaving the AWS Organization, which would
+  # shed all SCP guardrails.
+  # ==========================================================================
+  KonductorOrganizationProtectionPolicy:
+    Type: AWS::Organizations::Policy
+    Properties:
+      Name: KonductorOrganizationProtection
+      Description: >-
+        Denies organizations:LeaveOrganization for all principals except the
+        recovery role. Prevents member accounts from shedding SCP guardrails.
+      Type: SERVICE_CONTROL_POLICY
+      TargetIds: !If
+        - HasBothTargets
+        - !Split [',', !Join [',', [!Join [',', !Ref TargetOuIds], !Join [',', !Ref TargetAccountIds]]]]
+        - !If
+          - HasTargetOus
+          - !Ref TargetOuIds
+          - !Ref TargetAccountIds
+      Content:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyLeaveOrganization
+            Effect: Deny
+            Action:
+              - organizations:LeaveOrganization
+            Resource:
+              - '*'
+            Condition:
+              StringNotEquals:
+                aws:PrincipalArn:
+                  - !Ref RecoveryRoleArn

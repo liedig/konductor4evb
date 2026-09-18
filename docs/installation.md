@@ -247,6 +247,110 @@ For detailed instructions including verification and troubleshooting, see
 
 ---
 
+## Phase 3.5 — Organization guardrails (optional, separately authorized)
+
+> **Warning — separate authorization required.** This phase mutates AWS
+> Organizations policy attachments. It requires organization-admin
+> credentials, explicit authorization from your cloud governance process,
+> and a completed sandbox verification (below) before any production
+> attachment. Skipping this phase leaves Konductor fully functional but
+> without the deny ceiling that stops domain-account administrators from
+> modifying Konductor-managed resources — the trust stack alone grants
+> Konductor access but constrains no one else.
+
+The trust stack (Phase 3) is an *allow grant*: it lets Konductor manage
+`{org}-*` resources in the domain account. It does not prevent a
+domain-account administrator from deleting or reconfiguring those
+resources. The guardrail stack (`guardrail-stack.yaml`) closes that gap
+with three Service Control Policies — a **deny ceiling** over every
+principal in the covered accounts. SCPs restrict; they never grant. Team
+roles still need their ordinary IAM allows, and Konductor still needs the
+trust role.
+
+### Deployment order
+
+Deploy this phase **after** the trust stack, and only after the
+prerequisites below are met. This is a separate deployment step, not part
+of `make deploy-*`.
+
+### Required inputs
+
+| Input | Description |
+|---|---|
+| `Organization` | The same short identifier used in Phases 2–3 (e.g., `acme`) |
+| `KonductorTrustRoleArn` | Exact ARN of the trust role from Phase 3 (e.g., `arn:aws:iam::<domain-account>:role/acme-konductor-trust-role`). Exact match — no wildcards. |
+| `RecoveryRoleArn` | Exact ARN of a centrally controlled recovery/maintenance role. This role is exempt from every SCP deny and is the only in-model maintenance path for the trust role. |
+| `TargetOuIds` and/or `TargetAccountIds` | The OUs and/or individual account IDs the SCPs attach to. At least one is required. |
+
+### Prerequisites
+
+1. **Recovery role bootstrapped and tested first.** Create the recovery
+   role in the target accounts, confirm its central principal can assume
+   it, and confirm it can read the trust role — **before** attaching any
+   SCP. Attaching guardrails without a working recovery path risks lockout
+   (the ultimate fallback is central SCP detachment by the organization
+   administrator).
+2. **Resource inventory.** Confirm existing `{org}-*` buses, queues, and
+   roles in the target accounts match the supported naming selectors.
+   Resources outside the selector patterns are not covered.
+
+### Deploy (organization admin credentials)
+
+```bash
+aws cloudformation deploy \
+  --template-file guardrail-stack.yaml \
+  --stack-name konductor-guardrails \
+  --parameter-overrides \
+    Organization=acme \
+    KonductorTrustRoleArn=arn:aws:iam::<domain-account-id>:role/acme-konductor-trust-role \
+    RecoveryRoleArn=arn:aws:iam::<domain-account-id>:role/<recovery-role-name> \
+    TargetAccountIds=<sandbox-account-id> \
+  --region <region>
+```
+
+### Verification — local fixtures first, then authorized sandbox
+
+1. **Local verification**: run the repository's policy/template fixture
+   tests. These prove the SCP statements match the enforcement matrix —
+   they do **not** prove live enforcement.
+2. **Authorized sandbox verification**: attach the SCPs to an isolated
+   sandbox account/OU first and run the full acceptance procedure in
+   `openspec/changes/protect-domain-managed-resources/sandbox-acceptance.md`
+   (positive team operations, denied administrator operations, Konductor
+   provisioning/compensation, recovery path). Retain the recorded
+   evidence: policy versions, targets, principals, observed AWS outcomes.
+3. **Staged production attachment**: only after a documented sandbox pass,
+   attach to production OUs/accounts in stages, with explicit
+   organization-admin approval at each stage.
+
+> **Do not claim protection without sandbox verification.** A deployed
+> stack and passing fixtures show the policies exist and are well-formed;
+> only the sandbox run demonstrates that AWS actually denies the protected
+> operations. Until then, describe the installation as "guardrails
+> deployed, enforcement unverified."
+
+### Rollback
+
+If a guardrail breaks a legitimate operation: **detach** the affected SCP
+from the affected target → **repair** via the recovery role (fix policy
+content or exception ARNs) → **re-attach** the validated version. Do not
+delete protected resources as a rollback strategy. Record the temporary
+protection gap while detached.
+
+### Coverage limits (read before claiming protection)
+
+- SCPs do **not** apply to the AWS Organizations **management account** —
+  principals operating there bypass every statement.
+- **Service-linked roles** are exempt from SCP evaluation for actions they
+  are designed to perform.
+- Organization administrators remain trusted and retain full control of
+  attachments.
+- Console links in the web UI are navigation conveniences, not an
+  authorization mechanism — they do not enforce read-only (or any) AWS
+  access.
+
+---
+
 ## Phase 4 — Smoke test
 
 Verify your installation by running the automated smoke test, which registers a

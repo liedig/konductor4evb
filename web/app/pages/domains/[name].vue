@@ -89,10 +89,26 @@ function toggleEnv(env: string) {
   openEnvs.value = { ...openEnvs.value, [env]: !openEnvs.value[env] }
 }
 
-function arnConsoleLink(env: string, arn: string | undefined): string | null {
-  if (!arn) return null
-  const siblings = Object.values(domain.value?.resourceArns?.[env] ?? {})
-  return consoleLinkFor(arn, regionFromArns(siblings))
+const PLATFORM_FIELDS = ['platformEventBusArn', 'schemaRegistryArn', 'subscriptionDlqArn', 'dashboardArn'] as const
+const DOMAIN_FIELDS = ['appEventBusArn', 'integrationDlqArn'] as const
+
+function platformResources(env: string) {
+  const arns = domain.value?.resourceArns?.[env] ?? {}
+  return PLATFORM_FIELDS
+    .filter(key => arns[key])
+    .map(key => ({ label: key, value: arns[key]! }))
+}
+
+function domainResources(env: string) {
+  const arns = domain.value?.resourceArns?.[env] ?? {}
+  const fallbackRegion = regionFromArns(Object.values(arns))
+  const owner = domain.value?.ownerAccountId
+  return DOMAIN_FIELDS
+    .filter(key => arns[key])
+    .map(key => {
+      const value = arns[key]!
+      return { label: key, value, link: domainConsoleLink(key, value, owner, fallbackRegion) }
+    })
 }
 
 onMounted(load)
@@ -195,25 +211,39 @@ onMounted(load)
                 <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </button>
-            <dl
+            <div
               v-show="openEnvs[env]"
               :id="`env-panel-${env}`"
-              class="grid gap-1 border-t border-border p-4 font-mono text-xs break-all text-muted"
+              class="border-t border-border p-4"
             >
-              <div v-for="(arn, label) in domain?.resourceArns?.[env] ?? {}" :key="label" class="grid grid-cols-[180px_1fr] gap-2">
-                <dt>{{ label }}</dt>
-                <dd class="text-foreground">
-                  <a
-                    v-if="arnConsoleLink(env, arn)"
-                    :href="arnConsoleLink(env, arn)!"
-                    target="_blank"
-                    rel="noopener"
-                    class="underline decoration-dotted underline-offset-2 hover:text-accent"
-                  >{{ arn }}</a>
-                  <template v-else>{{ arn }}</template>
-                </dd>
+              <div data-resource-group="platform">
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Platform-managed resources</h3>
+                <dl class="mt-2 grid gap-1 font-mono text-xs break-all text-muted">
+                  <div v-for="r in platformResources(env)" :key="r.label" class="grid grid-cols-[180px_1fr] gap-2">
+                    <dt>{{ r.label }}</dt>
+                    <dd class="text-foreground">{{ r.value }}</dd>
+                  </div>
+                </dl>
               </div>
-            </dl>
+              <div data-resource-group="domain" class="mt-4">
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-muted">Resources in your account</h3>
+                <dl class="mt-2 grid gap-1 font-mono text-xs break-all text-muted">
+                  <div v-for="r in domainResources(env)" :key="r.label" class="grid grid-cols-[180px_1fr] gap-2">
+                    <dt>{{ r.label }}</dt>
+                    <dd class="text-foreground">
+                      <a
+                        v-if="r.link"
+                        :href="r.link"
+                        target="_blank"
+                        rel="noopener"
+                        class="underline decoration-dotted underline-offset-2 hover:text-accent"
+                      >{{ r.value }}</a>
+                      <template v-else>{{ r.value }}</template>
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
           </div>
         </div>
       </NxCard>
