@@ -23,6 +23,9 @@ tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+aws-sdk-dynamodb = { workspace = true, features = ["test-util"] }
+aws-sdk-schemas = { workspace = true, features = ["test-util"] }
+aws-sdk-sqs = { workspace = true, features = ["test-util"] }
 aws-smithy-mocks = { workspace = true }
 
 [lints]

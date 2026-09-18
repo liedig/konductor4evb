@@ -19,6 +19,8 @@ urlencoding = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+aws-sdk-dynamodb = { workspace = true, features = ["test-util"] }
+aws-sdk-eventbridge = { workspace = true, features = ["test-util"] }
 aws-smithy-mocks = { workspace = true }
 serde_yaml = "0.9"
 tokio = { workspace = true }

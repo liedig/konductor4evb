@@ -46,17 +46,17 @@ license = "Apache-2.0"
 [workspace.dependencies]
 anyhow = "1"
 aws-config = "1"
-aws-sdk-dynamodb = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
-aws-sdk-eventbridge = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
-aws-sdk-sesv2 = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
-aws-sdk-sfn = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
-aws-sdk-sqs = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
-aws-sdk-ssm = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-dynamodb = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-eventbridge = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-sesv2 = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-sfn = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-sqs = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-ssm = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-sts = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
-aws-sdk-schemas = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
-aws-sdk-lambda = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-schemas = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-lambda = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 sha2 = "0.11"
-aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client", "test-util"] }
+aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 jsonwebtoken = { version = "10", features = ["rust_crypto"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
