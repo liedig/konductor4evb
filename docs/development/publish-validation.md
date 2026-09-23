@@ -1,19 +1,19 @@
-# Publish Validation at Ingest — Design Deep Dive
+# Publish validation at ingest — design deep dive
 
-How Konductor decides whether a publish request becomes an event, why the
-machinery is shaped the way it is, and what each piece guarantees. This
-document assumes no prior involvement in the design: every concept is
-introduced before it is used, and every mechanism is paired with the failure
-it exists to prevent.
+Konductor for Amazon EventBridge validates publish requests before accepting
+them for delivery. This document explains the admission checks, delivery
+guarantees, and failure cases that shaped the design.
 
 Read this if you are about to modify the publish path, review a change to it,
 or explain its behavior to a producer team. For the producer-facing how-to,
-see [Publishing Events](../publishing-events.md); for the decision-log entry,
-see [decisions.md](decisions.md) (`validate-at-ingest`).
+see [Publishing events](../publishing-events.md). For the `validate-at-ingest`
+decision, see the [Decision log](decisions.md).
 
 ## 1. The failure this design eliminates
 
-The publish path used to work like this:
+The earlier publish path queued requests in Amazon Simple Queue Service
+(Amazon SQS) before validating them. Amazon API Gateway returned a response
+before an AWS Lambda consumer checked authorization and payload conformance:
 
 ```text
 POST /publish ──▶ API Gateway ──▶ SQS queue ──▶ consumer Lambda ──▶ domain bus
@@ -23,28 +23,24 @@ POST /publish ──▶ API Gateway ──▶ SQS queue ──▶ consumer Lambd
                                                       handling happened HERE
 ```
 
-API Gateway answered `202 Accepted` the moment the request body was well-formed
-and sitting in the queue. Everything that could make a publish *wrong* — the
-caller having no publisher binding, the domain being disabled, the schema not
-existing, the payload not matching the schema — was discovered later, inside an
-asynchronous consumer the caller could not observe.
+API Gateway returned `202 Accepted` when a well-formed request reached the
+queue. The asynchronous consumer later checked publisher bindings, domain
+status, schema existence, and payload conformance. The caller could not
+observe those checks.
 
-The result was a systematic failure mode: **producers learned about broken
-publishes only by absence.** An event that never arrives looks exactly like an
-event that is merely slow. The caller got `202`, logged success, and moved on.
-Debugging started downstream, with a consumer team asking "where is my event?",
-and worked backwards through platform logs.
+As a result, producers could not distinguish failed publishes from delayed
+delivery. The caller received `202` and logged success. Consumer teams then
+had to trace missing events backward through platform logs.
 
 One incident made the cost concrete: a producer appended a schema version that
 *removed* a field (a breaking change disguised as an append). Events stamped
 with the new version no longer matched what consumers expected, and nothing in
-the platform flagged it — nothing ever checked conformance. The append itself
+the platform flagged it—nothing ever checked conformance. The append itself
 was legal; there was no enforcement point anywhere in the pipeline.
 
-The design goal follows directly: **move every decidable failure to the
-synchronous side of the queue, so the API answer is always actionable.** If the
-platform can know a publish will not deliver, the caller must hear it in the
-response, with enough detail to fix it.
+The design goal is to detect every decidable failure before queueing the
+event. If the platform can determine that a publish cannot succeed, it must
+return enough detail for the caller to fix the request.
 
 ## 2. The promise of `202`
 
@@ -54,11 +50,13 @@ The redesign turns `202 Accepted` from "your request is queued" into a promise:
 > is live, the payload conforms to the schema's latest version, and the event
 > is durably queued. Delivery from that point is the platform's problem.
 
-Everything that can be decided synchronously is decided synchronously. Only two
-things remain asynchronous, because they are physically impossible to settle at
-request time: the domain being disabled *between* admission and delivery (a
-genuine race, handled by a delivery-time recheck), and transient EventBridge
-failures (handled by the queue's retry machinery, unchanged).
+Admission performs every check that it can complete synchronously. Two
+delivery-time failures remain:
+
+- A domain might be disabled between admission and delivery. Delivery
+  rechecks the domain status.
+- Amazon EventBridge might return a transient failure. The queue retains
+  the event for retry.
 
 ## 3. The two halves: admission and delivery
 
@@ -75,39 +73,37 @@ graph LR
 
 **Admission** (`publish-events-admission`) runs synchronously behind
 `POST /publish`. It performs every check that can fail, in a deliberate order,
-and enqueues only publishes that passed all of them. Its single write — the
-`SendMessage` to the queue — *is* the commit: once that succeeds, the event is
+and enqueues only publishes that passed all of them. Its single write—the
+`SendMessage` to the queue—*is* the commit: once that succeeds, the event is
 durable and the caller gets `202`.
 
 **Delivery** (`publish-events`) consumes the queue. It performs no
-authorization, no schema fetch, and no payload validation. It re-checks domain
+authorization, no schema fetch, and no payload validation. It rechecks domain
 liveness, builds the canonical envelope, and calls `PutEvents`.
 
-Why split, instead of one function that validates and delivers synchronously?
+Separate functions preserve three properties:
 
 - **The queue boundary is worth keeping.** It absorbs publish bursts, decouples
   ingest availability from EventBridge availability, and gives delivery retries
   somewhere durable to live. A fully synchronous path would re-introduce
   backpressure coupling the queue exists to remove.
-- **Blast radius.** A delivery bug (bad envelope construction, an EventBridge
-  API change) delays events but cannot block ingest; producers keep getting
-  actionable answers. An admission bug blocks ingest loudly (visible `503`s),
-  which is the correct trade — silent acceptance of unvalidatable events is the
-  failure mode this design exists to remove.
+- **Failure isolation.** A delivery bug delays events but does not block
+  admission. An admission bug returns visible `503` responses rather than
+  silently accepting events that the platform cannot validate.
 - **Least privilege.** Delivery no longer needs to read the authorization
-  bindings table or the schema registry, so its IAM role loses both. The queue
-  enforces the same boundary: IAM grants `SendMessage` to the admission role
+  bindings table or the schema registry, so its AWS Identity and Access
+  Management (IAM) role loses both permissions. The queue enforces the same
+  boundary: IAM grants `SendMessage` to the admission role
   only, and a resource policy on the queue denies `sqs:SendMessage` to every
-  other principal — so even a same-account workload with broad SQS permissions
+  other principal—so even a same-account workload with broad SQS permissions
   cannot inject a command that skips validation. The deliberate trade-off:
-  console/CLI DLQ redrive is denied too. The correct re-drive is re-publishing
-  through `/publish` — the DLQ retains the original message body for exactly
-  that, and re-admission re-validates rather than bypassing the gate.
+  dead-letter queue (DLQ) redrive through the console or command line is
+  also denied. Republish through `/publish` instead. The DLQ retains the
+  original message body, and admission validates it again.
 
 ## 4. What admission checks, and why in that order
 
-Each request walks a fixed sequence. The order is not incidental; each step is
-justified by what it protects:
+Admission checks each request in the following order:
 
 1. **Request shape (`400`).** The body must be exactly
    `{domain, eventName, data, idempotencyKey?}`. Unknown fields are rejected —
@@ -119,7 +115,7 @@ justified by what it protects:
    schemas exist by comparing `403` and `404`. Denial before access discloses
    nothing.
 3. **Domain liveness (`404`).** The domain must exist and be `ACTIVE`. A
-   disabled domain rejects all publishes — this is how platform operators drain
+   disabled domain rejects all publishes—this is how platform operators drain
    a domain without touching bindings.
 4. **Schema resolution (`404`).** The latest version of `{org}-{domain}@{eventName}`
    is resolved from the stage-selected environment's registry. The schema is
@@ -131,11 +127,11 @@ justified by what it protects:
    minimum of 0`), capped so a pathological payload cannot produce an unbounded
    response.
 6. **Envelope deliverability (`400`).** Admission constructs the exact
-   EventBridge entry the delivery step would send — same source, detail-type,
-   version stamp, and payload — and rejects the request if it fails structural
+   EventBridge entry the delivery step would send—same source, detail-type,
+   version stamp, and payload—and rejects the request if it fails structural
    or size validation (256 KiB entry limit). Without this step, a conforming
    but oversized payload would earn a `202` and then fail deterministically on
-   every delivery retry into the DLQ: the silent-drop failure in a new costume.
+   every delivery retry until it reached the DLQ.
 7. **Enqueue (`202`).** Only now does anything durable happen.
 
 Steps 2–6 each answer *before* touching anything the caller is not entitled to
@@ -143,50 +139,51 @@ know about, and no step writes anything except the last.
 
 ## 5. Reading the answers
 
+Use the status code to distinguish invalid requests from platform failures.
+
 | Status | Meaning | What the caller should do |
 |--------|---------|---------------------------|
-| `400` | The request body itself is malformed (missing field, unknown field, bad event name), or the resulting event entry would exceed EventBridge's size limit | Fix the request shape; shrink the payload |
+| `400` | The request body is malformed, or the generated entry would exceed the EventBridge size limit | Fix the request shape or reduce the payload size |
 | `403` | No publisher binding for this principal on this domain | Ask the platform team for a binding |
 | `404` | Domain missing/inactive, or no schema for this event in this environment | Check domain status; register the schema first |
 | `422` | The payload violates the schema's latest version | Fix the payload (violations are listed in `message`) |
-| `503` | The platform could not *evaluate* the request (registry unreachable, stored schema unusable, queue write failed) | Retry with backoff — this is never a rejection |
+| `503` | The platform could not *evaluate* the request (registry unreachable, stored schema unusable, queue write failed) | Retry with backoff—this is never a rejection |
 
-Two distinctions are load-bearing:
+Two distinctions determine how callers respond:
 
 **`422` versus `400`.** A `400` says "this is not a well-formed publish
 request"; a `422` says "this is a perfectly good publish request whose payload
 breaks the event contract." Keeping them separate lets monitoring distinguish
-client bugs (400 — the caller's HTTP code is wrong) from contract drift (422 —
+client bugs (400—the caller's HTTP code is wrong) from contract drift (422 —
 the caller's *data* diverged from the schema), which have different owners and
 different urgencies.
 
 **`503` is never a rejection.** A `503` means Konductor could not determine
-whether the publish is valid — the registry timed out, or a stored schema
-cannot be compiled. Failing closed with a retryable answer is the only honest
-move: pretending the publish is fine recreates the silent-drop failure, and
-pretending it is invalid punishes producers for a platform problem.
+whether the publish is valid. The registry might have timed out, or a stored
+schema might not compile. The retryable response avoids both silent
+acceptance and an incorrect claim that the producer supplied invalid data.
 
 ## 6. The schema cache and the refresh-before-reject rule
 
 Calling the Schemas API on every publish would add a network hop and a hard
 dependency to the hot path, so admission keeps an in-memory cache keyed by
-`(environment, schema)` holding `{version, content, fetchedAt}`, with a TTL of
+`(environment, schema)` holding `{version, content, fetchedAt}`, with a time to live (TTL) of
 at most 60 seconds.
 
 A cache introduces an obvious hazard: what if a producer appends schema version
 4, immediately publishes a version-4-shaped payload, and the cache still holds
 version 3? The new payload fails validation against the stale schema and gets a
-spurious `422`. This is not a corner case — "append schema, publish new shape"
+spurious `422`. This is not a corner case—"append schema, publish new shape"
 is the *normal* evolution workflow.
 
-The rule that eliminates it: **a cached schema may admit, but it may not
-reject.** When validation fails against a cached entry, admission force-fetches
+The rule is: **a cached schema can admit a payload, but it cannot reject
+one.** When validation fails against a cached entry, admission force-fetches
 the schema from the registry and validates once more against the authoritative
 latest version. The `422` is returned only if the payload fails against the
 fresh schema too. A false rejection caused by cache staleness is therefore
 impossible; the cache only ever saves the *admission* path a registry call.
 
-What about the symmetric case — a payload that passes the stale schema but
+What about the symmetric case—a payload that passes the stale schema but
 would fail the fresh one? Under the platform's additive-only evolution norm
 (new versions add fields and loosen constraints; they never remove), any
 payload valid under version N is valid under every later version, so stale
@@ -196,7 +193,7 @@ that provably accepts every payload the current latest version accepts
 (the append-time compatibility gate, `gate-schema-promotion`, hardened by
 `harden-schema-compatibility-checker` to fail closed on anything its
 bounded proof cannot establish), so a stale cache entry can only ever lag
-behind on loosenings — exactly the direction the force-fetch on rejection
+behind on loosenings—exactly the direction the force-fetch on rejection
 already covers.
 
 One scope limit matters: the gate's proof is *pairwise*. It compares the
@@ -229,7 +226,7 @@ message sits in the queue: the event would carry a stamp for a version its
 payload was never checked against.
 
 The accepted consequence: if version 5 is appended between admission and
-delivery, the event is stamped version 4 — the version it provably conforms
+delivery, the event is stamped version 4—the version it provably conforms
 to. Consumers migrating to version 5 should treat the stamp as a statement
 about the payload, not about the registry's current state.
 
@@ -243,13 +240,13 @@ about the payload, not about the registry's current state.
   because the race is real.
 - **Envelope structural validation.** Before `PutEvents`, the constructed
   envelope is checked (positive version, non-empty identity, serializable,
-  within EventBridge's 256 KB entry limit). An invalid *generated* envelope
-  means the platform's own code is broken — it is reported for retry, never
+  within the 256 KB entry limit for EventBridge). An invalid *generated* envelope
+  means the platform's own code is broken—it is reported for retry, never
   partially delivered.
 - **Retry semantics, unchanged.** Transient `PutEvents` failures are reported
   for retry; retries exhaust to the publish DLQ with all attributes intact.
   `publishedAt` derives from the SQS `SentTimestamp`, which is fixed when the
-  message is first sent and survives every in-queue retry — so automatic
+  message is first sent and survives every in-queue retry—so automatic
   retries always keep the original publish time. The one exception is a DLQ
   *redrive*, which re-sends as a new message with a new `SentTimestamp`; given
   the queue's admission-only write policy, the sanctioned re-drive path is
@@ -263,7 +260,7 @@ queue message therefore became an explicitly versioned **format-2 envelope**:
 the supported publisher body, the resolved business/schema identity and target,
 the selected metadata revision and digest, the generated extension values, and
 the compiled metadata schema (or a bounded validation descriptor) the delivery
-path will need. Metadata lives in the message body, not SQS attributes — the
+path will need. Metadata lives in the message body, not SQS attributes—the
 attribute surface stays bounded and the trusted-principal attributes are
 preserved unchanged.
 
@@ -274,27 +271,28 @@ authorization:
   under the old revision. A request reading after the commit gets the new one.
   No cross-store atomicity between DynamoDB and SQS is promised, and no
   in-flight work is invalidated.
-- Missing or unreadable configuration is `503` — never a fallback to an older
+- Missing or unreadable configuration is `503`—never a fallback to an older
   cached revision. The mutable active pointer is never TTL-cached; immutable
   revision contents cache indefinitely keyed by revision and digest.
 
 Every generated field except `publishedAt` is a **frozen value** at enqueue.
-`publishedAt` is the queue-time exception: SQS's acceptance time is unknowable
+`publishedAt` is the queue-time exception: the SQS acceptance time is unknowable
 before SQS accepts, so preflight uses the fixed-width UTC-millisecond
 representation, no configurable constraint may depend on its eventual value, and
 delivery derives it from the recorded queue message and checks it against the
 frozen built-in rule.
 
-Delivery reads only recorded values — the format-2 body carries everything, so
+Delivery reads only recorded values—the format-2 body carries everything, so
 a retry cannot drift and no consumer path performs configuration reads or
 "repairs" a message with fresh UUIDs. A format-2 message with missing or
 inconsistent fields fails processing; only an actual legacy wrapper takes the
 old three-field path. Absence is legacy *recognition*, never recovery from a
 malformed new-format message.
 
-One honesty rule rides along: a client retry after an ambiguous enqueue outcome
-(a timeout with the request already sent) is a **new admission** and may generate
-a new UUID even with the same idempotency key. The application-level
+An important limitation remains: a client retry after an ambiguous enqueue
+outcome is a **new admission**. For example, a request might time out after
+the client has sent it. The retry might generate a new universally unique
+identifier (UUID), even with the same idempotency key. The application-level
 deduplication key is `idempotencyKey`; UUID metadata is not an exactly-once
 guarantee. The older claim that every non-`202` proves nothing queued is
 stronger than distributed enqueue can promise and is not repeated here.
@@ -302,8 +300,8 @@ stronger than distributed enqueue can promise and is not repeated here.
 ## 10. Why schemas are draft-4 only, enforced at write time
 
 Validation is only as reliable as the stored schemas. If a registry could hold
-a document that does not compile — malformed JSON, a non-object, an OpenAPI 3.0
-document, a draft-2020-12 schema using draft-4-incompatible keywords — then
+a document that does not compile—malformed JSON, a non-object, an OpenAPI 3.0
+document, a draft-2020-12 schema using draft-4-incompatible keywords—then
 every publish against it would fail at admission with `503`, forever. The
 platform would have traded "events silently dropped" for "events rejected
 loudly for a reason nobody can fix at publish time."
@@ -322,6 +320,8 @@ An audit of every org registry before rollout found exactly one schema
 carve-out for legacy OpenAPI 3.0 content was dropped rather than shipped.
 
 ## 11. What this design deliberately does not do
+
+The design excludes the following alternatives:
 
 - **Caller-declared or pinned schema versions.** Producers cannot publish
   "against version 3." Allowing it would couple producers to consumer migration
@@ -343,18 +343,20 @@ carve-out for legacy OpenAPI 3.0 content was dropped rather than shipped.
 
 ## 12. Where things live
 
+The following files implement and test the publish path.
+
 | Piece | Location |
 |-------|----------|
 | Admission handler | `event-streams/functions/publish-events-admission/` |
 | Delivery consumer | `event-streams/functions/publish-events/` |
 | Validation, cache, draft-4 compile gate | `lib/konductor-common/src/schema_validation.rs` |
 | Principal envelope serialization | `lib/konductor-common/src/principal_context.rs` (`to_sqs_attributes`) |
-| Schema write gates (draft-4 400s) | `event-streams/functions/schema-admin/` |
+| Schema write gates (draft-4 400 s) | `event-streams/functions/schema-admin/` |
 | Infrastructure (queue policy, IAM, alarm) | `konductor-core-stack.yaml` |
 | API contracts (`/publish` responses) | `api/openapi-oauth.yaml`, `api/openapi-iam.yaml` |
 | Contract tests | `lib/konductor-common/tests/api_surfaces.rs` |
 
 Operations: a `PublishUnavailable` metric filter on the admission log feeds the
-`konductor-publish-admission-unavailable-alarm` — any firing means ingest is
+`konductor-publish-admission-unavailable-alarm`—any firing means ingest is
 degraded (registry outage, unusable stored schema, or queue failure) and
 publishers are seeing `503`s.

@@ -1,18 +1,20 @@
-# TypeScript Conventions
+# TypeScript conventions
 
-TypeScript conventions for the Konductor web console in `web/` — the only TypeScript in the repo (the backend is Rust). Verified against the codebase; when this doc and the code disagree, the code wins — fix the doc.
+The web console for Konductor for Amazon EventBridge uses TypeScript in `web/`. The backend uses Rust. This guide describes the implemented conventions. If the code and this guide differ, update the guide to match the code.
 
-Vue/Nuxt-specific patterns (component structure, the API layer, the Nx\* kit) live in [vue.md](./vue.md).
+For component structure, the API layer, and the Nx\* kit, see [Vue and Nuxt conventions](./vue.md).
 
 ## Toolchain
 
-- Node 24 (CI), pnpm (version pinned by the `packageManager` field in `web/package.json`)
+The continuous integration (CI) Web job uses the following toolchain:
+
+- Node.js 24 and pnpm (version pinned by the `packageManager` field in `web/package.json`)
 - `nuxt.config.ts` + `tsconfig.json` extending Nuxt's generated `.nuxt/tsconfig.json` (strict by default)
-- Gates, all run in CI's Web job: `pnpm lint` (ESLint via `@nuxt/eslint` defaults), `pnpm typecheck` (`nuxi typecheck`, vue-tsc), `pnpm build`
+- Quality checks: `pnpm lint` (ESLint with `@nuxt/eslint` defaults), `pnpm typecheck` (`nuxi typecheck`, vue-tsc), and `pnpm build`
 
 ## Formatting
 
-Enforced by the Nuxt ESLint stylistic preset — don't fight it by hand:
+Follow the formatting rules enforced by the Nuxt ESLint stylistic preset:
 
 - Single quotes, **no semicolons**, trailing commas in multiline literals
 - 2-space indent
@@ -27,13 +29,15 @@ const tones: Record<BadgeTone, string> = {
 
 ## Imports
 
+Use the following import conventions:
+
 - `import type` for type-only imports (`import type { DomainSummary } from '~/types/api'`)
-- Value imports explicit for stores and third-party packages; Vue primitives and `composables/` are Nuxt auto-imports (see vue.md)
+- Explicit value imports for stores and third-party packages. Nuxt automatically imports Vue primitives and `composables/`. See [Imports](./vue.md#imports).
 - Path alias `~/` for everything under `app/`, never deep relative chains
 
-## API Types
+## API types
 
-`app/types/api.ts` hand-mirrors the OpenAPI spec (`api/openapi-oauth.yaml`) — hand-written by design; when the API changes, update both in the same change.
+`app/types/api.ts` mirrors the OpenAPI specification in `api/openapi-oauth.yaml`. These types are handwritten. When the API changes, update both files in the same change.
 
 - String-literal unions for enums (`DomainStatus`, `BadgeTone`) instead of stringly-typed values
 - Optional fields use `?` (they are absent, not `null`)
@@ -53,9 +57,9 @@ export interface DomainSummary {
 }
 ```
 
-## Runtime Validation at Boundaries
+## Runtime validation at boundaries
 
-No validation library. Parse `unknown` into typed values with hand-rolled guards at exactly two boundaries: boot-time config (`parseKonductorConfig` in `types/config.ts`) and API error bodies (`isErrorBody` in `useApi.ts`).
+The console does not use a validation library. Parse `unknown` into typed values with explicit guards at two boundaries: startup configuration and API error bodies. Use `parseKonductorConfig` in `types/config.ts` for configuration and `isErrorBody` in `useApi.ts` for errors.
 
 ```typescript
 function isErrorBody(data: unknown): data is ApiErrorBody {
@@ -67,15 +71,19 @@ function isErrorBody(data: unknown): data is ApiErrorBody {
 }
 ```
 
-`any` is not used; external/unknown data enters as `unknown` and is narrowed.
+Accept external data as `unknown`, then narrow its type. Do not use `any`.
 
-## Error Handling
+## Error handling
 
-- The API layer throws typed `ApiError` (see vue.md); callers narrow with `instanceof`
+Handle errors with the following conventions:
+
+- The API layer throws typed `ApiError` objects. Narrow them with `instanceof`. See [Error handling in pages](./vue.md#error-handling-in-pages).
 - Normalize unknown caught values before surfacing them: `error instanceof Error ? error.message : 'Request failed'`
-- Never swallow: catch → typed handling or a toast, not a bare `console.error`
+- Handle caught errors with typed error handling or a toast. Do not use only `console.error`.
 
-## Everyday Idioms
+## Everyday idioms
+
+Use the following patterns for defaults, optional values, and constrained types:
 
 ```typescript
 // ✅ ?? for defaults — preserves 0, false, ''
@@ -96,11 +104,13 @@ description: form.description || undefined
 
 - `undefined` means "absent"; don't introduce `null` except where the API contract uses it
 - async/await everywhere; no raw `.then()` chains
-- Requests must not hang forever — `useApi` already applies `AbortSignal.timeout(30_000)`; keep that pattern for any new network path
+- Requests must not hang forever—`useApi` already applies `AbortSignal.timeout(30_000)`; keep that pattern for any new network path
 - Prefer derived, non-mutating transforms (`map`/`filter`/`toSorted`) over in-place mutation of shared state; form arrays are the sanctioned exception (v-model binds into a `reactive` form object)
 
-## State and Reactivity Types
+## State and reactivity types
+
+Use explicit types where inference does not provide the required constraints:
 
 - `ref`/`reactive` with explicit type parameters when inference is too loose: `ref<Entitlement[]>([])`, `reactive<Record<string, string>>({})`
 - Shared state from composables is exposed `readonly` with setter functions (`useToast`)
-- The single Pinia store (`stores/session.ts`) is setup-style with computed derivations, mirroring the backend principal contract — extend it rather than adding parallel session state
+- The single Pinia store (`stores/session.ts`) is setup-style with computed derivations, mirroring the backend principal contract—extend it rather than adding parallel session state

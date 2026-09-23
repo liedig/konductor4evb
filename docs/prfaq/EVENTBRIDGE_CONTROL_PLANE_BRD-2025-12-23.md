@@ -1,44 +1,55 @@
-# EventBridge [Control Plane] - Business Requirements Document (BRD)
+<a id="eventbridge-control-plane---business-requirements-document-brd"></a>
 
-**Version:** 1.0  
-**Date:** December 23, 2025  
-**Status:** Draft  
-**Target Launch:** March 15, 2026
+# EventBridge [Control Plane] business requirements document
+
+This business requirements document (BRD) records the proposal dated December 23, 2025. It is a historical planning draft, not a description of the current Konductor for Amazon EventBridge implementation. Product placeholders, launch targets, and requirement identifiers retain their original intent. For current behavior, see [Architecture](../development/architecture.md).
+
+**Version:** 1.0\
+**Date:** December 23, 2025\
+**Status:** Draft\
+**Target launch:** March 15, 2026
 
 ---
 
-## 1. Executive Summary
+## 1. Executive summary
 
-The EventBridge [Control Plane] is a new AWS service designed to eliminate the
-complexity of building Event-Driven Architectures (EDA) using Amazon
-EventBridge, particularly for cross-account event delivery scenarios. This
-service enables AWS developers and architects to subscribe to events and start
-processing them within minutes, compared to the current 1-2 days required to
-manually configure cross-account infrastructure.
+The proposed EventBridge [Control Plane] simplifies event-driven architecture
+(EDA) with Amazon EventBridge, particularly cross-account event delivery.
+Developers and architects subscribe to events and begin processing within
+minutes. The proposal contrasts this target with 1–2 days of manual
+infrastructure setup.
 
-### Business Value
+### Business value
+
+The proposal sets the following business targets:
 
 - **60% reduction** in integration resources developers must manage per event subscription (from 8 resources to 3)
 - **Transformation of setup time** from 1-2 days to under 10 minutes for 90% of use cases
 - **15% increase** in new EDA implementations within six months of launch
-- **Target NPS of 40+** within the first year (up from current 25)
+- **Target net promoter score (NPS) of 40+** within the first year (up from 25)
 
-### Strategic Importance
+### Strategic importance
 
-The [Control Plane] removes the primary adoption barrier preventing AWS customers from implementing EDA at enterprise scale, directly competing with alternative platforms like Confluent and Apache Kafka while strengthening AWS's serverless and event-driven architecture strategy.
+The [Control Plane] targets infrastructure complexity as a barrier to enterprise EDA adoption. It competes with alternatives such as Confluent and Apache Kafka and supports the AWS strategy for serverless and event-driven architecture.
 
 ---
 
-## 2. Business Objectives
+## 2. Business objectives
 
-### Primary Objectives
+Use the objectives and success criteria to evaluate the proposed service.
+
+### Primary objectives
+
+The primary objectives are to:
 
 1. **Simplify cross-account event delivery** by abstracting infrastructure complexity from developers
 2. **Accelerate EDA adoption** on AWS by reducing time-to-value from days to minutes
 3. **Improve developer productivity** by reducing resource management overhead by 60%
 4. **Enable platform team governance** while maintaining development team autonomy
 
-### Success Criteria
+### Success criteria
+
+The proposal defines success through the following targets:
 
 - Achieve <10 minute time-to-event-consumption for 90% of use cases
 - Reduce average resources managed per event subscription from 8 to 3
@@ -48,75 +59,85 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-## 3. Scope Definition
+## 3. Scope definition
 
-### In Scope for Initial Release
+The scope distinguishes initial-release requirements from deferred capabilities.
 
-#### Domain Management
+### In scope for initial release
+
+The initial release covers the following functional areas.
+
+#### Domain management
 
 - Domain registration and de-registration through API, CLI, and Console
 - Automated provisioning of domain-specific event buses in producer and platform accounts
 - Domain-specific schema registry creation and management
 - Domain lifecycle management (active, suspended, deleted states)
 
-#### Event Publishing
+#### Event publishing
 
 - Publish API operation for event producers
 - Automatic routing to appropriate domain-specific event buses
 - Support for all EventBridge event formats and patterns
 
-#### Event Subscription
+#### Event subscription
 
 - Subscribe API operation for event consumers
 - Automated cross-account rule creation and management
 - Unsubscribe API operation with automatic resource cleanup
 - Permission-based event discovery through schema registries
 
-#### Schema Management
+#### Schema management
 
 - Automatic schema version tracking and storage
 - Impact analysis for schema version changes
 - Migration plan generation for consumers to adopt new schema versions
 - Schema compatibility validation
 
-#### Event Flow Visibility
+#### Event flow visibility
 
 - Comprehensive mapping of event origins across domains
 - Consumer tracking for each event type
 - Cross-domain relationship visualization
 - Domain-level event flow metrics
 
-#### Cross-Account Automation
+#### Cross-account automation
 
 - Automated IAM policy creation for cross-account delivery
 - Resource policy management for event buses
 - Permission validation and error reporting
 - Support for AWS Organizations integration
 
-#### Monitoring & Observability
+<a id="monitoring--observability"></a>
+
+#### Monitoring and observability
 
 - CloudWatch metrics for domain-level event processing
-- Dead letter queue implementation for failed events
+- Dead-letter queue implementation for failed events
 - Automated alarm creation for domain health
 - Integration with AWS CloudTrail for audit logging
 
-#### Integration with AWS Messaging Services
+#### Integration with AWS messaging services
 
 - Support for SNS topic targets in event subscriptions
 - Support for SQS queue targets in event subscriptions
 - Support for Kinesis stream targets in event subscriptions
 - Automatic configuration of necessary permissions for service integrations
 
-### Out of Scope for Initial Release
+### Out of scope for initial release
 
-- Multi-region event replication (future enhancement)
+The initial release excludes the following capabilities:
+
+- Multi-Region event replication (future enhancement)
 - Event replay beyond 30 days (future enhancement)
 - Visual workflow designer for business process automation (future phase)
 - On-premises event source integration
 - Custom event transformation logic within the [Control Plane]
 - Built-in event archival to S3 (customers can implement separately)
 
-### Deferred Features
+### Deferred features
+
+The following features remain deferred:
 
 - Advanced event routing based on content-based filtering beyond EventBridge patterns
 - Event rate limiting and throttling at domain level
@@ -125,13 +146,17 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-## 4. Functional Requirements
+## 4. Functional requirements
 
-### FR-1: Domain Registration and Management
+The following requirements define the proposed behavior. The `FR` identifiers remain stable for traceability.
 
-#### FR-1.1: Register Domain
+### FR-1: Domain registration and management
 
-**Description:** Platform teams must be able to register a new domain that logically groups related events.
+The domain lifecycle covers registration, discovery, updates, and deletion.
+
+#### FR-1.1: Register domain
+
+**Description:** Platform teams must be able to register a domain that groups related events. AWS Identity and Access Management (IAM) policies control cross-account access, and a dead-letter queue (DLQ) retains failed events.
 
 **Requirements:**
 
@@ -144,13 +169,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
   - Domain-specific event bus in owner account
   - Domain-specific event bus in platform account
   - Schema registry for domain events
-  - Dead letter queue for failed events
+  - Dead-letter queue for failed events
   - CloudWatch dashboard for domain monitoring
   - IAM policies for cross-account access
 - Provisioning completion within 5 minutes for 95% of operations
 - Return domain ID and provisioning status
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Domain registration API completes successfully within 5 minutes
 - All required resources (event buses, schema registry, DLQ, monitoring) are provisioned
@@ -158,7 +183,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - IAM policies grant appropriate cross-account permissions
 - CloudWatch dashboard displays domain-level metrics
 
-#### FR-1.2: List Domains
+#### FR-1.2: List domains
 
 **Description:** Users must be able to discover domains they have access to.
 
@@ -170,14 +195,14 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Pagination support for large result sets (100 domains per page)
 - Console view with search and filter capabilities
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API returns all domains user has permission to access
 - Filtering works correctly for all supported attributes
 - Pagination handles large domain lists (tested with 10,000+ domains)
 - Console displays domains with relevant metadata in sortable table
 
-#### FR-1.3: Describe Domain
+#### FR-1.3: Describe domain
 
 **Description:** Users must be able to retrieve detailed information about a specific domain.
 
@@ -192,14 +217,14 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
   - Monitoring and alarm status
 - Console detail view with tabs for configuration, events, subscriptions, monitoring
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API returns complete domain details within 1 second
 - All resource ARNs are correct and accessible
 - Event statistics are accurate and up-to-date (within 5 minutes)
 - Console view displays all information clearly organized
 
-#### FR-1.4: Update Domain
+#### FR-1.4: Update domain
 
 **Description:** Domain owners must be able to update domain metadata and configuration.
 
@@ -211,14 +236,14 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Prevent updates to immutable fields (domain name, owner account)
 - Validate permissions before allowing updates
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Metadata updates apply within 1 minute
 - Domain suspension immediately stops event delivery
 - Immutable fields cannot be modified (API returns error)
 - Audit trail in CloudTrail captures all domain modifications
 
-#### FR-1.5: Delete Domain
+#### FR-1.5: Delete domain
 
 **Description:** Domain owners must be able to delete domains they no longer need.
 
@@ -229,13 +254,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Graceful cleanup of all provisioned resources:
   - Event buses in owner and platform accounts
   - Schema registry and all schema versions
-  - Dead letter queues (preserve messages for 30 days)
+  - Dead-letter queues (preserve messages for 30 days)
   - CloudWatch dashboards and alarms
   - IAM policies
 - Soft delete with 30-day retention before permanent deletion
 - Return cleanup status and timeline
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API rejects deletion if active subscriptions exist (unless forced)
 - All resources are cleaned up within 15 minutes
@@ -245,9 +270,11 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### FR-2: Event Publishing
+### FR-2: Event publishing
 
-#### FR-2.1: Publish Event
+Publishing requirements cover event submission and schema validation.
+
+#### FR-2.1: Publish event
 
 **Description:** Event producers must be able to publish events to their domain without knowing target event bus details.
 
@@ -266,16 +293,16 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Integration with AWS X-Ray for distributed tracing
 - Support for event deduplication using event ID
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
-- API accepts events and routes to correct domain event bus within 100ms (p99)
+- API accepts events and routes to correct domain event bus within 100 ms (p99)
 - Batch publishing handles up to 10 events per call
 - Schema validation (when enabled) rejects non-conforming events
 - Event IDs are generated and returned for tracking
 - Failed events are routed to DLQ with error details
 - X-Ray traces show complete event flow from producer to bus
 
-#### FR-2.2: Event Schema Validation
+#### FR-2.2: Event schema validation
 
 **Description:** The [Control Plane] must validate published events against registered schemas when enabled.
 
@@ -287,18 +314,20 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Support for schema evolution (backward/forward compatibility)
 - Allow publishing with schema validation warnings but not errors
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
-- Schema validation completes within 50ms additional latency
+- Schema validation completes within 50 ms additional latency
 - Validation errors include specific field mismatches
 - Compatible schema changes allow event publishing
 - Incompatible changes reject events with clear error messages
 
 ---
 
-### FR-3: Event Subscription
+### FR-3: Event subscription
 
-#### FR-3.1: Subscribe to Event
+Subscription requirements cover access to producer events and subscription lifecycle operations.
+
+#### FR-3.1: Subscribe to event
 
 **Description:** Event consumers must be able to subscribe to events from other domains with automatic cross-account delivery setup.
 
@@ -316,16 +345,16 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Subscription activation within 2 minutes for 95% of operations
 - Console interface for browsing available events and subscribing
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API validates consumer has permission to subscribe to domain events
 - Cross-account rules and policies are created successfully
 - Events begin flowing to consumer event bus within 2 minutes
 - Consumer can create their own processing rules on their event bus
 - CloudWatch metrics track subscription delivery success rate
-- Console allows browsing schemas and one-click subscription
+- The console supports schema browsing and subscription in one action
 
-#### FR-3.2: List Subscriptions
+#### FR-3.2: List subscriptions
 
 **Description:** Users must be able to view their active event subscriptions.
 
@@ -342,14 +371,14 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
   - Delivery metrics (success rate, failures)
 - Console view with search, filter, and sort capabilities
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API returns all subscriptions user has permission to view
 - Filtering works correctly for all supported attributes
 - Delivery metrics are accurate (within 5 minutes)
 - Console displays subscriptions in organized, actionable format
 
-#### FR-3.3: Describe Subscription
+#### FR-3.3: Describe subscription
 
 **Description:** Users must be able to retrieve detailed information about a specific subscription.
 
@@ -364,14 +393,14 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
   - Error details for failed deliveries
 - Console detail view with delivery metrics and error logs
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API returns complete subscription details within 1 second
 - Delivery statistics are accurate and current (within 5 minutes)
 - Error details provide actionable troubleshooting information
 - Console view includes time-series graphs of delivery metrics
 
-#### FR-3.4: Update Subscription
+#### FR-3.4: Update subscription
 
 **Description:** Event consumers must be able to modify their subscription configuration.
 
@@ -384,14 +413,14 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Automatically update associated EventBridge rules
 - Preserve subscription history and metrics
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Event pattern updates apply within 2 minutes
 - Updated pattern correctly filters events
 - Disabled subscriptions stop event delivery immediately
 - Subscription metrics continue tracking across configuration changes
 
-#### FR-3.5: Unsubscribe from Event
+#### FR-3.5: Unsubscribe from event
 
 **Description:** Event consumers must be able to cleanly remove event subscriptions they no longer need.
 
@@ -406,7 +435,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Preserve subscription history for 90 days for audit purposes
 - Return unsubscribe status
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API validates caller owns subscription before deletion
 - Event delivery stops within 1 minute
@@ -416,9 +445,11 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### FR-4: Schema Management and Versioning
+### FR-4: Schema management and versioning
 
-#### FR-4.1: Register Event Schema
+Schema requirements cover registration, evolution, impact analysis, and discovery.
+
+#### FR-4.1: Register event schema
 
 **Description:** Domain owners must be able to register schemas for events their domain publishes.
 
@@ -432,7 +463,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Make schema discoverable to authorized consumers
 - Return schema ID and version
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API validates schema syntax before registration
 - Schema is assigned appropriate version number
@@ -440,7 +471,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Authorized users can discover and view schema
 - Invalid schemas are rejected with clear error messages
 
-#### FR-4.2: Update Event Schema (Create New Version)
+#### FR-4.2: Update event schema (create new version)
 
 **Description:** Domain owners must be able to publish new versions of event schemas.
 
@@ -454,7 +485,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Support for schema deprecation warnings
 - Notify subscribed consumers of schema updates
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API performs compatibility analysis within 2 seconds
 - Breaking changes are clearly identified
@@ -463,7 +494,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Consumers receive notification of schema updates
 - Previous schema versions remain accessible
 
-#### FR-4.3: Schema Impact Analysis
+#### FR-4.3: Schema impact analysis
 
 **Description:** The [Control Plane] must analyze the impact of schema changes on existing consumers.
 
@@ -476,7 +507,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Provide schema comparison showing field-level differences
 - Track consumer migration status to new schema versions
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Impact analysis completes within 5 seconds for domains with 1000+ subscriptions
 - Change classification is accurate for common schema evolution patterns
@@ -484,7 +515,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Schema comparison clearly highlights additions, deletions, modifications
 - Migration tracking shows which consumers have adopted new version
 
-#### FR-4.4: Schema Migration Planning
+#### FR-4.4: Schema migration planning
 
 **Description:** The [Control Plane] must provide automated migration plans for schema version updates.
 
@@ -498,16 +529,16 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Allow domain owners to communicate migration plan to consumers
 - Track migration completion percentage
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Migration plan is generated within 5 seconds
-- Plan clearly distinguishes required vs. optional updates
+- Plan clearly distinguishes required versus optional updates
 - Timeline recommendations are realistic and actionable
-- Console provides one-click sharing of migration plan with consumers
+- The console supports sharing a migration plan with consumers in one action
 - Migration progress is visible to domain owners
 - All consumers complete migration before schema deprecation deadline
 
-#### FR-4.5: Schema Discovery
+#### FR-4.5: Schema discovery
 
 **Description:** Event consumers must be able to discover available event schemas they have permission to access.
 
@@ -515,13 +546,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 - API operation: `ListSchemas(filters, pagination)`
 - Search by domain, event type, keywords in schema
-- Filter by schema properties (e.g., contains specific fields)
+- Filter by schema properties (for example, contains specific fields)
 - View schema definition and examples
 - See schema version history
 - Preview event samples for each schema
 - Console interface with search and visual schema browser
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Search returns relevant schemas within 1 second
 - Filtering correctly applies all specified criteria
@@ -532,9 +563,11 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### FR-5: Event Flow Visibility and Mapping
+### FR-5: Event flow visibility and mapping
 
-#### FR-5.1: Event Flow Visualization
+These requirements describe how teams inspect event origins, consumers, and domain relationships.
+
+#### FR-5.1: Event flow visualization
 
 **Description:** Users must be able to visualize how events flow between domains across their organization.
 
@@ -552,16 +585,16 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Console visualization with interactive graph
 - Zoom and pan capabilities for large topologies
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API returns flow map data within 5 seconds for 10,000+ subscriptions
 - Graph accurately represents all active event flows
 - Volume metrics reflect actual event traffic (within 5 minutes)
 - Cross-account boundaries are clearly marked
 - Console visualization is responsive and intuitive
-- Users can click nodes/edges for detailed information
+- Users can choose nodes or edges to view detailed information
 
-#### FR-5.2: Event Origin Tracking
+#### FR-5.2: Event origin tracking
 
 **Description:** Users must be able to identify the origin (domain and account) of any event type.
 
@@ -575,7 +608,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Show event flow to all consumers
 - Console detail view for event origin information
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API returns origin information within 1 second
 - Origin data is accurate and current
@@ -583,7 +616,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Schema information is complete and up-to-date
 - Consumer list is comprehensive
 
-#### FR-5.3: Consumer Tracking
+#### FR-5.3: Consumer tracking
 
 **Description:** Domain owners must be able to see who is consuming their events.
 
@@ -596,7 +629,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Identify consumers using outdated schema versions
 - Console view with consumer metrics and health status
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API returns complete consumer list within 2 seconds
 - Consumer information includes all active subscriptions
@@ -604,7 +637,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Outdated schema usage is clearly flagged
 - Console provides actionable insights on consumer health
 
-#### FR-5.4: Cross-Domain Relationship Mapping
+#### FR-5.4: Cross-domain relationship mapping
 
 **Description:** Users must be able to understand dependencies between domains.
 
@@ -618,7 +651,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Calculate dependency depth and complexity
 - Console visualization of domain relationships
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - API returns relationship data within 3 seconds
 - Upstream and downstream dependencies are complete
@@ -628,9 +661,11 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### FR-6: Cross-Account IAM Automation
+### FR-6: Cross-account IAM automation
 
-#### FR-6.1: Automated IAM Policy Creation
+Cross-account automation must create, validate, and govern permissions.
+
+#### FR-6.1: Automated IAM policy creation
 
 **Description:** The [Control Plane] must automatically create and manage IAM policies for cross-account event delivery.
 
@@ -647,7 +682,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Update policies when subscriptions change
 - Clean up unused policies when subscriptions are removed
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Policies grant only necessary permissions
 - Policy creation completes within 2 minutes
@@ -656,7 +691,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Unused policies are removed within 10 minutes of final subscription deletion
 - All policy operations are logged in CloudTrail
 
-#### FR-6.2: Permission Validation
+#### FR-6.2: Permission validation
 
 **Description:** The [Control Plane] must validate that required permissions exist before performing operations.
 
@@ -669,7 +704,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Suggest corrective actions for permission issues
 - Support for dry-run operations to test permissions
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Permission validation completes within 1 second
 - Missing permissions are clearly identified
@@ -677,7 +712,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Dry-run operations accurately simulate permission checks
 - No operations fail due to preventable permission issues
 
-#### FR-6.3: AWS Organizations Integration
+#### FR-6.3: AWS Organizations integration
 
 **Description:** The [Control Plane] must integrate with AWS Organizations for simplified permission management.
 
@@ -690,7 +725,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Support for organizational units (OUs) based access control
 - Respect organization-level restrictions
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - [Control Plane] correctly identifies organization structure
 - Cross-account operations work seamlessly within same organization
@@ -700,13 +735,17 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### FR-7: Monitoring and Observability
+### FR-7: Monitoring and observability
+
+Monitoring requirements cover metrics, dashboards, alarms, failed events, and audit records. Requirements FR-7.1–FR-7.5 appear after the messaging integration requirements in this draft.
 
 ---
 
-### FR-8: AWS Messaging Services Integration
+### FR-8: AWS messaging services integration
 
-#### FR-8.1: SNS Topic Target Support
+The proposed integrations support Amazon Simple Notification Service (Amazon SNS), Amazon Simple Queue Service (Amazon SQS), and Amazon Kinesis targets.
+
+#### FR-8.1: SNS topic target support
 
 **Description:** Event consumers must be able to subscribe to domain events with SNS topics as targets, enabling fan-out patterns and email/SMS notifications.
 
@@ -722,7 +761,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Validation of SNS topic accessibility before subscription creation
 - Console interface for selecting SNS topics as subscription targets
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Events are successfully delivered to SNS topics within 2 minutes of subscription
 - SNS topic permissions are correctly configured automatically
@@ -731,7 +770,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Failed deliveries to SNS are captured in domain DLQ
 - CloudWatch metrics track SNS delivery success rate
 
-#### FR-8.2: SQS Queue Target Support
+#### FR-8.2: SQS queue target support
 
 **Description:** Event consumers must be able to subscribe to domain events with SQS queues as targets, enabling buffered processing and decoupling.
 
@@ -745,10 +784,10 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Support for both standard and FIFO queues
 - Support for SQS message attributes and deduplication
 - Validation of SQS queue accessibility before subscription creation
-- Support for dead letter queues on target SQS queues
+- Support for dead-letter queues on target SQS queues
 - Console interface for selecting SQS queues as subscription targets
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Events are successfully delivered to SQS queues within 2 minutes of subscription
 - SQS queue permissions are correctly configured automatically
@@ -758,7 +797,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - CloudWatch metrics track SQS delivery success rate
 - Integration works with customer-configured SQS DLQs
 
-#### FR-8.3: Kinesis Stream Target Support
+#### FR-8.3: Kinesis stream target support
 
 **Description:** Event consumers must be able to subscribe to domain events with Kinesis data streams as targets, enabling real-time streaming analytics.
 
@@ -774,7 +813,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Monitoring of Kinesis stream throttling and capacity
 - Console interface for selecting Kinesis streams as subscription targets
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Events are successfully delivered to Kinesis streams within 2 minutes of subscription
 - Kinesis stream permissions are correctly configured automatically
@@ -784,7 +823,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - CloudWatch metrics track Kinesis delivery success rate and throttling
 - Integration respects Kinesis stream capacity limits
 
-#### FR-8.4: Multi-Target Subscription Support
+#### FR-8.4: Multi-target subscription support
 
 **Description:** Event consumers must be able to create multiple subscriptions for the same event type to different target types.
 
@@ -796,7 +835,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Consolidated view of all targets for a given event type
 - Ability to manage (update, delete) each subscription independently
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Consumer can create subscriptions to EventBus, SNS, SQS, and Kinesis simultaneously for same event
 - Each subscription has independent delivery metrics
@@ -804,7 +843,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Console clearly shows all subscriptions grouped by event type
 - Deleting one subscription doesn't affect others
 
-#### FR-8.5: Target-Specific Configuration
+#### FR-8.5: Target-specific configuration
 
 **Description:** The [Control Plane] must support target-specific configuration options for each messaging service.
 
@@ -827,7 +866,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
   - Explicit hash key support
   - Shard-level metrics
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - All target-specific configurations are supported through API and Console
 - Configuration validation occurs before subscription creation
@@ -835,7 +874,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Configuration can be updated after subscription creation
 - Default configurations work correctly when not specified
 
-#### FR-8.6: Cross-Service Permissions Management
+#### FR-8.6: Cross-service permissions management
 
 **Description:** The [Control Plane] must manage IAM and resource policies for all integrated messaging services.
 
@@ -848,7 +887,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Support for customer-managed IAM roles (optional advanced configuration)
 - Least privilege access for all service integrations
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - All necessary permissions are created automatically
 - Permissions follow AWS security best practices
@@ -859,7 +898,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-#### FR-7.1: CloudWatch Metrics
+#### FR-7.1: CloudWatch metrics
 
 **Description:** The [Control Plane] must publish comprehensive metrics to CloudWatch.
 
@@ -882,7 +921,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Metrics published with 1-minute granularity
 - Metrics retained for 15 months
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - All metrics publish within 1 minute of events
 - Metrics are accurate (within 1% for counts)
@@ -890,7 +929,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Metrics can be used for alarming and dashboards
 - Historical metrics are queryable for 15 months
 
-#### FR-7.2: CloudWatch Dashboards
+#### FR-7.2: CloudWatch dashboards
 
 **Description:** The [Control Plane] must automatically create CloudWatch dashboards for domains.
 
@@ -907,7 +946,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Support for dashboard customization
 - Link dashboard from [Control Plane] Console
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Dashboard is created within 5 minutes of domain registration
 - All visualizations display correct data
@@ -915,7 +954,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Dashboard updates reflect current metrics (within 1 minute)
 - Customizations persist across dashboard updates
 
-#### FR-7.3: CloudWatch Alarms
+#### FR-7.3: CloudWatch alarms
 
 **Description:** The [Control Plane] must create default CloudWatch alarms for critical issues.
 
@@ -930,7 +969,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Integration with SNS for alarm notifications
 - Alarm state visible in [Control Plane] Console
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Alarms are created within 5 minutes of domain registration
 - Alarms trigger correctly based on thresholds
@@ -938,7 +977,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Alarm state is visible in both CloudWatch and [Control Plane] consoles
 - Custom alarm configurations are respected
 
-#### FR-7.4: Dead Letter Queue Implementation
+#### FR-7.4: Dead-letter queue implementation
 
 **Description:** The [Control Plane] must implement DLQs for failed event deliveries.
 
@@ -956,7 +995,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Support for event replay from DLQ
 - CloudWatch metrics for DLQ depth
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - DLQ is created when domain is registered
 - Failed events appear in DLQ within 1 minute
@@ -965,7 +1004,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Replay from DLQ successfully re-delivers events
 - DLQ depth metric is accurate
 
-#### FR-7.5: AWS CloudTrail Integration
+#### FR-7.5: AWS CloudTrail integration
 
 **Description:** All [Control Plane] operations must be logged to CloudTrail for audit purposes.
 
@@ -982,7 +1021,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - Support for CloudTrail Lake queries
 - Integrate with AWS Config for compliance tracking
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - All API calls appear in CloudTrail within 15 minutes
 - CloudTrail events include complete request details
@@ -992,17 +1031,21 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-## 5. Non-Functional Requirements
+## 5. Non-functional requirements
+
+The non-functional requirements (`NFR`) define performance, scale, reliability, security, operations, usability, and cost targets.
 
 ### NFR-1: Performance
 
-#### NFR-1.1: API Latency
+Measure performance through API latency, provisioning time, and throughput.
+
+#### NFR-1.1: API latency
 
 - **Requirement:** All read API operations (List, Describe, Get) must complete within 1 second at p99
-- **Requirement:** Write API operations (Register, Subscribe, Publish) must complete within 100ms at p99, excluding async resource provisioning
-- **Requirement:** Event publishing latency overhead must be <50ms compared to direct EventBridge publishing
+- **Requirement:** Write API operations (Register, Subscribe, Publish) must complete within 100 ms at p99, excluding async resource provisioning
+- **Requirement:** Event publishing latency overhead must be <50 ms compared to direct EventBridge publishing
 
-#### NFR-1.2: Resource Provisioning Time
+#### NFR-1.2: Resource provisioning time
 
 - **Requirement:** Domain registration provisioning must complete within 5 minutes for 95% of operations
 - **Requirement:** Subscription activation must complete within 2 minutes for 95% of operations
@@ -1010,46 +1053,50 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 #### NFR-1.3: Throughput
 
-- **Requirement:** Support 10,000+ API operations per second per region
+- **Requirement:** Support 10,000+ API operations per second per Region
 - **Requirement:** Support 1 million+ events published per second per domain
 - **Requirement:** Support 100,000+ concurrent subscriptions across all domains
 
 ### NFR-2: Scalability
 
-#### NFR-2.1: Domain Scale
+The service must meet the following domain, subscription, and event-volume targets.
+
+#### NFR-2.1: Domain scale
 
 - **Requirement:** Support 100,000+ domains per AWS account
 - **Requirement:** Support 50,000+ total domain registrations across all customers within 3 years
 - **Requirement:** Support 10,000+ schemas per domain
 
-#### NFR-2.2: Subscription Scale
+#### NFR-2.2: Subscription scale
 
 - **Requirement:** Support 10,000+ subscriptions per domain
 - **Requirement:** Support 100,000+ total subscriptions per customer account
 - **Requirement:** Handle 1 million+ event delivery rules across all customers
 
-#### NFR-2.3: Event Volume
+#### NFR-2.3: Event volume
 
 - **Requirement:** Process 5 billion+ events per month across all customers within 3 years
 - **Requirement:** Support event sizes up to 256 KB (EventBridge limit)
 - **Requirement:** Support burst traffic up to 10x sustained rate
 
-### NFR-3: Availability and Reliability
+### NFR-3: Availability and reliability
 
-#### NFR-3.1: Service Availability
+These targets cover service availability, stored data, and failure recovery.
+
+#### NFR-3.1: Service availability
 
 - **Requirement:** Achieve 99.95% service availability (SLA target)
-- **Requirement:** Support multi-AZ deployment in all regions
+- **Requirement:** Support multi-AZ deployment in all Regions
 - **Requirement:** Zero data loss for committed subscriptions
-- **Requirement:** Graceful degradation during regional service issues
+- **Requirement:** Graceful degradation during Regional service issues
 
-#### NFR-3.2: Data Durability
+#### NFR-3.2: Data durability
 
 - **Requirement:** 99.999999999% (11 nines) durability for schema definitions
 - **Requirement:** 99.99% durability for subscription configurations
 - **Requirement:** 30-day point-in-time recovery for domain configurations
 
-#### NFR-3.3: Fault Tolerance
+#### NFR-3.3: Fault tolerance
 
 - **Requirement:** Automatic retry with exponential backoff for transient failures
 - **Requirement:** Circuit breaker pattern for downstream service failures
@@ -1058,21 +1105,23 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ### NFR-4: Security
 
-#### NFR-4.1: Authentication and Authorization
+Security requirements cover access, data protection, networks, and compliance.
+
+#### NFR-4.1: Authentication and authorization
 
 - **Requirement:** Support AWS IAM authentication for all API operations
 - **Requirement:** Support AWS STS temporary credentials
 - **Requirement:** Implement fine-grained authorization at domain and subscription level
 - **Requirement:** Support AWS Organizations SCPs for governance
 
-#### NFR-4.2: Data Protection
+#### NFR-4.2: Data protection
 
 - **Requirement:** Encrypt all data at rest using AWS KMS
 - **Requirement:** Support customer-managed KMS keys
 - **Requirement:** Encrypt all data in transit using TLS 1.2+
 - **Requirement:** No logging of sensitive event payload data
 
-#### NFR-4.3: Network Security
+#### NFR-4.3: Network security
 
 - **Requirement:** Support VPC endpoints for private API access
 - **Requirement:** Support AWS PrivateLink for cross-account private connectivity
@@ -1085,7 +1134,9 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - **Requirement:** Support PCI DSS compliant deployments
 - **Requirement:** Comply with GDPR data residency requirements
 
-### NFR-5: Operational Excellence
+### NFR-5: Operational excellence
+
+Operations must support monitoring, deployment, and incident response.
 
 #### NFR-5.1: Monitoring
 
@@ -1099,7 +1150,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - **Requirement:** Support blue-green deployment for zero-downtime updates
 - **Requirement:** Implement canary deployment for gradual rollout (1%, 10%, 50%, 100%)
 - **Requirement:** Automated rollback on deployment failures
-- **Requirement:** Region-by-region rollout capability
+- **Requirement:** Region-by-Region rollout capability
 
 #### NFR-5.3: Support
 
@@ -1110,37 +1161,41 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ### NFR-6: Usability
 
-#### NFR-6.1: Console Experience
+Console, API, and error-message requirements support the developer experience.
+
+#### NFR-6.1: Console experience
 
 - **Requirement:** Intuitive UI following AWS Console design guidelines
 - **Requirement:** Support for all core operations through Console (no CLI-only features)
 - **Requirement:** Responsive design supporting desktop and tablet form factors
 - **Requirement:** Contextual help and documentation links throughout Console
 
-#### NFR-6.2: API Design
+#### NFR-6.2: API design
 
 - **Requirement:** Consistent API design following AWS API standards
 - **Requirement:** Comprehensive API documentation with examples
 - **Requirement:** AWS SDK support for all major languages (Python, Java, JavaScript, Go, .NET)
 - **Requirement:** AWS CLI support with command completion
 
-#### NFR-6.3: Error Messages
+#### NFR-6.3: Error messages
 
 - **Requirement:** Clear, actionable error messages for all failure scenarios
 - **Requirement:** Include error codes that map to documentation
 - **Requirement:** Suggest corrective actions in error messages where possible
 - **Requirement:** Avoid exposing internal implementation details in errors
 
-### NFR-7: Cost Optimization
+### NFR-7: Cost optimization
 
-#### NFR-7.1: Pricing Efficiency
+The service must control both customer charges and underlying resource use.
 
-- **Requirement:** Achieve 30% lower total cost of ownership vs. manual EventBridge management
+#### NFR-7.1: Pricing efficiency
+
+- **Requirement:** Achieve 30% lower total cost of ownership versus manual EventBridge management
 - **Requirement:** No hidden costs (all charges transparent in pricing page)
 - **Requirement:** Support AWS Cost Explorer for cost tracking
 - **Requirement:** Provide cost estimation tools in Console
 
-#### NFR-7.2: Resource Efficiency
+#### NFR-7.2: Resource efficiency
 
 - **Requirement:** Automatic cleanup of unused resources
 - **Requirement:** Optimize resource utilization through resource sharing where possible
@@ -1148,15 +1203,17 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-## 6. User Stories
+## 6. User stories
 
-### US-1: Platform Team - Register Domain
+The user stories (`US`) connect requirements to platform, producer, consumer, and security tasks.
 
-**As a** platform team lead  
-**I want to** register a new domain for our order processing events  
+### US-1: Platform team - register domain
+
+**As a** platform team lead\
+**I want to** register a new domain for our order processing events\
 **So that** development teams can publish and subscribe to order events without managing infrastructure
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I can register a domain through Console or CLI in under 5 minutes
 - All necessary resources (event buses, schema registry, DLQ) are provisioned automatically
@@ -1165,13 +1222,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-2: Event Producer - Publish Event
+### US-2: Event producer - publish event
 
-**As an** event producer developer  
-**I want to** publish order events to my domain  
+**As an** event producer developer\
+**I want to** publish order events to my domain\
 **So that** consumers can process orders without me knowing who they are
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I can publish events using a simple API call with domain ID and event payload
 - I don't need to know which event bus to target
@@ -1180,13 +1237,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-3: Event Consumer - Discover Events
+### US-3: Event consumer - discover events
 
-**As an** event consumer developer  
-**I want to** discover what order events are available  
+**As an** event consumer developer\
+**I want to** discover what order events are available\
 **So that** I can decide which events my application should process
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I can browse available schemas through Console
 - I can see event schema definitions and examples
@@ -1195,13 +1252,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-4: Event Consumer - Subscribe to Event
+### US-4: Event consumer - subscribe to event
 
-**As an** event consumer developer  
-**I want to** subscribe to order created events  
+**As an** event consumer developer\
+**I want to** subscribe to order created events\
 **So that** my inventory service can reserve items when orders are placed
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I can subscribe using Console or API with just domain, event type, and my target event bus
 - Cross-account delivery is set up automatically
@@ -1210,13 +1267,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-5: Event Consumer - Process Subscribed Events
+### US-5: Event consumer - process subscribed events
 
-**As an** event consumer developer  
-**I want to** create rules on my event bus to trigger my Lambda function  
+**As an** event consumer developer\
+**I want to** create rules on my event bus to trigger my Lambda function\
 **So that** I can process order events in my application
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I only need to interact with my own event bus, not the domain event bus
 - I can create multiple rules for the same event with different filters
@@ -1225,13 +1282,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-6: Platform Team - Manage Schema Versions
+### US-6: Platform team - manage schema versions
 
-**As a** platform team lead  
-**I want to** update the order event schema to add a new field  
+**As a** platform team lead\
+**I want to** update the order event schema to add a new field\
 **So that** events include customer loyalty tier information
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I can register a new schema version through Console or API
 - System analyzes compatibility and identifies breaking changes
@@ -1241,13 +1298,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-7: Event Consumer - Respond to Schema Change
+### US-7: Event consumer - respond to schema change
 
-**As an** event consumer developer  
-**I want to** know when schemas I depend on are updated  
+**As an** event consumer developer\
+**I want to** know when schemas I depend on are updated\
 **So that** I can update my application if needed
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I receive notification when subscribed event schema changes
 - I can see migration plan and recommendations
@@ -1256,13 +1313,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-8: Platform Team - Monitor Domain Health
+### US-8: Platform team - monitor domain health
 
-**As a** platform team lead  
-**I want to** monitor health and usage of my domain  
+**As a** platform team lead\
+**I want to** monitor health and usage of my domain\
 **So that** I can ensure events are flowing correctly
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I have a CloudWatch dashboard showing domain metrics
 - I can see event publication rates, subscriptions, and delivery success
@@ -1271,13 +1328,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-9: Event Consumer - Troubleshoot Failed Deliveries
+### US-9: Event consumer - troubleshoot failed deliveries
 
-**As an** event consumer developer  
-**I want to** investigate why some events are not being delivered to my application  
+**As an** event consumer developer\
+**I want to** investigate why some events are not being delivered to my application\
 **So that** I can fix issues and ensure no events are missed
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I can see failed events in the domain DLQ
 - Error messages clearly indicate why delivery failed
@@ -1286,28 +1343,28 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-10: Platform Team - Visualize Event Flows
+### US-10: Platform team - visualize event flows
 
-**As a** platform team lead  
-**I want to** visualize how events flow between domains across our organization  
+**As a** platform team lead\
+**I want to** visualize how events flow between domains across our organization\
 **So that** I can understand dependencies and plan changes
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I can see a graph showing all domains and event flows
 - Graph shows event volume and cross-account boundaries
 - I can filter by domain or event type
-- I can click nodes to see detailed information
+- I can choose nodes to view detailed information
 
 ---
 
-### US-11: Security Team - Audit Event Access
+### US-11: Security team - audit event access
 
-**As a** security team member  
-**I want to** audit who has access to sensitive customer events  
+**As a** security team member\
+**I want to** audit who has access to sensitive customer events\
 **So that** I can ensure compliance with data protection policies
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - I can see all subscriptions to sensitive event types
 - I can identify consumers by account and owner
@@ -1316,13 +1373,13 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-### US-12: Development Team - Migrate from Manual Setup
+### US-12: Development team - migrate from manual setup
 
-**As a** development team lead  
-**I want to** migrate our existing manual EventBridge setup to [Control Plane]  
+**As a** development team lead\
+**I want to** migrate our existing manual EventBridge setup to [Control Plane]\
 **So that** we can simplify management and reduce operational overhead
 
-**Acceptance Criteria:**
+**Acceptance criteria:**
 
 - Migration tooling can import our existing event buses and rules
 - System recommends optimal domain structure
@@ -1331,11 +1388,15 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-## 7. Dependencies and Constraints
+## 7. Dependencies and constraints
 
-### Technical Dependencies
+The service depends on AWS resources and must operate within technical, operational, and business constraints.
 
-#### AWS Service Dependencies
+### Technical dependencies
+
+The following dependencies affect implementation and failure handling.
+
+#### AWS service dependencies
 
 - **Amazon EventBridge**: Core event routing infrastructure
   - Risk: EventBridge service limits or outages
@@ -1365,15 +1426,17 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
   - Risk: SQS message delays or limits
   - Mitigation: Design with SQS characteristics in mind
 
-#### External Dependencies
+#### External dependencies
 
 - **AWS Organizations**: Optional integration for simplified permissions
 - **AWS KMS**: Encryption key management
-- **AWS X-Ray**: Distributed tracing for debugging
+- **AWS X-ray**: Distributed tracing for debugging
 
 ### Constraints
 
-#### Technical Constraints
+The proposal assumes the following limits and commitments.
+
+#### Technical constraints
 
 - **EventBridge rule limit**: 2000 rules per event bus
   - Addressed by domain-specific event buses
@@ -1384,17 +1447,17 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - **IAM policy size limits**: 10,240 characters for resource policies
   - Implement policy splitting for large subscription lists
 
-- **Cross-region latency**: Event delivery between regions has inherent latency
-  - Document cross-region behavior, consider future multi-region support
+- **Cross-region latency**: Event delivery between Regions has inherent latency
+  - Document cross-Region behavior, consider future multi-Region support
 
-#### Operational Constraints
+#### Operational constraints
 
-- **Initial launch**: US regions only, expand to other regions in phases
+- **Initial launch**: US Regions only, expand to other Regions in phases
 - **GA timeline**: March 15, 2026 (fixed date)
 - **Team size**: Limited engineering resources require prioritization
 - **Beta period**: 60-day beta with up to 50 customers before GA
 
-#### Business Constraints
+#### Business constraints
 
 - **Pricing model**: Must align with EventBridge pricing to avoid customer confusion
 - **Support model**: Must integrate with existing AWS Support processes
@@ -1403,32 +1466,36 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 
 ---
 
-## 8. Acceptance Criteria
+## 8. Acceptance criteria
 
-### Overall System Acceptance
+Use the following checks to evaluate the complete system and readiness to leave beta.
 
-#### Functional Completeness
+### Overall system acceptance
+
+System acceptance covers functionality, performance, reliability, security, usability, and operations.
+
+#### Functional completeness
 
 - [ ] All functional requirements (FR-1 through FR-7) are implemented
 - [ ] All API operations are available through AWS CLI and SDKs
 - [ ] All operations are available through AWS Console
 - [ ] End-to-end workflows are functional (domain registration → publish → subscribe → consume)
 
-#### Performance Acceptance
+#### Performance acceptance
 
-- [ ] API latency meets p99 targets (<1s for reads, <100ms for writes)
+- [ ] API latency meets p99 targets (<1 s for reads, <100 ms for writes)
 - [ ] Resource provisioning completes within target times (5 min domains, 2 min subscriptions)
 - [ ] System handles target throughput (10K API ops/sec, 1M events/sec)
 - [ ] Load testing validates scalability targets (100K domains, 1M subscriptions)
 
-#### Reliability Acceptance
+#### Reliability acceptance
 
 - [ ] System achieves 99.95% availability during beta period
 - [ ] Zero data loss for committed subscriptions
 - [ ] Automated failover works correctly during AZ failure simulation
 - [ ] Recovery time objective (RTO) is under 5 minutes for service issues
 
-#### Security Acceptance
+#### Security acceptance
 
 - [ ] All API operations require proper IAM authentication
 - [ ] Data at rest is encrypted using AWS KMS
@@ -1436,14 +1503,14 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - [ ] Security review and penetration testing completed
 - [ ] No critical or high-severity security findings remain unresolved
 
-#### Usability Acceptance
+#### Usability acceptance
 
 - [ ] Console UI passes usability testing with 5+ beta customers
 - [ ] API documentation is complete with examples for all operations
 - [ ] Error messages are clear and actionable (validated through testing)
 - [ ] Getting started tutorial allows new users to complete first workflow in <15 minutes
 
-#### Operational Acceptance
+#### Operational acceptance
 
 - [ ] CloudWatch metrics and dashboards are functional
 - [ ] CloudWatch alarms trigger correctly for failure scenarios
@@ -1451,7 +1518,7 @@ The [Control Plane] removes the primary adoption barrier preventing AWS customer
 - [ ] Runbooks exist for all common operational scenarios
 - [ ] On-call team is trained and ready for GA support
 
-### Beta Exit Criteria
+### Beta exit criteria
 
 To exit beta and proceed to General Availability, the following criteria must be met:
 
@@ -1468,95 +1535,105 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-## 9. Success Metrics
+## 9. Success metrics
 
-### Primary Metrics (North Star)
+These metrics track the business targets after general availability (GA).
 
-#### Developer Productivity
+### Primary metrics (north star)
 
-**Metric**: Integration resource management overhead reduction  
-**Target**: 60% reduction (from 8 resources to 3 per event subscription)  
-**Measurement**: Survey development teams on number of resources they manage per event  
+The primary metrics measure productivity, time to value, adoption, and satisfaction.
+
+#### Developer productivity
+
+**Metric**: Integration resource management overhead reduction\
+**Target**: 60% reduction (from 8 resources to 3 per event subscription)\
+**Measurement**: Survey development teams on number of resources they manage per event\
 **Timeline**: Measure at 3 months and 6 months post-GA
 
-#### Time to Value
+#### Time to value
 
-**Metric**: Time from decision to consume event to first event processed  
-**Target**: <10 minutes for 90% of use cases  
-**Measurement**: Track time between SubscribeToEvent API call and first event delivered to consumer  
+**Metric**: Time from decision to consume event to first event processed\
+**Target**: <10 minutes for 90% of use cases\
+**Measurement**: Track time between SubscribeToEvent API call and first event delivered to consumer\
 **Timeline**: Real-time tracking, report monthly
 
-#### EDA Adoption Rate
+#### EDA adoption rate
 
-**Metric**: Increase in new event-driven application implementations  
-**Target**: 15% increase within 6 months of GA  
-**Measurement**: Compare new EventBridge application count pre-launch vs. 6 months post-launch  
+**Metric**: Increase in new event-driven application implementations\
+**Target**: 15% increase within 6 months of GA\
+**Measurement**: Compare new EventBridge application count pre-launch versus 6 months post-launch\
 **Timeline**: Measure at 3 months and 6 months post-GA
 
-#### Customer Satisfaction
+#### Customer satisfaction
 
-**Metric**: Net Promoter Score (NPS) for [Control Plane] users  
-**Target**: 40+ within first year  
-**Baseline**: Current EventBridge EDA NPS is 25  
-**Measurement**: Quarterly NPS survey of active [Control Plane] users  
+**Metric**: Net Promoter Score (NPS) for [Control Plane] users\
+**Target**: 40+ within first year\
+**Baseline**: Current EventBridge EDA NPS is 25\
+**Measurement**: Quarterly NPS survey of active [Control Plane] users\
 **Timeline**: Measure quarterly
 
-### Secondary Metrics (Operational Health)
+### Secondary metrics (operational health)
 
-#### Service Adoption
+The secondary metrics track adoption, service quality, engagement, and business impact.
+
+#### Service adoption
 
 - **Active domains**: 1,000+ within 6 months, 10,000+ within 1 year
 - **Active subscriptions**: 10,000+ within 6 months, 100,000+ within 1 year
 - **Events processed**: 100M+ per month within 6 months, 1B+ per month within 1 year
 
-#### Service Quality
+#### Service quality
 
 - **API error rate**: <0.1%
 - **API latency (p99)**: <1 second
 - **Service availability**: >99.95%
 - **Resource provisioning success rate**: >99%
 
-#### Customer Engagement
+#### Customer engagement
 
 - **Daily active users**: 500+ within 6 months
 - **Weekly active domains publishing events**: 5,000+ within 1 year
 - **Customer retention**: >90% month-over-month
 
-#### Business Impact
+#### Business impact
 
-- **Revenue**: $5M+ annual recurring revenue (ARR) within 1 year
+- **Revenue**: US dollars (USD) 5 million+ in annual recurring revenue (ARR) within 1 year
 - **Cost reduction for customers**: Average 30% reduction in EDA operational costs
 - **AWS EventBridge growth**: 20% increase in EventBridge usage attributable to [Control Plane]
 
-### Measurement and Reporting
+### Measurement and reporting
 
-#### Data Collection
+Collect operational data and customer feedback, then report against the success criteria.
+
+#### Data collection
 
 - CloudWatch metrics for all operational metrics (real-time)
 - CloudTrail logs for usage analytics (daily aggregation)
 - Quarterly customer surveys for satisfaction and feedback
 - Monthly operational reviews with service team
 
-#### Reporting Cadence
+#### Reporting cadence
 
 - **Daily**: Service health dashboard (availability, errors, latency)
 - **Weekly**: Usage metrics (domains, subscriptions, events)
 - **Monthly**: Business metrics report for leadership
 - **Quarterly**: Comprehensive metrics review including customer satisfaction
 
-#### Success Criteria Gates
+#### Success criteria gates
 
 - **3 months post-GA**: Achieve 1,000+ active domains, NPS of 35+
 - **6 months post-GA**: Achieve 15% increase in EDA adoption, 10,000+ subscriptions
-- **12 months post-GA**: Achieve NPS of 40+, 100,000+ subscriptions, $5M ARR
+- **12 months post-GA**: Achieve NPS of 40+, 100,000+ subscriptions, and USD 5 million ARR
 
 ---
 
-## 10. Risks and Mitigation Strategies
+## 10. Risks and mitigation strategies
 
-### High Priority Risks
+The following risks include mitigation actions and governance requirements.
 
-#### Risk 1: Enterprise Adoption Resistance
+### High priority risks
+
+#### Risk 1: enterprise adoption resistance
 
 **Description**: Large enterprises with existing complex EDA implementations may perceive the [Control Plane] as too abstract or constraining compared to their custom solutions.
 
@@ -1577,7 +1654,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-#### Risk 2: Technical Scalability at Launch
+#### Risk 2: technical scalability at launch
 
 **Description**: [Control Plane] must manage potentially millions of cross-account event subscriptions and automatically provision resources across thousands of AWS accounts. System may not scale as expected under production load.
 
@@ -1599,7 +1676,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-#### Risk 3: Security and Compliance Issues
+#### Risk 3: security and compliance issues
 
 **Description**: Automated cross-account resource provisioning raises security concerns, particularly for customers in regulated industries. Any security vulnerabilities could block adoption.
 
@@ -1622,9 +1699,9 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Medium Priority Risks
+### Medium priority risks
 
-#### Risk 4: EventBridge Service Dependency
+#### Risk 4: EventBridge service dependency
 
 **Description**: [Control Plane] is tightly coupled to EventBridge. Any EventBridge service limits, breaking changes, or outages directly impact [Control Plane].
 
@@ -1645,7 +1722,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-#### Risk 5: Customer Confusion with Pricing
+#### Risk 5: customer confusion with pricing
 
 **Description**: [Control Plane] pricing adds complexity on top of existing EventBridge pricing. Customers may find total costs confusing or unexpectedly high.
 
@@ -1658,7 +1735,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 - Create extremely clear pricing documentation with examples
 - Build cost estimation tools into Console
 - Provide pricing calculator on website
-- Ensure billing shows clear line items for [Control Plane] vs. EventBridge
+- Ensure billing shows clear line items for [Control Plane] versus EventBridge
 - Offer pricing consultation for large enterprise deployments
 - Create pricing case studies showing TCO reduction
 - Implement cost anomaly detection to alert customers to unexpected charges
@@ -1667,7 +1744,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-#### Risk 6: Performance Degradation Under Load
+#### Risk 6: performance degradation under load
 
 **Description**: API latency or resource provisioning times may degrade as system scales, particularly during peak usage periods.
 
@@ -1688,9 +1765,9 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Low Priority Risks
+### Low priority risks
 
-#### Risk 7: Schema Versioning Complexity
+#### Risk 7: schema versioning complexity
 
 **Description**: Schema versioning and migration planning is complex. Implementation may be incomplete or confusing at launch.
 
@@ -1710,7 +1787,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-#### Risk 8: Documentation and Training Gaps
+#### Risk 8: documentation and training gaps
 
 **Description**: Insufficient or unclear documentation could slow customer adoption and increase support burden.
 
@@ -1731,15 +1808,15 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Risk Monitoring and Governance
+### Risk monitoring and governance
 
-#### Risk Review Cadence
+#### Risk review cadence
 
 - **Weekly**: Engineering and product leadership review high-priority risks
 - **Monthly**: Comprehensive risk review with all stakeholders
 - **Quarterly**: Executive risk review with mitigation progress assessment
 
-#### Risk Escalation
+#### Risk escalation
 
 - Medium risks that remain unmitigated for 4+ weeks escalate to high priority
 - High risks that remain unmitigated for 2+ weeks escalate to executive leadership
@@ -1747,9 +1824,11 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-## 11. Implementation Phases
+## 11. Implementation phases
 
-### Phase 1: Foundation (Months 1-2)
+The phases retain the schedule proposed in December 2025. They are planning targets, not completion records.
+
+### Phase 1: foundation (months 1-2)
 
 **Goal**: Build core infrastructure and basic domain management
 
@@ -1762,7 +1841,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 - CloudFormation templates for resource provisioning
 - Basic Console UI for domain management
 
-**Success Criteria**:
+**Success criteria**:
 
 - Domain registration completes successfully
 - Resources are provisioned in both producer and platform accounts
@@ -1771,7 +1850,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Phase 2: Subscription Management (Month 3)
+### Phase 2: subscription management (month 3)
 
 **Goal**: Implement subscription capabilities and event flow
 
@@ -1783,7 +1862,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 - Subscription management in Console
 - Basic monitoring and metrics
 
-**Success Criteria**:
+**Success criteria**:
 
 - Subscriptions activate successfully within 2 minutes
 - Events flow from producer to consumer correctly
@@ -1792,7 +1871,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Phase 3: Schema Management (Month 4)
+### Phase 3: schema management (month 4)
 
 **Goal**: Add schema versioning and discovery capabilities
 
@@ -1804,7 +1883,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 - Migration plan generation
 - Schema validation during event publishing
 
-**Success Criteria**:
+**Success criteria**:
 
 - Schemas are discoverable by authorized consumers
 - Impact analysis correctly identifies affected subscriptions
@@ -1813,7 +1892,9 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Phase 4: Visibility & Monitoring (Month 5)
+<a id="phase-4-visibility--monitoring-month-5"></a>
+
+### Phase 4: Visibility and monitoring (month 5)
 
 **Goal**: Implement event flow visualization and comprehensive observability
 
@@ -1824,9 +1905,9 @@ To exit beta and proceed to General Availability, the following criteria must be
 - Cross-domain relationship visualization
 - Enhanced CloudWatch dashboards
 - CloudWatch alarms for domain health
-- Dead letter queue implementation
+- Dead-letter queue implementation
 
-**Success Criteria**:
+**Success criteria**:
 
 - Event flow graph accurately represents organization topology
 - Tracking identifies all producers and consumers
@@ -1835,7 +1916,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Phase 5: Beta Launch (Month 6)
+### Phase 5: beta launch (month 6)
 
 **Goal**: Launch controlled beta with select customers
 
@@ -1847,9 +1928,9 @@ To exit beta and proceed to General Availability, the following criteria must be
 - Beta feedback collection mechanism
 - Support runbooks and escalation process
 
-**Beta Customers**: 30-50 customers including Flight Centre and 2-3 other enterprise accounts
+**Beta customers**: 30-50 customers including Flight Centre and 2-3 other enterprise accounts
 
-**Success Criteria**:
+**Success criteria**:
 
 - Beta customers successfully register domains and create subscriptions
 - No P0 bugs reported by beta customers
@@ -1858,7 +1939,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Phase 6: GA Preparation (Month 7-8)
+### Phase 6: GA preparation (month 7-8)
 
 **Goal**: Address beta feedback and prepare for General Availability
 
@@ -1872,7 +1953,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 - Support training for AWS Support engineers
 - Launch communications plan
 
-**Success Criteria**:
+**Success criteria**:
 
 - All beta exit criteria met
 - No P0 or P1 bugs remain unresolved
@@ -1882,11 +1963,11 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Phase 7: General Availability (Month 9 - March 15, 2026)
+### Phase 7: general availability (month 9 - March 15, 2026)
 
 **Goal**: Launch EventBridge [Control Plane] to all AWS customers
 
-**Launch Activities**:
+**Launch activities**:
 
 - Press release distribution
 - Blog post publication
@@ -1895,9 +1976,9 @@ To exit beta and proceed to General Availability, the following criteria must be
 - Social media campaign
 - Partnership with AWS Solutions Architects for customer outreach
 
-**Initial Regions**: US East (N. Virginia), US West (Oregon), EU (Ireland)
+**Initial regions**: US East (N. Virginia), US West (Oregon), EU (Ireland)
 
-**Success Criteria**:
+**Success criteria**:
 
 - Smooth GA launch with no service disruptions
 - 1,000+ domains registered within first month
@@ -1906,96 +1987,102 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-### Phase 8: Post-Launch Optimization (Months 10-12)
+### Phase 8: post-launch optimization (months 10-12)
 
 **Goal**: Optimize based on GA usage patterns and expand capabilities
 
 **Deliverables**:
 
 - Performance optimizations based on real-world usage
-- Additional AWS region launches
+- Additional AWS Region launches
 - Advanced schema evolution features
 - Enhanced event flow analytics
 - Migration tooling for complex existing deployments
 - Enterprise features based on customer feedback
 
-**Success Criteria**:
+**Success criteria**:
 
 - Achieve 10,000+ domains within 6 months of GA
 - Customer NPS increases to 40+
 - Service scales successfully to production load
-- Expansion to 10+ AWS regions
+- Expansion to 10+ AWS Regions
 - 15% increase in new EDA implementations
 
 ---
 
-## 12. Open Questions
+## 12. Open questions
 
-### Technical Questions
+The following decisions remained open in this draft.
 
-1. **Schema Registry Implementation**: Should we use AWS Glue Schema Registry or build a custom solution optimized for the [Control Plane] use case?
-   - **Decision Needed By**: End of Phase 1
+### Technical questions
+
+1. **Schema registry implementation**: Should we use AWS Glue Schema Registry or build a custom solution optimized for the [Control Plane] use case?
+   - **Decision needed by**: End of Phase 1
    - **Owner**: Technical Lead
 
-2. **Multi-Region Strategy**: How will we handle cross-region event delivery? Should domains be region-specific or global?
-   - **Decision Needed By**: Phase 2
+2. **Multi-region strategy**: How will we handle cross-Region event delivery? Should domains be Region-specific or global?
+   - **Decision needed by**: Phase 2
    - **Owner**: Architecture Team
 
-3. **Event Replay Capability**: What is the optimal event replay window? 30 days balances cost vs. utility, but should we offer configurable windows?
-   - **Decision Needed By**: Phase 4
+3. **Event replay capability**: What is the optimal event replay window? 30 days balances cost versus utility, but should we offer configurable windows?
+   - **Decision needed by**: Phase 4
    - **Owner**: Product Management
 
-4. **Rule Limit Optimization**: At what subscription threshold should we automatically distribute to additional event buses to avoid rule limits?
-   - **Decision Needed By**: Phase 2
+4. **Rule limit optimization**: At what subscription threshold should we automatically distribute to additional event buses to avoid rule limits?
+   - **Decision needed by**: Phase 2
    - **Owner**: Technical Lead
 
-### Product Questions
+### Product questions
 
-1. **Pricing Model Validation**: Have we validated pricing with enterprise customers? Will domain-based pricing cause concerns with multi-domain architectures?
-   - **Decision Needed By**: Before Beta Launch
+1. **Pricing model validation**: Have we validated pricing with enterprise customers? Will domain-based pricing cause concerns with multi-domain architectures?
+   - **Decision needed by**: Before Beta Launch
    - **Owner**: Product Management
 
-2. **Console vs. API Priority**: Should we prioritize Console UI or API-first development? Many enterprise customers prefer infrastructure-as-code.
-   - **Decision Needed By**: Phase 1
+2. **Console versus API priority**: Should we prioritize Console UI or API-first development? Many enterprise customers prefer infrastructure-as-code.
+   - **Decision needed by**: Phase 1
    - **Owner**: Product Management
 
-3. **Migration Tooling Scope**: How sophisticated should migration tooling be for GA? Should we support automated migration or just assessment and recommendations?
-   - **Decision Needed By**: Phase 6
+3. **Migration tooling scope**: How sophisticated should migration tooling be for GA? Should we support automated migration or just assessment and recommendations?
+   - **Decision needed by**: Phase 6
    - **Owner**: Product Management
 
-### Business Questions
+### Business questions
 
-1. **Service Naming**: "Control Plane" is provisional. What is the final service name?
-   - **Decision Needed By**: End of Phase 5 (before GA preparation)
+1. **Service naming**: "Control Plane" is provisional. What is the final service name?
+   - **Decision needed by**: End of Phase 5 (before GA preparation)
    - **Owner**: Product Marketing
 
-2. **Go-to-Market Strategy**: Beyond AWS Solutions Architects, should we engage systems integrators and consulting partners for launch?
-   - **Decision Needed By**: Phase 6
+2. **Go-to-market strategy**: Beyond AWS Solutions Architects, should we engage systems integrators and consulting partners for launch?
+   - **Decision needed by**: Phase 6
    - **Owner**: Business Development
 
-3. **Enterprise Support Package**: Should we offer a premium support tier for enterprise customers with dedicated architectural guidance?
-   - **Decision Needed By**: Phase 6
+3. **Enterprise support package**: Should we offer a premium support tier for enterprise customers with dedicated architectural guidance?
+   - **Decision needed by**: Phase 6
    - **Owner**: Product Management
 
 ---
 
 ## 13. Appendices
 
-### Appendix A: Glossary
+The appendices define terminology and outline supporting material.
 
-- **Domain**: A logical grouping of related events, typically aligned with business or architectural boundaries (e.g., "Orders", "Inventory", "Customers")
-- **Event Producer**: A service or application that publishes events to a domain
-- **Event Consumer**: A service or application that subscribes to and processes events from a domain
-- **Event Bus**: An EventBridge resource that receives and routes events (domain-specific buses created by [Control Plane])
+### Appendix A: glossary
+
+The proposal uses the following terms:
+
+- **Domain**: A logical grouping of related events, typically aligned with business or architectural boundaries (for example, "Orders", "Inventory", "Customers")
+- **Event producer**: A service or application that publishes events to a domain
+- **Event consumer**: A service or application that subscribes to and processes events from a domain
+- **Event bus**: An EventBridge resource that receives and routes events (domain-specific buses created by [Control Plane])
 - **Schema**: The structure definition for an event type, including required fields, data types, and constraints
-- **Schema Version**: A specific version of a schema, following semantic versioning (major.minor.patch)
+- **Schema version**: A specific version of a schema, following semantic versioning (major.minor.patch)
 - **Subscription**: A relationship between an event consumer and specific events from a domain, including the routing rules
-- **Cross-Account Delivery**: Sending events from an event bus in one AWS account to an event bus in a different AWS account
-- **DLQ (Dead Letter Queue)**: An SQS queue that receives events that failed to be delivered successfully
-- **Impact Analysis**: The process of identifying consumers affected by a schema version change
-- **Migration Plan**: Recommended steps for consumers to adopt a new schema version
+- **Cross-account delivery**: Sending events from an event bus in one AWS account to an event bus in a different AWS account
+- **Dead-letter queue (DLQ)**: An SQS queue that receives events after delivery fails
+- **Impact analysis**: The process of identifying consumers affected by a schema version change
+- **Migration plan**: Recommended steps for consumers to adopt a new schema version
 
-### Appendix B: Reference Architecture Diagrams
+### Appendix B: reference architecture diagrams
 
 *(Note: Detailed architecture diagrams would be included here showing component interactions, data flows, and AWS service integration)*
 
@@ -2009,9 +2096,11 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 **Diagram 5**: Monitoring and observability architecture
 
-### Appendix C: API Summary
+### Appendix C: API summary
 
-#### Domain Management APIs
+The following lists summarize the proposed API operations:
+
+#### Domain management APIs
 
 - `RegisterDomain` - Create new domain with automatic resource provisioning
 - `ListDomains` - Discover available domains
@@ -2019,7 +2108,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 - `UpdateDomain` - Modify domain configuration
 - `DeleteDomain` - Remove domain and clean up resources
 
-#### Event Publishing APIs
+#### Event publishing APIs
 
 - `PublishEvent` - Publish event to domain (single or batch)
 - `ValidateEvent` - Validate event against schema without publishing
@@ -2032,7 +2121,7 @@ To exit beta and proceed to General Availability, the following criteria must be
 - `UpdateSubscription` - Modify subscription configuration
 - `UnsubscribeFromEvent` - Remove subscription
 
-#### Schema Management APIs
+#### Schema management APIs
 
 - `RegisterSchema` - Register new schema for domain events
 - `UpdateSchema` - Create new schema version
@@ -2041,25 +2130,25 @@ To exit beta and proceed to General Availability, the following criteria must be
 - `GetSchemaImpactAnalysis` - Analyze impact of schema changes
 - `GetSchemaMigrationPlan` - Generate migration recommendations
 
-#### Event Flow Visibility APIs
+#### Event flow visibility APIs
 
 - `GetEventFlowMap` - Retrieve event flow topology
 - `GetEventOrigin` - Identify event source domain
 - `GetEventConsumers` - List consumers of specific events
 - `GetDomainRelationships` - Show domain dependencies
 
-### Appendix D: Sample Code Examples
+### Appendix D: sample code examples
 
 *(Note: Full code examples would be included showing common workflows in Python, Java, and JavaScript)*
 
-**Example 1**: Registering a domain  
-**Example 2**: Publishing an event  
-**Example 3**: Subscribing to an event  
-**Example 4**: Processing subscribed events  
-**Example 5**: Updating a schema version  
+**Example 1**: Registering a domain\
+**Example 2**: Publishing an event\
+**Example 3**: Subscribing to an event\
+**Example 4**: Processing subscribed events\
+**Example 5**: Updating a schema version\
 **Example 6**: Querying event flow map
 
-### Appendix E: Migration Guide Outline
+### Appendix E: migration guide outline
 
 *(Note: Full migration guide would be developed during Phase 6)*
 
@@ -2073,15 +2162,15 @@ To exit beta and proceed to General Availability, the following criteria must be
 
 ---
 
-**Document Control**
+**Document control**
 
 - **Authors**: Product Management, Engineering Leadership
 - **Reviewers**: Technical Leads, Security Team, Solutions Architecture
 - **Approvers**: VP Engineering, VP Product
-- **Next Review**: Weekly during development, monthly post-GA
-- **Change Log**:
-  - v1.0 (Dec 23, 2025): Initial BRD creation based on approved PR/FAQ
+- **Next review**: Weekly during development, monthly post-GA
+- **Change log**:
+  - v1.0 (December 23, 2025): Initial BRD creation based on approved PR/FAQ
 
 ---
 
-**End of Business Requirements Document**
+**End of business requirements document**

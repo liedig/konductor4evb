@@ -1,10 +1,12 @@
 # Konductor for Amazon EventBridge Installation Guide
 
-This guide walks you through deploying Konductor for Amazon EventBridge into your own AWS environment from scratch. By the end, you will have a working Konductor installation and will have verified it by registering, approving, and activating a domain.
+Konductor for Amazon EventBridge manages event domains and cross-account routing. This guide covers deployment in your AWS environment and verification through domain registration, approval, and activation.
 
 ## Overview
 
-Konductor deploys as three CloudFormation stacks across two types of AWS accounts:
+Konductor deploys as three AWS CloudFormation stacks across two types of AWS accounts: the platform account and domain accounts.
+
+The platform uses Amazon API Gateway, AWS Lambda, Amazon DynamoDB, AWS Step Functions, and Amazon EventBridge. AWS Identity and Access Management (IAM) roles control access between accounts. Dead-letter queues (DLQs) retain messages after retries fail. The following diagram shows the stack boundaries.
 
 ```text
 ┌─────────────────────────────────────────────────┐
@@ -35,39 +37,39 @@ Konductor deploys as three CloudFormation stacks across two types of AWS account
 
 | Tool | Install | Verify |
 |---|---|---|
-| Rust stable | [rustup.rs](https://rustup.rs/) — the project pins stable via `rust-toolchain.toml` | `rustc --version` |
+| Rust stable | [rustup.rs](https://rustup.rs/)—the project pins stable via `rust-toolchain.toml` | `rustc --version` |
 | cargo-lambda | [cargo-lambda.info](https://www.cargo-lambda.info/) | `cargo lambda --version` |
-| zig 0.14.x (for cross-compilation) | `brew install zig@0.14` or install via [ziglang.org](https://ziglang.org/). **zig 0.16+ has a broken `ar` command** — see [Troubleshooting](#zig-016-ar-regression-breaks-sam-build) | `zig version` |
-| AWS SAM CLI | [docs.aws.amazon.com](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) | `sam --version` |
-| AWS CLI | [docs.aws.amazon.com](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) | `aws --version` |
+| zig 0.14.x (for cross-compilation) | `brew install zig@0.14` or install via [ziglang.org](https://ziglang.org/). **zig 0.16+ has a broken `ar` command**—see [Troubleshooting](#zig-016-ar-regression-breaks-sam-build) | `zig version` |
+| AWS Serverless Application Model Command Line Interface (AWS SAM CLI) | [Installing the AWS SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) | `sam --version` |
+| AWS Command Line Interface (AWS CLI) | [Installing the AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) | `aws --version` |
 | curl / jq | System package manager | `curl --version && jq --version` |
 | awscurl (for smoke test) | `pip install awscurl` | `awscurl --version` |
 
 ### AWS environment
 
 - **Platform account**: The AWS account where Konductor runs. You need credentials with permissions to deploy CloudFormation stacks, create IAM roles, and manage API Gateway, Lambda, DynamoDB, EventBridge, and SES resources.
-- **Domain account(s)**: One or more AWS accounts where domain resources will be provisioned. You need credentials with permissions to deploy CloudFormation stacks and create IAM roles.
-- **AWS Organizations**: The platform account must belong to an AWS Organization. Konductor uses AWS RAM to share domain namespace information across accounts. Capture the Organization ARN (e.g., `arn:aws:organizations::123456789012:organization/o-abc123`) — you will need it as a parameter.
-- **Email addresses** (optional): For approval and rejection notifications during testing. Both the sender and recipient addresses must be verified in SES sandbox mode. If you skip this, you can still approve domains via the API directly.
-- **Service quotas**: Default quotas in the platform account support only **3 domains** (the EventBridge Schema Registry limit is 10 registries per region). Before onboarding more, see [Service Quotas and Capacity Planning](service-quotas.md).
+- **Domain accounts**: One or more AWS accounts where domain resources will be provisioned. You need credentials with permissions to deploy CloudFormation stacks and create IAM roles.
+- **AWS Organizations**: The platform account must belong to an AWS organization. Konductor uses AWS Resource Access Manager (AWS RAM) to share domain namespace information across accounts. Record the organization's Amazon Resource Name (ARN), for example `arn:aws:organizations::123456789012:organization/o-abc123`, for the deployment parameter.
+- **Email addresses** (optional): Amazon Simple Email Service (Amazon SES) sends approval and rejection notifications during testing. Verify both sender and recipient addresses in the Amazon SES sandbox. Without email notifications, approve domains through the API.
+- **Service quotas**: Default quotas in the platform account support only **3 domains** (the EventBridge Schema Registry limit is 10 registries per Region). Before onboarding more, see [Service Quotas and Capacity Planning](service-quotas.md).
 
 ### Decide on your namespace
 
-Konductor is a singleton per organization. Platform resources follow the fixed `konductor-*` pattern (e.g., `konductor-bus`); the domain-account trust role follows `{org}-konductor-trust-role` (org-scoped so it's unique across organizations sharing a domain account); domain resources follow `{org}-{env}-{domain}-*` (the env comes from the `Environments` parameter, applied per-domain at provisioning time). Choose a value for:
+Konductor is a singleton per organization. Platform resources follow the fixed `konductor-*` pattern (for example, `konductor-bus`); the domain-account trust role follows `{org}-konductor-trust-role` (org-scoped so it's unique across organizations sharing a domain account); domain resources follow `{org}-{env}-{domain}-*` (the env comes from the `Environments` parameter, applied per-domain at provisioning time). Choose a value for:
 
 | Parameter | Example | Notes |
 |---|---|---|
 | `Organization` | `acme` | Short identifier for your organization |
 
-This value is immutable once deployed. Stack names are fixed (`konductor-core`, `konductor-notifications`, `konductor-trust`) — one deployment per AWS Organization.
+This value is immutable once deployed. Stack names are fixed (`konductor-core`, `konductor-notifications`, `konductor-trust`)—one deployment per AWS organization.
 
 ---
 
-## Phase 1 — Deploy the notifications stack (optional)
+## Phase 1 — deploy the notifications stack (optional)
 
 This stack creates SES email identities for approval and rejection notifications. It is for testing against the SES sandbox only. Skip this phase if you do not need email notifications.
 
-**Important:** Deploy this stack in the same AWS region as the Konductor core stack. SES identities are regional.
+**Important:** Deploy this stack in the same AWS Region as the Konductor core stack. SES identities are Regional.
 
 ```bash
 sam deploy \
@@ -96,7 +98,7 @@ sam deploy \
 SES sandbox requires both email addresses to be verified before you can send:
 
 1. After deploying, check your inbox for SES verification emails from AWS.
-2. Click the verification link in each email.
+2. Choose the verification link in each email.
 3. Confirm verification status:
 
 ```bash
@@ -118,7 +120,7 @@ aws cloudformation describe-stacks \
 
 ---
 
-## Phase 2 — Deploy the Konductor core stack
+## Phase 2 — deploy the Konductor core stack
 
 Deploy the core stack into the platform account.
 
@@ -144,19 +146,23 @@ For repeatable deployments using the defaults in `samconfig-core.toml`:
 sam deploy --config-file samconfig-core.toml
 ```
 
-**Required parameters:**
+#### Required parameters
+
+Supply the following parameters for the core stack.
 
 | Parameter | Description | Example |
 |---|---|---|
 | `Organization` | Organization identifier used in Konductor resource naming | `acme` |
-| `AwsOrganizationArn` | AWS Organization ARN (for RAM sharing of domain namespaces). Distinct from `Organization`. | `arn:aws:organizations::123456789012:organization/o-abc123` |
+| `AwsOrganizationArn` | AWS organization ARN (for RAM sharing of domain namespaces). Distinct from `Organization`. | `arn:aws:organizations::123456789012:organization/o-abc123` |
 
-**Optional parameters:**
+#### Optional parameters
+
+Use these parameters to configure notifications and domain environments.
 
 | Parameter | Description | Default |
 |---|---|---|
 | `NotificationSenderEmail` | SES sender address used as the From on all Konductor notification emails (from Phase 1) | `""` (disabled) |
-| `PlatformOperatorEmail` | SES recipient that receives domain approval requests — the platform team inbox (from Phase 1) | `""` (disabled) |
+| `PlatformOperatorEmail` | SES recipient that receives domain approval requests—the platform team inbox (from Phase 1) | `""` (disabled) |
 | `NamespacePattern` | Resource naming convention | `{org}-{env}-{domain}` |
 | `Environments` | Comma-delimited list of environments every approved domain is provisioned into. Platform-team controlled; domain requesters cannot override. Each entry must match `^[a-z0-9][a-z0-9-]{0,31}$`. | `dev,staging,prod` |
 
@@ -175,10 +181,10 @@ sam deploy --config-file samconfig-core.toml \
 
 ### Confirm the platform notifications subscription
 
-When notifications are enabled, the core stack subscribes `PlatformOperatorEmail` to the `konductor-platform-notifications` SNS topic, which forwards every lifecycle event on the konductor bus to platform operators. SNS email subscriptions require a one-time confirmation:
+When notifications are enabled, the core stack subscribes `PlatformOperatorEmail` to an Amazon Simple Notification Service (Amazon SNS) topic, `konductor-platform-notifications`. The topic forwards lifecycle events from the Konductor bus to platform operators. Confirm the email subscription once:
 
 1. After deploying, check the platform team inbox for an AWS Notification "Subscription Confirmation" email.
-2. Click **Confirm subscription**. Until confirmed, operator notifications are not delivered.
+2. Choose **Confirm subscription**. Amazon SNS does not deliver operator notifications until you confirm.
 
 ### Capture stack outputs
 
@@ -191,21 +197,21 @@ aws cloudformation describe-stacks \
   --region <region>
 ```
 
-You need these two values:
+Record the following values:
 
-| Output | Used in Phase 3 as |
+| Output | Used in phase 3 as |
 |---|---|
 | `KonductorFunctionRoleArn` | `KonductorRoleArn` parameter |
 | `ProvisioningWorkflowRoleArn` | `ProvisioningWorkflowRoleArn` parameter |
 | `RetagWorkflowRoleArn` | `RetagWorkflowRoleArn` parameter |
 
-Also note the `IamApiEndpoint` and `OAuthApiEndpoint` outputs — the smoke test uses both (registration and status polling go to the IAM endpoint; approval is OAuth-only).
+Also note the `IamApiEndpoint` and `OAuthApiEndpoint` outputs—the smoke test uses both (registration and status polling go to the IAM endpoint; approval is OAuth-only).
 
 ---
 
-## Phase 3 — Onboard a domain account
+## Phase 3 — onboard a domain account
 
-Deploy the trust stack in each domain account that will own domains. This grants Konductor cross-account access to provision domain resources, including tagging them with the domain's tag set. **Existing installations**: redeploy the trust stack after upgrading past the resource-tagging change — without the added tag permissions, app-side provisioning fails at the tagging step. Likewise, after upgrading past the editable cost-center change, redeploy the trust stack with the new `RetagWorkflowRoleArn` parameter — without it, cost-center retagging of app-side resources fails with an assume-role denial and the platform emits `RetagDomainFailed`.
+Deploy the trust stack in each domain account that will own domains. This grants Konductor cross-account access to provision domain resources, including tagging them with the domain's tag set. **Existing installations**: redeploy the trust stack after upgrading past the resource-tagging change—without the added tag permissions, app-side provisioning fails at the tagging step. Likewise, after upgrading past the editable cost-center change, redeploy the trust stack with the new `RetagWorkflowRoleArn` parameter—without it, cost-center retagging of app-side resources fails with an assume-role denial and the platform emits `RetagDomainFailed`.
 
 Switch your AWS CLI credentials to the domain account, then:
 
@@ -243,50 +249,50 @@ A single trust role (`<org>-konductor-trust-role`) serves all environments of al
 domains in the account.
 
 For detailed instructions including verification and troubleshooting, see
-[trust-stack-deployment.md](trust-stack-deployment.md).
+[Trust Stack Deployment Guide](trust-stack-deployment.md).
 
 ---
 
-## Phase 3.5 — Organization guardrails (optional, separately authorized)
+## Phase 3.5 — organization guardrails (optional, separately authorized)
 
-> **Warning — separate authorization required.** This phase mutates AWS
+> **Warning: Separate authorization required.** This phase changes AWS
 > Organizations policy attachments. It requires organization-admin
 > credentials, explicit authorization from your cloud governance process,
-> and a completed sandbox verification (below) before any production
+> and completed [sandbox verification](#verification--local-fixtures-first-then-authorized-sandbox) before any production
 > attachment. Skipping this phase leaves Konductor fully functional but
 > without the deny ceiling that stops domain-account administrators from
-> modifying Konductor-managed resources — the trust stack alone grants
+> modifying Konductor-managed resources. The trust stack alone grants
 > Konductor access but constrains no one else.
 
 The trust stack (Phase 3) is an *allow grant*: it lets Konductor manage
 `{org}-*` resources in the domain account. It does not prevent a
 domain-account administrator from deleting or reconfiguring those
 resources. The guardrail stack (`guardrail-stack.yaml`) closes that gap
-with three Service Control Policies — a **deny ceiling** over every
+with three service control policies (SCPs)—a **deny ceiling** over every
 principal in the covered accounts. SCPs restrict; they never grant. Team
 roles still need their ordinary IAM allows, and Konductor still needs the
 trust role.
 
 ### Deployment order
 
-Deploy this phase **after** the trust stack, and only after the
-prerequisites below are met. This is a separate deployment step, not part
+Deploy this phase after the trust stack and after meeting the
+[prerequisites](#prerequisites-1). This is a separate deployment step, not part
 of `make deploy-*`.
 
 ### Required inputs
 
 | Input | Description |
 |---|---|
-| `Organization` | The same short identifier used in Phases 2–3 (e.g., `acme`) |
-| `KonductorTrustRoleArn` | Exact ARN of the trust role from Phase 3 (e.g., `arn:aws:iam::<domain-account>:role/acme-konductor-trust-role`). Exact match — no wildcards. |
+| `Organization` | The same short identifier used in Phases 2–3 (for example, `acme`) |
+| `KonductorTrustRoleArn` | Exact ARN of the trust role from Phase 3 (for example, `arn:aws:iam::<domain-account>:role/acme-konductor-trust-role`). Exact match—no wildcards. |
 | `RecoveryRoleArn` | Exact ARN of a centrally controlled recovery/maintenance role. This role is exempt from every SCP deny and is the only in-model maintenance path for the trust role. |
-| `TargetOuIds` and/or `TargetAccountIds` | The OUs and/or individual account IDs the SCPs attach to. At least one is required. |
+| `TargetOuIds` and/or `TargetAccountIds` | Organizational units (OUs), individual account IDs, or both for SCP attachment. Specify at least one target. |
 
 ### Prerequisites
 
 1. **Recovery role bootstrapped and tested first.** Create the recovery
    role in the target accounts, confirm its central principal can assume
-   it, and confirm it can read the trust role — **before** attaching any
+   it, and confirm it can read the trust role—**before** attaching any
    SCP. Attaching guardrails without a working recovery path risks lockout
    (the ultimate fallback is central SCP detachment by the organization
    administrator).
@@ -346,12 +352,12 @@ protection gap while detached.
 - Organization administrators remain trusted and retain full control of
   attachments.
 - Console links in the web UI are navigation conveniences, not an
-  authorization mechanism — they do not enforce read-only (or any) AWS
+  authorization mechanism—they do not enforce read-only (or any) AWS
   access.
 
 ---
 
-## Phase 4 — Smoke test
+## Phase 4 — smoke test
 
 Verify your installation by running the automated smoke test, which registers a
 test domain, approves it, and polls until it reaches ACTIVE status. The approval
@@ -382,7 +388,7 @@ resources, describe the domain and check the `resourceArns` map:
 awscurl -X GET "${API_URL}/domains/smoke-test" --region <region> | jq .
 ```
 
-The response should include an `environments` list (e.g., `["dev","staging","prod"]`)
+The response should include an `environments` list (for example, `["dev","staging","prod"]`)
 and a `resourceArns` map keyed by environment with event bus, schema registry,
 and DLQ ARNs for each.
 
@@ -394,7 +400,7 @@ make teardown-domain DOMAIN_NAME=smoke-test
 
 ### Manual smoke test
 
-If you prefer to run the steps manually (e.g., to test with a real domain name or inspect intermediate states), use the endpoints below. Registration and status polling use the IAM surface (`awscurl` SigV4-signed requests); approval is OAuth-only, so the decide call is a plain `curl` with a platform-admin bearer token.
+To test with a specific domain name or inspect intermediate states, use the following manual steps. Registration and status polling use the IAM surface through `awscurl` and AWS Signature Version 4 (SigV4). Approval is OAuth-only, so the decision request uses `curl` with a platform-admin bearer token.
 
 ```bash
 API_URL="<IamApiEndpoint from Phase 2>"
@@ -432,11 +438,11 @@ In SES sandbox mode, both the sender and recipient email addresses must be verif
 - SES sandbox only allows sending to verified addresses. You cannot send to arbitrary recipients until you request production access.
 - The `ownerEmail` and `secondaryOwnerEmails` values submitted during domain registration are notification recipients. In SES sandbox mode, each must be a verified SES identity before any approval, rejection, registration-failure, or provisioning-failure notification can be delivered to them. Either verify each owner email as an SES identity, or request SES production access to lift the sandbox restriction.
 
-### RAM share failed: not in an AWS Organization
+### RAM share failed: not in an AWS organization
 
 The `AwsOrganizationArn` parameter is required. Konductor uses AWS RAM to share domain namespace information across accounts. If you see errors during provisioning related to RAM:
 
-- Confirm the platform account belongs to an AWS Organization.
+- Confirm the platform account belongs to an AWS organization.
 - Verify the Organization ARN is correct (`arn:aws:organizations::...`).
 - Ensure the domain account is in the same Organization.
 
@@ -468,7 +474,7 @@ or
 ar: error: unable to open '...libaws_lc_0_39_1_crypto.a': No such file or directory
 ```
 
-This is a regression in zig 0.16.0 where the `ar` subcommand (LLVM Archiver) cannot create new archive files. The `c` (create) modifier is broken — it always attempts to open an existing file first, failing when the output `.a` file does not yet exist. This affects any Rust crate using `cc-rs` for native compilation during cross-builds (including `ring` and `aws-lc-sys`, both used by the AWS SDK).
+This is a regression in zig 0.16.0 where the `ar` subcommand (LLVM Archiver) cannot create new archive files. The `c` (create) modifier is broken—it always attempts to open an existing file first, failing when the output `.a` file does not yet exist. This affects any Rust crate using `cc-rs` for native compilation during cross-builds (including `ring` and `aws-lc-sys`, both used by the AWS SDK).
 
 **Fix:** Downgrade zig to 0.14.x:
 

@@ -1,18 +1,24 @@
 # Trust Stack Deployment Guide
 
-The trust stack grants Konductor for Amazon EventBridge cross-account access to create and manage domain resources (event buses, DLQs, bus-to-bus IAM roles) in a domain account. **One trust role per domain account** — the same role serves all environments of all domains owned by that account.
+The trust stack grants Konductor for Amazon EventBridge cross-account access to create and manage domain resources. These include event buses, dead-letter queues (DLQs), and bus-to-bus AWS Identity and Access Management (IAM) roles.
+
+Deploy one trust role in each domain account. The same role serves every environment of every domain owned by that account.
 
 ## Prerequisites
 
+Before deployment, confirm the following prerequisites:
+
 1. The Konductor core stack is deployed in the platform account.
 2. You know the `Organization` value matching the Konductor configuration (default: `acme`).
-3. You have an AWS CLI profile configured with permissions to deploy CloudFormation in the target domain account.
+3. You have an AWS Command Line Interface (AWS CLI) profile with permission to deploy AWS CloudFormation stacks in the target domain account.
 
 ## Deploy
 
+Use the Makefile target for the standard deployment, or supply parameters directly with the AWS CLI.
+
 ### Makefile (recommended)
 
-The `deploy-trust` Makefile target automatically resolves `KonductorFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from the deployed `konductor-core` stack outputs, eliminating manual copy-paste of role ARNs:
+The `deploy-trust` Makefile target resolves `KonductorFunctionRoleArn` and `ProvisioningWorkflowRoleArn` from the deployed `konductor-core` stack outputs. You do not need to copy these Amazon Resource Names (ARNs) manually:
 
 ```bash
 make deploy-trust APP_PROFILE=<aws-cli-profile>
@@ -41,7 +47,7 @@ aws cloudformation deploy \
   --region <region>
 ```
 
-Replace the `<placeholders>` with actual values. Example for organization `acme` and platform account `111111111111`:
+Replace `<platform-account-id>`, `<org>`, and `<region>` with your platform account ID, organization identifier, and AWS Region. The following example uses organization `acme` and the fictitious platform account `111111111111`:
 
 ```bash
 aws cloudformation deploy \
@@ -66,9 +72,11 @@ aws iam get-role --role-name <org>-konductor-trust-role
 
 The trust policy names the platform account root as principal, constrained by an `ArnEquals` condition on `aws:PrincipalArn` to exactly the Konductor function role and the provisioning workflow role. Only those two roles can assume the trust role; the account-root principal alone grants nothing.
 
-This shape is deliberate. IAM resolves role-ARN principals to internal unique IDs when a trust policy is saved, so naming the platform roles directly would sever trust whenever the Konductor core stack is torn down and redeployed (the recreated roles get new unique IDs). The `aws:PrincipalArn` condition is string-matched on every request instead, and both platform role names are deterministic, so trust survives platform redeploys without touching this stack.
+IAM resolves role-ARN principals to internal unique IDs when it saves a trust policy. If the core stack recreates a named role, that role receives a new ID. A policy that names the role directly then loses its trust relationship.
 
-## What the Trust Stack Creates
+The `aws:PrincipalArn` condition instead compares the ARN string on each request. Both platform role names are deterministic, so the trust relationship survives core-stack redeployments.
+
+## What the trust stack creates
 
 | Resource | Purpose |
 |---|---|
@@ -80,9 +88,9 @@ The role grants scoped permissions for:
 - **SQS**: create/delete DLQ queues (scoped to `<org>-*` queues, covering all envs)
 - **IAM**: create/delete bus-to-bus forwarding roles (scoped to `<org>-*-b2b-*` roles, covering all envs)
 
-## Updating the Trust Stack
+## Updating the trust stack
 
-Redeploying the Konductor core stack does **not** require any trust stack update: the platform role names are fixed, their ARN strings do not change, and the trust policy's `aws:PrincipalArn` condition keeps matching. Only if the role ARNs themselves change (different platform account, renamed roles) re-run the Makefile target (it auto-fetches the latest ARNs):
+Redeploying the Konductor core stack does **not** require any trust stack update: the platform role names are fixed, their ARN strings do not change, and the trust policy's `aws:PrincipalArn` condition keeps matching. Only if the role ARNs themselves change (different platform account, renamed roles) rerun the Makefile target (it auto-fetches the latest ARNs):
 
 ```bash
 make deploy-trust APP_PROFILE=<aws-cli-profile>
@@ -103,9 +111,9 @@ aws cloudformation deploy \
   --region <region>
 ```
 
-## Removing the Trust Stack
+## Removing the trust stack
 
-Deleting the stack revokes cross-account access. Existing domain resources in the account will remain but the Konductor will no longer be able to manage them.
+Deleting the stack revokes cross-account access. Existing domain resources remain in the account, but Konductor can no longer manage them.
 
 ```bash
 make teardown-trust APP_PROFILE=<aws-cli-profile>

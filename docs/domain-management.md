@@ -1,6 +1,6 @@
 # Domain Management Guide
 
-This guide is for **domain owners** — teams who want to register a new EventBridge domain, get it approved, and start using the provisioned infrastructure. It covers the full lifecycle from registration through active operation.
+Konductor for Amazon EventBridge provisions and manages infrastructure for event domains across AWS accounts. This guide helps domain owners register a domain, obtain approval, and use its resources.
 
 If you are a platform team member responsible for approving registrations or managing the Konductor installation itself, see the [Installation Guide](installation.md) for deployment and the [Trust Stack Deployment Guide](trust-stack-deployment.md) for onboarding domain accounts.
 
@@ -8,15 +8,24 @@ If you are a platform team member responsible for approving registrations or man
 
 ## Overview
 
-Konductor for Amazon EventBridge provisions and manages the cross-account EventBridge infrastructure your domain needs: event buses, schema registries, DLQs, and CloudWatch dashboards across all configured environments. You interact with Konductor through a REST API offered on two surfaces: **IAM** (SigV4-signed, for automation and platform tooling) and **OAuth** (Cognito token, for interactive users). The day-to-day operations — register/describe/list domains, publish, subscriptions, schemas — exist on both. Platform-administration operations are **OAuth-only**: deciding registrations (`/domains/registrations/decide`), the pending-registrations inbox, binding and entitlement administration, and domain enable/disable. OAuth responses are also ownership-scoped: team callers see the domains their teams own, while platform roles see everything. This guide's examples use the IAM surface via `awscurl`.
+Konductor creates event buses, schema registries, dead-letter queues (DLQs), and Amazon CloudWatch dashboards across the configured environments.
 
-Your domain name is your domain's identity. It is the sole identifier used in API paths, DynamoDB records, event payloads, and resource names. Choose carefully — domain names are globally unique and cannot be renamed.
+You access Konductor through a REST API with two authentication options:
+
+- **AWS Identity and Access Management (IAM)** – Use AWS Signature Version 4 (SigV4) requests for automation and platform tooling.
+- **OAuth** – Use an Amazon Cognito token for interactive access.
+
+Both API surfaces support domain registration, domain reads, publishing, subscriptions, and schemas. Platform administration is OAuth-only. This includes registration decisions (`/domains/registrations/decide`), the pending-registrations inbox, binding and entitlement administration, and enabling or disabling domains.
+
+OAuth responses also enforce ownership scope. Team callers see domains their teams own. Platform roles see all domains. This guide uses `awscurl` with the IAM surface.
+
+Your domain name is your domain's identity. It is the sole identifier used in API paths, DynamoDB records, event payloads, and resource names. Choose carefully—domain names are globally unique and cannot be renamed.
 
 ---
 
-## Registering a Domain
+## Registering a domain
 
-Register a domain by sending a POST request to the `/domains` endpoint. The request is asynchronous: Konductor validates the body, enqueues the command to SQS, and returns a request ID immediately. The actual processing (persistence, approval workflow trigger) happens moments later.
+To register a domain, send a POST request to `/domains`. Konductor validates the body, sends the command to Amazon Simple Queue Service (Amazon SQS), and returns a request ID. A handler then persists the registration and starts the approval workflow asynchronously.
 
 ### Request
 
@@ -46,7 +55,7 @@ awscurl -X POST "${API_URL}/domains" \
 | `ownerEmail` | Yes | Email address for the domain owner. Receives approval and rejection outcome notifications. |
 | `secondaryOwnerEmails` | Yes | One or more secondary owner email addresses. At least one is required. Secondary owners are backup contacts for when the primary owner is unavailable. |
 | `description` | No | Human-readable description (max 256 characters). |
-| `tags` | No | Key-value string map for organisational metadata. |
+| `tags` | No | Key-value string map for organizational metadata. |
 
 ### Response
 
@@ -57,26 +66,26 @@ awscurl -X POST "${API_URL}/domains" \
 }
 ```
 
-The `requestId` is the SQS message ID. You can use it to correlate with CloudWatch logs if needed, but it is not the domain identifier — your domain name is.
+The `requestId` is the SQS message ID. You can use it to correlate with CloudWatch logs if needed, but it is not the domain identifier—your domain name is.
 
 ### What happens next
 
 1. The command handler Lambda processes the message from SQS.
 2. It validates business rules (naming format, reserved names like `konductor`).
-3. It performs a conditional `PutItem` against the domains table with `attribute_not_exists(domainName)` — if the name is already taken, the registration fails with a "domain already exists" error event.
-4. It stamps the current platform-configured environment list (e.g., `["dev", "staging", "prod"]`) onto the domain record. This list is snapshotted at registration time and does not change if the platform configuration is updated later.
+3. It performs a conditional `PutItem` against the domains table with `attribute_not_exists(domainName)`—if the name is already taken, the registration fails with a "domain already exists" error event.
+4. It stamps the current platform-configured environment list (for example, `["dev", "staging", "prod"]`) onto the domain record. This list is snapshotted at registration time and does not change if the platform configuration is updated later.
 5. It starts the approval Step Functions workflow.
-6. The platform team receives an approval request email with one-click approve/reject links.
+6. The platform team receives an approval request email with approval and rejection links.
 
 ### Duplicate name handling
 
-If a domain with the same name already exists, the conditional PutItem fails and a `RegisterDomainFailed` event is emitted with reason "domain already exists". The domain name is globally unique across the entire Konductor installation — this is intentional governance, not a technical limitation.
+If a domain with the same name already exists, the conditional PutItem fails and a `RegisterDomainFailed` event is emitted with reason "domain already exists". The domain name is globally unique across the entire Konductor installation—this is intentional governance, not a technical limitation.
 
 ---
 
-## Approval Process
+## Approval process
 
-After you register a domain, the platform team must approve it before any infrastructure is created. You do not interact with the approval endpoint directly — that is the platform team's responsibility.
+After you register a domain, the platform team must approve it before any infrastructure is created. You do not interact with the approval endpoint directly—that is the platform team's responsibility.
 
 ### What you will receive
 
@@ -124,7 +133,7 @@ The approval workflow waits up to 7 days for a decision. If no decision is recei
 
 ---
 
-## Checking Domain Status
+## Checking domain status
 
 Retrieve details about a specific domain using its domain name:
 
@@ -179,8 +188,8 @@ awscurl -X GET "${API_URL}/domains/billing" --region "${REGION}"
 | `status` | Current lifecycle status (see [Domain Lifecycle](#domain-lifecycle)). |
 | `environments` | Environments this domain is provisioned into. Snapshotted at registration time. |
 | `tags` | Key-value metadata. |
-| `resourceArns` | Per-environment resource ARNs. Only populated when status is `ACTIVE`. Each key is an environment name. |
-| `namespaceParameter` | SSM parameter path for the domain namespace (env-independent). |
+| `resourceArns` | Amazon Resource Names (ARNs) for each environment. Populated only when status is `ACTIVE`. Each key is an environment name. |
+| `namespaceParameter` | AWS Systems Manager (SSM) parameter path for the environment-independent domain namespace. |
 | `createdAt` | Registration timestamp. |
 | `updatedAt` | Last update timestamp. |
 | `decidedBy` | Who approved or rejected the domain. |
@@ -189,7 +198,7 @@ awscurl -X GET "${API_URL}/domains/billing" --region "${REGION}"
 
 ### Response (non-ACTIVE domain)
 
-When the domain is not yet `ACTIVE`, `resourceArns` is absent and `approvedAt` may not be set. For `PENDING_APPROVAL` domains, the response includes the same metadata fields but no resource information.
+When the domain is not yet `ACTIVE`, `resourceArns` is absent and `approvedAt` might not be set. For `PENDING_APPROVAL` domains, the response includes the same metadata fields but no resource information.
 
 ### Not found
 
@@ -204,7 +213,7 @@ If the domain name does not exist, the API returns `404` with:
 
 ---
 
-## Listing Domains
+## Listing domains
 
 List all domains you have access to, with optional filters:
 
@@ -259,9 +268,9 @@ awscurl -X GET "${API_URL}/domains?nextToken=<token>&maxResults=50" --region "${
 
 ---
 
-## Updating Domain Metadata
+## Updating domain metadata
 
-Update mutable metadata for an existing domain. This is asynchronous — the API accepts the command and returns a request ID. The outcome is communicated via EventBridge events.
+Update mutable metadata for an existing domain. This is asynchronous—the API accepts the command and returns a request ID. The outcome is communicated via EventBridge events.
 
 ```bash
 awscurl -X PUT "${API_URL}/domains/billing" \
@@ -278,7 +287,7 @@ awscurl -X PUT "${API_URL}/domains/billing" \
 | Field | Mutable | Notes |
 |-------|---------|-------|
 | `description` | Yes | Max 256 characters. |
-| `costCenter` | Yes | Change-only: 1-256 characters, no control characters. Omit the field to leave it unchanged; an empty value is rejected. Changing it re-tags every provisioned resource (see below). |
+| `costCenter` | Yes | Change-only: 1–256 characters, with no control characters. Omit the field to leave it unchanged. An empty value is rejected. Changing it retags every provisioned resource. See [Update outcome events](#update-outcome-events). |
 | `domainName` | No | Cannot be renamed. Register a new domain instead. |
 | `status` | No | Status transitions are managed by workflows, not the update API. |
 | `ownerAccountId` | No | Fixed at registration time. |
@@ -311,11 +320,11 @@ A successful update emits `UpdateDomainSucceeded` on the control plane bus (`kon
 
 `costCenter` is present in the detail only when it changed. A failed update emits `UpdateDomainFailed` with `domainName`, `reason`, and `failedAt`.
 
-When `costCenter` changes, an `UpdateDomainSucceeded` event with `costCenter` in `changedFields` additionally triggers the **retag workflow** (`konductor-retag-domain`), which converges the `cost-center` tag on every provisioned resource — both event buses, schema registries, DLQs, dashboards, and alarms across all environments, plus the namespace parameter — to the new value. Retagging is asynchronous and idempotent: tag calls are upserts, so a redelivered event that starts a duplicate execution converges to the same tag state. A retag failure emits `RetagDomainFailed` and never reverts the committed record change.
+When `costCenter` changes, an `UpdateDomainSucceeded` event with `costCenter` in `changedFields` additionally triggers the **retag workflow** (`konductor-retag-domain`), which converges the `cost-center` tag on every provisioned resource—both event buses, schema registries, DLQs, dashboards, and alarms across all environments, plus the namespace parameter—to the new value. Retagging is asynchronous and idempotent: tag calls are upserts, so a redelivered event that starts a duplicate execution converges to the same tag state. A retag failure emits `RetagDomainFailed` and never reverts the committed record change.
 
 ---
 
-## Domain Lifecycle
+## Domain lifecycle
 
 Your domain moves through a well-defined status progression:
 
@@ -342,11 +351,11 @@ Your domain moves through a well-defined status progression:
 | Status | Meaning | What to do |
 |--------|---------|-------------|
 | `PENDING_APPROVAL` | Registration submitted, awaiting platform team decision | Wait for approval email. Contact platform team if it takes longer than expected. |
-| `APPROVED` | Approved, provisioning not yet started | Nothing — this is a transient state. You should see `PROVISIONING` within seconds. |
+| `APPROVED` | Approved, provisioning not yet started | Nothing—this is a transient state. You should see `PROVISIONING` within seconds. |
 | `REJECTED` | Registration denied | Review the rejection email for justification. Correct the submission and re-register under the same name. |
 | `PROVISIONING` | Infrastructure creation in progress across all environments | Wait. Typically completes within 1-2 minutes. Poll `GET /domains/{domainName}` to check. |
 | `ACTIVE` | All resources created, domain is operational | Start using your event buses. See [Provisioned Resources](#provisioned-resources). |
-| `PROVISIONING_FAILED` | Resource creation failed, rollback completed | Check the provisioning failure email. Contact your platform team — they can inspect Step Functions execution history for details. |
+| `PROVISIONING_FAILED` | Resource creation failed, rollback completed | Check the provisioning failure email. Contact your platform team—they can inspect Step Functions execution history for details. |
 
 ### Environment snapshot
 
@@ -354,7 +363,7 @@ The environments your domain is provisioned into are determined by the platform 
 
 ---
 
-## Provisioned Resources
+## Provisioned resources
 
 When your domain reaches `ACTIVE`, Konductor has created resources in two AWS accounts across all your environments:
 
@@ -382,7 +391,7 @@ When your domain reaches `ACTIVE`, Konductor has created resources in two AWS ac
 | Resource | Name | Purpose |
 |----------|------|---------|
 | SSM parameter | `/namespace/{domain}` | Namespace identifier shared across the organization via RAM |
-| RAM resource share | `{org}-domain-namespaces` | Organization-wide sharing of domain namespace parameters |
+| AWS Resource Access Manager (AWS RAM) resource share | `{org}-domain-namespaces` | Organization-wide sharing of domain namespace parameters |
 
 ### Naming convention example
 
@@ -398,25 +407,25 @@ acme-dev-billing-integration-dlq    (domain account)
 /namespace/billing                  (SSM parameter, shared via RAM)
 ```
 
-The platform-side and app-side event buses share the same name — they live in different accounts, so there is no collision.
+The platform-side and app-side event buses share the same name—they live in different accounts, so there is no collision.
 
 ---
 
-## Event Subscriptions
+## Event subscriptions
 
 Once domains are `ACTIVE`, teams connect them with **schema-first subscriptions**: you subscribe to an event contract (a schema in the producer's registry), and Konductor builds the delivery stream in every environment. You never touch EventBridge rules or cross-account policies on the platform side.
 
 ### Discovering schemas
 
-Your catalog shows exactly what your domain may subscribe to — nothing more:
+Your catalog shows exactly what your domain may subscribe to—nothing more:
 
 ```bash
 awscurl -X GET "${API_URL}/schemas?consumerDomain=checkout" --region ${AWS_REGION}
 ```
 
-The response expands your domain's **entitlements** (granted by the platform team) against producer registries, listing each covered schema (named `{source}@{event-name}`, e.g. `acme-orders@OrderNotification`) with the **latest version per environment** — so you can see before subscribing if dev is ahead of prod. If the catalog is empty, your domain has no entitlements yet: ask the platform team to grant one (e.g. `orders` / `OrderNotification*`). Filter with `&domain=orders` or `&environment=prod`, and page with `nextToken` (up to 50 entries per page).
+The response expands your domain's **entitlements** (granted by the platform team) against producer registries, listing each covered schema (named `{source}@{event-name}`, for example, `acme-orders@OrderNotification`) with the **latest version per environment**—so you can see before subscribing if dev is ahead of prod. If the catalog is empty, your domain has no entitlements yet: ask the platform team to grant one (for example, `orders` / `OrderNotification*`). Filter with `&domain=orders` or `&environment=prod`, and page with `nextToken` (up to 50 entries per page).
 
-Entitlements follow one grammar: `*` covers a producer's whole domain (future schemas included), an exact event name covers all its versions (future versions included), and a trailing `*` covers a name family. You never write patterns yourself — the platform grants them — but reading your catalog tells you exactly which grammar you received.
+Entitlements follow one grammar: `*` covers a producer's whole domain (future schemas included), an exact event name covers all its versions (future versions included), and a trailing `*` covers a name family. You never write patterns yourself—the platform grants them—but reading your catalog tells you exactly which grammar you received.
 
 ### Subscribing
 
@@ -433,16 +442,16 @@ awscurl -X POST "${API_URL}/subscriptions" \
 
 Key things to know:
 
-- **You always subscribe to the latest schema version** — it is resolved and pinned per environment when the subscription activates. There is no version parameter: the schema is the contract, and there is one current representation of an event.
-- **You need a subscriber binding and entitlement coverage.** Your principal must hold the `subscriber` role on the consumer domain (granted via the binding administration API), and an entitlement must cover the target schema. Both are checked at subscribe time — and again inside the activation workflow, so a grant revoked mid-flight stops before any rule is created. A `403` on an existing subscription or schema means a missing binding or coverage, not a missing resource.
+- **You always subscribe to the latest schema version**—it is resolved and pinned per environment when the subscription activates. There is no version parameter: the schema is the contract, and there is one current representation of an event.
+- **You need a subscriber binding and entitlement coverage.** Your principal must hold the `subscriber` role on the consumer domain (granted via the binding administration API), and an entitlement must cover the target schema. Both are checked at subscribe time—and again inside the activation workflow, so a grant revoked mid-flight stops before any rule is created. A `403` on an existing subscription or schema means a missing binding or coverage, not a missing resource.
 - **Activation is all-or-nothing across environments.** If the schema is missing in any environment's registry, the subscription fails as a whole.
-- **Start with an environment paused** (e.g., avoid production event volume while developing) by passing initial state: `"environments": {"prod": {"enabled": false}}`.
+- **Start with an environment paused** (for example, avoid production event volume while developing) by passing initial state: `"environments": {"prod": {"enabled": false}}`.
 
-Track progress with `GET /subscriptions/{consumerDomain}.{producerDomain}.{eventName}` — status moves `PENDING → ACTIVE` (or `FAILED` with error detail). List your domain's streams with `GET /subscriptions?domain=checkout&direction=inbound` (or `direction=outbound` as a producer).
+Track progress with `GET /subscriptions/{consumerDomain}.{producerDomain}.{eventName}`—status moves `PENDING → ACTIVE` (or `FAILED` with error detail). List your domain's streams with `GET /subscriptions?domain=checkout&direction=inbound` (or `direction=outbound` as a producer).
 
 ### Consuming events
 
-Once the stream is `ACTIVE`, matching events arrive on **your app-side domain bus** (`{org}-{env}-{consumerDomain}-event-bus`). Processing them is your responsibility: create your own EventBridge rules on your bus targeting your Lambda functions, queues, or state machines. This is the only direct interaction your team has with an event bus — the platform owns everything upstream.
+Once the stream is `ACTIVE`, matching events arrive on **your app-side domain bus** (`{org}-{env}-{consumerDomain}-event-bus`). Processing them is your responsibility: create your own EventBridge rules on your bus targeting your Lambda functions, queues, or state machines. This is the only direct interaction your team has with an event bus—the platform owns everything upstream.
 
 ### Pausing and resuming
 
@@ -456,7 +465,7 @@ awscurl -X POST "${API_URL}/subscriptions/state" \
   }'
 ```
 
-Disabling flips the delivery rule off atomically — the subscription, its pinned version, and the contract remain intact. Use it for cost control during development or as a kill switch during incidents. Re-enabling re-checks entitlement coverage: if the platform revoked your entitlement while the stream was paused, the enable is denied. Revocation itself never deletes your subscription — it disables the delivery rules, and a new grant plus an explicit re-enable restores the stream.
+Disabling flips the delivery rule off atomically—the subscription, its pinned version, and the contract remain intact. Use it for cost control during development or as a kill switch during incidents. Re-enabling rechecks entitlement coverage: if the platform revoked your entitlement while the stream was paused, the enable is denied. Revocation itself never deletes your subscription—it disables the delivery rules, and a new grant plus an explicit re-enable restores the stream.
 
 ### Unsubscribing
 
@@ -464,13 +473,13 @@ Disabling flips the delivery rule off atomically — the subscription, its pinne
 awscurl -X DELETE "${API_URL}/subscriptions/checkout.orders.OrderNotification" --region ${AWS_REGION}
 ```
 
-Konductor removes the platform-side delivery rules in every environment; the subscription record is retained for 90 days for audit. **Any integration rules you created on your own bus are yours to clean up** — the platform never modifies your bus.
+Konductor removes the platform-side delivery rules in every environment; the subscription record is retained for 90 days for audit. **Any integration rules you created on your own bus are yours to clean up**—the platform never modifies your bus.
 
 ### Producer obligations: the event envelope
 
-Producers publish through the **Publish API** (`POST /publish`), which derives the canonical identity, resolves the latest schema version, and stamps the envelope for you — see [Publishing Events](publishing-events.md). Schema registration is likewise in-platform via `POST /schemas` and `POST /schemas/versions`.
+Producers publish through the **Publish API** (`POST /publish`), which derives the canonical identity, resolves the latest schema version, and stamps the envelope for you—see [Publishing Events](publishing-events.md). Schema registration is likewise in-platform via `POST /schemas` and `POST /schemas/versions`.
 
-Direct publishing to your platform-side bus remains possible (the provisioning-created PutEvents policy permits your owner account), but then **you** must stamp the canonical envelope — subscription filtering depends on it:
+Direct publishing to your platform-side bus remains possible (the provisioning-created PutEvents policy permits your owner account), but then **you** must stamp the canonical envelope—subscription filtering depends on it:
 
 ```json
 {
@@ -483,9 +492,9 @@ Direct publishing to your platform-side bus remains possible (the provisioning-c
 }
 ```
 
-- `Source` is your domain's namespace identity (`{org}-{domain}`) — the same value in every environment.
+- `Source` is your domain's namespace identity (`{org}-{domain}`)—the same value in every environment.
 - `DetailType` is the event name, matching the schema name's suffix after `@`.
-- `detail.metadata.schemaVersion` must be **numeric** and match a registered schema version. Events with a missing or string-typed version match no subscriptions — they silently deliver to no one.
+- `detail.metadata.schemaVersion` must be **numeric** and match a registered schema version. Events with a missing or string-typed version match no subscriptions—they silently deliver to no one.
 
 ---
 
@@ -496,16 +505,16 @@ Direct publishing to your platform-side bus remains possible (the provisioning-c
 The approval workflow waits up to 7 days. If your domain has been pending longer than expected:
 
 1. Check the domain status via `GET /domains/{domainName}`.
-2. Contact your platform team — the approval email may be sitting unread.
+2. Contact your platform team—the approval email may be sitting unread.
 3. If the 7-day timeout passes, the workflow marks the domain `REJECTED` (`decidedBy: system:timeout`) and you receive the standard rejection notification. Re-register when ready.
 
 ### APPROVAL_NOTIFICATION_FAILED
 
-The registration was accepted but the approval request email could not be delivered (most commonly the platform's SES sender identity is unverified or SES is misconfigured). **Nobody rejected your domain** — no decision was ever made, and no owner email is sent (email delivery is exactly what failed).
+The registration was accepted but the approval request email could not be delivered (most commonly the platform's SES sender identity is unverified or SES is misconfigured). **Nobody rejected your domain**—no decision was ever made, and no owner email is sent (email delivery is exactly what failed).
 
 Recovery is operator-driven:
 
-1. The platform team fixes the notification transport (e.g., verifies the SES identity — see `notifications-stack.yaml`).
+1. The platform team fixes the notification transport (for example, verifies the SES identity—see `notifications-stack.yaml`).
 2. They delete the failed record and you re-register, which restarts the approval flow.
 
 Platform operators can find these domains with:
@@ -514,7 +523,7 @@ Platform operators can find these domains with:
 awscurl --service execute-api "https://{api-id}.execute-api.{region}.amazonaws.com/prod/domains?status=APPROVAL_NOTIFICATION_FAILED"
 ```
 
-Operators should also sweep for records left in `PROVISIONING` by workflow crashes predating the failure-path hardening (2026-07): `?status=PROVISIONING` with no running `konductor-provision-domain` execution means a stuck record — delete it and re-register.
+Operators should also sweep for records left in `PROVISIONING` by workflow crashes predating the failure-path hardening (2026-07): `?status=PROVISIONING` with no running `konductor-provision-domain` execution means a stuck record—delete it and re-register.
 
 ### PROVISIONING_FAILED
 
@@ -534,26 +543,33 @@ The email intentionally does not include technical details. Your platform team c
 
 ### Duplicate registration error
 
-If you try to register a domain name that already exists in a status other than `REJECTED`, you will see a `RegisterDomainFailed` event with reason "domain already exists" and receive a failure notification email at the submitted `ownerEmail`. Domain names are globally unique while in use. Choose a different name, or if the existing domain is `REJECTED`, simply correct your submission and re-register — the rejected record is replaced atomically.
+If you try to register a domain name that already exists in a status other than `REJECTED`, you will see a `RegisterDomainFailed` event with reason "domain already exists" and receive a failure notification email at the submitted `ownerEmail`. Domain names are globally unique while in use. Choose a different name, or if the existing domain is `REJECTED`, simply correct your submission and re-register—the rejected record is replaced atomically.
 
 ### API returns 403
 
-On the IAM surface, ensure your AWS credentials have permission to invoke the API Gateway, and verify that your `awscurl --region` matches the region where Konductor is deployed. On the OAuth surface, check that your access token is unexpired and carries the role the route requires (e.g., `platform-admin` for approval and binding administration). For publish and schema writes specifically, a `403` means your principal lacks a `publisher` binding for the domain — see [Publishing Events](publishing-events.md#before-you-can-publish-publisher-bindings).
+On the IAM surface, ensure your AWS credentials have permission to invoke the API Gateway, and verify that your `awscurl --region` matches the Region where Konductor is deployed. On the OAuth surface, check that your access token is unexpired and carries the role the route requires (for example, `platform-admin` for approval and binding administration). For publish and schema writes specifically, a `403` means your principal lacks a `publisher` binding for the domain—see [Publishing Events](publishing-events.md#before-you-can-publish-publisher-bindings).
 
 ### Subscription active but no events arriving
 
-1. Confirm the producer's events carry the canonical envelope — especially a **numeric** `detail.metadata.schemaVersion`. Events published through the Publish API are stamped correctly by construction; this check matters for producers publishing directly to their bus, where a string-typed version matches no rules.
-2. Compare the version the producer stamps with your pinned version: `GET /subscriptions/{subscriptionId}` shows `pinnedVersion` per environment. If the producer moved to a newer version after you subscribed, your rule no longer matches — this is contract enforcement, not a bug. Coordinate with the producer team.
+1. Confirm the producer's events carry the canonical envelope—especially a **numeric** `detail.metadata.schemaVersion`. Events published through the Publish API are stamped correctly by construction; this check matters for producers publishing directly to their bus, where a string-typed version matches no rules.
+2. Compare the version the producer stamps with your pinned version: `GET /subscriptions/{subscriptionId}` shows `pinnedVersion` per environment. If the producer moved to a newer version after you subscribed, your rule no longer matches—this is contract enforcement, not a bug. Coordinate with the producer team.
 3. Check the environment is enabled (`enabled: true` in the per-env map).
 4. Check the per-subscription zero-events alarm and the producer's subscription DLQ for delivery failures.
 
 ### Subscribe fails with a validation error
 
-`SubscribeFailed` outcome events carry the reason: both domains must be `ACTIVE`, you must hold a `subscriber` binding on the consumer domain and a current entitlement covering the producer schema (a revoked entitlement also fails re-enable), the schema's `source` must match the producer's namespace identity, and the derived rule name (`{consumerDomain}-{eventName}`) must fit EventBridge's 64-character/`[A-Za-z0-9._-]` constraints.
+`SubscribeFailed` events include the failure reason. Check the following requirements:
+
+- Both domains must be `ACTIVE`.
+- You must hold a `subscriber` binding on the consumer domain and a current entitlement for the producer schema. Revoked entitlements also prevent re-enabling a subscription.
+- The schema's `source` must match the producer's namespace identity.
+- The derived rule name (`{consumerDomain}-{eventName}`) must use `[A-Za-z0-9._-]` and fit the 64-character limit for EventBridge.
 
 ---
 
-## Clean Up
+<a id="clean-up"></a>
+
+## Cleaning up domain resources
 
 A `DELETE /domains` API endpoint is not yet available. To remove a domain and its resources, a platform operator can use the teardown script, which drives the same deprovision-env workflow used by the provisioning saga's rollback path:
 

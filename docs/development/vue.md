@@ -1,18 +1,22 @@
-# Vue & Nuxt Conventions
+<a id="vue--nuxt-conventions"></a>
 
-Conventions for the Konductor web console in `web/`. Verified against the codebase; when this doc and the code disagree, the code wins — fix the doc.
+# Vue and Nuxt conventions
 
-For colors, typography, and design tokens, see [design-system.md](./design-system.md) (rendered live at `/design-system` in the running app).
+The web console for Konductor for Amazon EventBridge uses Vue and Nuxt in `web/`. This guide describes the implemented conventions. If the code and this guide differ, update the guide to match the code.
 
-## Application Shape
+For colors, typography, and design tokens, see [Design system](./design-system.md). The running application renders the component gallery at `/design-system`.
 
-- **SPA, no SSR**: `ssr: false` in `nuxt.config.ts`; statically generated (`nuxi generate`) and served from S3 + CloudFront. There is no server side — never write code that depends on SSR behavior, and don't add `useFetch` "for SSR".
-- **Runtime config over build-time env**: `web/public/config.json` (generated from stack outputs) is loaded once by `plugins/config.client.ts`, validated by `parseKonductorConfig`, and provided app-wide. Read it via `useKonductorConfig()` — never import config values or env vars directly in components.
-- **Auth**: Cognito via aws-amplify, tokens in `sessionStorage` (per browser tab). `stores/session.ts` is the **only** Pinia store; it exposes `status`, `username`, `teamGroups`, `isPlatformRole`, `persona`, `homeRoute`, and `accessToken()`.
+## Application shape
 
-## API Access
+The console uses the following architecture:
 
-**All** API traffic goes through `useApi()`. It attaches the session Bearer token, refreshes once and retries on 401, redirects to `/login` on a second 401, applies a 30s timeout, and normalizes failures into a typed `ApiError` (`status`, `code`, `fieldList`).
+- **Single-page application (SPA), no server-side rendering (SSR)**: `ssr: false` in `nuxt.config.ts`. Generate the application with `nuxi generate` and serve it from Amazon Simple Storage Service (Amazon S3) and Amazon CloudFront. Do not add code that depends on SSR behavior.
+- **Runtime config over build-time env**: `web/public/config.json` (generated from stack outputs) is loaded once by `plugins/config.client.ts`, validated by `parseKonductorConfig`, and provided app-wide. Read it via `useKonductorConfig()`—never import config values or env vars directly in components.
+- **Authentication**: Amazon Cognito through `aws-amplify`, with tokens in `sessionStorage` for each browser tab. `stores/session.ts` is the only Pinia store. It exposes `status`, `username`, `teamGroups`, `isPlatformRole`, `persona`, `homeRoute`, and `accessToken()`.
+
+## API access
+
+Send all API traffic through `useApi()`. It attaches the session bearer token and applies a 30-second timeout. On HTTP 401, it refreshes the token and retries once. A second HTTP 401 redirects to `/login`. It normalizes failures into a typed `ApiError` with `status`, `code`, and `fieldList`.
 
 ```vue
 <script setup lang="ts">
@@ -31,7 +35,9 @@ const { data } = await useFetch('/api/domains')
 
 Bounded contexts get their own thin composable over `useApi()` (`useDomains`, `useCatalog`, `useApprovals`) with one function per endpoint, typed against `~/types/api`. Add new endpoints there, not inline in pages.
 
-### Error Handling in Pages
+### Error handling in pages
+
+Map field-level errors to the form and display other failures in a toast:
 
 ```typescript
 try {
@@ -49,7 +55,7 @@ try {
 }
 ```
 
-A 403 from a scoped endpoint is a UI state, not a crash — render a forbidden/empty state (see `DomainAccessPanel.vue`).
+Treat HTTP 403 from a scoped endpoint as a user interface (UI) state, not a crash. Render an access-denied or empty state, as in `DomainAccessPanel.vue`.
 
 ## Imports
 
@@ -71,7 +77,7 @@ import type { DomainSummary } from '~/types/api'
 </script>
 ```
 
-## Component Structure
+## Component structure
 
 Always `<script setup lang="ts">`. Group code in this order (see `pages/domains/new.vue` for the canonical form):
 
@@ -102,7 +108,9 @@ async function submit() { /* ... */ }
 </script>
 ```
 
-## Props, Models, Emits
+## Props, models, emits
+
+Define props, models, and generic components with the following patterns:
 
 ```vue
 <script setup lang="ts">
@@ -124,9 +132,9 @@ const model = defineModel<string>({ default: '' })
 
 Component-only types can be exported by their owner (`TableColumn` from `NxTable.vue`). Types also used by composables belong in `app/types/` so plain TypeScript checks do not need to resolve Vue files. `BadgeTone` lives in `types/ui.ts`, with a compatibility re-export from `NxBadge.vue`.
 
-## The Nx\* Component Kit
+## The Nx\* component kit
 
-Build pages from the kit in `app/components/` — `NxButton`, `NxCard`, `NxInput`, `NxSelect`, `NxModal`, `NxConfirm`, `NxBadge`, `NxStatusPill`, `NxTable`, `NxEmptyState`, `NxToasts` — composed with Tailwind utilities and design tokens (`bg-surface`, `text-muted`, `border-border-strong`, `text-danger`, `bg-accent`, ...). **Reka UI is an internal dependency of the overlay and notification wrappers**, not a second page-facing kit. Import its primitives explicitly only inside those wrappers. Buttons, inputs, and simple selects remain native.
+Build pages from the kit in `app/components/`—`NxButton`, `NxCard`, `NxInput`, `NxSelect`, `NxModal`, `NxConfirm`, `NxBadge`, `NxStatusPill`, `NxTable`, `NxEmptyState`, `NxToasts`—composed with Tailwind utilities and design tokens (`bg-surface`, `text-muted`, `border-border-strong`, `text-danger`, `bg-accent`, ...). **Reka UI is an internal dependency of the overlay and notification wrappers**, not a second page-facing kit. Import its primitives explicitly only inside those wrappers. Buttons, inputs, and simple selects remain native.
 
 ```vue
 <template>
@@ -143,14 +151,14 @@ Build pages from the kit in `app/components/` — `NxButton`, `NxCard`, `NxInput
 </template>
 ```
 
-- Tables: `NxTable` with `columns`/`items` and `#cell-{key}` / `#empty` slots.
+- Tables: use `NxTable` with `columns` and `items`, plus `#cell-{key}` and `#empty` slots.
 - Variant/tone styling lives in the component as a `Record<Tone, string>` map keyed by the prop (see `NxBadge`, `NxButton`).
 - Navigation is `NuxtLink`; actions are `NxButton`. Forms use `@submit.prevent` and a submit-type `NxButton` with `:loading="busy"`.
-- Modals use controlled `open` and emit `close`. Confirmations emit `confirm`/`cancel` and never own the API request. Set `busy` during async confirmation work; busy prevents user dismissal and duplicate actions. Confirmations focus Cancel first and never dismiss on backdrop clicks.
+- Modals use controlled `open` and emit `close`. Confirmations emit `confirm` or `cancel` and never own the API request. Set `busy` during asynchronous confirmation work to prevent dismissal and duplicate actions. Confirmations focus **Cancel** first and do not dismiss when you select the backdrop.
 
 ## Forms
 
-The established form pattern (see `pages/domains/new.vue`):
+Use the form pattern in `pages/domains/new.vue`:
 
 - One `reactive` object for the form, one `reactive<Record<string, string>>` for field errors
 - A `validate()` function that populates field errors and returns a boolean; hand-rolled regex checks, no validation library
@@ -160,6 +168,8 @@ The established form pattern (see `pages/domains/new.vue`):
 
 ## Feedback
 
+Use the shared toast queue to report asynchronous results:
+
 ```typescript
 const toast = useToast()
 toast.success('Subscription requested')
@@ -168,7 +178,9 @@ toast.error(error instanceof ApiError ? error.message : 'Request failed')
 
 Toasts are app-wide transient notifications rendered once by `<NxToasts />` in `app.vue`. `useToast` owns only the queue; each `NxToastItem` uses `useToastLifetime` for six seconds of unpaused display time. Hover, focus, or window inactivity pauses expiry until all conditions clear. Do not add a competing queue timeout. Use `NxConfirm`/`NxModal` for destructive or blocking interactions instead of `confirm()`.
 
-## Routing and Guards
+## Routing and guards
+
+Apply page middleware according to the required route access:
 
 ```vue
 <script setup lang="ts">
@@ -179,9 +191,11 @@ definePageMeta({ middleware: 'persona' })
 </script>
 ```
 
-The guards are navigation hygiene only — the API is the enforcing boundary. Programmatic navigation uses `navigateTo`.
+Guards control navigation. The API enforces authorization. Use `navigateTo` for programmatic navigation.
 
 ## Styling
+
+Apply the shared styling conventions:
 
 - Tailwind utility classes with design-system tokens; **no `<style>` blocks** in components (none exist in the app).
 - Conditional classes via `:class` bindings and tone/variant maps, not string interpolation into class names.
@@ -189,10 +203,12 @@ The guards are navigation hygiene only — the API is the enforcing boundary. Pr
 
 ## State
 
+Keep state ownership explicit:
+
 - Server data: fetched in pages/components via the composables, held in local refs.
 - Cross-component transient UI: module-level shared state inside a composable returning `readonly` refs (`useToast` is the pattern).
 - Pinia: only for the session store. Don't add stores for server data.
 
-## Quality Gates
+## Quality gates
 
-No unit tests exist for the web app today; the gates are `pnpm lint`, `pnpm typecheck`, and `pnpm build` (all run in CI's Web job). Keep them green.
+The web application has no unit tests. Its quality checks are `pnpm lint`, `pnpm typecheck`, and `pnpm build`. All run in the Web job for continuous integration (CI). Keep these checks passing.

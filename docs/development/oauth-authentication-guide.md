@@ -1,24 +1,26 @@
 # OAuth Authentication Guide
 
-This guide explains how the Cognito user pool is provisioned, what claims the Konductor authorizer validates, and how to obtain an access token and call the OAuth API surface using API testing tools such as Insomnia, Postman, or curl.
+Use this guide to obtain an access token and call the OAuth API for Konductor for Amazon EventBridge. It covers the Amazon Cognito user pool, authorizer claims, and requests with Insomnia, Postman, or curl.
+
+The command examples use the AWS Command Line Interface (AWS CLI). To set up the platform first, see the [Installation Guide](../installation.md).
 
 ---
 
-## What Konductor Provisions
+## What Konductor provisions
 
-When you deploy the core stack (`make deploy-core`), SAM creates the following Cognito resources automatically:
+When you deploy the core stack (`make deploy-core`), AWS Serverless Application Model (AWS SAM) creates the following Amazon Cognito resources.
 
 | Resource | Purpose |
 |----------|---------|
-| **User Pool** (`{org}-konductor-users`) | Stores user accounts. Email is the username attribute. Admin-created users only (no self-registration). Password policy: 12+ chars, mixed case, numbers. |
-| **User Pool Domain** (`{org}-konductor-{account-id}`) | Hosted UI domain for the OAuth authorization-code flow. |
-| **App Client** (`{org}-konductor-control-plane`) | OAuth client using the authorization-code flow with `openid`, `email`, and `profile` scopes. No client secret (public client). Access token validity is configurable (default 60 minutes). |
+| **User pool** (`{org}-konductor-users`) | Stores user accounts. Email is the username attribute. Administrators create accounts; self-registration is unavailable. Passwords require at least 12 characters, mixed case, and numbers. |
+| **User pool domain** (`{org}-konductor-{account-id}`) | Hosted user interface (UI) domain for the OAuth authorization-code flow. |
+| **App client** (`{org}-konductor-control-plane`) | Public OAuth client using the authorization-code flow with `openid`, `email`, and `profile` scopes. It has no client secret. Access token validity is configurable (default 60 minutes). |
 | **Group: `platform-admin`** | Maps to the `PlatformAdmin` global role. Can access all API methods including POST (writes) and the approval endpoint. |
 | **Group: `platform-auditor`** | Maps to the `PlatformAuditor` global role. Can only access GET (read) endpoints. Cannot mutate or approve. |
 
-### Stack Outputs
+### Stack outputs
 
-After deployment, the following CloudFormation outputs are available:
+After deployment, AWS CloudFormation exposes the following outputs:
 
 ```
 CognitoUserPoolId        – e.g. ap-southeast-2_abc123def
@@ -40,7 +42,9 @@ aws cloudformation describe-stacks \
 
 ---
 
-## Setting Up Users
+## Setting up users
+
+Use the development seed script or create users and assign groups manually.
 
 ### 0. Shortcut: seed the development personas
 
@@ -54,8 +58,8 @@ ALICE_PASSWORD='...' BOB_PASSWORD='...' make seed-users
 - `alice@example.com` → `platform-admin` (approvals inbox, enable/disable, full reads)
 - `bob@example.com` → `team-payments` (team caller: registers and owns domains, scoped reads)
 
-The script is idempotent — re-running re-asserts passwords and membership.
-The steps below show the equivalent manual flow.
+The script is idempotent—rerunning re-asserts passwords and membership.
+The following sections describe the equivalent manual flow.
 
 ### 1. Create a user
 
@@ -87,7 +91,7 @@ aws cognito-idp admin-add-user-to-group \
 
 A user can belong to both groups. If `platform-admin` is present, the admin role takes precedence and the user has full access.
 
-### 3. (Optional) Set a permanent password without email
+### 3. (Optional) set a permanent password without email
 
 For testing or automation setups where email delivery is not configured:
 
@@ -101,11 +105,11 @@ aws cognito-idp admin-set-user-password \
 
 ---
 
-## Required Access-Token Claims
+## Required access-token claims
 
-The Konductor OAuth authorizer validates the following claims on every request. An access token that fails any check is rejected with `401 Unauthorized`.
+The Konductor OAuth authorizer validates the following JSON Web Token (JWT) claims on every request. It checks signatures against the user pool's JSON Web Key Set (JWKS). If a required check fails, the authorizer returns `401 Unauthorized`.
 
-| Claim | Required Value | Verified By |
+| Claim | Required value | Verified by |
 |-------|---------------|-------------|
 | `sub` | Any non-empty string (Cognito subject) | Used as `principalId` for audit logging and `decidedBy` in approvals |
 | `iss` | Must match the configured user-pool issuer | JWT signature validation (`jsonwebtoken` crate) |
@@ -115,28 +119,32 @@ The Konductor OAuth authorizer validates the following claims on every request. 
 | `cognito:groups` | Optional, but determines role-based access | Authorizer maps known groups to roles; unknown groups are preserved as opaque team-group identifiers |
 | `kid` (header) | Must match a key in the user pool's JWKS | JWKS lookup with cache and refresh on unknown `kid` |
 
-### Group-to-Role Mapping
+### Group-to-role mapping
 
-| Cognito Group | Global Role | API Access |
+The authorizer maps controlled Amazon Cognito groups to global roles.
+
+| Cognito group | Global role | API access |
 |---------------|------------|------------|
 | `platform-admin` | `PlatformAdmin` | All methods on all OAuth endpoints |
 | `platform-auditor` | `PlatformAuditor` | GET-only on read endpoints; all write and approve endpoints return `403` |
-| Any other group (e.g. `team-payments`) | No global role (opaque team-group) | No API access by itself; team-group identifiers are carried in the trusted-principal context for grant-engine role-binding evaluation |
+| Any other group (for example, `team-payments`) | No global role (opaque team-group) | No API access by itself; team-group identifiers are carried in the trusted-principal context for grant-engine role-binding evaluation |
 
-### What the Authorizer Does NOT Do
+### What the authorizer does not do
+
+The authorizer has the following boundaries:
 
 - It does not read the request body or query parameters for identity.
 - It does not log token material or sensitive claims.
 - It does not cache authorizer results by default (`AuthorizerResultTtlInSeconds: 0`).
-- It does not assign permissions from team-group names; only the two controlled groups above map to roles.
+- It does not assign permissions from team-group names. Only `platform-admin` and `platform-auditor` map to global roles.
 
 ---
 
-## Obtaining an Access Token
+## Obtaining an access token
 
 Konductor uses the OAuth 2.0 **authorization-code** flow. The app client does not have a client secret (public client), so the token exchange does not require one.
 
-### Option A: Hosted UI (Browser)
+### Option A: hosted UI (browser)
 
 Open this URL in a browser, replacing the placeholders:
 
@@ -167,7 +175,7 @@ curl -X POST "https://<OAUTH_DOMAIN>/oauth2/token" \
 
 The response contains `access_token`, `id_token`, and `refresh_token`. Use the **`access_token`** (not the ID token) in API calls.
 
-### Option B: CLI (Admin Auth Flow)
+### Option B: CLI (admin auth flow)
 
 For testing without a browser, use the admin authentication flow:
 
@@ -192,7 +200,7 @@ aws cognito-idp admin-respond-to-auth-challenge \
 
 The `AuthenticationResult.AccessToken` field is the token you need.
 
-### Option C: Hosted UI (Direct Login, No Redirect)
+### Option C: hosted UI (direct login, no redirect)
 
 For quick testing, Cognito supports a login URL that directly returns tokens without a server callback. Use `http://localhost` as the redirect URI:
 
@@ -206,13 +214,13 @@ https://<OAUTH_DOMAIN>/login?
 
 After login, the browser redirects to `http://localhost?code=XXXX`. Copy the code and exchange it as shown in Option A.
 
-### Option D: Custom Login (SRP, no Hosted UI)
+### Option D: custom login (SRP, no hosted UI)
 
 First-party consoles (for example the Konductor web UI) sign users in with the
-SRP flow instead of redirecting to the hosted UI. The user-pool client allows
+Secure Remote Password (SRP) flow instead of redirecting to the hosted UI. The user-pool client allows
 `ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH`; raw-password
 authentication stays disabled, so credentials never traverse the client.
-AWS's Amplify Auth (`signIn`/`fetchAuthSession`) implements the SRP
+AWS Amplify Auth (`signIn`/`fetchAuthSession`) implements the SRP
 handshake for browser apps; store tokens in `sessionStorage`, not
 `localStorage`.
 
@@ -220,15 +228,19 @@ handshake for browser apps; store tokens in `sessionStorage`, not
 
 ## Calling the API
 
-### Available OAuth Endpoints
+Send an access token in the `Authorization` header when calling an OAuth endpoint.
 
-| Method | Path | Required Role | Description |
+### Available OAuth endpoints
+
+The following table lists the OAuth endpoints and their authorization requirements.
+
+| Method | Path | Required role | Description |
 |--------|------|--------------|-------------|
 | GET | `/domains` | admin or auditor (unscoped); team callers see owned domains | List domains (paginated, filterable) |
 | GET | `/domains?view=directory` | any authenticated caller | Names-only directory projection (name, namespace, description, status) for pickers |
 | POST | `/domains` | any authenticated caller with a team group | Register a new domain owned by `owningTeam` (async, 202) |
 | GET | `/domains/{domainName}` | admin or auditor; owning team | Describe a single domain (404 for other teams, same as missing) |
-| PUT | `/domains/{domainName}` | owning team or admin | Update domain metadata — description, emails, tags (async, 202) |
+| PUT | `/domains/{domainName}` | owning team or admin | Update domain metadata—description, emails, tags (async, 202) |
 | GET | `/domains/registrations/pending` | admin | Approvals inbox: pending registrations with `taskToken` and owning team |
 | POST | `/domains/registrations/decide` | admin | Approve or reject a registration |
 | POST | `/domains/{domainName}/state` | admin | Enable/disable a domain (`{"action": "enable"\|"disable"}`); shallow: existing estate is retained |
@@ -258,6 +270,8 @@ handshake for browser apps; store tokens in `sessionStorage`, not
 | DELETE | `/entitlements/{entitlementId}` | admin | Revoke an entitlement (converges subscriptions via the revocation pipeline) |
 
 ### Using curl
+
+To list domains, register a domain, or approve a registration, use the following request examples:
 
 ```bash
 API_URL="https://<API_ID>.execute-api.<REGION>.amazonaws.com/dev"
@@ -290,6 +304,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 ```
 
 ### Using Insomnia
+
+To configure requests in Insomnia, complete these steps:
 
 1. **Create a new environment** (or use the base environment) with these variables:
 
@@ -332,6 +348,8 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 
 ### Using Postman
 
+To configure a collection in Postman, complete these steps:
+
 1. **Create an environment** with `apiUrl` and `accessToken` variables.
 
 2. **Set up authorization at the collection level**:
@@ -351,11 +369,11 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
      - Client ID: `<CLIENT_ID>`
      - Scope: `openid email profile`
      - Grant Type: `Authorization Code`
-   - Click "Get New Access Token" to open the browser, log in, and exchange the code automatically.
+   - Choose **Get New Access Token** to open the browser, sign in, and exchange the code automatically.
 
 ---
 
-## Bootstrapping Role Bindings
+## Bootstrapping role bindings
 
 Resource authorization decisions are answered by the grant engine from the `konductor-authorization-bindings` table: a principal (a Cognito team group, issuer-qualified, or an AWS account) holds a role (`publisher` or `subscriber`) on a domain. Until a binding exists, every resource-scoped action by that principal is denied.
 
@@ -363,7 +381,7 @@ Binding administration cannot deadlock against an empty table: the `platform-adm
 
 ### Seeding developer bindings
 
-Use the seed helper instead of hand-writing curl calls. It goes through the real admin API (same validation, conditional writes, and audit records as production) and is safe to re-run — identical creates are idempotent:
+Use the seed helper instead of hand-writing curl calls. It goes through the real admin API (same validation, conditional writes, and audit records as production) and is safe to rerun—identical creates are idempotent:
 
 ```bash
 TOKEN="<platform-admin access token>" \
@@ -376,7 +394,7 @@ make seed-bindings
 
 `API_URL` defaults to the stack's `OAuthApiEndpoint` output (set `AWS_REGION`); override with `API_URL=...` when targeting a non-default endpoint.
 
-Notes:
+When creating or revoking bindings, apply these rules:
 
 - The Cognito group value must be qualified with the exact issuer URL of the user pool (see the `CognitoUserPoolIssuer` stack output). A binding for `orders-publishers` on a different issuer never matches tokens from this pool.
 - AWS-account bindings apply to every principal in the account (IAM role, user, or session); there is no per-ARN granularity.
@@ -385,7 +403,7 @@ Notes:
 
 ### Seeding entitlements (migration path)
 
-Consumer domains retain event access through **entitlements**. Seed them the same way — through the admin API, idempotent on re-run:
+Consumer domains retain event access through **entitlements**. Seed them the same way—through the admin API, idempotent on rerun:
 
 ```bash
 TOKEN="<platform-admin access token>" \
@@ -396,9 +414,9 @@ ENTITLEMENTS='[
 make seed-entitlements
 ```
 
-Migration order matters: seed the `subscriber` **bindings first** (`make seed-bindings`), then the entitlements, then let the revocation worker and hourly sweep re-evaluate any existing subscriptions — subscriptions whose coverage lapsed are disabled, never deleted, and nothing re-enables them automatically. The scope grammar: `*` covers the producer's whole domain including future schemas, an exact event name covers all its versions including future ones, and a trailing `*` covers a name family.
+Migration order matters: seed the `subscriber` **bindings first** (`make seed-bindings`), then the entitlements, then let the revocation worker and hourly sweep re-evaluate any existing subscriptions—subscriptions whose coverage lapsed are disabled, never deleted, and nothing re-enables them automatically. The scope grammar: `*` covers the producer's whole domain including future schemas, an exact event name covers all its versions including future ones, and a trailing `*` covers a name family.
 
-## Decoding and Inspecting a Token
+## Decoding and inspecting a token
 
 To verify your token has the correct claims before making API calls:
 
@@ -432,7 +450,9 @@ Key things to verify:
 
 ## Troubleshooting
 
-| Symptom | Likely Cause | Fix |
+Use the response status and error message to identify the next action.
+
+| Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | `401 Unauthorized` | Missing or expired token, wrong token type (ID token), or invalid signature | Verify `token_use: "access"`, check `exp`, ensure the Authorization header is `Bearer <token>` |
 | `403 AccessDenied` | User is in `platform-auditor` but calling a write/approve endpoint | Add user to `platform-admin` group |
@@ -444,9 +464,9 @@ Key things to verify:
 
 ---
 
-## IAM Surface (Automation)
+## IAM surface (automation)
 
-For AWS-native automation (CI/CD, scripts using AWS credentials), use the IAM API surface instead. No Cognito token is needed; requests are signed with SigV4.
+For automation that uses AWS credentials, use the AWS Identity and Access Management (IAM) API surface. This includes continuous integration and delivery (CI/CD) pipelines. Sign requests with AWS Signature Version 4 (SigV4). You do not need a Cognito token.
 
 ```bash
 IAM_API_URL="https://<IAM_API_ID>.execute-api.<REGION>.amazonaws.com/dev"
