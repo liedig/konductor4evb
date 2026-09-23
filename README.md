@@ -1,6 +1,6 @@
-<img src="docs/konductor-logo-light-bg.svg" alt="Konductor for Amazon EventBridge" width="500">
-
 # Konductor for Amazon EventBridge
+
+<img src="docs/konductor-logo-light-bg.svg" alt="Konductor for Amazon EventBridge" width="500">
 
 [![CI (main)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml?query=branch%3Amain)
 [![CI (develop)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml?query=branch%3Adevelop)
@@ -8,7 +8,7 @@
 
 A serverless control plane for cross-account event-driven architecture at scale. Platform teams get governed domains — registration, approval, provisioning, ownership, and observability. Application teams get three simple verbs — **publish, subscribe, unsubscribe** — for event stream automation and never touch event buses other than their own, IAM policies, or cross-account delivery infrastructure.
 
-[Installation guide](docs/installation.md) | [Architecture](docs/development/architecture.md) | [API contracts](api/) (OAuth: `openapi-oauth.yaml`, IAM: `openapi-iam.yaml`)
+[Documentation home](docs/README.md) | [Installation](docs/operations/installation.md) | [Architecture](docs/architecture/README.md) | [API contracts](api/) (OAuth: `openapi-oauth.yaml`, IAM: `openapi-iam.yaml`)
 
 ## Why Konductor
 
@@ -54,42 +54,43 @@ Both API surfaces serve **environment-named stages** (`dev`, `staging`, `prod`):
 
 ## Core Capabilities
 
-* **Domain lifecycle.** Register a domain via API, get human approval via email or API, and Konductor provisions all resources across every configured environment with all-or-nothing saga rollback. See [Domain Management Guide](docs/domain-management.md).
+- **Domain lifecycle.** Register a domain via API, get human approval via email or API, and Konductor provisions all resources across every configured environment with all-or-nothing saga rollback. See the [domain guide](docs/guides/domains.md).
 
-* **Event publishing.** `POST /publish` with a domain, event name, and business data — Konductor authorizes the publisher, resolves the latest schema version, stamps the canonical envelope, and delivers to the domain's event bus. Store-and-forward through SQS: once accepted (`202`), the event survives downstream failures and is retried with its idempotency key intact. See [Publishing Events](docs/publishing-events.md).
+- **Event publishing.** `POST /publish` with a domain, event name, and business data — Konductor authorizes the publisher, resolves the latest schema version, stamps the canonical envelope, and delivers to the domain's event bus. Store-and-forward through SQS: once accepted (`202`), the event survives downstream failures and is retried with its idempotency key intact. See the [publishing guide](docs/guides/publishing-events.md).
 
-* **Schema management.** Publishers create schemas and append versions with `POST /schemas` and `POST /schemas/versions` — append-only, in platform-managed registries, targeting the environment selected by the API stage. See [Publishing Events](docs/publishing-events.md).
+- **Schema management.** Publishers create schemas and append versions with `POST /schemas` and `POST /schemas/versions` — append-only, in platform-managed registries, targeting the environment selected by the API stage. See the [publishing guide](docs/guides/publishing-events.md).
 
-* **Schema-first subscriptions.** Consumers subscribe to a schema contract, not a bus. Konductor pins the latest version per environment, materializes EventBridge rules, and wires cross-account delivery with DLQs and zero-events alarms. Per-environment enable/disable maps to native rule state. See [Domain Management Guide](docs/domain-management.md#event-subscriptions).
+- **Schema-first subscriptions.** Consumers subscribe to a schema contract, not a bus. Konductor pins the latest version per environment, materializes EventBridge rules, and wires cross-account delivery with DLQs and zero-events alarms. Per-environment enable/disable maps to native rule state. See the [subscription guide](docs/guides/subscriptions.md).
 
-* **Multi-environment reliability.** Every domain is provisioned across the platform-configured environment list (default: dev, staging, prod). Provisioning is all-or-nothing; deprovisioning is idempotent. See [Architecture](docs/development/architecture.md).
+- **Multi-environment reliability.** Every domain is provisioned across the platform-configured environment list (default: dev, staging, prod). Provisioning is all-or-nothing; deprovisioning is idempotent. See [Domain lifecycle](docs/architecture/domain-lifecycle.md).
 
-## Working with Konductor
+## Documentation
 
-The documentation builds understanding linearly — each step assumes the ones before it:
+<a id="working-with-konductor"></a>
 
-| # | Step | Guide | Audience |
-|---|------|-------|----------|
-| 1 | Understand the concepts | [Architecture](docs/development/architecture.md) — start with *The Problem* and *System Overview* | Everyone |
-| 2 | Install the platform | [Installation Guide](docs/installation.md) | Platform operators |
-| 3 | Onboard domain accounts | [Trust Stack Deployment](docs/trust-stack-deployment.md) | Platform operators |
-| 4 | Register and approve domains | [Domain Management Guide](docs/domain-management.md) | Domain owners |
-| 5 | Set up users and access | [OAuth Authentication Guide](docs/development/oauth-authentication-guide.md) | Platform admins |
-| 6 | Publish events, manage schemas | [Publishing Events](docs/publishing-events.md) | Producers |
-| 7 | Subscribe to events | [Domain Management Guide — Event Subscriptions](docs/domain-management.md#event-subscriptions) | Consumers |
+Start at the [documentation home](docs/README.md), which routes by reader task instead of reading order:
 
-Deep reference for contributors and operators: [Architecture](docs/development/architecture.md), [Decisions](docs/development/decisions.md), [Testing Guide](docs/development/testing.md), [Service Quotas](docs/service-quotas.md), [AGENTS.md](AGENTS.md).
+| I want to… | Start with |
+|---|---|
+| Understand the system | [Architecture overview](docs/architecture/README.md) |
+| Install or operate the platform | [Operations](docs/operations/README.md): installation, trust, guardrails, access, quotas |
+| Register and manage a domain | [Domain guide](docs/guides/domains.md) |
+| Publish events or author schemas | [Publishing guide](docs/guides/publishing-events.md) |
+| Consume another domain's events | [Subscription guide](docs/guides/subscriptions.md) |
+| Look up an API, status, event, or table | [Reference](docs/reference/README.md) |
+| Change or review the implementation | [Contributor guide](docs/development/README.md) and [AGENTS.md](AGENTS.md) |
+| Understand why a choice was made | [Decision index](docs/decisions/README.md) and the [changelog](CHANGELOG.md) |
 
 ## Web Console
 
 Konductor ships a role-gated web console (`web/`, Nuxt + Tailwind, statically hosted on S3 + CloudFront from the core stack). Platform admins land on the pending-approvals inbox; domain teams land on their domains. Sign-in is a custom Konductor-branded page using Cognito SRP — no hosted UI.
 
-- **Develop**: `make web-dev` (http://localhost:3000). It writes `web/public/config.json` from the core stack outputs and proxies `/dev/*` API calls to the deployed OAuth API, so the dev console behaves like the deployed one.
+- **Develop**: `make web-dev` (`http://localhost:3000`). It writes `web/public/config.json` from the core stack outputs and proxies `/dev/*` API calls to the deployed OAuth API, so the dev console behaves like the deployed one.
 - **Deploy**: `make deploy-web` — builds, syncs to the web bucket, writes `config.json` from current stack outputs (no rebuild needed on stack changes), and invalidates CloudFront. The console URL is the `KonductorWebUrl` output.
 - **Test logins**: `make seed-users` creates the dev personas (`alice` = platform-admin, `bob` = team-payments owner).
 - Visual language: [Design System](docs/development/design-system.md); the `/design-system` route renders every primitive against the live build.
 
-> Default AWS quotas cap a fresh platform account at **3 domains**. See [Service Quotas](docs/service-quotas.md) before onboarding more.
+> Default AWS quotas cap a fresh platform account at **3 domains**. See [Service Quotas](docs/operations/service-quotas.md) before onboarding more.
 
 ## Current Scope
 

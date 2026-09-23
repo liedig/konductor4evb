@@ -8,7 +8,7 @@ This project is licensed under the [Apache License 2.0](LICENSE). By contributin
 
 This project uses the [Developer Certificate of Origin (DCO)](https://developercertificate.org/) to establish a clear contribution chain. All commits must include a `Signed-off-by` line:
 
-```
+```text
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
@@ -30,4 +30,4 @@ By signing off, you certify that you wrote the contribution or otherwise have th
 - [ ] `cargo clippy --workspace -- -D warnings` passes
 - [ ] `cargo test --workspace` passes
 - [ ] Commit messages follow Conventional Commits with `Signed-off-by`
-- [ ] Docs updated if applicable
+- [ ] Docs updated if applicable, following the [documentation maintenance rules](docs/development/documentation.md)

@@ -31,7 +31,7 @@ Hard rules for new UI content:
 
 ## Side Effects and Durability
 
-Classify every new handler write path at authoring time against the stream-driven side-effects rubric (per-handler records: `docs/development/decisions.md`, "Stream-Driven Side-Effects Audit"). When a handler commits a DynamoDB write and performs any other side effect (EventBridge, SQS, SNS, Step Functions, SES, rule mutations), answer:
+Classify every new handler write path at authoring time against the stream-driven side-effects rubric (`docs/development/side-effects/README.md`; per-handler records live in the topic files alongside it). When a handler commits a DynamoDB write and performs any other side effect (EventBridge, SQS, SNS, Step Functions, SES, rule mutations), answer:
 
 1. Does the written item carry everything a stream consumer would need?
 2. Does every side effect hang on a committed state transition? (Rejections that never commit stay on an explicit emission path.)
@@ -40,7 +40,15 @@ Classify every new handler write path at authoring time against the stream-drive
 5. Can a consumer meet the 24-hour stream retention / shard-blocking operational bar?
 6. Is durability already provided by an inbound command envelope (SQS command, triggering event, or Step Functions execution context)?
 
-A handler performs exactly one synchronous commit; drive everything else from the table's stream. If a handler-driven path stays (e.g., synchronous read-your-write), record the reason in `docs/development/decisions.md`. Step Functions execution names are idempotency keys: deterministic per unit of work, never timestamped.
+A handler performs exactly one synchronous commit; drive everything else from the table's stream. If a handler-driven path stays (e.g., synchronous read-your-write), record the reason in the matching topic file under `docs/development/side-effects/`. Step Functions execution names are idempotency keys: deterministic per unit of work, never timestamped.
+
+## Documentation
+
+- Maintenance rules live in `docs/development/documentation.md`: one primary page per topic, placed under the matching home (`docs/guides/`, `docs/operations/`, `docs/architecture/`, `docs/reference/`, `docs/development/`, `docs/decisions/`, `docs/history/`); link instead of copying tables or procedures
+- Record meaningful choices about behavior, boundaries, or trade-offs as decision records in `docs/decisions/`, indexed in `docs/decisions/README.md`; preserve old dates, IDs, and supersession links
+- Add notable user, operator, contributor, or security changes under `Unreleased` in `CHANGELOG.md`
+- Report conflicts between documentation and implementation in `docs/reference/documentation-discrepancies.md`; do not silently resolve them
+- Moved pages keep a forwarding page at the old path; update active navigation and agent references in the same change
 
 ## Testing Strategy
 

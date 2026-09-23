@@ -18,11 +18,12 @@ context: |
   - TypeScript + vue-tsc (nuxi typecheck), ESLint
   - pnpm (pinned via packageManager field in web/package.json)
 
-  For architecture overview: read docs/development/architecture.md
+  For architecture overview: read docs/architecture/README.md (topic map to focused pages)
   For testing patterns: read docs/development/testing.md
-  For past decisions: read docs/development/decisions.md
+  For past decisions: read docs/decisions/README.md (topic index of decision records)
   For Vue conventions: read docs/development/vue.md
   For TypeScript conventions: read docs/development/typescript.md
+  For documentation maintenance rules: read docs/development/documentation.md
 
   ## Scale Targets
   - Up to 1,000 domains per platform deployment (realistic usage in the low hundreds; the cap bounds quota planning and blast radius) and billions of events per month across cross-account scenarios
@@ -51,5 +52,7 @@ rules:
       This project follows DDD - prefer extending an existing spec over creating a new one.
       Only create a new spec if the change introduces a genuinely new bounded context.
   tasks:
-    - Always include a task to update decision log (docs/development/decisions.md)
-    - If the change affects architecture (workflows, APIs, resources, data model, events, cross-account trust), include a task to update docs/development/architecture.md
+    - For a meaningful choice about behavior, boundaries, or trade-offs, include a task to add or update a decision record under docs/decisions/ and its index (docs/decisions/README.md)
+    - If the change affects architecture (workflows, APIs, resources, data model, events, cross-account trust), include a task to update the affected topic pages under docs/architecture/ and docs/reference/
+    - For notable user, operator, or contributor changes, include a task to add an entry under Unreleased in CHANGELOG.md
+    - Keep documentation edits within the maintenance rules in docs/development/documentation.md

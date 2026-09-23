@@ -1,6 +1,6 @@
-<a id="vue--nuxt-conventions"></a>
-
 # Vue and Nuxt conventions
+
+<a id="vue--nuxt-conventions"></a>
 
 The web console for Konductor for Amazon EventBridge uses Vue and Nuxt in `web/`. This guide describes the implemented conventions. If the code and this guide differ, update the guide to match the code.
 

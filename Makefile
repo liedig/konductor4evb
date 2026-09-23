@@ -155,7 +155,7 @@ ifndef SECONDARY_OWNER_EMAIL
 	$(error SECONDARY_OWNER_EMAIL is required — at least one secondary owner email for the domain)
 endif
 ifndef TOKEN
-	$(error TOKEN is required — a platform-admin access token for the approval step, which is OAuth-only; see docs/development/oauth-authentication-guide.md)
+	$(error TOKEN is required — a platform-admin access token for the approval step, which is OAuth-only; see docs/guides/authentication.md)
 endif
 	@set -euo pipefail; \
 	DOMAIN_NAME="$(DOMAIN_NAME)"; \
