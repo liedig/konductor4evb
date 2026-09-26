@@ -3619,6 +3619,9 @@ Outputs:
   ProvisioningWorkflowRoleArn:
     Description: Provisioning workflow role ARN (pass as ProvisioningWorkflowRoleArn to trust-stack.yaml)
     Value: !GetAtt ProvisioningWorkflowRole.Arn
+  KonductorEnvironments:
+    Description: Comma-joined platform environment list every domain provisions into (drives the console's per-environment account overrides)
+    Value: !Join [",", !Ref Environments]
   RetagWorkflowRoleArn:
     Description: Cost-center retag workflow role ARN (pass as RetagWorkflowRoleArn to trust-stack.yaml)
     Value: !GetAtt RetagWorkflowRole.Arn

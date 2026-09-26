@@ -86,6 +86,11 @@ pub struct Domain {
     pub secondary_owner_emails: Option<Vec<String>>,
     pub status: DomainStatus,
     pub environments: Vec<String>,
+    /// Sparse per-environment account overrides, fixed at registration.
+    /// Absent on records written before the field existed; resolution always
+    /// falls back to `owner_account_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_accounts: Option<std::collections::HashMap<String, String>>,
     pub tags: Option<std::collections::HashMap<String, String>>,
     pub resource_arns: Option<std::collections::HashMap<String, PerEnvResourceArns>>,
     pub namespace_parameter: Option<String>,
@@ -130,6 +135,12 @@ pub struct RegisterDomainRequest {
     /// omit it, in which case approval creates no owner binding.
     #[serde(default)]
     pub owning_team: Option<String>,
+    /// Sparse per-environment account overrides. Keys must name configured
+    /// platform environments and values must be 12-digit account IDs — both
+    /// enforced handler-side at registration; the map is immutable
+    /// afterwards.
+    #[serde(default)]
+    pub environment_accounts: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -358,6 +369,95 @@ mod tests {
         });
         let parsed: RegisterDomainRequest = serde_json::from_value(value).unwrap();
         assert_eq!(parsed.cost_center.as_deref(), Some("cc-1234"));
+    }
+
+    #[test]
+    fn domain_record_without_environment_accounts_deserializes_to_none() {
+        let parsed: Domain = serde_json::from_value(serde_json::json!({
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com",
+            "status": "PENDING_APPROVAL",
+            "environments": ["dev", "prod"],
+            "createdAt": "2026-09-24T00:00:00Z",
+            "updatedAt": "2026-09-24T00:00:00Z"
+        }))
+        .expect("records written before the field existed must still parse");
+        assert_eq!(parsed.environment_accounts, None);
+    }
+
+    #[test]
+    fn domain_record_ignores_fields_added_by_newer_code() {
+        let parsed: Result<Domain, _> = serde_json::from_value(serde_json::json!({
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com",
+            "status": "PENDING_APPROVAL",
+            "environments": ["dev"],
+            "createdAt": "2026-09-24T00:00:00Z",
+            "updatedAt": "2026-09-24T00:00:00Z",
+            "someFutureField": {"anything": true}
+        }));
+        assert!(
+            parsed.is_ok(),
+            "no deny_unknown_fields: a rolled-back reader tolerates records written by newer code"
+        );
+    }
+
+    #[test]
+    fn domain_record_round_trips_sparse_environment_accounts() {
+        let parsed: Domain = serde_json::from_value(serde_json::json!({
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com",
+            "status": "PENDING_APPROVAL",
+            "environments": ["dev", "prod"],
+            "environmentAccounts": {"prod": "999988887777"},
+            "createdAt": "2026-09-24T00:00:00Z",
+            "updatedAt": "2026-09-24T00:00:00Z"
+        }))
+        .unwrap();
+        assert_eq!(
+            parsed
+                .environment_accounts
+                .as_ref()
+                .and_then(|m| m.get("prod"))
+                .map(String::as_str),
+            Some("999988887777")
+        );
+
+        let serialized = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(serialized["environmentAccounts"]["prod"], "999988887777");
+
+        let mapless = Domain {
+            environment_accounts: None,
+            ..parsed
+        };
+        let serialized = serde_json::to_value(&mapless).unwrap();
+        assert!(
+            serialized.get("environmentAccounts").is_none(),
+            "an absent map stays absent on write: the record stays sparse"
+        );
+    }
+
+    #[test]
+    fn register_domain_request_accepts_environment_accounts() {
+        let parsed: RegisterDomainRequest = serde_json::from_value(serde_json::json!({
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com",
+            "secondaryOwnerEmails": ["backup@example.com"],
+            "environmentAccounts": {"prod": "999988887777"}
+        }))
+        .unwrap();
+        assert_eq!(
+            parsed
+                .environment_accounts
+                .as_ref()
+                .and_then(|m| m.get("prod"))
+                .map(String::as_str),
+            Some("999988887777")
+        );
     }
 
     #[test]

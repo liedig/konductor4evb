@@ -6,6 +6,8 @@ The trust stack grants Konductor for Amazon EventBridge cross-account access to 
 
 Deploy one trust role in each domain account. The same role serves every environment of every domain owned by that account.
 
+A registration can also pin individual environments to accounts other than its owner account (`environmentAccounts`). Deploy the trust stack once in every distinct account any approved domain resolves into — the owner account plus every account named in an override. An environment mapped to an account without the trust role fails provisioning with an assume-role denial, exactly as an owner account without the role does today.
+
 ## Prerequisites
 
 Before deployment, confirm the following prerequisites:

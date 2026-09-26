@@ -107,6 +107,12 @@ fn render_domain(item: &HashMap<String, AttributeValue>, org: &str) -> Value {
     let environments = get_string_list(item, "environments").unwrap_or_default();
     let secondary_owner_emails = get_string_set(item, "secondaryOwnerEmails");
     let domain_name = get_s(item, "domainName").unwrap_or_default();
+    let owner_account_id = get_s(item, "ownerAccountId").unwrap_or_default();
+    let environment_accounts = konductor_common::environment_accounts::effective_accounts(
+        attr_to_string_map(item, "environmentAccounts").as_ref(),
+        &owner_account_id,
+        &environments,
+    );
 
     let resolver = NamespaceResolver::default_pattern();
     let namespace = resolver.namespace(org, &domain_name);
@@ -115,12 +121,13 @@ fn render_domain(item: &HashMap<String, AttributeValue>, org: &str) -> Value {
         "domainName": domain_name,
         "namespace": namespace,
         "description": get_s(item, "description"),
-        "ownerAccountId": get_s(item, "ownerAccountId"),
+        "ownerAccountId": owner_account_id,
         "ownerEmail": get_s(item, "ownerEmail"),
         "secondaryOwnerEmails": secondary_owner_emails,
         "costCenter": get_s(item, "costCenter"),
         "status": get_s(item, "status"),
         "environments": environments,
+        "environmentAccounts": environment_accounts,
         "tags": attr_to_string_map(item, "tags"),
         "resourceArns": resource_arns,
         "namespaceParameter": get_s(item, "namespaceParameter"),
@@ -337,6 +344,78 @@ mod tests {
         assert_eq!(resp["statusCode"], 200);
         let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
         assert!(body["costCenter"].is_null());
+    }
+
+    #[tokio::test]
+    async fn environment_accounts_resolve_to_the_default_account_without_overrides() {
+        let mut item = domain_item();
+        item.insert(
+            "environments".to_string(),
+            AttributeValue::L(vec![s("dev"), s("staging"), s("prod")]),
+        );
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let resp = fetch_domain(
+            &ddb,
+            "domains",
+            "bindings",
+            &event,
+            &iam_principal(),
+            "acme",
+        )
+        .await;
+
+        assert_eq!(resp["statusCode"], 200);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            body["environmentAccounts"],
+            json!({"dev": "111122223333", "staging": "111122223333", "prod": "111122223333"}),
+            "a mapless record exposes the complete default map"
+        );
+    }
+
+    #[tokio::test]
+    async fn environment_accounts_apply_sparse_overrides_from_the_record() {
+        let mut item = domain_item();
+        item.insert(
+            "environments".to_string(),
+            AttributeValue::L(vec![s("dev"), s("staging"), s("prod")]),
+        );
+        item.insert(
+            "environmentAccounts".to_string(),
+            AttributeValue::M(HashMap::from([("prod".to_string(), s("999988887777"))])),
+        );
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let resp = fetch_domain(
+            &ddb,
+            "domains",
+            "bindings",
+            &event,
+            &iam_principal(),
+            "acme",
+        )
+        .await;
+
+        assert_eq!(resp["statusCode"], 200);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            body["environmentAccounts"],
+            json!({"dev": "111122223333", "staging": "111122223333", "prod": "999988887777"}),
+            "the response carries the resolved map, not the sparse stored one"
+        );
     }
 
     #[tokio::test]

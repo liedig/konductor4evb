@@ -82,10 +82,16 @@ States:
     Type: Map
     MaxConcurrency: 0
     Items: "{% $keys($domain.resourceArns.M) %}"
+    # Credentials resolve per environment from the record's sparse
+    # environmentAccounts (absent on pre-feature records, so the lookup falls
+    # back to the default account). Iteration stays per environment: every
+    # tag target is an environment-scoped resource from resourceArns, so a
+    # shared account is never tagged twice for the same resource — the
+    # account only scopes the trust-role credentials.
     ItemSelector:
       environment: "{% $states.context.Map.Item.Value %}"
       domainName: "{% $states.input.detail.domainName %}"
-      ownerAccountId: "{% $domain.ownerAccountId.S %}"
+      accountId: "{% $lookup($domain.environmentAccounts.M, $states.context.Map.Item.Value).S ? $lookup($domain.environmentAccounts.M, $states.context.Map.Item.Value).S : $domain.ownerAccountId.S %}"
       costCenter: "{% $domain.costCenter.S %}"
       resourceArns: "{% $lookup($domain.resourceArns.M, $states.context.Map.Item.Value).M %}"
     ItemProcessor:
@@ -303,7 +309,7 @@ States:
                 {"Key": "cost-center", "Value": $states.input.costCenter}
               ] %}
           Credentials:
-            RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
+            RoleArn: "{% 'arn:aws:iam::' & $states.input.accountId & ':role/${Organization}-konductor-trust-role' %}"
           Output: "{% $states.input %}"
           Next: TagIntegrationDlq
           Catch:
@@ -333,7 +339,7 @@ States:
                 {"cost-center": $states.input.costCenter}
               ]) %}
           Credentials:
-            RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
+            RoleArn: "{% 'arn:aws:iam::' & $states.input.accountId & ':role/${Organization}-konductor-trust-role' %}"
           Output: "{% $states.input %}"
           Next: EnvRetagSucceeded
           Catch:

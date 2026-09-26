@@ -10,6 +10,8 @@ export interface KonductorConfig {
   userPoolId: string
   userPoolClientId: string
   region: string
+  /** Platform environments a domain provisions into; drives the request form's per-environment account override fields. Empty when the serving stack predates the KonductorEnvironments output. */
+  environments: string[]
 }
 
 export function parseKonductorConfig(raw: unknown): KonductorConfig {
@@ -22,10 +24,14 @@ export function parseKonductorConfig(raw: unknown): KonductorConfig {
       throw new Error(`config.json is missing a non-empty "${key}"`)
     }
   }
+  const environments = Array.isArray(candidate.environments)
+    ? candidate.environments.filter((e): e is string => typeof e === 'string' && e !== '')
+    : []
   return {
     apiBaseUrl: candidate.apiBaseUrl as string,
     userPoolId: candidate.userPoolId as string,
     userPoolClientId: candidate.userPoolClientId as string,
     region: candidate.region as string,
+    environments,
   }
 }

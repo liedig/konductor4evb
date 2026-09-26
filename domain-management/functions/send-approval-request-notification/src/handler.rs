@@ -32,12 +32,19 @@ pub async fn handle(
         .await
         .context("failed to persist taskToken to domain record")?;
 
+    let effective_accounts = konductor_common::environment_accounts::effective_accounts(
+        fields.environment_accounts.as_ref(),
+        &fields.owner_account_id,
+        &fields.environments,
+    );
+
     let html_body = build_approval_email_body(
         &fields.domain_name,
         &fields.owner_account_id,
         &fields.owner_email,
         is_new_account,
         &fields.environments,
+        &effective_accounts,
         &console_url,
     );
 
@@ -50,6 +57,7 @@ struct EventFields {
     owner_account_id: String,
     owner_email: String,
     environments: Vec<String>,
+    environment_accounts: Option<std::collections::HashMap<String, String>>,
 }
 
 fn extract_event_fields(payload: &Value) -> Result<EventFields, Error> {
@@ -78,12 +86,21 @@ fn extract_event_fields(payload: &Value) -> Result<EventFields, Error> {
                 .collect()
         })
         .unwrap_or_default();
+    let environment_accounts = payload
+        .get("environmentAccounts")
+        .and_then(|v| v.as_object())
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        });
     Ok(EventFields {
         task_token: task_token.to_string(),
         domain_name: domain_name.to_string(),
         owner_account_id: owner_account_id.to_string(),
         owner_email: owner_email.to_string(),
         environments,
+        environment_accounts,
     })
 }
 
@@ -166,6 +183,7 @@ fn build_approval_email_body(
     owner_email: &str,
     is_new_account: bool,
     environments: &[String],
+    environment_accounts: &std::collections::HashMap<String, String>,
     console_url: &str,
 ) -> String {
     let domain_name = escape(domain_name);
@@ -189,6 +207,31 @@ Ensure the trust-stack has been deployed to this account before approving.
     let environments_display = escape(&environments_display);
     let approvals_url = format!("{}/admin", escape(console_url.trim_end_matches('/')));
 
+    let accounts_display = if environment_accounts.is_empty() {
+        String::new()
+    } else {
+        let mut rows: Vec<(&String, &String)> = environment_accounts.iter().collect();
+        rows.sort_by_key(|(environment, _)| *environment);
+        let rows_html = rows
+            .into_iter()
+            .map(|(environment, account)| {
+                format!(
+                    "<tr><td>{}</td><td>{}</td></tr>",
+                    escape(environment),
+                    escape(account)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("");
+        format!(
+            r#"<p>Provisioning places each environment's resources into the account below. Ensure the trust-stack is deployed to every listed account before approving.</p>
+<table>
+<tr><td><strong>Environment</strong></td><td><strong>Account</strong></td></tr>
+{rows_html}
+</table>"#
+        )
+    };
+
     format!(
         r#"<html>
 <body>
@@ -202,6 +245,7 @@ Ensure the trust-stack has been deployed to this account before approving.
 <tr><td><strong>Owner Email</strong></td><td>{owner_email}</td></tr>
 <tr><td><strong>Environments</strong></td><td>{environments_display}</td></tr>
 </table>
+{accounts_display}
 <p style="margin-top:24px">
   <a href="{approvals_url}">Open Pending approvals</a> in the Konductor for Amazon EventBridge console
   to review and approve or reject this registration.
@@ -221,6 +265,13 @@ mod tests {
         vec!["dev".into(), "staging".into(), "prod".into()]
     }
 
+    fn default_accounts() -> std::collections::HashMap<String, String> {
+        envs()
+            .into_iter()
+            .map(|e| (e, "111122223333".to_string()))
+            .collect()
+    }
+
     #[test]
     fn approval_email_body_contains_domain_name() {
         let body = build_approval_email_body(
@@ -229,6 +280,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            &default_accounts(),
             CONSOLE_URL,
         );
         assert!(body.contains("billing"));
@@ -242,6 +294,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            &default_accounts(),
             CONSOLE_URL,
         );
         assert!(body.contains("111122223333"));
@@ -255,6 +308,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            &default_accounts(),
             CONSOLE_URL,
         );
         assert!(body.contains("owner@example.com"));
@@ -268,6 +322,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            &default_accounts(),
             CONSOLE_URL,
         );
         assert!(body.contains(r#"href="https://console.example.com/admin""#));
@@ -282,6 +337,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            &default_accounts(),
             "https://evil.example.com/<script>",
         );
         assert!(!body.contains("evil.example.com/<script>"));
@@ -295,6 +351,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            &default_accounts(),
             CONSOLE_URL,
         );
         assert!(!body.contains("decision=approve"));
@@ -304,17 +361,25 @@ mod tests {
 
     #[test]
     fn approval_email_body_escapes_html_input() {
+        let hostile_accounts =
+            std::collections::HashMap::from([("dev".to_string(), "1111<script>".to_string())]);
         let body = build_approval_email_body(
             "<billing>",
             "111122223333",
             "owner@example.com",
             false,
             &["dev<script>".to_string()],
+            &hostile_accounts,
             CONSOLE_URL,
         );
         assert!(body.contains("&lt;billing&gt;"));
         assert!(!body.contains("<billing>"));
         assert!(body.contains("dev&lt;script&gt;"));
+        assert!(
+            body.contains("1111&lt;script&gt;"),
+            "account map values are escaped like every other interpolated field"
+        );
+        assert!(!body.contains("1111<script>"));
     }
 
     #[test]
@@ -325,6 +390,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            &default_accounts(),
             CONSOLE_URL,
         );
         assert!(body.contains("Approval Required"));
@@ -338,6 +404,7 @@ mod tests {
             "owner@example.com",
             true,
             &envs(),
+            &default_accounts(),
             CONSOLE_URL,
         );
         assert!(body.contains("New Account Detected"));
@@ -352,6 +419,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            &default_accounts(),
             CONSOLE_URL,
         );
         assert!(!body.contains("New Account Detected"));
@@ -365,6 +433,7 @@ mod tests {
             "owner@example.com",
             false,
             &envs(),
+            &default_accounts(),
             CONSOLE_URL,
         );
         assert!(body.contains("dev, staging, prod"));
@@ -378,8 +447,41 @@ mod tests {
             "owner@example.com",
             false,
             &[],
+            &std::collections::HashMap::new(),
             CONSOLE_URL,
         );
         assert!(body.contains("(none configured)"));
+        assert!(
+            !body.contains("<strong>Account</strong>"),
+            "no account table without a resolved map"
+        );
+    }
+
+    #[test]
+    fn approval_email_body_renders_the_resolved_account_per_environment() {
+        let accounts = std::collections::HashMap::from([
+            ("dev".to_string(), "111122223333".to_string()),
+            ("staging".to_string(), "111122223333".to_string()),
+            ("prod".to_string(), "999988887777".to_string()),
+        ]);
+        let body = build_approval_email_body(
+            "billing",
+            "111122223333",
+            "owner@example.com",
+            false,
+            &envs(),
+            &accounts,
+            CONSOLE_URL,
+        );
+        assert!(
+            body.contains("<td>prod</td><td>999988887777</td>"),
+            "one line per environment, env then account: {body}"
+        );
+        assert!(body.contains("<td>dev</td><td>111122223333</td>"));
+        assert!(body.contains("<td>staging</td><td>111122223333</td>"));
+        assert!(
+            body.contains("trust-stack is deployed to every listed account"),
+            "the approver sees the trust prerequisite for override accounts"
+        );
     }
 }

@@ -22,6 +22,7 @@ A single `domains` DynamoDB table stores both domain metadata and registration s
 | `secondaryOwnerEmails` | String Set (SS) | Not applicable |
 | `tags` | Map | Not applicable |
 | `environments` | List<String> |—(stamped at registration time from the platform `Environments` parameter) |
+| `environmentAccounts` | Map<String,String> |—(sparse per-environment account overrides, stored exactly as submitted; keys are members of the stamped environment list, values are 12-digit account IDs; absent when the registration carried no overrides and on records predating the field) |
 | `resourceArns` | Map<env, PerEnvResourceArns> |—(populated after provisioning; keyed by environment) |
 | `namespaceParameter` | String |—(for example, `/namespace/billing`) |
 | `taskToken` | String |—(Step Functions task token) |

@@ -14,6 +14,7 @@ export const test = base.extend({
             region: 'ap-southeast-2',
             userPoolId: 'ap-southeast-2_GalleryTest',
             userPoolClientId: 'gallerytestclient',
+            environments: ['dev', 'staging', 'prod'],
           },
         })
       }

@@ -1,7 +1,15 @@
 Comment: Per-environment domain resource provisioning with inner saga rollback
 QueryLanguage: JSONata
-StartAt: CreatePlatformEventBus
+StartAt: ResolveAccount
 States:
+
+  # In-flight provision-domain executions started before the resolved-account
+  # change still pass ownerAccountId; normalize once so every downstream state
+  # reads accountId.
+  ResolveAccount:
+    Type: Pass
+    Output: "{% $merge([$states.input, { 'accountId': $states.input.accountId ? $states.input.accountId : $states.input.ownerAccountId }]) %}"
+    Next: CreatePlatformEventBus
 
   CreatePlatformEventBus:
     Type: Task
@@ -49,8 +57,8 @@ States:
     Arguments:
       EventBusName: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
       Action: "events:PutEvents"
-      Principal: "{% $states.input.ownerAccountId %}"
-      StatementId: "{% 'allow-' & $states.input.ownerAccountId & '-put-events-' & $states.input.domainName %}"
+      Principal: "{% $states.input.accountId %}"
+      StatementId: "{% 'allow-' & $states.input.accountId & '-put-events-' & $states.input.domainName %}"
     Output: "{% $states.input %}"
     Next: CreateSchemaRegistry
     Catch:
@@ -144,7 +152,7 @@ States:
           {"Key": "konductor:environment", "Value": $states.input.environment}
         ], $states.input.costCenter ? [{"Key": "cost-center", "Value": $states.input.costCenter}] : []) %}
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.accountId & ':role/${Organization}-konductor-trust-role' %}"
     Assign:
       appBus: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -176,7 +184,7 @@ States:
       Principal: "${AWS::AccountId}"
       StatementId: allow-platform-subscription-delivery
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.accountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: CreateIntegrationDlq
     Catch:
@@ -206,7 +214,7 @@ States:
           $states.input.costCenter ? {"cost-center": $states.input.costCenter} : {}
         ]) %}
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.accountId & ':role/${Organization}-konductor-trust-role' %}"
     Assign:
       integrationDlq: "{% $states.result %}"
     Output: "{% $states.input %}"
@@ -420,7 +428,7 @@ States:
       status: SUCCEEDED
       environment: "{% $states.input.environment %}"
       domainName: "{% $states.input.domainName %}"
-      ownerAccountId: "{% $states.input.ownerAccountId %}"
+      accountId: "{% $states.input.accountId %}"
       resourceArns:
         platformEventBusArn: "{% $platformBus.EventBusArn %}"
         appEventBusArn: "{% $appBus.EventBusArn %}"
@@ -458,7 +466,7 @@ States:
     Arguments:
       QueueUrl: "{% $integrationDlq.QueueUrl %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.accountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: CompensateAppEventBus
     Catch:
@@ -491,7 +499,7 @@ States:
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.accountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: CompensateDlqDepthAlarm
     Catch:

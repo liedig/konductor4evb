@@ -106,7 +106,7 @@ The platform account contains the following resources. A dead-letter queue (DLQ)
 | Zero-events alarm | S × E | `activate-subscription` |
 | Singletons (konductor-bus, 2 DynamoDB tables, API, 13 Lambdas, 7 state machines, 6 queues) | fixed | core stack |
 
-Each domain account: E app event buses, E integration DLQs, 1 trust role. None of these approach any default quota while an account hosts a single domain (the intended model).
+Each domain account hosts the app event bus and integration DLQ for every environment resolving into it — by default all E environments of its domain, or a subset when the registration pins environments to other accounts via `environmentAccounts` — plus 1 trust role. Per-account headroom therefore counts **environments resolving into the account**, not domains: an account hosting several domains' `prod` environments carries one bus and one DLQ per hosted environment. None of these approach any default quota while an account hosts a single domain's environments (the intended model).
 
 ---
 
@@ -213,7 +213,7 @@ The following limits usually require no adjustment for initial deployments.
 | CloudFormation | Resources per stack | 500 | Core stack ≈ 70 |
 | SES (if notifications enabled) | Sandbox: 200 emails/day, 1/s, verified recipients only | Not applicable | ~2–3 emails per registration. Request SES production access before real onboarding, or operators must pre-verify every owner address. |
 
-Domain accounts need **no quota increases** under the one-domain-per-account model.
+Domain accounts need **no quota increases** under the one-domain-per-account model. When `environmentAccounts` concentrates several domains' environments into one account, apply the per-environment counts above to that account before onboarding.
 
 ## Cost scaling (no quota, but grows with N)
 

@@ -92,6 +92,19 @@ function toggleEnv(env: string) {
 const PLATFORM_FIELDS = ['platformEventBusArn', 'schemaRegistryArn', 'subscriptionDlqArn', 'dashboardArn'] as const
 const DOMAIN_FIELDS = ['appEventBusArn', 'integrationDlqArn'] as const
 
+/** Resolved account per environment, sorted for a stable presentation. */
+const accountEntries = computed(() => {
+  if (!domain.value?.environmentAccounts) return []
+  return Object.entries(domain.value.environmentAccounts)
+    .map(([env, account]) => ({ env, account }))
+    .sort((a, b) => a.env.localeCompare(b.env))
+})
+
+/** The account hosting an environment's resources (override or owner default). */
+function accountFor(env: string): string | undefined {
+  return domain.value?.environmentAccounts?.[env] ?? domain.value?.ownerAccountId
+}
+
 function platformResources(env: string) {
   const arns = domain.value?.resourceArns?.[env] ?? {}
   return PLATFORM_FIELDS
@@ -102,12 +115,12 @@ function platformResources(env: string) {
 function domainResources(env: string) {
   const arns = domain.value?.resourceArns?.[env] ?? {}
   const fallbackRegion = regionFromArns(Object.values(arns))
-  const owner = domain.value?.ownerAccountId
+  const account = accountFor(env)
   return DOMAIN_FIELDS
     .filter(key => arns[key])
     .map(key => {
       const value = arns[key]!
-      return { label: key, value, link: domainConsoleLink(key, value, owner, fallbackRegion) }
+      return { label: key, value, link: domainConsoleLink(key, value, account, fallbackRegion) }
     })
 }
 
@@ -143,6 +156,16 @@ onMounted(load)
           <div>
             <dt class="text-muted">Owner account</dt>
             <dd class="mt-0.5 font-mono">{{ domain.ownerAccountId }}</dd>
+          </div>
+          <div v-if="accountEntries.length > 0">
+            <dt class="text-muted">Accounts per environment</dt>
+            <dd class="mt-0.5 font-mono text-xs">
+              <span
+                v-for="entry in accountEntries"
+                :key="entry.env"
+                class="mr-3 inline-block whitespace-nowrap"
+              >{{ entry.env }} → {{ entry.account }}</span>
+            </dd>
           </div>
           <div>
             <dt class="text-muted">Owner email</dt>

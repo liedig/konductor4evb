@@ -120,9 +120,11 @@ web-dev: ## Run the live-backed web console and open /design-system in your brow
 	API_URL=$$(output OAuthApiEndpoint); \
 	POOL_ID=$$(output KonductorUserPoolId); \
 	CLIENT_ID=$$(output KonductorUserPoolClientId); \
+	ENVS=$$(output KonductorEnvironments); \
 	test -n "$$POOL_ID" || { echo "$(YELLOW)KonductorUserPoolId output missing — deploy the core stack first (make deploy-core)$(RESET)"; exit 1; }; \
-	printf '{"apiBaseUrl":"/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s"}\n' \
-		"$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" > web/public/config.json; \
+	if [ -n "$$ENVS" ]; then ENVS_JSON=$$(printf '%s' "$$ENVS" | sed 's/,/","/g; s/^/"/; s/$$/"/'); else ENVS_JSON=""; fi; \
+	printf '{"apiBaseUrl":"/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s","environments":[%s]}\n' \
+		"$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" "$$ENVS_JSON" > web/public/config.json; \
 	cd web && KONDUKTOR_DEV_API_URL="$$API_URL" KONDUKTOR_OPEN_GALLERY=1 pnpm dev
 
 deploy-web: ## Build the web console, publish to the web bucket, and write config.json from stack outputs
@@ -137,8 +139,10 @@ deploy-web: ## Build the web console, publish to the web bucket, and write confi
 	test -n "$$BUCKET" || { echo "$(YELLOW)KonductorWebBucketName output missing — deploy the core stack first (make deploy-core)$(RESET)"; exit 1; }; \
 	echo "$(CYAN)Building web console$(RESET)"; \
 	cd web && pnpm install --frozen-lockfile && pnpm build && cd ..; \
-	printf '{"apiBaseUrl":"%s/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s"}\n' \
-		"$$WEB_URL" "$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" > web/.output/public/config.json; \
+	ENVS=$$(output KonductorEnvironments); \
+	if [ -n "$$ENVS" ]; then ENVS_JSON=$$(printf '%s' "$$ENVS" | sed 's/,/","/g; s/^/"/; s/$$/"/'); else ENVS_JSON=""; fi; \
+	printf '{"apiBaseUrl":"%s/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s","environments":[%s]}\n' \
+		"$$WEB_URL" "$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" "$$ENVS_JSON" > web/.output/public/config.json; \
 	echo "$(CYAN)Syncing to s3://$$BUCKET$(RESET)"; \
 	aws s3 sync web/.output/public "s3://$$BUCKET" --delete; \
 	echo "$(CYAN)Invalidating distribution $$DISTRIBUTION$(RESET)"; \

@@ -4,6 +4,7 @@ pub mod dynamodb;
 pub mod entitlement;
 pub mod entitlement_store;
 pub mod envelope;
+pub mod environment_accounts;
 pub mod error;
 pub mod grant;
 pub mod grant_engine;

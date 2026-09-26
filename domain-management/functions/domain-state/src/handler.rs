@@ -150,12 +150,21 @@ async fn retry_provisioning(
         Err(e) => return Ok(transition_error(e, domain_name, DomainStatus::Approved)),
     };
 
+    let owner_account_id = get_s(&attrs, "ownerAccountId").unwrap_or_default();
+    let environments =
+        konductor_common::dynamodb::get_string_list(&attrs, "environments").unwrap_or_default();
+    let environment_accounts = konductor_common::environment_accounts::effective_accounts(
+        konductor_common::dynamodb::attr_to_string_map(&attrs, "environmentAccounts").as_ref(),
+        &owner_account_id,
+        &environments,
+    );
     let detail = json!({
         "domainName": domain_name,
-        "ownerAccountId": get_s(&attrs, "ownerAccountId"),
+        "ownerAccountId": owner_account_id,
         "ownerEmail": get_s(&attrs, "ownerEmail"),
         "secondaryOwnerEmails": konductor_common::dynamodb::get_string_set(&attrs, "secondaryOwnerEmails"),
-        "environments": konductor_common::dynamodb::get_string_list(&attrs, "environments").unwrap_or_default(),
+        "environments": environments,
+        "environmentAccounts": environment_accounts,
         "costCenter": get_s(&attrs, "costCenter"),
         "retriedBy": retried_by,
         "retriedAt": now,
@@ -411,8 +420,56 @@ mod tests {
         assert_eq!(detail["domainName"], "sales");
         assert_eq!(detail["ownerAccountId"], "210987654321");
         assert_eq!(detail["environments"], json!(["dev", "staging", "prod"]));
+        assert_eq!(
+            detail["environmentAccounts"],
+            json!({"dev": "210987654321", "staging": "210987654321", "prod": "210987654321"}),
+            "a mapless record retries with the default account everywhere"
+        );
         assert_eq!(detail["retriedBy"], "user-subject-1");
         assert!(detail["retriedAt"].is_string());
+    }
+
+    #[tokio::test]
+    async fn retry_event_carries_the_resolved_account_map_from_the_record() {
+        set_env();
+        let update = mock!(aws_sdk_dynamodb::Client::update_item)
+            .match_requests(|req| req.condition_expression() == Some("#status = :current"))
+            .then_output(|| {
+                let mut record = failed_domain_record();
+                record.insert(
+                    "environmentAccounts".to_string(),
+                    AttributeValue::M(HashMap::from([("prod".to_string(), s("999988887777"))])),
+                );
+                UpdateItemOutput::builder()
+                    .set_attributes(Some(record))
+                    .build()
+            });
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_rule = retry_event_rule(std::sync::Arc::clone(&captured));
+        let ddb = mock_client!(aws_sdk_dynamodb, [&update]);
+        let events = mock_client!(aws_sdk_eventbridge, [&events_rule]);
+
+        let resp = handle(
+            &ddb,
+            &events,
+            state_event(
+                oauth_ctx("[\"platform-admin\"]", "[]"),
+                "sales",
+                "retry-provisioning",
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let calls = captured.lock().unwrap();
+        let (_, detail) = calls[0].split_once('|').unwrap();
+        let detail: Value = serde_json::from_str(detail).unwrap();
+        assert_eq!(
+            detail["environmentAccounts"],
+            json!({"dev": "210987654321", "staging": "210987654321", "prod": "999988887777"}),
+            "provisioning re-enters with the domain's resolved per-environment accounts"
+        );
     }
 
     #[tokio::test]

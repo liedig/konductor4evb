@@ -210,10 +210,14 @@ States:
     Type: Map
     MaxConcurrency: 0
     Items: "{% $states.input.detail.environments %}"
+    # Each environment targets its resolved account: the sparse override when
+    # the approved event carries one, otherwise the domain's default account.
+    # $lookup on an absent environmentAccounts yields undefined, so in-flight
+    # executions from before the field existed fall back unchanged.
     ItemSelector:
       environment: "{% $states.context.Map.Item.Value %}"
       domainName: "{% $states.input.detail.domainName %}"
-      ownerAccountId: "{% $states.input.detail.ownerAccountId %}"
+      accountId: "{% $lookup($states.input.detail.environmentAccounts, $states.context.Map.Item.Value) ? $lookup($states.input.detail.environmentAccounts, $states.context.Map.Item.Value) : $states.input.detail.ownerAccountId %}"
       costCenter: "{% $states.input.detail.costCenter %}"
     ItemProcessor:
       ProcessorConfig:
@@ -237,6 +241,7 @@ States:
           Output:
             status: SUCCEEDED
             environment: "{% $states.input.environment %}"
+            accountId: "{% $states.input.accountId %}"
             result: "{% $states.result.Output %}"
           End: true
           Catch:
@@ -332,10 +337,13 @@ States:
     Type: Map
     MaxConcurrency: 0
     Items: "{% $succeededResults %}"
+    # Rollback targets the account the environment was provisioned into, as
+    # recorded on the succeeded item — never re-resolved, so a retry of this
+    # execution cannot drift from what provisioning actually did.
     ItemSelector:
       environment: "{% $states.context.Map.Item.Value.environment %}"
       domainName: "{% $states.input.detail.domainName %}"
-      ownerAccountId: "{% $states.input.detail.ownerAccountId %}"
+      accountId: "{% $states.context.Map.Item.Value.accountId %}"
       resourceArns: "{% $states.context.Map.Item.Value.result.resourceArns %}"
     ItemProcessor:
       ProcessorConfig:

@@ -13,6 +13,7 @@ before treating an older claim as a current requirement.
 
 ## Domains, provisioning, and names
 
+- [Per-environment account overrides for domain provisioning](per-environment-domain-accounts.md)
 - [Unified domain lifecycle and workflow-owned outcomes](domain-management-redesign.md)
 - [Namespace convention, compensation, account detection, and sharing](konductor-provisioning-enhancements.md)
 - [Provisioning outcome event names](provisioning-event-cleanup.md)

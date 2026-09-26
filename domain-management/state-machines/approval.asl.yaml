@@ -25,6 +25,7 @@ States:
         ownerEmail: "{% $states.input.ownerEmail %}"
         secondaryOwnerEmails: "{% $states.input.secondaryOwnerEmails %}"
         environments: "{% $states.input.environments %}"
+        environmentAccounts: "{% $states.input.environmentAccounts %}"
     TimeoutSeconds: 604800
     Retry:
       - ErrorEquals:
@@ -248,6 +249,7 @@ States:
               "ownerEmail": $registration.ownerEmail,
               "secondaryOwnerEmails": $registration.secondaryOwnerEmails,
               "environments": $registration.environments,
+              "environmentAccounts": $registration.environmentAccounts,
               "approvedBy": $states.input.decidedBy,
               "justification": $states.input.justification ? $states.input.justification : '',
               "approvedAt": $states.context.State.EnteredTime
@@ -277,6 +279,7 @@ States:
               "costCenter": $registration.costCenter,
               "ownerEmail": $registration.ownerEmail,
               "secondaryOwnerEmails": $registration.secondaryOwnerEmails,
+              "environmentAccounts": $registration.environmentAccounts,
               "rejectedBy": $rejection.decidedBy,
               "justification": $rejection.justification,
               "rejectedAt": $states.context.State.EnteredTime

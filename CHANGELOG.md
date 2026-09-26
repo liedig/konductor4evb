@@ -13,6 +13,14 @@ Older rationale is available through the [decision index](docs/decisions/README.
   fixed-at-setup drift guard, and customer values moved out of committed
   deploy configuration into gitignored `konductor-platform.toml`.
   [Decision](docs/decisions/configure-customer-platform.md).
+- Allow a registration to pin individual environments to AWS accounts other
+  than the domain's owner account (`environmentAccounts`): validation and
+  sparse storage on the domain record, per-environment resolution through
+  provisioning, rollback, retagging, and the approval email, plus override
+  fields in the console request form and the effective map on the approval
+  card and domain detail. The trust stack must be deployed once per distinct
+  account used.
+  [Decision](docs/decisions/per-environment-domain-accounts.md).
 - Reorganize documentation around reader tasks, focused architecture topics,
   reference pages, and operations runbooks.
 - Preserve decision history in [topic-indexed records](docs/decisions/README.md)

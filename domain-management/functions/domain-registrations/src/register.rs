@@ -36,14 +36,7 @@ pub async fn handle(
         }
     })?;
 
-    if let Some(reason) = authorize_registration(principal, request).err() {
-        tracing::warn!(action = "domains:Register", domain = %request.domain_name, "registration authorization denied");
-        emit_failed(eb, &cp_bus, request, &reason).await?;
-        return Ok(());
-    }
-
-    if let Err(e) = validate_domain_name(&request.domain_name) {
-        emit_failed(eb, &cp_bus, request, &e.to_string()).await?;
+    if reject_invalid_request(eb, &cp_bus, request, principal, &environments).await? {
         return Ok(());
     }
 
@@ -266,6 +259,57 @@ fn authorize_registration(
     }
 }
 
+/// The caller-supplied overrides normalized for storage and resolution: an
+/// empty map is indistinguishable from an absent one, so neither is stored.
+fn requested_overrides(request: &RegisterDomainRequest) -> Option<&HashMap<String, String>> {
+    request
+        .environment_accounts
+        .as_ref()
+        .filter(|m| !m.is_empty())
+}
+
+/// The rejection reason when the sparse override map names an environment
+/// outside the platform list or a malformed account ID; None when valid or
+/// absent.
+fn invalid_overrides_reason(
+    request: &RegisterDomainRequest,
+    environments: &[String],
+) -> Option<String> {
+    let overrides = requested_overrides(request)?;
+    konductor_common::environment_accounts::validate_environment_accounts(overrides, environments)
+        .err()
+}
+
+/// The deterministic request rejections — authorization, domain-name
+/// syntax, and the environmentAccounts contract — emit RegisterDomainFailed
+/// and ack the message. Returns true when the request was rejected.
+async fn reject_invalid_request(
+    eb: &aws_sdk_eventbridge::Client,
+    cp_bus: &str,
+    request: &RegisterDomainRequest,
+    principal: &TrustedPrincipal,
+    environments: &[String],
+) -> Result<bool> {
+    if let Some(reason) = authorize_registration(principal, request).err() {
+        tracing::warn!(action = "domains:Register", domain = %request.domain_name, "registration authorization denied");
+        emit_failed(eb, cp_bus, request, &reason).await?;
+        return Ok(true);
+    }
+
+    if let Err(e) = validate_domain_name(&request.domain_name) {
+        emit_failed(eb, cp_bus, request, &e.to_string()).await?;
+        return Ok(true);
+    }
+
+    if let Some(reason) = invalid_overrides_reason(request, environments) {
+        tracing::warn!(domain = %request.domain_name, %reason, "registration rejected: invalid environmentAccounts");
+        emit_failed(eb, cp_bus, request, &reason).await?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 fn base_domain_item(
     org: &str,
     request: &RegisterDomainRequest,
@@ -299,6 +343,12 @@ fn base_domain_item(
     }
     if let Some(cc) = request.cost_center.as_deref().filter(|v| !v.is_empty()) {
         item.insert("costCenter".to_string(), s(cc));
+    }
+    if let Some(overrides) = requested_overrides(request) {
+        item.insert(
+            "environmentAccounts".to_string(),
+            string_map_to_attr(overrides),
+        );
     }
     let effective: HashMap<String, String> = konductor_common::tags::effective_tags(
         org,
@@ -521,6 +571,11 @@ async fn start_approval_workflow(
         "description": request.description,
         "costCenter": request.cost_center,
         "environments": environments,
+        "environmentAccounts": konductor_common::environment_accounts::effective_accounts(
+            requested_overrides(request),
+            &request.owner_account_id,
+            environments,
+        ),
     });
 
     if let Err(e) = sfn
@@ -551,7 +606,7 @@ async fn emit_succeeded(
     let result = eb.put_events().entries(
         aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
             .event_bus_name(cp_bus).source("konductor.domain-management").detail_type("RegisterDomainSucceeded")
-            .detail(json!({"requestId": request_id, "domainName": request.domain_name, "ownerAccountId": request.owner_account_id, "ownerEmail": request.owner_email, "secondaryOwnerEmails": request.secondary_owner_emails, "status": status, "createdAt": created_at, "environments": environments}).to_string())
+            .detail(json!({"requestId": request_id, "domainName": request.domain_name, "ownerAccountId": request.owner_account_id, "ownerEmail": request.owner_email, "secondaryOwnerEmails": request.secondary_owner_emails, "status": status, "createdAt": created_at, "environments": environments, "environmentAccounts": konductor_common::environment_accounts::effective_accounts(requested_overrides(request), &request.owner_account_id, environments)}).to_string())
             .build(),
     ).send().await.map_err(|e| ControlPlaneError::EventBridge(e.to_string()))?;
 
@@ -845,6 +900,7 @@ mod tests {
                 secondary_owner_emails: vec!["backup@example.com".to_string()],
                 cost_center: None,
                 owning_team: None,
+                environment_accounts: None,
             }
         }
 
@@ -1835,6 +1891,312 @@ mod tests {
             assert_eq!(eb_rule.num_calls(), 1);
             // sfn has no mock rules — any call would error, so Ok(()) proves
             // the workflow was not started for a duplicate registration.
+        }
+
+        fn default_effective_map() -> Value {
+            json!({
+                "dev": "111122223333",
+                "staging": "111122223333",
+                "prod": "111122223333"
+            })
+        }
+
+        fn sfn_input_rule(expected_accounts: Value) -> Rule {
+            mock!(aws_sdk_sfn::Client::start_execution)
+                .match_requests(move |req| {
+                    req.input()
+                        .and_then(|i| serde_json::from_str::<Value>(i).ok())
+                        .is_some_and(|input| {
+                            input.get("environmentAccounts") == Some(&expected_accounts)
+                        })
+                })
+                .then_output(|| {
+                    StartExecutionOutput::builder()
+                        .execution_arn("arn:exec")
+                        .start_date(aws_sdk_sfn::primitives::DateTime::from_secs(0))
+                        .build()
+                        .unwrap()
+                })
+        }
+
+        fn succeeded_event_with_accounts_rule(expected_accounts: Value) -> Rule {
+            mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(move |req| {
+                    req.entries().iter().any(|entry| {
+                        entry.detail_type() == Some("RegisterDomainSucceeded")
+                            && entry
+                                .detail()
+                                .and_then(|d| serde_json::from_str::<Value>(d).ok())
+                                .is_some_and(|v| {
+                                    v.get("environmentAccounts") == Some(&expected_accounts)
+                                })
+                    })
+                })
+                .then_output(|| PutEventsOutput::builder().build())
+        }
+
+        #[tokio::test]
+        async fn mapless_registration_resolves_everywhere_to_the_default_account() {
+            set_env();
+
+            let tx_rule = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+                .match_requests(|req| {
+                    req.transact_items()
+                        .first()
+                        .and_then(|t| t.put())
+                        .is_some_and(|p| !p.item().contains_key("environmentAccounts"))
+                })
+                .then_output(|| TransactWriteItemsOutput::builder().build());
+            let ddb = mock_client!(aws_sdk_dynamodb, [&tx_rule]);
+
+            let eb_rule = succeeded_event_with_accounts_rule(default_effective_map());
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
+            let sfn_rule = sfn_input_rule(default_effective_map());
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
+
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(&clients, &valid_request(), &iam_principal(), "msg-1").await;
+
+            assert!(result.is_ok());
+            assert_eq!(tx_rule.num_calls(), 1, "record stores no map attribute");
+            assert_eq!(
+                sfn_rule.num_calls(),
+                1,
+                "workflow input carries the full default map"
+            );
+            assert_eq!(eb_rule.num_calls(), 1, "event carries the full default map");
+        }
+
+        #[tokio::test]
+        async fn sparse_override_is_stored_sparse_and_resolved_into_a_full_effective_map() {
+            set_env();
+
+            let tx_rule = mock!(aws_sdk_dynamodb::Client::transact_write_items)
+                .match_requests(|req| {
+                    req.transact_items()
+                        .first()
+                        .and_then(|t| t.put())
+                        .and_then(|p| p.item().get("environmentAccounts"))
+                        .and_then(|v| v.as_m().ok())
+                        .is_some_and(|m| {
+                            m.len() == 1
+                                && m.get("prod")
+                                    .and_then(|v| v.as_s().ok())
+                                    .map(String::as_str)
+                                    == Some("999988887777")
+                        })
+                })
+                .then_output(|| TransactWriteItemsOutput::builder().build());
+            let ddb = mock_client!(aws_sdk_dynamodb, [&tx_rule]);
+
+            let effective = json!({
+                "dev": "111122223333",
+                "staging": "111122223333",
+                "prod": "999988887777"
+            });
+            let eb_rule = succeeded_event_with_accounts_rule(effective.clone());
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
+            let sfn_rule = sfn_input_rule(effective);
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
+
+            let mut request = valid_request();
+            request.environment_accounts = Some(HashMap::from([(
+                "prod".to_string(),
+                "999988887777".to_string(),
+            )]));
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(&clients, &request, &iam_principal(), "msg-1").await;
+
+            assert!(result.is_ok());
+            assert_eq!(
+                tx_rule.num_calls(),
+                1,
+                "record stores only the sparse override"
+            );
+            assert_eq!(sfn_rule.num_calls(), 1);
+            assert_eq!(eb_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn every_environment_may_be_overridden() {
+            set_env();
+
+            let tx_rule = tx_ok_rule();
+            let ddb = mock_client!(aws_sdk_dynamodb, [&tx_rule]);
+
+            let effective = json!({
+                "dev": "222233334444",
+                "staging": "555566667777",
+                "prod": "999988887777"
+            });
+            let eb_rule = succeeded_event_with_accounts_rule(effective.clone());
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
+            let sfn_rule = sfn_input_rule(effective);
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
+
+            let mut request = valid_request();
+            request.environment_accounts = Some(HashMap::from([
+                ("dev".to_string(), "222233334444".to_string()),
+                ("staging".to_string(), "555566667777".to_string()),
+                ("prod".to_string(), "999988887777".to_string()),
+            ]));
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(&clients, &request, &iam_principal(), "msg-1").await;
+
+            assert!(result.is_ok());
+            assert_eq!(
+                sfn_rule.num_calls(),
+                1,
+                "no environment keeps the default account"
+            );
+            assert_eq!(eb_rule.num_calls(), 1);
+        }
+
+        #[tokio::test]
+        async fn unknown_environment_key_fails_before_any_write_or_workflow() {
+            set_env();
+
+            let ddb = mock_client!(aws_sdk_dynamodb, &[]);
+            let failed_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries().iter().any(|e| {
+                        e.detail_type() == Some("RegisterDomainFailed")
+                            && e.detail().is_some_and(|d| d.contains("'qa'"))
+                    })
+                })
+                .then_output(|| PutEventsOutput::builder().build());
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &failed_rule]
+            );
+            let sfn = mock_client!(aws_sdk_sfn, &[]);
+            let ssm = mock_client!(aws_sdk_ssm, &[]);
+
+            let mut request = valid_request();
+            request.environment_accounts = Some(HashMap::from([(
+                "qa".to_string(),
+                "999988887777".to_string(),
+            )]));
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(&clients, &request, &iam_principal(), "msg-1").await;
+
+            assert!(result.is_ok(), "deterministic rejection acks the message");
+            assert_eq!(failed_rule.num_calls(), 1, "reason names the offending key");
+        }
+
+        #[tokio::test]
+        async fn malformed_account_value_fails_before_any_write_or_workflow() {
+            set_env();
+
+            let ddb = mock_client!(aws_sdk_dynamodb, &[]);
+            let failed_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries().iter().any(|e| {
+                        e.detail_type() == Some("RegisterDomainFailed")
+                            && e.detail().is_some_and(|d| d.contains("not-an-account"))
+                    })
+                })
+                .then_output(|| PutEventsOutput::builder().build());
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &failed_rule]
+            );
+            let sfn = mock_client!(aws_sdk_sfn, &[]);
+            let ssm = mock_client!(aws_sdk_ssm, &[]);
+
+            let mut request = valid_request();
+            request.environment_accounts = Some(HashMap::from([(
+                "prod".to_string(),
+                "not-an-account".to_string(),
+            )]));
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(&clients, &request, &iam_principal(), "msg-1").await;
+
+            assert!(result.is_ok());
+            assert_eq!(
+                failed_rule.num_calls(),
+                1,
+                "reason names the offending value"
+            );
+        }
+
+        #[tokio::test]
+        async fn duplicate_accounts_across_environments_are_accepted() {
+            set_env();
+
+            let tx_rule = tx_ok_rule();
+            let ddb = mock_client!(aws_sdk_dynamodb, [&tx_rule]);
+
+            let effective = json!({
+                "dev": "111122223333",
+                "staging": "999988887777",
+                "prod": "999988887777"
+            });
+            let eb_rule = succeeded_event_with_accounts_rule(effective.clone());
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &eb_rule]
+            );
+            let sfn_rule = sfn_input_rule(effective);
+            let sfn = mock_client!(aws_sdk_sfn, [&sfn_rule]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
+
+            let mut request = valid_request();
+            request.environment_accounts = Some(HashMap::from([
+                ("staging".to_string(), "999988887777".to_string()),
+                ("prod".to_string(), "999988887777".to_string()),
+            ]));
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(&clients, &request, &iam_principal(), "msg-1").await;
+
+            assert!(result.is_ok());
+            assert_eq!(tx_rule.num_calls(), 1);
+            assert_eq!(sfn_rule.num_calls(), 1);
+            assert_eq!(eb_rule.num_calls(), 1);
         }
     }
 }

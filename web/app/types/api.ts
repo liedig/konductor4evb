@@ -53,6 +53,8 @@ export interface DomainDetail {
   tags?: Record<string, string>
   resourceArns?: Record<string, PerEnvResourceArns>
   namespaceParameter?: string
+  /** Resolved account per environment (sparse overrides applied); absent on responses from stacks predating the field. */
+  environmentAccounts?: Record<string, string>
   createdAt?: string
   updatedAt?: string
 }
@@ -71,6 +73,8 @@ export interface PendingRegistration {
   owningTeam?: string
   createdAt?: string
   taskToken?: string
+  /** Resolved account per environment, for approver review. */
+  environmentAccounts?: Record<string, string>
 }
 
 export interface PendingRegistrationsResponse {
@@ -91,6 +95,8 @@ export interface RegisterDomainRequest {
   secondaryOwnerEmails: string[]
   costCenter?: string
   owningTeam: string
+  /** Sparse per-environment account overrides; omitted when every environment uses the owner account. */
+  environmentAccounts?: Record<string, string>
 }
 
 export interface UpdateDomainRequest {

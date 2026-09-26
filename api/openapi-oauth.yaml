@@ -1949,6 +1949,12 @@ components:
           type: string
           maxLength: 256
           description: Optional governed cost-allocation tag propagated to every provisioned resource. The only accepted custom tag; arbitrary tag maps are rejected.
+        environmentAccounts:
+          type: object
+          additionalProperties:
+            type: string
+            pattern: "^[0-9]{12}$"
+          description: Optional sparse map pinning individual platform environments to AWS accounts other than ownerAccountId. Keys must name configured platform environments (validated at registration); environments without an entry use ownerAccountId. Duplicate accounts across environments are legal. Immutable after registration.
         owningTeam:
           type: string
           description: Cognito team group that will own the domain; required for OAuth callers and must be one of the caller's team groups. IAM callers may omit it (approval then creates no owner binding).
@@ -2013,6 +2019,13 @@ components:
           items:
             type: string
           example: ["dev", "staging", "prod"]
+        environmentAccounts:
+          type: object
+          description: Effective account per environment (sparse registration overrides resolved against ownerAccountId). Absent on responses from stacks predating the field.
+          additionalProperties:
+            type: string
+            pattern: "^[0-9]{12}$"
+          example: {"dev": "111122223333", "staging": "111122223333", "prod": "444455556666"}
         costCenter:
           type: string
           description: Governed cost-center tag value set at registration or by update.
@@ -2128,6 +2141,12 @@ components:
         owningTeam:
           type: string
           description: Cognito team group that will own the domain once approved.
+        environmentAccounts:
+          type: object
+          description: Effective account per environment (sparse registration overrides resolved against ownerAccountId), so the approver sees every account that would receive resources. Absent on responses from stacks predating the field.
+          additionalProperties:
+            type: string
+            pattern: "^[0-9]{12}$"
         createdAt:
           type: string
           format: date-time

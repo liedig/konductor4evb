@@ -55,6 +55,13 @@ async function decide(registration: PendingRegistration, decision: 'ACCEPT' | 'R
   }
 }
 
+/** Resolved account per environment, sorted for a stable presentation. */
+function accountEntries(registration: PendingRegistration) {
+  return Object.entries(registration.environmentAccounts ?? {})
+    .map(([env, account]) => ({ env, account }))
+    .sort((a, b) => a.env.localeCompare(b.env))
+}
+
 function openReject(registration: PendingRegistration) {
   justification.value = ''
   justificationError.value = ''
@@ -115,6 +122,16 @@ onMounted(load)
               <div class="flex gap-2">
                 <dt class="text-muted">Secondary</dt>
                 <dd>{{ registration.secondaryOwnerEmails?.join(', ') || '—' }}</dd>
+              </div>
+              <div v-if="accountEntries(registration).length > 0" class="flex gap-2 sm:col-span-2">
+                <dt class="text-muted">Accounts</dt>
+                <dd class="font-mono text-xs">
+                  <span
+                    v-for="entry in accountEntries(registration)"
+                    :key="entry.env"
+                    class="mr-3 inline-block whitespace-nowrap"
+                  >{{ entry.env }} → {{ entry.account }}</span>
+                </dd>
               </div>
             </dl>
           </div>

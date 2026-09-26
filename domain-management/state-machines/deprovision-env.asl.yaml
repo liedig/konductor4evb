@@ -9,11 +9,14 @@ QueryLanguage: JSONata
 StartAt: Start
 States:
 
+  # In-flight rollback invocations started before the resolved-account change
+  # still pass ownerAccountId; normalize once so every downstream state reads
+  # accountId.
   Start:
     Type: Pass
     Assign:
       compensationErrors: "{% [] %}"
-    Output: "{% $states.input %}"
+    Output: "{% $merge([$states.input, { 'accountId': $states.input.accountId ? $states.input.accountId : $states.input.ownerAccountId }]) %}"
     Next: CheckIntegrationDlqPresent
 
   CheckIntegrationDlqPresent:
@@ -37,7 +40,7 @@ States:
     Arguments:
       QueueUrl: "{% $states.input.resourceArns.integrationDlqArn %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.accountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: DeleteAppEventBus
     Catch:
@@ -68,7 +71,7 @@ States:
     Arguments:
       Name: "{% '${Organization}' & '-' & $states.input.environment & '-' & $states.input.domainName & '-event-bus' %}"
     Credentials:
-      RoleArn: "{% 'arn:aws:iam::' & $states.input.ownerAccountId & ':role/${Organization}-konductor-trust-role' %}"
+      RoleArn: "{% 'arn:aws:iam::' & $states.input.accountId & ':role/${Organization}-konductor-trust-role' %}"
     Output: "{% $states.input %}"
     Next: DeleteDlqDepthAlarm
     Catch:

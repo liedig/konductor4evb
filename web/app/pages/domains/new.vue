@@ -7,6 +7,7 @@ definePageMeta({ middleware: 'auth' })
 const session = useSessionStore()
 const domainsApi = useDomains()
 const toast = useToast()
+const config = useKonductorConfig()
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/
 const ACCOUNT_PATTERN = /^[0-9]{12}$/
@@ -21,6 +22,12 @@ const form = reactive({
   description: '',
   costCenter: '',
 })
+// One override field per platform-configured environment; empty means the
+// owner account hosts that environment.
+const accountOverrides = reactive<Record<string, string>>({})
+for (const environment of config.environments) {
+  accountOverrides[environment] = ''
+}
 const fieldErrors = reactive<Record<string, string>>({})
 const busy = ref(false)
 const accepted = ref<{ requestId?: string, message?: string } | null>(null)
@@ -48,7 +55,20 @@ function validate(): boolean {
     ? 'At least one secondary owner email is required.'
     : secondaries.every(e => EMAIL_PATTERN.test(e)) ? '' : 'Every secondary owner email must be valid.'
   fieldErrors.costCenter = validateCostCenter()
+  for (const environment of config.environments) {
+    const value = (accountOverrides[environment] ?? '').trim()
+    fieldErrors[`override-${environment}`] = value === '' || ACCOUNT_PATTERN.test(value)
+      ? ''
+      : 'A 12-digit AWS account ID, or leave empty to use the owner account.'
+  }
   return Object.values(fieldErrors).every(e => e === '')
+}
+
+function overridePayload(): Record<string, string> | undefined {
+  const entries = config.environments
+    .map(environment => [environment, (accountOverrides[environment] ?? '').trim()] as const)
+    .filter(([, account]) => account !== '')
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
 }
 
 const MAX_COST_CENTER = 256
@@ -73,6 +93,7 @@ async function submit() {
       secondaryOwnerEmails: form.secondaryOwnerEmails.map(e => e.trim()).filter(Boolean),
       description: form.description || undefined,
       costCenter: form.costCenter.trim() || undefined,
+      environmentAccounts: overridePayload(),
     })
     toast.success('Registration request accepted')
   } catch (error) {
@@ -174,6 +195,25 @@ async function submit() {
           hint="Optional. Applied as a cost-center tag on every resource this domain provisions."
           :error="fieldErrors.costCenter"
         />
+        <fieldset
+          v-if="config.environments.length > 0"
+          class="flex flex-col gap-3 rounded-lg border border-border p-4"
+        >
+          <legend class="px-1 text-sm font-medium text-muted">Per-environment accounts (optional)</legend>
+          <p class="text-xs text-faint">
+            Provisioning places every environment in the owner account unless you pin one here.
+            Overrides are fixed once the domain is registered, and each account needs the
+            trust-stack deployed before approval.
+          </p>
+          <NxInput
+            v-for="environment in config.environments"
+            :key="environment"
+            v-model="accountOverrides[environment]"
+            :label="`${environment} account ID`"
+            placeholder="Default: owner account"
+            :error="fieldErrors[`override-${environment}`]"
+          />
+        </fieldset>
         <div class="mt-2 flex justify-end gap-2">
           <NuxtLink to="/domains"><NxButton variant="secondary">Cancel</NxButton></NuxtLink>
           <NxButton type="submit" :loading="busy">Submit request</NxButton>

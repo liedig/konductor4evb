@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use konductor_common::api;
 use konductor_common::dynamodb::{
-    deserialize_pagination_token, get_s, get_string_set, s, serialize_pagination_token,
+    attr_to_string_map, deserialize_pagination_token, get_s, get_string_list, get_string_set, s,
+    serialize_pagination_token,
 };
 use konductor_common::error::ControlPlaneError;
 use konductor_common::models::DomainStatus;
@@ -80,6 +81,11 @@ pub async fn handle(
                         "owningTeam": get_s(item, "owningTeam"),
                         "createdAt": get_s(item, "createdAt"),
                         "taskToken": get_s(item, "taskToken"),
+                        "environmentAccounts": konductor_common::environment_accounts::effective_accounts(
+                            attr_to_string_map(item, "environmentAccounts").as_ref(),
+                            &get_s(item, "ownerAccountId").unwrap_or_default(),
+                            &get_string_list(item, "environments").unwrap_or_default(),
+                        ),
                     })
                 })
                 .collect();
@@ -147,6 +153,10 @@ mod tests {
             ("owningTeam".to_string(), s(team)),
             ("createdAt".to_string(), s("2026-08-11T00:00:00Z")),
             ("taskToken".to_string(), s("AQABAAAA...task-token")),
+            (
+                "environments".to_string(),
+                AttributeValue::L(vec![s("dev"), s("staging"), s("prod")]),
+            ),
         ])
     }
 
@@ -185,6 +195,37 @@ mod tests {
         assert_eq!(regs[0]["owningTeam"], "team-orders");
         assert_eq!(regs[0]["taskToken"], "AQABAAAA...task-token");
         assert_eq!(regs[0]["ownerEmail"], "orders@example.com");
+    }
+
+    #[tokio::test]
+    async fn registrations_carry_the_resolved_environment_account_map() {
+        set_env();
+        let mut overridden = pending_item("orders", "team-orders");
+        overridden.insert(
+            "environmentAccounts".to_string(),
+            AttributeValue::M(HashMap::from([("prod".to_string(), s("999988887777"))])),
+        );
+        let mapless = pending_item("billing", "team-billing");
+        let query = pending_query_rule(vec![overridden, mapless]);
+        let ddb = mock_client!(aws_sdk_dynamodb, [&query]);
+
+        let resp = handle(&ddb, event_with(oauth_ctx("[\"platform-admin\"]", "[]")))
+            .await
+            .unwrap();
+        assert_eq!(resp["statusCode"], 200);
+
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        let regs = body["registrations"].as_array().unwrap();
+        assert_eq!(
+            regs[0]["environmentAccounts"],
+            json!({"dev": "111122223333", "staging": "111122223333", "prod": "999988887777"}),
+            "sparse override resolved for the approval card"
+        );
+        assert_eq!(
+            regs[1]["environmentAccounts"],
+            json!({"dev": "111122223333", "staging": "111122223333", "prod": "111122223333"}),
+            "a mapless registration resolves to the default account everywhere"
+        );
     }
 
     #[tokio::test]

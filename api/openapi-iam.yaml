@@ -1015,6 +1015,12 @@ components:
           type: string
           maxLength: 256
           description: Optional governed cost-allocation tag propagated to every provisioned resource. The only accepted custom tag; arbitrary tag maps are rejected.
+        environmentAccounts:
+          type: object
+          additionalProperties:
+            type: string
+            pattern: "^[0-9]{12}$"
+          description: Optional sparse map pinning individual platform environments to AWS accounts other than ownerAccountId. Keys must name configured platform environments (validated at registration); environments without an entry use ownerAccountId. Duplicate accounts across environments are legal. Immutable after registration.
       example:
         domainName: sales
         ownerAccountId: "111122223333"
@@ -1076,6 +1082,13 @@ components:
           items:
             type: string
           example: ["dev", "staging", "prod"]
+        environmentAccounts:
+          type: object
+          description: Effective account per environment (sparse registration overrides resolved against ownerAccountId). Absent on responses from stacks predating the field.
+          additionalProperties:
+            type: string
+            pattern: "^[0-9]{12}$"
+          example: {"dev": "111122223333", "staging": "111122223333", "prod": "444455556666"}
         costCenter:
           type: string
           description: Governed cost-center tag value set at registration or by update.
