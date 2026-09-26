@@ -45,3 +45,5 @@ No application code, deployed settings, group memberships, or main specs are cha
 - Configuration change authorization, audit history, activation, failure recovery, and behavior for existing installations.
 
 Resolve these choices before creating delta specs, a design, or implementation tasks.
+
+Resolved 2026-09-24 in design.md (D1–D6): deploy-time contract with deployment parameters as the single source of truth; fixed-at-setup versus updateable lifecycle classes; environment membership changes deferred to a named future change (`extend-platform-environments`); Cognito-native access administration with no Konductor bootstrap mechanism; preflight validation covering notification pairing and SES prerequisites; customer configuration kept in a gitignored file with a committed example.

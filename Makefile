@@ -1,4 +1,4 @@
-.PHONY: help build test check smoke smoke-subscription deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions web-dev deploy-web clean
+.PHONY: help build test check smoke smoke-subscription validate-config deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions web-dev deploy-web clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
@@ -23,7 +23,7 @@ help: ## Show this help message
 	@printf "  $(BOLD)Build & Test$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(build|test|check|clean):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Deploy$(RESET)\n"
-	@awk 'BEGIN {FS = ":.*?## "} /^(deploy|deploy-core|deploy-notifications|deploy-trust):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^(validate-config|deploy|deploy-core|deploy-notifications|deploy-trust):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Teardown$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(teardown-.+):.*## / {printf "    $(YELLOW)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Smoke Test$(RESET) $(DIM)(manual — never run by deploy or CI)$(RESET)\n"
@@ -41,6 +41,7 @@ help: ## Show this help message
 	@printf "    $(DIM)NOTIFICATION_SENDER_EMAIL$(RESET)    required for: deploy-notifications\n"
 	@printf "    $(DIM)PLATFORM_OPERATOR_EMAIL$(RESET)      required for: deploy-notifications\n"
 	@printf "    $(DIM)APP_PROFILE$(RESET)                  required for: deploy-trust, teardown-trust\n"
+	@printf "    $(DIM)PLATFORM_PROFILE$(RESET)             optional for: validate-config, deploy-core, deploy-trust (default: $(CYAN)$(PLATFORM_PROFILE)$(RESET))\n"
 	@printf "    $(DIM)ORGANIZATION$(RESET)                 optional for: deploy-trust (default: $(CYAN)$(ORGANIZATION)$(RESET))\n"
 	@printf "    $(DIM)DOMAIN_STATUS$(RESET)               optional for: list-domains (filter by status)\n"
 	@printf "    $(DIM)OWNER_ACCOUNT_ID$(RESET)            optional for: list-domains (filter by owner)\n"
@@ -282,8 +283,13 @@ endif
 
 deploy: build deploy-core ## Build then deploy the core stack
 
-deploy-core: build ## Deploy the Konductor core stack (builds first)
-	sam deploy --config-file samconfig-core.toml
+validate-config: ## Validate konductor-platform.toml against the configuration contract
+	@python3 scripts/validate-config.py --region $(AWS_REGION) --profile $(PLATFORM_PROFILE)
+
+deploy-core: build ## Deploy the Konductor core stack (validates konductor-platform.toml, builds, deploys)
+	@set -euo pipefail; \
+	OVERRIDES=$$(python3 scripts/validate-config.py --region $(AWS_REGION) --profile $(PLATFORM_PROFILE) --render); \
+	sam deploy --config-file samconfig-core.toml --parameter-overrides "$$OVERRIDES"
 
 deploy-notifications: ## Deploy the notifications stack (SES identities)
 ifndef NOTIFICATION_SENDER_EMAIL

@@ -76,7 +76,7 @@ acme-prod-billing-integration-dlq     (Domain account DLQ)
 acme-prod-billing-dashboard           (CloudWatch dashboard)
 ```
 
-The domain pattern is configurable via the `NamespacePattern` SAM parameter (default: `{org}-{env}-{domain}`). The `NamespaceResolver` in `lib/konductor-common/src/namespace.rs` handles domain-resource name generation. The platform pattern (`konductor-*`) is fixed.
+The domain pattern is configurable via the `NamespacePattern` SAM parameter (default: `{org}-{env}-{domain}`), fixed at setup—syntax and lifecycle are defined in the [configuration contract](configuration.md). The `NamespaceResolver` in `lib/konductor-common/src/namespace.rs` handles domain-resource name generation. The platform pattern (`konductor-*`) is fixed.
 
 The `konductor` name is reserved—the register-domain handler rejects it so no domain can collide with the platform namespace.
 

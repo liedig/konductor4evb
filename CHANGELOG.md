@@ -7,6 +7,12 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Add the customer platform configuration flow: a published
+  [configuration contract](docs/reference/configuration.md), template
+  parameter constraints, a `make validate-config` preflight with a
+  fixed-at-setup drift guard, and customer values moved out of committed
+  deploy configuration into gitignored `konductor-platform.toml`.
+  [Decision](docs/decisions/configure-customer-platform.md).
 - Reorganize documentation around reader tasks, focused architecture topics,
   reference pages, and operations runbooks.
 - Preserve decision history in [topic-indexed records](docs/decisions/README.md)

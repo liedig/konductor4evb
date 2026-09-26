@@ -166,3 +166,14 @@ These examples were preserved, not promoted to executable fixtures.
 The earlier style pass also left `409 s`, `400 s`, and `503 s` in some HTTP
 failure prose. Review these as status-code plurals, not timing claims. No
 runtime or latency meaning is inferred from them during this reorganization.
+
+## D12
+
+**SES parameter names in the architecture spec.** The
+[system-architecture spec](../../openspec/specs/system-architecture/spec.md)
+names `ApprovalFromEmail` and `ApprovalToEmail` as the SES parameters. The
+[core template](../../konductor-core-stack.yaml) declares
+`NotificationSenderEmail` and `PlatformOperatorEmail`; the spec's names exist
+nowhere in templates or code. The `configure-customer-platform` change uses
+the template names. Review whether the spec requirement should be corrected to
+the implemented names; not resolved here.

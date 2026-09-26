@@ -14,5 +14,6 @@ stack_name = "konductor-core"
 resolve_s3 = true
 capabilities = "CAPABILITY_NAMED_IAM"
 confirm_changeset = false
-parameter_overrides = "Organization=acme AwsOrganizationArn=arn:aws:organizations::444433332222:organization/o-lipnxj8tgf NotificationSenderEmail=sliedig+konductor@example.com PlatformOperatorEmail=sliedig+konductor@example.com"
 tags = "Application=konductor Component=core auto-delete=no"
+# Customer parameter values come from konductor-platform.toml (gitignored),
+# validated and rendered by scripts/validate-config.py via `make deploy-core`.

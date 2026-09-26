@@ -42,6 +42,7 @@ before treating an older claim as a current requirement.
 
 ## Trust and operations
 
+- [Platform configuration contract and preflight](configure-customer-platform.md)
 - [Trust-stack deployment targets](add-trust-stack-deploy.md)
 - [Organization guardrails and ownership-aware console links](protect-domain-managed-resources.md)
 - [Single installation entry point](installation-guide.md)

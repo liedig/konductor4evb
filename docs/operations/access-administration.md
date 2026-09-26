@@ -101,11 +101,23 @@ aws cognito-idp admin-set-user-password \
   --permanent
 ```
 
+## Platform roles are Cognito-native
+
+Group membership is managed only in Amazon Cognito—by an authorized operator through the console or CLI (or `make seed-users` in development). No Konductor API route can create users, change group membership, or grant a platform role:
+
+- Bindings carry only domain-scoped roles (`publisher`, `subscriber`, `owner`); the platform-role tokens are not valid binding roles.
+- Entitlements carry schema coverage only—no role or principal fields.
+- No deployed function holds a Cognito group-mutation permission.
+
+An invariant test (`lib/konductor-common/tests/platform_role_isolation.rs`) pins these properties and fails if an API-reachable path to group membership is introduced.
+
+Two consequences follow. First, no caller can self-escalate through the API: becoming a platform administrator requires Cognito access in the platform account, never a Konductor permission. Second, the platform cannot lock itself out—because `platform-admin` resolves from the controlled Cognito group and never from the grant table, binding misconfiguration or revocation cannot remove the ability to administer bindings (the break-glass property).
+
 ## Bootstrapping role bindings
 
-Resource authorization decisions are answered by the grant engine from the `konductor-authorization-bindings` table: a principal (a Cognito team group, issuer-qualified, or an AWS account) holds a role (`publisher` or `subscriber`) on a domain. Until a binding exists, every resource-scoped action by that principal is denied.
+Resource authorization decisions are answered by the grant engine from the `konductor-authorization-bindings` table: a principal (a Cognito team group, issuer-qualified, or an AWS account) holds a role (`publisher`, `subscriber`, or `owner`) on a domain. Until a binding exists, every resource-scoped action by that principal is denied.
 
-Binding administration cannot deadlock against an empty table: the `platform-admin` global role resolves from the controlled Cognito group (`platform-admin`), never from the grant table. Any platform-admin access token can always create the first bindings.
+Binding administration cannot deadlock against an empty table (see [Platform roles are Cognito-native](#platform-roles-are-cognito-native)). Any platform-admin access token can always create the first bindings.
 
 ### Seeding developer bindings
 

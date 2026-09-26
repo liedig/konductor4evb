@@ -7,6 +7,7 @@ Use these pages to look up a contract or identifier. Procedures belong in
 
 | Topic | Reference |
 |---|---|
+| Platform settings, syntax, and lifecycle | [Configuration contract](configuration.md) |
 | API routes and request/response schemas | [API contracts](api.md) |
 | OAuth claims and global-role mapping | [Access-token claims](authentication.md) |
 | Business-event identity and metadata | [Canonical event envelope](event-envelope.md) |

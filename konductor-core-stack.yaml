@@ -6,20 +6,38 @@ Parameters:
   Environments:
     Type: CommaDelimitedList
     Default: "dev,staging,prod"
+    AllowedPattern: "^[a-z0-9][a-z0-9-]{0,31}(,[a-z0-9][a-z0-9-]{0,31})*$"
     Description: >
       Comma-delimited list of environments every approved domain will be
-      provisioned into. Platform-team configured; domain requesters have no
-      say. Each entry must match ^[a-z0-9][a-z0-9-]{0,31}$.
+      provisioned into (no spaces around commas). Platform-team configured;
+      domain requesters have no say. Each entry must match
+      ^[a-z0-9][a-z0-9-]{0,31}$ and be unique; 1-10 entries (API stage quota).
+      Fixed at setup: changing the list on an existing installation means a
+      new deployment.
   Organization:
     Type: String
-    Description: Organization identifier used in resource naming
+    AllowedPattern: "^[a-z0-9]([a-z0-9-]{0,41}[a-z0-9])$"
+    Description: >
+      Organization identifier used in resource naming: 2-43 lowercase
+      letters, digits, or hyphens, starting and ending with a letter or
+      digit. The 43-character bound derives from the 64-character IAM
+      role-name limit for the <org>-konductor-trust-role deployed into each
+      domain account. Fixed at setup: changing it on an existing
+      installation means a new deployment.
   NamespacePattern:
     Type: String
     Default: "{org}-{env}-{domain}"
+    MaxLength: 128
+    AllowedPattern: "^([a-z0-9-]|\\{org\\}|\\{env\\}|\\{domain\\})+$"
     Description: >
       Naming convention for domain resources (per-env buses, schema registries,
-      DLQs, dashboards, alarms). Does not apply to Konductor platform resources,
-      which use the fixed {org}-konductor-* pattern.
+      DLQs, dashboards, alarms). Must contain the {org}, {env}, and {domain}
+      placeholders (enforced by preflight validation); literal characters are
+      restricted to lowercase, digits, and hyphens so substituted names stay
+      valid for the strictest services (SQS queue names). Does not apply to
+      Konductor platform resources, which use the fixed {org}-konductor-*
+      pattern. Fixed at setup: changing it on an existing installation means a
+      new deployment.
   AwsOrganizationArn:
     Type: String
     Description: >-

@@ -63,7 +63,7 @@ Konductor is a singleton per organization. Platform resources follow the fixed `
 |---|---|---|
 | `Organization` | `acme` | Short identifier for your organization |
 
-This value is immutable once deployed. Stack names are fixed (`konductor-core`, `konductor-notifications`, `konductor-trust`)—one deployment per AWS organization.
+This value is immutable once deployed, as are the environments list, namespace pattern, and AWS Organization ARN—see the lifecycle classes in the [configuration contract](../reference/configuration.md). Stack names are fixed (`konductor-core`, `konductor-notifications`, `konductor-trust`)—one deployment per AWS organization.
 
 ---
 
@@ -109,7 +109,7 @@ aws ses get-identity-verification-attributes \
   --region <region>
 ```
 
-Both identities should show `VerificationStatus: Success`.
+Both identities should show `VerificationStatus: Success`. `make validate-config` re-checks this status in Phase 2 before a core deploy enables notifications.
 
 Capture the email addresses for Phase 2:
 
@@ -134,52 +134,44 @@ make test     # cargo test --workspace
 make build    # sam build (Rust cross-compilation for arm64)
 ```
 
+### Configure the platform
+
+Customer values live in `konductor-platform.toml` at the repository root. The file is gitignored—it is the one place customer values live. Create it from the committed example and fill in your values:
+
+```bash
+cp konductor-platform.toml.example konductor-platform.toml
+```
+
+Every setting, its syntax, default, and lifecycle class is defined in the [configuration contract](../reference/configuration.md). Four settings are fixed at setup (`organization`, `aws_organization_arn`, `environments`, `namespace_pattern`); the rest can change later by editing the file and redeploying.
+
+Validate before deploying:
+
+```bash
+make validate-config
+```
+
+The preflight checks the contract rules and the SES verification status of both notification addresses. Once a stack exists, it also refuses fixed-at-setup changes against the deployed stack.
+
 ### Deploy
 
-For a first-time deployment with guided prompts:
-
 ```bash
-sam deploy --config-file samconfig-core.toml --guided
+make deploy-core
 ```
 
-For repeatable deployments using the defaults in `samconfig-core.toml`:
+This runs the same validation first, then deploys with parameter overrides rendered from `konductor-platform.toml`—deploy and validation cannot read different values.
+
+> **On `environments`**: this is an org-wide governance setting, fixed at setup. Every domain registered and approved on this Konductor deployment is provisioned across the full list. The preflight refuses a changed list against a deployed stack; adding or removing environments on a live platform is a provisioning-shaped migration deferred to a future change.
+
+### Existing installations: adopt the configuration file
+
+Installations deployed before this flow have their values in `samconfig-core.toml` parameter overrides or deploy history. Generate the file from the deployed stack instead of retyping values:
 
 ```bash
-sam deploy --config-file samconfig-core.toml
+python3 scripts/validate-config.py --init-from-stack > konductor-platform.toml
+make validate-config
 ```
 
-#### Required parameters
-
-Supply the following parameters for the core stack.
-
-| Parameter | Description | Example |
-|---|---|---|
-| `Organization` | Organization identifier used in Konductor resource naming | `acme` |
-| `AwsOrganizationArn` | AWS organization ARN (for RAM sharing of domain namespaces). Distinct from `Organization`. | `arn:aws:organizations::123456789012:organization/o-abc123` |
-
-#### Optional parameters
-
-Use these parameters to configure notifications and domain environments.
-
-| Parameter | Description | Default |
-|---|---|---|
-| `NotificationSenderEmail` | SES sender address used as the From on all Konductor notification emails (from Phase 1) | `""` (disabled) |
-| `PlatformOperatorEmail` | SES recipient that receives domain approval requests—the platform team inbox (from Phase 1) | `""` (disabled) |
-| `NamespacePattern` | Resource naming convention | `{org}-{env}-{domain}` |
-| `Environments` | Comma-delimited list of environments every approved domain is provisioned into. Platform-team controlled; domain requesters cannot override. Each entry must match `^[a-z0-9][a-z0-9-]{0,31}$`. | `dev,staging,prod` |
-
-> **On `Environments`**: this is an org-wide governance setting. Every domain registered and approved on this Konductor deployment is provisioned across the full list. To add or remove an environment, update the parameter and redeploy — the change applies to *future* registrations only; existing domains keep the environment list they were registered with.
-
-If you completed Phase 1, pass the email addresses:
-
-```bash
-sam deploy --config-file samconfig-core.toml \
-  --parameter-overrides \
-    Organization=acme \
-    AwsOrganizationArn=arn:aws:organizations::123456789012:organization/o-abc123 \
-    NotificationSenderEmail=konductor-sender@example.com \
-    PlatformOperatorEmail=platform-team@example.com
-```
+Review the generated file—settings absent from the deployed stack's parameters fall back to the contract defaults. Once validation passes, `make deploy-core` deploys with exactly the validated values. The committed `samconfig-core.toml` no longer carries parameter overrides.
 
 ### Confirm the platform notifications subscription
 

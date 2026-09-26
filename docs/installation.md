@@ -17,8 +17,8 @@ Use [installation](operations/installation.md). This page preserves links from o
 | <a id="phase-2--deploy-the-konductor-core-stack"></a>Phase 2 — deploy the Konductor core stack | [Open section](operations/installation.md#phase-2--deploy-the-konductor-core-stack) |
 | <a id="build-and-test-locally"></a>Build and test locally | [Open section](operations/installation.md#build-and-test-locally) |
 | <a id="deploy"></a>Deploy | [Open section](operations/installation.md#deploy) |
-| <a id="required-parameters"></a>Required parameters | [Open section](operations/installation.md#required-parameters) |
-| <a id="optional-parameters"></a>Optional parameters | [Open section](operations/installation.md#optional-parameters) |
+| <a id="required-parameters"></a>Required parameters | [Open section](reference/configuration.md#settings) |
+| <a id="optional-parameters"></a>Optional parameters | [Open section](reference/configuration.md#settings) |
 | <a id="confirm-the-platform-notifications-subscription"></a>Confirm the platform notifications subscription | [Open section](operations/installation.md#confirm-the-platform-notifications-subscription) |
 | <a id="capture-stack-outputs"></a>Capture stack outputs | [Open section](operations/installation.md#capture-stack-outputs) |
 | <a id="phase-3--onboard-a-domain-account"></a>Phase 3 — onboard a domain account | [Open section](operations/trust-stack-deployment.md#installation-handoff-three-role-recipe) |
