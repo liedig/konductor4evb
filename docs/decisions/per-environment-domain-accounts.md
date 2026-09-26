@@ -23,6 +23,6 @@
 
 ## Evidence
 
-[OpenSpec change](../../openspec/changes/per-environment-domain-accounts/proposal.md) (pre-archive path; the archive moves it under `openspec/changes/archive/`). The recorded date above is not necessarily the archive or merge date.
+[OpenSpec change](../../openspec/changes/archive/2026-09-26-per-environment-domain-accounts/proposal.md) (archived 2026-09-26). The recorded date above is not necessarily the archive or merge date.
 
 [Decision index](README.md)
