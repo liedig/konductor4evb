@@ -200,7 +200,6 @@ mod tests {
     use aws_sdk_dynamodb::operation::get_item::GetItemInput;
     use aws_sdk_dynamodb::operation::query::QueryInput;
     use aws_sdk_dynamodb::operation::transact_write_items::TransactWriteItemsInput;
-    use aws_sdk_dynamodb::types::AttributeValue;
     use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
     use konductor_common::dynamodb::get_s;
     use konductor_common::grant::{BindingPrincipal, ResourceRole};
