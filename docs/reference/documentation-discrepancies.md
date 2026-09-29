@@ -142,7 +142,7 @@ Resolution: the template selectors are account-agnostic
 `arn:aws:sqs:*:*:${Organization}-*`) and a raw-template regression test
 (`resource_selectors_are_account_agnostic`) locks the wildcard form. Live
 enforcement was verified in the authorized
-[sandbox acceptance run](../../openspec/changes/protect-domain-managed-resources/sandbox-acceptance-evidence.md)
+[sandbox acceptance run](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance-evidence.md)
 (13 denied operations, each attributed by AWS to the enforcing SCP). The
 fixture evaluator's `AccountId → *` normalization remains as an evaluation
 convenience and is not cited as enforcement evidence. One residual from the

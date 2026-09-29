@@ -11,7 +11,7 @@ Older rationale is available through the [decision index](docs/decisions/README.
   embed the deployer's account ID (`AWS::AccountId`), so the deny ceiling
   actually matches member-account resources. Redeploy `konductor-guardrails`
   stacks created before this fix. Enforcement verified in an authorized
-  [sandbox run](openspec/changes/protect-domain-managed-resources/sandbox-acceptance-evidence.md).
+  [sandbox run](openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance-evidence.md).
 - Add the customer platform configuration flow: a published
   [configuration contract](docs/reference/configuration.md), template
   parameter constraints, a `make validate-config` preflight with a

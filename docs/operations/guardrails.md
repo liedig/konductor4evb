@@ -8,7 +8,7 @@ This is an optional organization-admin operation. It is separate from installing
 > [D09](../reference/documentation-discrepancies.md#d09) was fixed
 > (account-agnostic selectors with a raw-template regression test) and
 > verified by the authorized
-> [sandbox acceptance run](../../openspec/changes/protect-domain-managed-resources/sandbox-acceptance-evidence.md)
+> [sandbox acceptance run](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance-evidence.md)
 > on 2026-09-29.
 
 ## Authorization boundary
@@ -91,7 +91,7 @@ aws cloudformation deploy \
    they do **not** prove live enforcement.
 2. **Authorized sandbox verification**: attach the SCPs to an isolated
    sandbox account/OU first and run the full acceptance procedure in
-   `openspec/changes/protect-domain-managed-resources/sandbox-acceptance.md`
+   `openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance.md`
    (positive team operations, denied administrator operations, Konductor
    provisioning/compensation, recovery path). Retain the recorded
    evidence: policy versions, targets, principals, observed AWS outcomes.
@@ -153,10 +153,10 @@ The guardrail SCPs protect exactly four surfaces on `{org}-*` resources: EventBr
 ## Design and acceptance evidence
 
 - [Guardrail decision](../decisions/protect-domain-managed-resources.md)
-- [Enforcement matrix](../../openspec/changes/protect-domain-managed-resources/enforcement-matrix.md)
-- [Authorized sandbox procedure](../../openspec/changes/protect-domain-managed-resources/sandbox-acceptance.md)
-- [Sandbox acceptance evidence](../../openspec/changes/protect-domain-managed-resources/sandbox-acceptance-evidence.md)
-- [Acceptance tasks](../../openspec/changes/protect-domain-managed-resources/tasks.md) (complete)
+- [Enforcement matrix](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/enforcement-matrix.md)
+- [Authorized sandbox procedure](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance.md)
+- [Sandbox acceptance evidence](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance-evidence.md)
+- [Acceptance tasks](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/tasks.md) (complete)
 
 The account-selector discrepancy (D09) is resolved and a sandbox pass is
 recorded in the acceptance evidence (2026-09-29; `KonductorProtectedResources`

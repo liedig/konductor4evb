@@ -27,7 +27,7 @@
 
 ## Evidence
 
-[OpenSpec change](../../openspec/changes/protect-domain-managed-resources/proposal.md). The recorded date above is not necessarily the archive or merge date.
+[OpenSpec change](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/proposal.md). The recorded date above is not necessarily the archive or merge date.
 
 ## Current relevance
 
