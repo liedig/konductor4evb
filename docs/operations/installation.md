@@ -205,7 +205,7 @@ Also note the `IamApiEndpoint` and `OAuthApiEndpoint` outputs—the smoke test u
 
 Follow [trust-stack deployment](trust-stack-deployment.md), including its [unresolved role-parameter discrepancy](../reference/documentation-discrepancies.md#d03). Keep the platform stack outputs from Phase 2 available.
 
-Organization guardrails are optional and separately authorized. They are not part of the ordinary installation path. See [guardrail deployment and verification](guardrails.md), including the unresolved account-selector issue, before considering attachment.
+Organization guardrails are optional and separately authorized. They are not part of the ordinary installation path. See [guardrail deployment and verification](guardrails.md), including the recorded sandbox acceptance evidence, before considering attachment.
 
 ## Phase 4 — smoke test
 

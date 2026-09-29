@@ -24,4 +24,5 @@ not authorization to deploy, change access, activate a revision, or delete data.
 
 [Organization guardrails](guardrails.md) require organization-admin approval,
 recovery-first bootstrap, and sandbox evidence. They are not an ordinary
-installation phase. Review the unresolved [account-selector issue](../reference/documentation-discrepancies.md#d09).
+installation phase. Enforcement was verified in the authorized
+[sandbox acceptance run](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance-evidence.md).
