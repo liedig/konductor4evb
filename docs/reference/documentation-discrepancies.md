@@ -126,19 +126,28 @@ requirements or certify the deployed retention/topology.
 
 ## D09
 
-**Guardrail account selectors and enforcement evidence.**
-The [guardrail template](../../guardrail-stack.yaml) uses `${AWS::AccountId}`
-in bus and queue resource selectors. CloudFormation resolves it to the stack's
-account, not each SCP attachment target. A management-account stack therefore
-selects that account's resources rather than the member-account buses and queues.
-The [local fixtures](../../lib/konductor-common/tests/guardrail_fixtures.rs)
-replace the value with `*`, so their evaluation is not deployment-equivalent.
+**Guardrail account selectors and enforcement evidence.** — **Resolved 2026-09-29.**
 
-No selector or fixture repair is included here. Do not claim enforcement from
-template validation or fixture success. Review selectors and deployment-equivalent
-tests before a separately authorized
-[sandbox acceptance run](../../openspec/changes/protect-domain-managed-resources/sandbox-acceptance.md).
-The [guardrail runbook](../operations/guardrails.md) remains evidence-gated.
+Original finding: the [guardrail template](../../guardrail-stack.yaml) used
+`${AWS::AccountId}` in bus and queue resource selectors. CloudFormation
+resolves it to the stack's account, not each SCP attachment target, so a
+management-account stack selected that account's resources rather than the
+member-account buses and queues. The
+[local fixtures](../../lib/konductor-common/tests/guardrail_fixtures.rs)
+replaced the value with `*`, so their evaluation was not
+deployment-equivalent.
+
+Resolution: the template selectors are account-agnostic
+(`arn:aws:events:*:*:event-bus/${Organization}-*`,
+`arn:aws:sqs:*:*:${Organization}-*`) and a raw-template regression test
+(`resource_selectors_are_account_agnostic`) locks the wildcard form. Live
+enforcement was verified in the authorized
+[sandbox acceptance run](../../openspec/changes/protect-domain-managed-resources/sandbox-acceptance-evidence.md)
+(13 denied operations, each attributed by AWS to the enforcing SCP). The
+fixture evaluator's `AccountId → *` normalization remains as an evaluation
+convenience and is not cited as enforcement evidence. One residual from the
+same family: `DenyPolicyVersionRollback` still binds `AWS::AccountId`; see
+the coverage limits in the [guardrail runbook](../operations/guardrails.md).
 
 ## D10
 

@@ -99,7 +99,10 @@ Resources:
               - events:PutPermission
               - events:RemovePermission
             Resource:
-              - !Sub 'arn:${AWS::Partition}:events:*:${AWS::AccountId}:event-bus/${Organization}-*'
+              # Account-agnostic selector: attachment targets decide which
+              # accounts the policy covers; ${AWS::AccountId} would resolve to
+              # the stack deployer's account and match nothing in members.
+              - !Sub 'arn:${AWS::Partition}:events:*:*:event-bus/${Organization}-*'
             Condition:
               StringNotEquals:
                 aws:PrincipalArn:
@@ -113,7 +116,7 @@ Resources:
               - events:TagResource
               - events:UntagResource
             Resource:
-              - !Sub 'arn:${AWS::Partition}:events:*:${AWS::AccountId}:event-bus/${Organization}-*'
+              - !Sub 'arn:${AWS::Partition}:events:*:*:event-bus/${Organization}-*'
             Condition:
               StringNotEquals:
                 aws:PrincipalArn:
@@ -129,7 +132,7 @@ Resources:
               - sqs:SetQueueAttributes
               - sqs:PurgeQueue
             Resource:
-              - !Sub 'arn:${AWS::Partition}:sqs:*:${AWS::AccountId}:${Organization}-*'
+              - !Sub 'arn:${AWS::Partition}:sqs:*:*:${Organization}-*'
             Condition:
               StringNotEquals:
                 aws:PrincipalArn:
@@ -143,7 +146,7 @@ Resources:
               - sqs:TagQueue
               - sqs:UntagQueue
             Resource:
-              - !Sub 'arn:${AWS::Partition}:sqs:*:${AWS::AccountId}:${Organization}-*'
+              - !Sub 'arn:${AWS::Partition}:sqs:*:*:${Organization}-*'
             Condition:
               StringNotEquals:
                 aws:PrincipalArn:

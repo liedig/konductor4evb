@@ -845,3 +845,35 @@ fn fixture_table_covers_required_scenarios() {
         .any(|r| r.expected == Expected::Denied && r.action == "organizations:LeaveOrganization");
     assert!(has_leave_org, "missing LeaveOrganization denial");
 }
+
+/// Regression guard for the 2026-09-29 sandbox acceptance finding: the
+/// events/sqs resource selectors embedded `${AWS::AccountId}`, which
+/// resolves to the *stack deployer's* account (the org admin account),
+/// while the SCP attaches to member accounts whose resource ARNs carry
+/// member account IDs — so the selectors matched nothing and no deny
+/// fired. The evaluator above maps `${AWS::AccountId}` to `*` when
+/// resolving the template, which masked the bug in fixtures; assert on
+/// the raw template text instead. Attachment scope (TargetOuIds /
+/// TargetAccountIds), not the selector, decides which accounts a policy
+/// covers.
+#[test]
+fn resource_selectors_are_account_agnostic() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../")
+        .join(GUARDRAIL_TEMPLATE);
+    let raw = std::fs::read_to_string(&path).expect("guardrail template must be readable");
+
+    for line in raw
+        .lines()
+        .filter(|l| l.contains("!Sub") && l.contains("arn:"))
+    {
+        for service in ["events", "sqs"] {
+            let bad = format!(":{service}:*:${{AWS::AccountId}}:");
+            assert!(
+                !line.contains(&bad),
+                "resource selector hard-codes the deployer account ({bad}); \
+                 SCPs attach to member accounts, so the account field must be `*`: {line}"
+            );
+        }
+    }
+}

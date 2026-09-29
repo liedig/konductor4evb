@@ -4,7 +4,12 @@
 
 This is an optional organization-admin operation. It is separate from installing Konductor and from granting cross-account trust.
 
-> **Review pending:** [D09](../reference/documentation-discrepancies.md#d09) records conflicting or unverified guidance retained from the previous documentation. This reorganization does not resolve it.
+> **D09 resolved:** the account-selector defect recorded as
+> [D09](../reference/documentation-discrepancies.md#d09) was fixed
+> (account-agnostic selectors with a raw-template regression test) and
+> verified by the authorized
+> [sandbox acceptance run](../../openspec/changes/protect-domain-managed-resources/sandbox-acceptance-evidence.md)
+> on 2026-09-29.
 
 ## Authorization boundary
 
@@ -49,6 +54,18 @@ of `make deploy-*`.
    SCP. Attaching guardrails without a working recovery path risks lockout
    (the ultimate fallback is central SCP detachment by the organization
    administrator).
+
+   Exemption is not a grant. The SCPs exempt the recovery role's exact ARN
+   from the deny ceiling, but the role's own identity policy must still
+   allow the maintenance **and recreation** set on the trust role, or the
+   exemption cannot be exercised. Minimum grant set on
+   `arn:aws:iam::<account>:role/{org}-konductor-trust-role*`:
+   `iam:GetRole`, `iam:CreateRole`, `iam:DeleteRole`, `iam:UpdateRole`,
+   `iam:UpdateAssumeRolePolicy`, `iam:TagRole`, `iam:UntagRole`,
+   `iam:PutRolePolicy`, `iam:DeleteRolePolicy`, `iam:AttachRolePolicy`,
+   `iam:DetachRolePolicy`. (Sandbox evidence: a recovery role granted only
+   read and maintenance actions received a plain IAM deny—correctly without
+   SCP attribution—when recreating the trust role.)
 2. **Resource inventory.** Confirm existing `{org}-*` buses, queues, and
    roles in the target accounts match the supported naming selectors.
    Resources outside the selector patterns are not covered.
@@ -100,6 +117,15 @@ protection gap while detached.
 
 - SCPs do **not** apply to the AWS Organizations **management account** —
   principals operating there bypass every statement.
+- The version-rollback deny (`DenyPolicyVersionRollback`, covering
+  `{org}-konductor-*` customer managed policies) takes effect only when the
+  platform account is a **member** account. The statement binds
+  `AWS::AccountId` at deploy time and SCPs are never evaluated in the
+  management account, so in a co-located deployment (platform account is
+  the management account) it is inert; in a split deployment it binds the
+  stack deployer's account rather than the platform account. Either way,
+  the real protection for those managed policies is the IAM grant surface
+  of the account that owns them.
 - **Service-linked roles** are exempt from SCP evaluation for actions they
   are designed to perform.
 - Organization administrators remain trusted and retain full control of
@@ -129,6 +155,9 @@ The guardrail SCPs protect exactly four surfaces on `{org}-*` resources: EventBr
 - [Guardrail decision](../decisions/protect-domain-managed-resources.md)
 - [Enforcement matrix](../../openspec/changes/protect-domain-managed-resources/enforcement-matrix.md)
 - [Authorized sandbox procedure](../../openspec/changes/protect-domain-managed-resources/sandbox-acceptance.md)
-- [Open acceptance tasks](../../openspec/changes/protect-domain-managed-resources/tasks.md)
+- [Sandbox acceptance evidence](../../openspec/changes/protect-domain-managed-resources/sandbox-acceptance-evidence.md)
+- [Acceptance tasks](../../openspec/changes/protect-domain-managed-resources/tasks.md) (complete)
 
-The account-selector discrepancy is unresolved. No sandbox pass is recorded by this documentation change.
+The account-selector discrepancy (D09) is resolved and a sandbox pass is
+recorded in the acceptance evidence (2026-09-29; `KonductorProtectedResources`
+content hash `738f33ca…9663`).
