@@ -7,6 +7,15 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Publish the documentation as a static site (MkDocs Material) built from
+  `docs/`, with a strict link-integrity gate on pull requests and GitHub
+  Pages deployment from `main`. Links that point outside the docs tree
+  resolve to GitHub file views at build time; source documents are
+  unchanged. The strategy documents stay in the repository but off the
+  site. Navigation follows the reader journey (setup, then domain
+  onboarding, then reference), and new orientation pages cover platform
+  configuration, domain prerequisites, and what an ACTIVE domain provides.
+  [Proposal](openspec/changes/publish-docs-site/proposal.md).
 - Fix the guardrail SCP resource selectors: bus and queue patterns no longer
   embed the deployer's account ID (`AWS::AccountId`), so the deny ceiling
   actually matches member-account resources. Redeploy `konductor-guardrails`

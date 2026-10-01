@@ -77,3 +77,55 @@ Validate local links and anchors, heading structure, tables, and fenced examples
 For a split or move, compare content across destinations rather than requiring
 per-file equality. Run the configured Markdown checks; report inherited issues
 separately from new failures. Do not run deployment examples as documentation tests.
+
+## Publish to the documentation site
+
+The `docs/` tree renders as a static site (MkDocs, Material theme) configured
+by `mkdocs.yml` at the repository root, with a link-rewrite hook in
+`docs-site/hooks.py`. A dedicated CI workflow builds the site with
+`mkdocs build --strict` on pull requests—a broken internal link or anchor
+fails the build. Merges to `main` deploy to GitHub Pages.
+
+Rules that keep the gate green:
+
+- Link between published pages with relative paths and anchors; the build
+  validates them.
+- Links to targets outside `docs/` (OpenSpec, templates, source files) or to
+  excluded pages are allowed: the build rewrites them to GitHub blob URLs.
+  The build never modifies source files.
+- Heading anchors follow GitHub slug rules in both renderings (an em dash
+  becomes a double hyphen). Do not "fix" anchors to another generator's
+  style; the site is configured to match GitHub.
+- The strategy documents (`docs/prfaq/` and the business-requirements and
+  press-release-FAQ snapshots in `docs/history/`) stay out of the site via
+  `exclude_docs` in `mkdocs.yml`. Declare exclusions only there.
+  Patterns follow `.gitignore` rules: a bare filename matches at every
+  depth, so anchor root-level entries with a leading `/`.
+- The site navigation is declared explicitly in `mkdocs.yml` (`nav:`) and
+  ordered by reader journey: setup for platform administrators, then the
+  domain-team path, then operations, concepts, reference, and contributor
+  pages. Add every new published page to `nav:` in the same change; the
+  strict build fails on a published page missing from it. Orientation
+  pages (the home introduction, platform configuration, domain
+  prerequisites, and the ACTIVE-domain page) link to primary pages rather
+  than copying their procedures or tables.
+- Decision records (`docs/decisions/`) are working history for the
+  repository, not published documentation: they are excluded from the
+  site, and links from published pages rewrite to their GitHub blob views.
+- The contributor working references — Vue conventions, TypeScript
+  conventions, and the side-effects rubric under `docs/development/` —
+  are excluded from the site for the same reason: they serve repository
+  contributors and stay reachable through GitHub.
+- The "Documentation moved" forwarding pages kept at old paths for
+  in-repository browsing are also excluded: on the site they would only
+  surface as sidebar stubs. Link to current locations in published pages.
+- The site theme follows the web console: `docs/stylesheets/brand.css`
+  maps the console's design tokens (`web/app/assets/css/tokens.css`) onto
+  the theme's palette variables, dark is the default palette, and pages use
+  the system font stack. Change the stylesheet and the tokens together; see
+  the [design system](design-system.md).
+- Mermaid fenced blocks render as diagrams on the site (the theme loads the
+  diagram library client-side); keep diagrams as plain fenced blocks in the
+  source so GitHub renders them too.
+- Preview locally with `mkdocs serve` from a virtualenv built on
+  `requirements-docs.txt`.

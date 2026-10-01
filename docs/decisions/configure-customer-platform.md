@@ -85,7 +85,7 @@ only informally argued, not pinned.
 
 ## Evidence
 
-[OpenSpec change](../../openspec/changes/configure-customer-platform/proposal.md)
+[OpenSpec change](../../openspec/changes/archive/2026-09-26-configure-customer-platform/proposal.md)
 (design D1–D6, spec deltas, tasks). Invariant mutation check: the scan tests
 fail when a group-mutation call or IAM action is injected.
 

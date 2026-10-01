@@ -146,3 +146,6 @@ konductor-platform.toml
 
 # Python (scripts/)
 __pycache__/
+
+# MkDocs site build output
+site/

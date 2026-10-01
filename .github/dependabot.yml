@@ -36,6 +36,17 @@ updates:
       web-tooling:
         patterns: ["eslint", "@nuxt/eslint", "typescript", "vue-tsc", "tailwindcss", "@tailwindcss/*"]
 
+  # Docs site build (pip).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore
+      include: scope
+    labels: ["type:deps", "area:deps"]
+
   # Workflows pin actions by SHA; this is what keeps those pins current.
   - package-ecosystem: github-actions
     directory: "/"

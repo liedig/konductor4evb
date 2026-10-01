@@ -233,7 +233,7 @@ awscurl -X GET "${API_URL}/domains?status=ACTIVE" --region "${REGION}"
 awscurl -X GET "${API_URL}/domains?nextToken=<token>&maxResults=50" --region "${REGION}"
 ```
 
-### Response
+### Response (list)
 
 ```json
 {
@@ -297,7 +297,7 @@ awscurl -X PUT "${API_URL}/domains/billing" \
 | `ownerEmail` | Yes | Mutable via update endpoint. |
 | `secondaryOwnerEmails` | Yes | One or more emails. Replaces the entire set. |
 
-### Response
+### Response (update)
 
 ```json
 {

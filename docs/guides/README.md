@@ -5,9 +5,19 @@
 Start with the task you need to complete. Platform deployment is not a
 prerequisite reading assignment for application teams.
 
-1. [Authenticate API requests](authentication.md).
-2. [Register and manage a domain](domains.md), if you do not already own an ACTIVE domain.
-3. [Publish events and author schemas](publishing-events.md), or [subscribe to events](subscriptions.md).
+## Register a domain
+
+Skip this section if your team already owns an `ACTIVE` domain.
+
+1. [Check the domain prerequisites](domain-prerequisites.md).
+2. [Authenticate API requests](authentication.md).
+3. [Register and manage a domain](domains.md).
+4. [Learn what an ACTIVE domain provides](active-domain.md).
+
+## Publish and subscribe
+
+- [Publish events and author schemas](publishing-events.md).
+- [Subscribe to events](subscriptions.md).
 
 For graphical API clients, see [Insomnia and Postman setup](api-clients.md).
 For exact routes and request schemas, use the [API contracts](../reference/api.md).

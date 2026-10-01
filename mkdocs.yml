@@ -1,0 +1,170 @@
+site_name: Konductor for Amazon EventBridge
+site_description: Documentation for Konductor for Amazon EventBridge
+# Provisional until the repository moves to the liedig org (change task 5.1).
+site_url: https://sliedig.github.io/konductor4evb/
+repo_url: https://github.com/sliedig/konductor4evb
+
+docs_dir: docs
+
+theme:
+  name: material
+  logo: konductor-logo-light-bg.svg
+  favicon: konductor-web-icon.svg
+  # The console uses the system font stack; this also avoids loading
+  # Roboto from Google Fonts.
+  font: false
+  # Colors come from stylesheets/brand.css, which mirrors the console's
+  # design tokens. Dark is listed first because it is the console default.
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.indexes
+    - navigation.sections
+    - navigation.top
+    - search.highlight
+
+plugins:
+  - search
+
+extra_css:
+  - stylesheets/brand.css
+
+hooks:
+  - docs-site/hooks.py
+
+# Strategy-genre pages stay in the repository but are not published.
+# The link hook rewrites inbound links to these to GitHub blob URLs.
+# "Documentation moved" forwarding pages serve GitHub browsing at old
+# paths; on the site they would only surface as sidebar stubs, so they
+# stay repo-only too. Decision records, the console convention pages
+# (Vue, TypeScript), and the side-effects rubric are working history
+# and contributor references for the repository, not published
+# documentation. Patterns follow .gitignore rules: a bare filename matches
+# at any depth, so root-level stubs are anchored with a leading slash.
+exclude_docs: |
+  prfaq/**
+  history/business-requirements-2025-12-23.md
+  history/press-release-faq-2025-12-23.md
+  decisions/**
+  development/typescript.md
+  development/vue.md
+  development/side-effects/**
+  /service-quotas.md
+  /installation.md
+  /domain-management.md
+  /publishing-events.md
+  /trust-stack-deployment.md
+  development/decisions.md
+  development/oauth-authentication-guide.md
+  development/publish-validation.md
+  development/metadata-rollout.md
+  development/architecture.md
+
+# Ordered by reader journey, not by directory. Every published page must
+# appear here; validation.omitted_files makes a missing page fail --strict.
+nav:
+  - Home: README.md
+  - Get started:
+      - Plan capacity: operations/service-quotas.md
+      - Configure the platform: operations/configure-platform.md
+      - Install Konductor: operations/installation.md
+      - Deploy domain-account trust: operations/trust-stack-deployment.md
+      - Set up users and access: operations/access-administration.md
+      - Troubleshoot installation: operations/installation-troubleshooting.md
+  - Domains:
+      - guides/README.md
+      - Prerequisites: guides/domain-prerequisites.md
+      - Authenticate: guides/authentication.md
+      - Register and manage a domain: guides/domains.md
+      - What an ACTIVE domain provides: guides/active-domain.md
+      - API clients: guides/api-clients.md
+  - Publish and subscribe:
+      - Publish events: guides/publishing-events.md
+      - Subscribe to events: guides/subscriptions.md
+  - Operate:
+      - operations/README.md
+      - Domain recovery and cleanup: operations/domain-recovery.md
+      - Metadata rollout: operations/metadata-rollout.md
+      - Organization guardrails: operations/guardrails.md
+      - Uninstall: operations/uninstall.md
+  - Concepts:
+      - architecture/README.md
+      - Platform boundaries: architecture/platform-boundaries.md
+      - Domain lifecycle: architecture/domain-lifecycle.md
+      - Provisioning and rollback: architecture/provisioning.md
+      - Cross-account trust: architecture/cross-account-trust.md
+      - Identity and authorization: architecture/authorization.md
+      - Entitlements: architecture/entitlements.md
+      - Publish validation: architecture/publish-validation.md
+      - Schemas: architecture/schemas.md
+      - Platform metadata: architecture/metadata.md
+      - Subscriptions: architecture/subscriptions.md
+  - Reference:
+      - reference/README.md
+      - Configuration contract: reference/configuration.md
+      - API contracts: reference/api.md
+      - Access-token claims: reference/authentication.md
+      - Event envelope: reference/event-envelope.md
+      - Domain statuses: reference/domain-statuses.md
+      - Resources and naming: reference/resources.md
+      - Lifecycle events: reference/lifecycle-events.md
+      - Data model: reference/data-model.md
+      - Discrepancy register: reference/documentation-discrepancies.md
+  - Contributing:
+      - development/README.md
+      - Repository map: development/repository.md
+      - Testing: development/testing.md
+      - Console workflow: development/console.md
+      - Design system: development/design-system.md
+      - Documentation maintenance: development/documentation.md
+  - History:
+      - history/README.md
+      - Documentation baseline: history/documentation-baseline.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - sane_lists
+  - tables
+  - toc:
+      permalink: true
+      # GitHub-compatible heading slugs so anchors (including the docs'
+      # double-hyphen em-dash convention) resolve identically in both
+      # renderings.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.superfences:
+      # Material ships and auto-loads mermaid.js for blocks marked with the
+      # mermaid class; without this custom fence the docs' ```mermaid blocks
+      # render as plain code.
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+# Raise MkDocs's link validation from info to warn so --strict enforces it.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  anchors: warn
+  unrecognized_links: warn
+
+extra:
+  # Base for links that escape the published docs tree; the hook turns
+  # them into <github_base>/blob|tree/<github_branch>/<path>.
+  github_base: https://github.com/sliedig/konductor4evb
+  github_branch: main
+
+copyright: Copyright &copy; 2026 Stephen Liedig

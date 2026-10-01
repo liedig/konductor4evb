@@ -8,10 +8,11 @@ not authorization to deploy, change access, activate a revision, or delete data.
 ## Install and onboard
 
 1. Review [service quotas and capacity](service-quotas.md).
-2. [Install Konductor](installation.md).
-3. [Deploy domain-account trust](trust-stack-deployment.md).
-4. [Set up users, bindings, and entitlements](access-administration.md).
-5. Run the [installation smoke test](installation.md#phase-4--smoke-test).
+2. [Configure the platform](configure-platform.md).
+3. [Install Konductor](installation.md).
+4. [Deploy domain-account trust](trust-stack-deployment.md).
+5. [Set up users, bindings, and entitlements](access-administration.md).
+6. Run the [installation smoke test](installation.md#phase-4--smoke-test).
 
 ## Operate and recover
 

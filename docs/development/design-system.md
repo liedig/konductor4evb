@@ -18,7 +18,7 @@ Dark is the default theme. Declare tokens once in `@theme`, which emits them at 
 
 ## Tokens
 
-The canonical token definitions are in `web/app/assets/css/tokens.css`, using Tailwind v4 `@theme`. Components use semantic utilities such as `bg-surface`, `text-muted`, and `border-border`, not raw palette colors. The following table describes each token.
+The canonical token definitions are in `web/app/assets/css/tokens.css`, using Tailwind v4 `@theme`. Components use semantic utilities such as `bg-surface`, `text-muted`, and `border-border`, not raw palette colors. The documentation site mirrors the color values in `docs/stylesheets/brand.css`; when you change a color token, update that file in the same change. The following table describes each token.
 
 | Token | Utility prefix | Role |
 |---|---|---|

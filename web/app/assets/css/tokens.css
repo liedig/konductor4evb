@@ -3,7 +3,8 @@
  * Dark is the default theme: `@theme` emits these at `:root`. A light palette
  * is stubbed under `[data-theme="light"]` for later polish (design.md, open
  * questions). Components consume semantic tokens only, never raw palette
- * utilities.
+ * utilities. The documentation site mirrors these colors in
+ * docs/stylesheets/brand.css; change both together.
  */
 @theme {
   /* Layered depth: background → surface (cards) → surface-raised (interactive) */

@@ -25,11 +25,11 @@ Use [domains](guides/domains.md). This page preserves links from older changes a
 | <a id="response-non-active-domain"></a>Response (non-ACTIVE domain) | [Open section](guides/domains.md#response-non-active-domain) |
 | <a id="not-found"></a>Not found | [Open section](guides/domains.md#not-found) |
 | <a id="listing-domains"></a>Listing domains | [Open section](guides/domains.md#listing-domains) |
-| <a id="response-1"></a>Response | [Open section](guides/domains.md#response-1) |
+| <a id="response-1"></a>Response (list) | [Open section](guides/domains.md#response-list) |
 | <a id="query-parameters"></a>Query parameters | [Open section](guides/domains.md#query-parameters) |
 | <a id="updating-domain-metadata"></a>Updating domain metadata | [Open section](guides/domains.md#updating-domain-metadata) |
 | <a id="mutable-fields"></a>Mutable fields | [Open section](guides/domains.md#mutable-fields) |
-| <a id="response-2"></a>Response | [Open section](guides/domains.md#response-2) |
+| <a id="response-2"></a>Response (update) | [Open section](guides/domains.md#response-update) |
 | <a id="update-outcome-events"></a>Update outcome events | [Open section](guides/domains.md#update-outcome-events) |
 | <a id="domain-lifecycle"></a>Domain lifecycle | [Open section](reference/domain-statuses.md) |
 | <a id="environment-snapshot"></a>Environment snapshot | [Open section](reference/domain-statuses.md#environment-snapshot) |
