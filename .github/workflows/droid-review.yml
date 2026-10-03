@@ -30,7 +30,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Run Droid Auto Review
-        uses: Factory-AI/droid-action@34deed76223017fb942bce0932018a7f1a984288 # v7
+        uses: Factory-AI/droid-action@efd4574f8244f28cf1da43e7733fd36840ba2880 # v9
         with:
           factory_api_key: ${{ secrets.FACTORY_API_KEY }}
           automatic_review: true
