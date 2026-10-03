@@ -2,8 +2,8 @@
 
 <img src="docs/konductor-logo-light-bg.svg" alt="Konductor for Amazon EventBridge" width="500">
 
-[![CI (main)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml?query=branch%3Amain)
-[![CI (develop)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/sliedig/konductor4evb/actions/workflows/ci.yml?query=branch%3Adevelop)
+[![CI (main)](https://github.com/liedig/konductor4evb/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/liedig/konductor4evb/actions/workflows/ci.yml?query=branch%3Amain)
+[![CI (develop)](https://github.com/liedig/konductor4evb/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/liedig/konductor4evb/actions/workflows/ci.yml?query=branch%3Adevelop)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 A serverless control plane for cross-account event-driven architecture at scale. Platform teams get governed domains — registration, approval, provisioning, ownership, and observability. Application teams get three simple verbs — **publish, subscribe, unsubscribe** — for event stream automation and never touch event buses other than their own, IAM policies, or cross-account delivery infrastructure.

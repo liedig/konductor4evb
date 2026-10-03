@@ -7,6 +7,9 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- The repository moved to the `liedig` GitHub organization
+  (`https://github.com/liedig/konductor4evb`). Old URLs redirect; update
+  local remotes with `git remote set-url origin git@github.com:liedig/konductor4evb.git`.
 - Publish the documentation as a static site (MkDocs Material) built from
   `docs/`, with a strict link-integrity gate on pull requests and GitHub
   Pages deployment from `main`. Links that point outside the docs tree

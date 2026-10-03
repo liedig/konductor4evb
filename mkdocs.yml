@@ -1,8 +1,7 @@
 site_name: Konductor for Amazon EventBridge
 site_description: Documentation for Konductor for Amazon EventBridge
-# Provisional until the repository moves to the liedig org (change task 5.1).
-site_url: https://sliedig.github.io/konductor4evb/
-repo_url: https://github.com/sliedig/konductor4evb
+site_url: https://liedig.github.io/konductor4evb/
+repo_url: https://github.com/liedig/konductor4evb
 
 docs_dir: docs
 
@@ -164,7 +163,7 @@ validation:
 extra:
   # Base for links that escape the published docs tree; the hook turns
   # them into <github_base>/blob|tree/<github_branch>/<path>.
-  github_base: https://github.com/sliedig/konductor4evb
+  github_base: https://github.com/liedig/konductor4evb
   github_branch: main
 
 copyright: Copyright &copy; 2026 Stephen Liedig

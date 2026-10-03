@@ -27,7 +27,7 @@
 
 ## 5. Launch (owner-only steps, after org transfer and public flip)
 
-- [ ] 5.1 Update `site_url`, `repo_url`, and the `extra:` blob base in `mkdocs.yml` for the `liedig` org location; verify the strict build still passes and rewritten links point at the new org
+- [x] 5.1 Update `site_url`, `repo_url`, and the `extra:` blob base in `mkdocs.yml` for the `liedig` org location; verify the strict build still passes and rewritten links point at the new org
 - [ ] 5.2 Enable GitHub Pages (source: GitHub Actions) on the transferred public repository; merge a trivial docs change and verify the deployed site loads at the Pages URL, search works, and an escaping link lands on the correct GitHub blob view
 - [ ] 5.3 Record the launch in the change (evidence note appended to this file or the PR): deployed URL, first successful deploy run id, and the Pages settings used
 

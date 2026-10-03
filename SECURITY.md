@@ -8,7 +8,7 @@ Konductor for Amazon EventBridge is pre-production and deployed per-organization
 
 Please report vulnerabilities privately. Do not open a public issue.
 
-- **Preferred:** [GitHub private vulnerability reporting](https://github.com/sliedig/konductor4evb/security/advisories/new) (Security → Advisories → Report a vulnerability).
+- **Preferred:** [GitHub private vulnerability reporting](https://github.com/liedig/konductor4evb/security/advisories/new) (Security → Advisories → Report a vulnerability).
 - **Fallback:** email sliedig@gmail.com.
 
 Include the affected component, reproduction steps, and the potential impact. Expect an acknowledgment within a few days and a triage decision (accepted, needs more information, or declined) shortly after. Accepted reports are fixed on `main`, with credit in the fix notes unless you prefer otherwise.
