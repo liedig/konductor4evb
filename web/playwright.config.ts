@@ -4,7 +4,7 @@ import { defineConfig } from '@playwright/test'
  * Isolated-browser UI tests (`pnpm test:ui`).
  *
  * The suite runs against the dev server with no external API: every
- * `/dev/**` call is fulfilled by the in-test route mock in
+ * `/api/**` call is fulfilled by the in-test route mock in
  * `tests/ui/api.ts`, and identity comes from the dev-only
  * `konductorTestSession` sessionStorage seam (stores/session.ts) — the
  * same seam the manual browser verification used. No real credentials,

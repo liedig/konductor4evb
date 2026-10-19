@@ -34,13 +34,14 @@ export default defineNuxtConfig({
     typeCheck: false,
   },
   nitro: {
-    // Local dev: browser calls stay same-origin (`/dev/...`) and are proxied
-    // to the deployed OAuth API (KONDUKTOR_DEV_API_URL, set by `make web-dev`).
-    // Production serves the API same-origin through CloudFront, so no CORS
-    // surface exists anywhere.
+    // Local dev: browser calls stay same-origin (`/api/{env}/...`) and are
+    // proxied to the deployed OAuth API's stage-less root
+    // (KONDUKTOR_DEV_API_URL, set by `make web-dev`); the environment
+    // segment selects the stage. Production serves the API same-origin
+    // through CloudFront, so no CORS surface exists anywhere.
     devProxy: process.env.KONDUKTOR_DEV_API_URL
       ? {
-          '/dev': {
+          '/api': {
             target: `${process.env.KONDUKTOR_DEV_API_URL}/`,
             changeOrigin: true,
           },

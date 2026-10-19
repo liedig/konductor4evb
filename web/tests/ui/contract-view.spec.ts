@@ -125,7 +125,7 @@ test('a failed contract read degrades: registered content stays, preview reports
 
 test('authoring preview composes unsaved business content without envelope fields', async ({ page }) => {
   await installApi(page)
-  await page.goto('/domains/orders')
+  await page.goto('/domains/orders/schemas/acme-orders%40OrderNotification')
 
   await page.getByRole('button', { name: 'New version' }).click()
   const dialog = page.getByRole('dialog')
@@ -143,7 +143,7 @@ test('authoring preview composes unsaved business content without envelope field
   await expect(dialog.getByRole('button', { name: 'Append version' })).toBeEnabled()
 })
 
-test('domain panel links each schema to its catalog detail page instead of a modal', async ({ page }) => {
+test('domain panel links each schema to its producer schema page', async ({ page }) => {
   await installApi(page)
   await page.goto('/domains/orders')
 
@@ -151,6 +151,6 @@ test('domain panel links each schema to its catalog detail page instead of a mod
   await expect(page.getByRole('button', { name: 'Contract', exact: true })).toHaveCount(0)
 
   await page.getByRole('link', { name: 'acme-orders@OrderNotification' }).click()
-  await expect(page).toHaveURL(/\/catalog\/orders\/acme-orders/)
-  await expect(card(page, 'Schema preview').getByText(/validate against right now/)).toBeVisible()
+  await expect(page).toHaveURL(/\/domains\/orders\/schemas\/acme-orders/)
+  await expect(card(page, 'Promotion pipeline')).toBeVisible()
 })

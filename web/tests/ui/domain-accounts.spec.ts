@@ -87,7 +87,7 @@ test('request form validates overrides and submits only the sparse map', async (
   await installApi(page)
 
   let captured: Record<string, unknown> | null = null
-  await page.route('**/dev/domains', async (route) => {
+  await page.route('**/api/dev/domains', async (route) => {
     if (route.request().method() !== 'POST') return route.fallback()
     captured = route.request().postDataJSON() as Record<string, unknown>
     await route.fulfill({
@@ -121,7 +121,7 @@ test('approval card shows the resolved account per environment', async ({ page }
   await page.setViewportSize({ width: 1280, height: 900 })
   await signIn(page, ['platform-admin'])
   await installApi(page)
-  await routeJson(page, '**/dev/domains/registrations/pending**', { registrations: [registration()] })
+  await routeJson(page, '**/api/dev/domains/registrations/pending**', { registrations: [registration()] })
   await page.goto('/admin')
 
   const card = page.locator('section').filter({
@@ -137,7 +137,7 @@ test('approval card omits the accounts row for registrations without the field',
   await page.setViewportSize({ width: 1280, height: 900 })
   await signIn(page, ['platform-admin'])
   await installApi(page)
-  await routeJson(page, '**/dev/domains/registrations/pending**', {
+  await routeJson(page, '**/api/dev/domains/registrations/pending**', {
     registrations: [registration({ environmentAccounts: undefined })],
   })
   await page.goto('/admin')
@@ -153,9 +153,9 @@ test('domain detail renders the effective map and links resources in override ac
   await page.setViewportSize({ width: 1280, height: 900 })
   await signIn(page, ['platform-admin'])
   await installApi(page)
-  await routeJson(page, '**/dev/domains/orders', domainDetail())
-  await routeJson(page, '**/dev/schemas**', { items: [] })
-  await routeJson(page, '**/dev/subscriptions**', { items: [] })
+  await routeJson(page, '**/api/dev/domains/orders', domainDetail())
+  await routeJson(page, '**/api/dev/schemas**', { items: [] })
+  await routeJson(page, '**/api/dev/subscriptions**', { items: [] })
   await page.goto('/domains/orders')
 
   const overview = page.locator('section').filter({
@@ -179,14 +179,14 @@ test('domain detail without the field keeps owner-account console links', async 
   await page.setViewportSize({ width: 1280, height: 900 })
   await signIn(page, ['platform-admin'])
   await installApi(page)
-  await routeJson(page, '**/dev/domains/orders', domainDetail({
+  await routeJson(page, '**/api/dev/domains/orders', domainDetail({
     environmentAccounts: undefined,
     resourceArns: {
       dev: { appEventBusArn: `arn:aws:events:${REGION}:${OWNER_ACCOUNT}:event-bus/acme-dev-orders` },
     },
   }))
-  await routeJson(page, '**/dev/schemas**', { items: [] })
-  await routeJson(page, '**/dev/subscriptions**', { items: [] })
+  await routeJson(page, '**/api/dev/schemas**', { items: [] })
+  await routeJson(page, '**/api/dev/subscriptions**', { items: [] })
   await page.goto('/domains/orders')
 
   const overview = page.locator('section').filter({

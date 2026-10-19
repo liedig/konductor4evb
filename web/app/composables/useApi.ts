@@ -42,16 +42,23 @@ function isErrorBody(data: unknown): data is ApiErrorBody {
  * One typed API client layer (design.md, decision 5). Attaches the session
  * access token; on 401 refreshes once and retries once, then clears the
  * session and hands off to the auth guard's `/login` redirect.
+ *
+ * Requests resolve to `{apiBaseUrl}/{environment}`: the environment
+ * selects the API stage, defaulting to the authoring environment (the first
+ * configured environment). Pass an explicit environment for cross-environment
+ * reads and promotion calls.
  */
-export function useApi() {
+export function useApi(environment?: string) {
   const config = useKonductorConfig()
   const session = useSessionStore()
+  const selected = environment ?? config.environments[0]
+  const baseURL = selected ? `${config.apiBaseUrl}/${selected}` : config.apiBaseUrl
 
   async function request<T>(method: string, path: string, options: RequestOptions = {}, retried = false): Promise<T> {
     const token = await session.accessToken(retried)
     try {
       return await $fetch<T>(path, {
-        baseURL: config.apiBaseUrl,
+        baseURL,
         method: method as 'GET',
         query: options.query,
         body: options.body as Record<string, unknown> | undefined,

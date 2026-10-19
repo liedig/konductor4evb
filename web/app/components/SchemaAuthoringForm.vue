@@ -54,12 +54,9 @@ const prettyPreview = computed(() => {
   }
 })
 
-// The stage segment of the API base URL is the target environment; the
-// console never lets the caller choose it.
-const targetEnvironment = computed(() => {
-  const segment = config.apiBaseUrl.replace(/\/+$/, '').split('/').pop()
-  return segment && segment !== config.apiBaseUrl ? segment : config.apiBaseUrl
-})
+// Schema mutations target the authoring environment (the first configured
+// environment); the console never lets the caller choose it.
+const targetEnvironment = computed(() => config.environments[0] ?? '')
 
 watch(() => props.open, (open) => {
   if (open) {

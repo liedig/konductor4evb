@@ -25,15 +25,15 @@ None. Promotion extends the existing schema-management bounded context.
 
 - `schema-management`: authoring restricted to the first environment; a new promotion requirement covering replay, the content-prefix check, linear order, concurrency, `schema:promote` authorization, asynchronous status, and producer lifecycle events; `SchemaVersionPublished` emitted once per promotion.
 - `event-subscriptions`: pins move to the latest version when a promotion runs or the first environment receives an append, using widen, drain, and narrow; a partial replay pins to the last written version. This replaces the rule that appends to existing environments never re-pin.
-- `system-architecture`: the order of the domain environment list is defined as the promotion order.
+- `system-architecture`: the order of the domain environment list is defined as the promotion order; API stages are derived from the environment list rather than a fixed `dev`/`staging`/`prod` set.
 - `web-ui`: the producer schema page; pipeline-ordered environment display; authoring targets the first environment; the console can address environment stages.
 
 ## Impact
 
 - Lambdas: `schema-admin` (first-environment guard, emission changes), a new promotion handler and status read, `materialize-subscription-env` reused for re-pinning, `subscription-extender` (single end-of-promotion signal).
-- Infrastructure: a Step Functions promotion workflow with a drain Wait state; promotion records in DynamoDB whose stream starts the workflow (to be classified against the side-effects rubric); generating CloudFront stage routes from `environments` instead of hardcoding `/dev`, `/staging`, and `/prod`; `config.json` authoring stage taken from `environments[0]`.
+- Infrastructure: a Step Functions promotion workflow with a drain Wait state; promotion records in DynamoDB whose stream starts the workflow (to be classified against the side-effects rubric); a `konductor-schema-versions` table recording canonical content and a hash for every version, because the registries expose only the latest version's content and cannot replay history; generating the API Gateway stages of both APIs and the CloudFront API routing from `Environments` instead of hardcoding `dev`, `staging`, and `prod` (today a custom environment list deploys but has no matching stages); `config.json` authoring stage taken from `environments[0]`.
 - API: OpenAPI contracts for the promotion endpoint and status read on the OAuth and IAM surfaces. Direct writes to stages other than the first now return an error.
 - Web: a new route under `/domains/{name}/schemas/`, `useApi()` addressing each environment's stage, and Playwright coverage for promotion flows.
 - Docs: a decision record superseding the parked `gate-schema-promotion` deferral, side-effects records, and a runbook note that a publish DLQ redrive after narrowing drops events stamped with the old version.
 - Assumes no schemas exist at launch, so no migration is needed.
-- Spikes: whether `UpdateSchema` with content identical to the latest version creates a new version, and whether `ClientTokenId` makes replay retries idempotent.
+- Spikes: whether `UpdateSchema` with content identical to the latest version creates a new version, and whether `ClientTokenId` makes replay retries idempotent. (Resolved: identical content fails with a no-change conflict, retries with the same client token return the same version, and registries normalize content and cannot return historical versions — hence the version-content store.)

@@ -3,6 +3,7 @@ use lambda_runtime::{service_fn, Error};
 use tracing_subscriber::EnvFilter;
 
 mod handler;
+mod record;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {

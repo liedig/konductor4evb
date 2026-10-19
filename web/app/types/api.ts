@@ -159,6 +159,37 @@ export interface SchemaMutationResponse {
   schemaVersion?: number
 }
 
+export type PromotionStatus = 'VALIDATING' | 'REPLAYING' | 'REPINNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+
+export type PromotionFailureReason = 'DIVERGED' | 'REPLAY_FAILED'
+
+export interface RepinCounts {
+  matched: number
+  repinned: number
+  failed: number
+}
+
+/** GET /schemas/promotions response (and the 202 body of the POST). */
+export interface PromotionView {
+  promotionId: string
+  schemaName: string
+  sourceEnvironment: string
+  targetEnvironment: string
+  requestedVersion: number
+  status: PromotionStatus
+  replayedVersions: number[]
+  targetVersion?: number
+  repin?: RepinCounts
+  reason?: PromotionFailureReason
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RequestPromotionRequest {
+  domain: string
+  eventName: string
+}
+
 export type SubscriptionStatus = 'PENDING' | 'ACTIVE' | 'AWAITING_PROMOTION' | 'FAILED' | 'REMOVED'
 
 export interface EnvStreamState {

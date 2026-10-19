@@ -10,6 +10,7 @@ use konductor_common::streams_db::merge_env_stream;
 
 use crate::config::Config;
 use crate::outcome::{Outcome, StepError};
+use crate::repin;
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
@@ -29,11 +30,23 @@ impl Clients {
     }
 }
 
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum MaterializeMode {
+    /// Full materialization: resolve the pin, create rule, target, and alarm.
+    #[default]
+    Create,
+    /// Promotion re-pin: rewrite the rule's version list only. Targets,
+    /// alarms, and entitlement checks are untouched — the rule already exists.
+    Repin,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MaterializeInput {
     pub(crate) producer_domain: String,
     pub(crate) consumer_domain: String,
+    #[serde(default)]
     pub(crate) consumer_account_id: String,
     pub(crate) source: String,
     pub(crate) detail_type: String,
@@ -41,13 +54,26 @@ pub struct MaterializeInput {
     pub(crate) rule_name: String,
     pub(crate) environment: String,
     pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) mode: MaterializeMode,
+    /// Explicit pattern versions for `mode: repin` (created modes resolve the
+    /// pin from the registry instead).
+    #[serde(default)]
+    pub(crate) versions: Vec<i64>,
+    /// `mode: repin` only: commit the new pin to the stream record after the
+    /// rule update commits (the narrow step; widen leaves the recorded pin).
+    #[serde(default)]
+    pub(crate) commit_pin: bool,
 }
 
 pub async fn handle(clients: &Clients, event: Value) -> Result<Value, Error> {
     let input: MaterializeInput =
         serde_json::from_value(event).context("invalid materialization input")?;
     let config = Config::from_env()?;
-    let outcome = materialize(clients, &config, &input).await?;
+    let outcome = match input.mode {
+        MaterializeMode::Create => materialize(clients, &config, &input).await?,
+        MaterializeMode::Repin => repin::repin(clients, &config, &input).await?,
+    };
     Ok(serde_json::to_value(outcome).context("failed to serialize materialization outcome")?)
 }
 
@@ -209,7 +235,7 @@ async fn put_rule(
     let pattern = serde_json::json!({
         "source": [input.source],
         "detail-type": [input.detail_type],
-        "detail": { "metadata": { "schemaVersion": [pinned] } },
+        "detail": { "metadata": { "schemaVersion": [pinned, pinned + 1] } },
     })
     .to_string();
     let state = if input.enabled {
@@ -303,7 +329,9 @@ async fn put_zero_events_alarm(
         .map_err(|err| sdk_cause(&err))
 }
 
-fn sdk_cause<E: std::error::Error>(err: &aws_sdk_eventbridge::error::SdkError<E>) -> String {
+pub(crate) fn sdk_cause<E: std::error::Error>(
+    err: &aws_sdk_eventbridge::error::SdkError<E>,
+) -> String {
     err.as_service_error()
         .map(|service| service.to_string())
         .filter(|message| !message.is_empty())
@@ -472,9 +500,11 @@ mod tests {
     }
 
     fn put_rule_rule(expected_state: RuleState, version: i64) -> Rule {
+        // The pattern always carries the one-version lookahead: producers may
+        // publish v+1 the moment it exists, before any re-pin lands.
         mock!(aws_sdk_eventbridge::Client::put_rule)
             .match_requests(move |req| {
-                let pinned = format!("\"schemaVersion\":[{version}]");
+                let pinned = format!("\"schemaVersion\":[{},{}]", version, version + 1);
                 req.name() == Some("shipping-OrderNotification")
                     && req.event_bus_name() == Some("acme-dev-billing-event-bus")
                     && req.state() == Some(&expected_state)

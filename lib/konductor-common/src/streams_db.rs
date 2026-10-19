@@ -344,6 +344,63 @@ pub async fn mark_stream_removed(
     Ok(())
 }
 
+/// Advances one environment's recorded pin after a committed re-pin (the
+/// narrow step of a schema promotion). Touches only `pinnedVersion` plus
+/// `updatedAt`, leaving rule identity and status intact.
+pub async fn set_env_pinned_version(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    producer_domain: &str,
+    schema_name: &str,
+    consumer_domain: &str,
+    env_name: &str,
+    pinned_version: i64,
+) -> Result<()> {
+    ddb.update_item()
+        .table_name(table)
+        .key(PK, s(producer_domain))
+        .key(SK, s(&EventStream::sort_key(schema_name, consumer_domain)))
+        .update_expression("SET environments.#env.pinnedVersion = :pin, updatedAt = :now")
+        .expression_attribute_names("#env", env_name)
+        .expression_attribute_values(":pin", n(pinned_version))
+        .expression_attribute_values(":now", s(&Utc::now().to_rfc3339()))
+        .send()
+        .await
+        .context("failed to commit re-pinned version")?;
+    Ok(())
+}
+
+/// Records a failed narrow-phase re-pin on the stream record: the env entry
+/// flips to `FAILED` with the cause, so operators can see which subscriber
+/// did not track the promotion. Re-enabling the entry repairs it (the
+/// re-materialization resolves the environment's latest version).
+pub async fn set_env_failed(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    producer_domain: &str,
+    schema_name: &str,
+    consumer_domain: &str,
+    env_name: &str,
+    error_detail: &str,
+) -> Result<()> {
+    ddb.update_item()
+        .table_name(table)
+        .key(PK, s(producer_domain))
+        .key(SK, s(&EventStream::sort_key(schema_name, consumer_domain)))
+        .update_expression(
+            "SET environments.#env.#status = :failed, environments.#env.errorDetail = :detail, updatedAt = :now",
+        )
+        .expression_attribute_names("#env", env_name)
+        .expression_attribute_names("#status", "status")
+        .expression_attribute_values(":failed", s(StreamStatus::Failed.as_str()))
+        .expression_attribute_values(":detail", s(error_detail))
+        .expression_attribute_values(":now", s(&Utc::now().to_rfc3339()))
+        .send()
+        .await
+        .context("failed to record re-pin failure")?;
+    Ok(())
+}
+
 /// Flips one environment's desired-state flag on a stream record. Rule
 /// identities, pinned versions, and the record itself are retained — only the
 /// per-environment `enabled` flag changes.

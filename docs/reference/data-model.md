@@ -73,3 +73,37 @@ The `konductor-event-streams` table is the **source of intent** for subscription
 | Streams feeding a consumer | `by-consumer` | `consumerDomain = :c` |
 
 The API-facing subscription id is `{consumerDomain}.{producerDomain}.{detailType}`—domain names cannot contain dots, so parsing splits on the first two dots; event names may contain dots safely.
+
+### Schema promotions table
+
+The `konductor-schema-promotions` table holds promotion head items and re-pin coordination state. The head item doubles as the per-target lease (a conditional put rejects a concurrent promotion with `409`), and its `NEW_AND_OLD_IMAGES` stream starts the promotion workflow and emits the lifecycle events.
+
+| Attribute | Type | Key |
+|-----------|------|-----|
+| `pk` | String (`{domain}#{eventName}#{environment}`) | Partition key (PK) |
+| `sk` | String (`PROMOTION` or `REPIN`) | Sort key (SK) |
+
+`PROMOTION` items carry `promotionId`, `sourceEnvironment`, `targetEnvironment`, `fromVersion`, `requestedVersion`, `lastWrittenVersion`, `phase` (`VALIDATING\|REPLAYING\|REPINNING\|COMPLETED\|FAILED\|CANCELLED`), `reason` (`DIVERGED\|REPLAY_FAILED`), `failedVersion`, `actor`, the `repinMatched`/`repinRepinned`/`repinFailed` counts, `drainUntil`, `createdAt`/`updatedAt`, and `expiresAt` (TTL). `REPIN` items carry `floorVersion`, `targetVersion`, `generation` (the optimistic-concurrency token that lets a newer re-pin win narrowing), `drainUntil`, and `updatedAt`; outside a re-pin, `floorVersion == targetVersion` is the pinned version and the derived rule pattern is `[pinned, pinned + 1]`.
+
+| Pattern | Index | Key condition |
+|---------|-------|---------------|
+| Promotion status for a schema and target | Table (PK+SK) | `pk = :d#e#env AND sk = PROMOTION` (strongly consistent) |
+| Re-pin state for a schema and environment | Table (PK+SK) | `pk = :d#e#env AND sk = REPIN` |
+
+### Schema versions table
+
+The `konductor-schema-versions` table is the canonical content store for every schema version in every environment. It exists because the EventBridge schema registry serves only the latest version's content and normalizes whitespace: replaying a promotion and detecting divergence both need historical, pre-normalization content. All side effects ride on the promotions table's stream, so this table has none.
+
+| Attribute | Type | Key |
+|-----------|------|-----|
+| `pk` | String (`{domain}#{eventName}#{environment}`) | Partition key (PK) |
+| `sk` | String (zero-padded version number) | Sort key (SK) |
+| `content` | String | Not applicable |
+| `contentHash` | String (SHA-256 of the canonical JSON) | Not applicable |
+| `writtenBy` | String (`schema-admin` or a promotion id) | Not applicable |
+| `writtenAt` | String (ISO 8601) | Not applicable |
+
+| Pattern | Index | Key condition |
+|---------|-------|---------------|
+| Content of one version | Table (PK+SK) | `pk = :d#e#env AND sk = :version` |
+| Version history of a schema in an environment | Table (PK) | `pk = :d#e#env` |

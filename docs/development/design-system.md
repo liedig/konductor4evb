@@ -55,7 +55,7 @@ All primitives are in `web/app/components/`. Nuxt imports them automatically, in
 | Input | `NxInput.vue` | `v-model`, associated label/hint/error, required and disabled semantics |
 | Select | `NxSelect.vue` | Native select; `v-model`, `options`, associated label/hint/error; preserves empty filter values |
 | Badge | `NxBadge.vue` | Tones `success`/`info`/`warning`/`danger`/`neutral` |
-| Status pill | `NxStatusPill.vue` | Maps lifecycle status strings, including `ACTIVE` and `PENDING_APPROVAL`, to tones. Reuse this mapping. |
+| Status pill | `NxStatusPill.vue` | Maps lifecycle status strings, including `ACTIVE`, `PENDING_APPROVAL`, and the promotion phases (`VALIDATING`, `REPLAYING`, `REPINNING`, `COMPLETED`, `FAILED`, `CANCELLED`), to tones. Reuse this mapping. |
 | Card | `NxCard.vue` | Optional `title` + `#actions` header slot |
 | Table | `NxTable.vue` | `columns` + `items`; per-column `cell-<key>` slots, `#empty` slot |
 | Modal | `NxModal.vue` | Reka Dialog, controlled `open`/`close`, Escape/backdrop close, `#actions` footer slot |
@@ -82,5 +82,6 @@ Use these patterns when composing pages:
 - **List + filter**: page header (`text-2xl font-semibold` title, muted subtitle, primary action on the right), filter row of `NxSelect`/`NxInput`, then `NxTable` with `NxStatusPill` cells; pagination via a "Load more" ghost button when `nextToken` is present.
 - **Detail**: header with name + status pill + actions; stacked `NxCard` sections (overview, related resources); read-only fields render as definition lists, never disabled inputs.
 - **Inbox**: list-first page where each row is one actionable item with age, primary approve action, and destructive reject behind a justification form; empty inbox gets an explicit `NxEmptyState`.
+- **Pipeline**: an ordered strip of environment nodes (configured order, never alphabetical) showing per-node state as `NxBadge`s and a per-target action; long-running transitions poll a status endpoint and report phases with `NxStatusPill`, settling on a toast. Used by the producer schema page's promotion pipeline.
 
 Status-to-tone mapping is centralized in `NxStatusPill`; subscribe/enable async flows settle on success/failure toasts and the polling helper rather than bespoke spinners.

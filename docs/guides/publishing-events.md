@@ -41,11 +41,11 @@ https://{api-id}.execute-api.{region}.amazonaws.com/staging/publish  → staging
 https://{api-id}.execute-api.{region}.amazonaws.com/prod/publish     → prod
 ```
 
-There is no environment field in any request body. The same call on different stages targets that environment's schema registry and event bus independently. Environment-agnostic operations (register, list, describe, decide) behave identically on any stage.
+There is no environment field in any request body. Publishing works on every stage and targets that environment's event bus independently. Schema writes are different: creation and version appends are accepted only on the **authoring stage** (the first configured environment, `dev` in a default installation); every other stage answers `400 AuthoringEnvironmentOnly`. Later environments receive versions only through promotion (`POST /schemas/promotions` on the target stage). Environment-agnostic operations (register, list, describe, decide) behave identically on any stage.
 
 ## Step 2: register your schema
 
-Every event needs a schema in the target environment's registry before it can be published there. Create version 1:
+Every event needs a schema in the target environment's registry before it can be published there. Create version 1 on the authoring stage (later environments receive it through promotion):
 
 ```bash
 awscurl -X POST "${API_URL}/schemas" --region ${AWS_REGION} \
@@ -69,6 +69,7 @@ Key things to know:
 - **Konductor validates event names before writing.** Names can contain only `[A-Za-z0-9._-]`. The derived subscription rule name must fit the 64-character limit for Amazon EventBridge. Invalid names return `400` before any write.
 - **Duplicates are rejected, never replaced.** Creating an existing schema returns `409 Conflict`; the existing schema and all its versions remain unchanged.
 - **The domain must be `ACTIVE`.** Otherwise `404 Not Found`, and no registry write occurs.
+- **Authoring stage only.** On any other stage the call fails with `400` and code `AuthoringEnvironmentOnly`, naming the authoring environment, before any registry access. No role or binding bypasses this; use promotion to reach later environments.
 
 Evolve an event by **appending** a version:
 
@@ -87,6 +88,26 @@ Appends are also **backward compatible only**. The new document is checked again
 - **Also rejected, as unproven rather than demonstrably breaking:** any change to a document carrying schema-bearing `$ref`s, edits to combinators or `patternProperties`, `id`/`format` changes, numeric comparisons that cannot be made exactly, and documents whose comparison exceeds the gate's work budget. These rejections mean the bounded proof could not establish compatibility, not that a breaking payload was found.
 
 Compatibility is judged against the current latest version only, never historical ones, and the gate is absolute—no flag or role bypasses it. If you need a genuinely breaking change (renaming a field, tightening a constraint), register it as a **new schema under a new event name** and migrate consumers explicitly; that keeps every accepted version of an event safe for consumers validated against its predecessors.
+
+## Promoting a schema to later environments
+
+New versions land only in the authoring environment. When a version is ready for the next environment, **promote** it—promotion replays the missing versions into the target registry under the *same* version numbers, so `v3` means the same contract in every environment. Each promotion covers one hop: the target is the stage you call, the source is its configured predecessor (for `dev, staging, prod`, promoting on the `staging` stage replays from `dev`).
+
+```bash
+awscurl -X POST "${API_URL_STAGING}/schemas/promotions" --region ${AWS_REGION} \
+  -H "Content-Type: application/json" \
+  -d '{ "domain": "orders", "eventName": "OrderNotification" }'
+```
+
+The call answers `202 Accepted` with the in-flight promotion (or `409` naming the promotion already running for that schema and environment—promotion is idempotent, so retrying the same request is safe and never double-writes). Track progress with `GET /schemas/promotions?domain=orders&eventName=OrderNotification` on the same stage; the status moves `VALIDATING → REPLAYING → REPINNING → COMPLETED`. In the console, the producer schema page (**Domains → your domain → schema name**) shows the whole pipeline: per-environment versions with behind counts, a Promote action per target environment, live promotion progress, the environments each version has reached, and every subscriber's pinned version.
+
+Key things to know:
+
+- **Replay validates before writing.** Promotion first compares the version history both registries share (canonical content comparison). If the target's history diverges from the authoring environment's, the promotion stops as `FAILED` with reason `DIVERGED` and leaves the target untouched—contact the platform team to reconcile before retrying.
+- **Failures are resumable.** If a replay fails mid-way (`REPLAY_FAILED`), the versions already written stay in the target; fix the cause and promote again—already-replayed versions are skipped, and per-version retries carry the same idempotency token.
+- **Subscribers keep receiving events.** After the replay, Konductor re-pins the target environment's subscription rules to the new version through a widen, drain, narrow sequence: rules first match both the pinned and the new versions, wait out a drain window (five minutes by default), then settle on the new version. No events are dropped in between, and consumers observe this as their rule filters changing—not as a gap in delivery.
+- **The version pin is per environment.** A consumer's rule in `staging` moves only when the promotion into `staging` completes; each environment's pins advance independently.
+- **You need the publisher binding.** Promotion requires the `schema:promote` grant on the producer domain (held by publishers); auditors can read promotion status but cannot start one.
 
 ## Step 3: publish an event
 
@@ -150,6 +171,7 @@ Konductor validates your `data` against the schema's latest version **before** a
 | `400` | Body failed structural validation (missing field, unknown field—including an injected top-level `metadata` key—invalid event name); on schema writes, also `content` that is not a valid draft-4 document; on version appends, also content that tightens the current latest version—offending paths are listed in `message` | Fix the request body / schema document; for a rejected append, loosen the document or register a new event name instead |
 | `403` | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
 | `404` | Domain missing/inactive, or no schema registered for this event in this environment | Check domain status; create the schema first |
+| `400` (schema writes) | Called on a non-authoring stage (`AuthoringEnvironmentOnly`) | Create and append on the authoring stage; promote into later environments |
 | `409` (create schema) | Schema already exists in this environment | Append a version instead |
 | `422` (publish) | `data` violates the schema's latest version—violations are listed in `message` | Fix the payload and retry; if you just appended a schema version, a plain retry picks it up |
 | `503` (publish) | The platform could not evaluate the publish (schema registry or queue trouble, or metadata configuration missing/unreadable) | Retry with backoff; alert your platform team if it persists |

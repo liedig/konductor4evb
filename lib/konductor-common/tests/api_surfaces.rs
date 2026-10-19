@@ -63,12 +63,13 @@ fn two_apis_serve_environment_named_stages() {
         assert_eq!(text(at(at(include, "Parameters"), "Location")), location);
 
         for (env, suffix) in [("staging", "Staging"), ("prod", "Prod")] {
-            let stage = resource(&doc, &format!("{logical_id}{suffix}Stage"));
+            let name = format!("{logical_id}{suffix}Stage");
+            let stage = at(at(&doc, "Resources"), &name);
             assert_eq!(text(at(stage, "Type")), "AWS::ApiGateway::Stage");
             assert_eq!(text(at(props(stage), "StageName")), env);
-            assert_eq!(text(at(props(stage), "RestApiId")), logical_id);
+            assert_eq!(text(at(at(props(stage), "RestApiId"), "Ref")), logical_id);
             assert_eq!(
-                text(at(props(stage), "DeploymentId")),
+                text(at(at(props(stage), "DeploymentId"), "Ref")),
                 format!("{logical_id}.Deployment")
             );
         }
@@ -450,12 +451,29 @@ fn schema_admin_has_least_privilege_permissions() {
         actions,
         [
             "dynamodb:GetItem",
+            "dynamodb:PutItem",
             "events:PutEvents",
             "schemas:CreateSchema",
             "schemas:DescribeSchema",
             "schemas:UpdateSchema"
         ],
-        "schema handlers: domain-state read, append-only schema writes, the compatibility gate's latest-version read (gate-schema-promotion), and the SchemaVersionPublished promotion signal (follow-schema-promotion)"
+        "schema handlers: domain-state read, append-only schema writes, the compatibility gate's latest-version read (gate-schema-promotion), the SchemaVersionPublished promotion signal (follow-schema-promotion), and version-content recording"
+    );
+    let function = resource(&doc, "SchemaAdminFunction");
+    let policies = seq(at(props(function), "Policies"));
+    let scoped = policies
+        .iter()
+        .filter_map(|policy| policy.get("Statement"))
+        .flat_map(seq)
+        .any(|s| {
+            seq(at(s, "Action"))
+                .iter()
+                .any(|a| text(a) == "dynamodb:PutItem")
+                && format!("{:?}", at(s, "Resource")).contains("SchemaVersionsTable")
+        });
+    assert!(
+        scoped,
+        "the PutItem grant must be scoped to the versions table only"
     );
 }
 
@@ -484,12 +502,66 @@ fn publisher_functions_have_no_administration_permissions() {
     ] {
         let (actions, _) = function_policy_shape(&doc, logical_id);
         for action in &forbidden {
+            // Schema-admin records version content into the versions table:
+            // PutItem there is its single sanctioned write (scoped above).
+            if logical_id == "SchemaAdminFunction" && *action == "dynamodb:PutItem" {
+                continue;
+            }
             assert!(
                 !actions.iter().any(|a| a == action),
                 "{logical_id} must not hold {action}"
             );
         }
     }
+}
+
+#[test]
+fn schema_promotions_has_least_privilege_permissions() {
+    let doc = core_template();
+    let (mut actions, managed) = function_policy_shape(&doc, "SchemaPromotionsFunction");
+    assert_eq!(
+        managed,
+        ["BindingsTableReadPolicy", "EntitlementsTableReadPolicy"],
+        "grant-engine decisions read bindings and entitlements through the reserved policies"
+    );
+    actions.sort();
+    assert_eq!(
+        actions,
+        [
+            "dynamodb:GetItem",
+            "dynamodb:GetItem",
+            "dynamodb:PutItem",
+            "schemas:DescribeSchema"
+        ],
+        "promotion requests: domain-state read, head-item get/put, and the source registry's latest-version read; workflow execution rides the stream"
+    );
+}
+
+#[test]
+fn schema_promotion_steps_has_least_privilege_permissions() {
+    let doc = core_template();
+    let (mut actions, managed) = function_policy_shape(&doc, "SchemaPromotionStepsFunction");
+    assert_eq!(managed, Vec::<String>::new(), "no managed policies");
+    actions.sort();
+    assert_eq!(
+        actions,
+        [
+            // promotions head + REPIN items: get, conditional put, update
+            "dynamodb:GetItem",
+            // versions content records
+            "dynamodb:GetItem",
+            "dynamodb:PutItem",
+            "dynamodb:PutItem",
+            // event-streams entry enumeration
+            "dynamodb:Query",
+            "dynamodb:UpdateItem",
+            "schemas:CreateSchema",
+            "schemas:DescribeSchema",
+            "schemas:ListSchemaVersions",
+            "schemas:UpdateSchema",
+        ],
+        "steps: head/REPIN writes, version content read+write, entry query, registry reads and target writes (CreateSchema lands v1 on first arrival)"
+    );
 }
 
 #[test]
@@ -1447,6 +1519,7 @@ fn activation_materializes_each_environment_via_the_shared_function() {
     );
     for required in [
         "schemas:DescribeSchema",
+        "events:DescribeRule",
         "events:PutRule",
         "events:PutTargets",
         "iam:PassRole",
@@ -1490,7 +1563,10 @@ fn activation_materializes_each_environment_via_the_shared_function() {
             "{moved} belongs to the materialize function, not the workflow role"
         );
     }
+}
 
+#[test]
+fn activation_workflow_maps_materialize_without_compensation() {
     let asl = repo_yaml("event-streams/state-machines/activate-subscription.asl.yaml");
     let states = mapping(at(&asl, "States"));
     let map_state = states
@@ -1566,8 +1642,9 @@ fn promotion_extender_is_wired_to_schema_publication() {
             "dynamodb:Query",
             "events:PutEvents",
             "lambda:InvokeFunction",
+            "states:StartExecution",
         ],
-        "extender: stream census, consumer account lookup, materialize invoke, lifecycle event"
+        "extender: stream census, consumer account lookup, materialize invoke, lifecycle event, authoring re-pin trigger"
     );
 
     let func = resource(&doc, "SubscriptionExtenderFunction");

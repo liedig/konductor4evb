@@ -14,19 +14,10 @@ const loadFailed = ref(false)
 const pending = ref(true)
 
 const formOpen = ref(false)
-const formEventName = ref<string | undefined>(undefined)
-const formAppendSchemaName = ref<string | undefined>(undefined)
 
-// Appends target only the console's API stage environment. The catalog
-// merges every environment, so a schema that exists solely in another stage
-// would deterministically 404 — offer append only when it exists here.
-const targetEnvironment = computed(() => {
-  const segment = config.apiBaseUrl.replace(/\/+$/, '').split('/').pop()
-  return segment && segment !== config.apiBaseUrl ? segment : config.apiBaseUrl
-})
-
-function appendable(schema: SchemaSummary): boolean {
-  return (schema.latestVersions ?? {})[targetEnvironment.value] != null
+// Environment badges follow the configured order, not the API payload's.
+function orderedEnvs(schema: SchemaSummary): string[] {
+  return orderEnvironments(Object.keys(schema.latestVersions ?? {}), config.environments)
 }
 
 // Producer scope: publishers see their own domain's schemas without any
@@ -51,14 +42,6 @@ async function load() {
 }
 
 function openRegister() {
-  formEventName.value = undefined
-  formAppendSchemaName.value = undefined
-  formOpen.value = true
-}
-
-function openAppend(schema: SchemaSummary) {
-  formEventName.value = schema.schemaName?.split('@')[1] ?? schema.schemaName
-  formAppendSchemaName.value = schema.schemaName
   formOpen.value = true
 }
 
@@ -72,14 +55,18 @@ onMounted(load)
 <template>
   <NxCard title="Schemas">
     <template #actions>
-      <NxButton v-if="!forbidden && !loadFailed && !pending" size="sm" @click="openRegister">Register schema</NxButton>
+      <!-- Registration starts here only until the first schema exists; after
+           that, schema management lives on each producer schema page. -->
+      <NxButton v-if="!forbidden && !loadFailed && !pending && schemas.length === 0" size="sm" @click="openRegister">
+        Register schema
+      </NxButton>
     </template>
 
     <p v-if="pending" class="text-sm text-muted">Loading…</p>
     <p v-else-if="forbidden" class="text-sm text-muted">
       Publisher access is required to view this domain's schemas.
     </p>
-    <p v-else-if="loadFailed" class="text-sm text-muted">
+    <p v-else-if="loadFailed" role="alert" class="text-sm text-danger">
       Schemas could not be loaded — refresh to try again.
     </p>
     <p v-else-if="schemas.length === 0" class="text-sm text-muted">
@@ -88,20 +75,18 @@ onMounted(load)
     <ul v-else class="flex flex-col gap-2">
       <li v-for="schema in schemas" :key="schema.schemaName" class="flex items-center justify-between gap-4">
         <NuxtLink
-          :to="`/catalog/${encodeURIComponent(schema.producerDomain ?? '')}/${encodeURIComponent(schema.schemaName ?? '')}?from=/domains/${encodeURIComponent(domain)}`"
+          :to="`/domains/${encodeURIComponent(domain)}/schemas/${encodeURIComponent(schema.schemaName ?? '')}`"
           class="truncate font-mono text-sm text-accent hover:underline"
         >
           {{ schema.schemaName }}
         </NuxtLink>
         <span class="flex shrink-0 items-center gap-2">
-          <template v-for="(version, env) in schema.latestVersions" :key="env">
-            <NxBadge tone="neutral">{{ env }} v{{ version }}</NxBadge>
+          <template v-for="env in orderedEnvs(schema)" :key="env">
+            <NxBadge tone="neutral">{{ env }} v{{ schema.latestVersions?.[env] }}</NxBadge>
             <NxBadge v-if="schema.metadataRevisions?.[env] !== undefined" tone="info">
               {{ env }} M{{ schema.metadataRevisions[env] }}
             </NxBadge>
           </template>
-          <NxButton v-if="appendable(schema)" variant="secondary" size="sm" @click="openAppend(schema)">New version</NxButton>
-          <span v-else class="text-xs text-muted">Not registered in {{ targetEnvironment }} yet</span>
         </span>
       </li>
     </ul>
@@ -110,8 +95,6 @@ onMounted(load)
       :open="formOpen"
       :domain="domain"
       :namespace="namespace"
-      :event-name="formEventName"
-      :append-schema-name="formAppendSchemaName"
       @close="formOpen = false"
       @saved="onSaved"
     />

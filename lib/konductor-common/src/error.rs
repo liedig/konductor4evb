@@ -54,6 +54,12 @@ pub enum ControlPlaneError {
     #[error("schema not found: {schema_name}")]
     SchemaNotFound { schema_name: String },
 
+    #[error("schema authoring is restricted to the '{authoring_environment}' environment; versions reach '{stage}' only through promotion")]
+    AuthoringEnvironmentOnly {
+        stage: String,
+        authoring_environment: String,
+    },
+
     #[error("schema already exists: {schema_name}")]
     SchemaAlreadyExists { schema_name: String },
 
@@ -71,6 +77,13 @@ pub enum ControlPlaneError {
 
     #[error("Schemas error: {0}")]
     Schemas(String),
+
+    #[error("no promotion recorded for {schema_name} in {environment} (domain {domain})")]
+    PromotionNotFound {
+        domain: String,
+        schema_name: String,
+        environment: String,
+    },
 
     #[error("metadata generation failed: {reason}")]
     MetadataGenerationFailed { reason: String },

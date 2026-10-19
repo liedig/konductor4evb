@@ -211,7 +211,7 @@ test('a failed configuration load keeps the page recoverable', async ({ page }) 
 
 test('empty history guidance appears before any revision is saved', async ({ page }) => {
   await installApi(page)
-  await page.route('**/dev/metadata/revisions**', async (route) => {
+  await page.route('**/api/dev/metadata/revisions**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',

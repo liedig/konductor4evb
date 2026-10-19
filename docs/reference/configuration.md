@@ -44,6 +44,22 @@ by redeploying with new values.
   instead. Adding or removing environments on a live platform is a
   provisioning-shaped migration deferred to a future change.
 
+## Stage rendering
+
+The core stack serves one API stage per environment, generated from the
+`environments` list at deploy time. `make build` and `make deploy-core` run
+`validate-config.py --render-stages`, which rewrites the two marked
+`StageName` lines in `konductor-core-stack.yaml` when the authoring
+environment (the first entry) is not the default `dev`, and regenerates
+the marked rendered-stages block with one additional stage resource per
+remaining environment. The template is committed with the default list
+rendered, so default installations see no diff; a custom list leaves a
+working-tree change to commit alongside the configuration change.
+`validate-config.py --check-stages` (run in CI) fails when the committed
+template drifts from the rendered output. The block renders inline rather
+than through `Fn::Transform`/`AWS::Include` — a Resources-level include
+failed changeset creation in the full template.
+
 ## Related
 
 - [Installation](../operations/installation.md) — where the values are supplied.

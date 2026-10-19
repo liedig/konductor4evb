@@ -52,7 +52,10 @@ help: ## Show this help message
 	@printf "    $(DIM)SUBSCRIPTION_STATUS$(RESET)         optional for: list-subscriptions (filter by status)\n\n"
 
 
-build-ci: lambda-binaries-ci ## Build all Lambda binaries once, then package with SAM
+render-stages: ## Render API stages from the validated environment list (konductor-platform.toml; defaults when absent)
+	@python3 scripts/validate-config.py --render-stages
+
+build-ci: render-stages lambda-binaries-ci ## Build all Lambda binaries once, then package with SAM
 	sam build --config-file samconfig-core.toml -c
 
 lambda-binaries-ci: ## Cross-compile every function to arm64 (per-package; a single workspace build collapses same-named bootstrap binaries into one output dir)
@@ -63,7 +66,7 @@ lambda-binaries-ci: ## Cross-compile every function to arm64 (per-package; a sin
 		cp target/lambda/bootstrap/bootstrap $$dir/bootstrap; \
 	done
 	
-build: lambda-binaries ## Build all Lambda binaries once, then package with SAM
+build: render-stages lambda-binaries ## Build all Lambda binaries once, then package with SAM
 	sam build --config-file samconfig-core.toml -c
 
 lambda-binaries: ## Cross-compile every function to arm64 (per-package to avoid bootstrap name collisions)
@@ -123,9 +126,9 @@ web-dev: ## Run the live-backed web console and open /design-system in your brow
 	ENVS=$$(output KonductorEnvironments); \
 	test -n "$$POOL_ID" || { echo "$(YELLOW)KonductorUserPoolId output missing — deploy the core stack first (make deploy-core)$(RESET)"; exit 1; }; \
 	if [ -n "$$ENVS" ]; then ENVS_JSON=$$(printf '%s' "$$ENVS" | sed 's/,/","/g; s/^/"/; s/$$/"/'); else ENVS_JSON=""; fi; \
-	printf '{"apiBaseUrl":"/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s","environments":[%s]}\n' \
+	printf '{"apiBaseUrl":"/api","userPoolId":"%s","userPoolClientId":"%s","region":"%s","environments":[%s]}\n' \
 		"$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" "$$ENVS_JSON" > web/public/config.json; \
-	cd web && KONDUKTOR_DEV_API_URL="$$API_URL" KONDUKTOR_OPEN_GALLERY=1 pnpm dev
+	cd web && KONDUKTOR_DEV_API_URL="$${API_URL%/*}" KONDUKTOR_OPEN_GALLERY=1 pnpm dev
 
 deploy-web: ## Build the web console, publish to the web bucket, and write config.json from stack outputs
 	@set -euo pipefail; \
@@ -141,7 +144,7 @@ deploy-web: ## Build the web console, publish to the web bucket, and write confi
 	cd web && pnpm install --frozen-lockfile && pnpm build && cd ..; \
 	ENVS=$$(output KonductorEnvironments); \
 	if [ -n "$$ENVS" ]; then ENVS_JSON=$$(printf '%s' "$$ENVS" | sed 's/,/","/g; s/^/"/; s/$$/"/'); else ENVS_JSON=""; fi; \
-	printf '{"apiBaseUrl":"%s/dev","userPoolId":"%s","userPoolClientId":"%s","region":"%s","environments":[%s]}\n' \
+	printf '{"apiBaseUrl":"%s/api","userPoolId":"%s","userPoolClientId":"%s","region":"%s","environments":[%s]}\n' \
 		"$$WEB_URL" "$$POOL_ID" "$$CLIENT_ID" "$(AWS_REGION)" "$$ENVS_JSON" > web/.output/public/config.json; \
 	echo "$(CYAN)Syncing to s3://$$BUCKET$(RESET)"; \
 	aws s3 sync web/.output/public "s3://$$BUCKET" --delete; \

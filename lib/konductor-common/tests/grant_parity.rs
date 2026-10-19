@@ -799,6 +799,40 @@ async fn subscriber_binding_does_not_grant_publisher_actions() {
 }
 
 #[tokio::test]
+async fn publisher_binding_allows_promote_unbound_and_cross_domain_deny() {
+    let bindings = manifest_bindings();
+    let publisher = oauth(&["orders-publishers"], vec![]);
+    assert_parity(
+        &bindings,
+        &[],
+        &publisher,
+        actions::SCHEMA_PROMOTE,
+        "orders-prod",
+        AuthorizationDecision::Allow,
+    )
+    .await;
+    assert_parity(
+        &bindings,
+        &[],
+        &publisher,
+        actions::SCHEMA_PROMOTE,
+        "payments-prod",
+        AuthorizationDecision::Deny,
+    )
+    .await;
+    let nobody = oauth(&["team-nobody"], vec![]);
+    assert_parity(
+        &bindings,
+        &[],
+        &nobody,
+        actions::SCHEMA_PROMOTE,
+        "orders-prod",
+        AuthorizationDecision::Deny,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn default_denial_for_unknown_principal_action_and_resource() {
     let bindings = manifest_bindings();
     let nobody = oauth(&["team-nobody"], vec![]);

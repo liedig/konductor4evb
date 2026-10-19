@@ -152,7 +152,10 @@ async function pollSubscription(subscriptionId: string) {
 
 // Environments with a current schema version materialize at activation; the
 // producer's remaining environments follow on promotion (awaiting promotion).
-const availableEnvironments = computed(() => Object.keys(schema.value?.latestVersions ?? {}).sort())
+// Displays follow the configured environment order, never alphabetical.
+const config = useKonductorConfig()
+const availableEnvironments = computed(() =>
+  orderEnvironments(Object.keys(schema.value?.latestVersions ?? {}), config.environments))
 
 function pretty(value?: string): string {
   if (!value) return ''

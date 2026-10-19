@@ -22,7 +22,7 @@ test('environments failure surfaces the message, not a blank page', async ({ pag
 
 test('loading state shows progress while the first read is in flight', async ({ page }) => {
   await installApi(page)
-  await page.route('**/dev/schemas**', async (route) => {
+  await page.route('**/api/dev/schemas**', async (route) => {
     await new Promise(resolve => setTimeout(resolve, 1200))
     await route.fulfill({
       status: 200,
@@ -38,7 +38,7 @@ test('loading state shows progress while the first read is in flight', async ({ 
 
 test('empty environments render guidance instead of a table', async ({ page }) => {
   await installApi(page)
-  await page.route('**/dev/metadata/environments', async (route) => {
+  await page.route('**/api/dev/metadata/environments', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ environments: [] }) })
   })
   await page.goto('/admin/metadata')
@@ -57,7 +57,7 @@ test('an activation audit without history explains itself', async ({ page }) => 
 test('catalog list failure leaves the panel recoverable', async ({ page }) => {
   await signIn(page, ['platform-admin'])
   await installApi(page)
-  await page.route('**/dev/schemas**', async (route) => {
+  await page.route('**/api/dev/schemas**', async (route) => {
     await route.fulfill({
       status: 500,
       contentType: 'application/json',

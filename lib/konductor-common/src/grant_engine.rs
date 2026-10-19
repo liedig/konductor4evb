@@ -26,6 +26,8 @@ pub mod actions {
     pub const SCHEMA_CREATE: &str = "schema:create";
     /// Append a version to an existing producer schema.
     pub const SCHEMA_VERSION_APPEND: &str = "schema:version-append";
+    /// Promote a producer schema to the next environment.
+    pub const SCHEMA_PROMOTE: &str = "schema:promote";
     /// Create a subscription against a composite resource
     /// (`{consumer}/{producer}/{event}`, see `subscription_resource`).
     pub const SUBSCRIPTION_CREATE: &str = "subscription:create";
@@ -40,9 +42,10 @@ pub mod actions {
 
 fn role_for_action(action: &str) -> Option<ResourceRole> {
     match action {
-        actions::SCHEMA_PUBLISH | actions::SCHEMA_CREATE | actions::SCHEMA_VERSION_APPEND => {
-            Some(ResourceRole::Publisher)
-        }
+        actions::SCHEMA_PUBLISH
+        | actions::SCHEMA_CREATE
+        | actions::SCHEMA_VERSION_APPEND
+        | actions::SCHEMA_PROMOTE => Some(ResourceRole::Publisher),
         _ => None,
     }
 }

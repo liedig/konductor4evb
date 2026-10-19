@@ -32,6 +32,7 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
         | ControlPlaneError::BindingNotFound { .. }
         | ControlPlaneError::EntitlementNotFound { .. }
         | ControlPlaneError::SchemaNotFound { .. }
+        | ControlPlaneError::PromotionNotFound { .. }
         | ControlPlaneError::MetadataRevisionNotFound { .. } => error_response(
             404,
             ApiError {
@@ -69,6 +70,16 @@ pub fn from_control_plane_error(err: &ControlPlaneError) -> Value {
                 request_id: None,
                 reason: Some(reason.clone()),
                 field_list: field_list.clone(),
+            },
+        ),
+        ControlPlaneError::AuthoringEnvironmentOnly { .. } => error_response(
+            400,
+            ApiError {
+                code: "AuthoringEnvironmentOnly".to_string(),
+                message: err.to_string(),
+                request_id: None,
+                reason: None,
+                field_list: None,
             },
         ),
         ControlPlaneError::AccessDenied => error_response(

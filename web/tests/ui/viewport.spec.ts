@@ -58,8 +58,8 @@ test('catalog detail panels stack and environment switching works at 375px', asy
   await expect(preview.getByText(/The contract events in prod validate against right now/)).toBeVisible()
 })
 
-test('the domain panel actions remain reachable at 375px', async ({ page }) => {
-  await page.goto('/domains/orders')
+test('the producer schema page actions remain reachable at 375px', async ({ page }) => {
+  await page.goto('/domains/orders/schemas/acme-orders%40OrderNotification')
 
   await page.getByRole('button', { name: 'New version' }).first().click()
   await expect(page.getByRole('dialog').getByText('Target environment: dev')).toBeVisible()

@@ -787,9 +787,11 @@ paths:
       summary: Create an event schema (publisher)
       description: >
         Flat schema creation mirroring EventBridge CreateSchema. Konductor derives
-        the canonical schema name {namespaceIdentity}@{eventName}, targets the
-        stage-selected environment's registry, and creates version 1. Requires
-        a publisher binding for the domain. Schemas are append-only.
+        the canonical schema name {namespaceIdentity}@{eventName} and creates
+        version 1 in the authoring environment's registry — the first
+        configured environment; later environments receive versions only
+        through promotion. Requires a publisher binding for the domain.
+        Schemas are append-only.
       x-amazon-apigateway-request-validator: validate-body
       requestBody:
         required: true
@@ -805,7 +807,11 @@ paths:
               schema:
                 $ref: "#/components/schemas/SchemaMutationResponse"
         "400":
-          description: Validation error
+          description: >
+            Validation error, or AuthoringEnvironmentOnly when called on a
+            stage other than the authoring environment's (the response names
+            the authoring environment and promotion as the path into later
+            environments)
           content:
             application/json:
               schema:
@@ -834,13 +840,132 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SchemaAdminFunction.Arn}/invocations"
 
+  /schemas/promotions:
+    post:
+      operationId: RequestSchemaPromotion
+      summary: Request promotion of a schema into the target environment
+      description: >
+        Starts an asynchronous promotion of a schema into the environment the
+        request's stage selects; the source is always the previous entry of the
+        platform environment list. The promotion replays every source version
+        after the target's verified watermark, preserving version numbers, then
+        re-pins subscription rules with delivery continuity. Returns 202 with
+        the promotion id; completion is reported by
+        `GET /schemas/promotions` and by `SchemaPromotionCompleted` /
+        `SchemaPromotionFailed` lifecycle events. Requires a publisher binding
+        for the domain (`schema:promote`).
+      x-amazon-apigateway-request-validator: validate-body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePromotionRequest"
+      responses:
+        "202":
+          description: Promotion accepted; replay runs asynchronously
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromotionStatusResponse"
+        "400":
+          description: >
+            Validation error, or the request's stage is the authoring
+            environment (the authoring environment has no source to promote
+            from)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller lacks a publisher binding for the domain
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain not found or not active, or the schema is missing from the source environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: A non-terminal promotion is already active for this schema and target environment; the response carries its id
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromotionConflictResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SchemaPromotionsFunction.Arn}/invocations"
+    get:
+      operationId: GetSchemaPromotion
+      summary: Report the latest promotion status for a schema on this stage
+      description: >
+        The latest promotion record for the schema in the environment the
+        request's stage selects: status (`VALIDATING`, `REPLAYING`,
+        `REPINNING`, `COMPLETED`, `FAILED`, `CANCELLED`), the versions replayed
+        so far, re-pin tallies, and the failure reason when failed.
+        Open to callers with a publisher binding for the domain and to
+        platform roles.
+      parameters:
+        - name: domain
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: eventName
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The latest promotion status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromotionStatusResponse"
+        "400":
+          description: Missing query parameters, or the request's stage is the authoring environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller holds neither a publisher binding for the domain nor a platform role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: No promotion recorded for this schema and environment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SchemaPromotionsFunction.Arn}/invocations"
+
   /schemas/versions:
     post:
       operationId: AppendSchemaVersion
       summary: Append a new version to an existing schema (publisher)
       description: >
         Flat append-only version registration mirroring EventBridge
-        UpdateSchema. Existing versions remain immutable. Requires a publisher
+        UpdateSchema in the authoring environment's registry. Existing
+        versions remain immutable. Requires a publisher
         binding for the domain. The appended document must provably preserve
         every payload the current latest version accepts, under a bounded
         syntactic proof: it may loosen or remove constraints, and it may add
@@ -869,10 +994,11 @@ paths:
         "400":
           description: >
             Validation error: the document is not valid JSON Schema draft-4,
-            or backward compatibility with the current latest version could
+            backward compatibility with the current latest version could
             not be established (the message identifies the relevant paths,
             distinguishing observed constraint restrictions from changes
-            the bounded proof does not support)
+            the bounded proof does not support), or AuthoringEnvironmentOnly
+            when called on a stage other than the authoring environment's
           content:
             application/json:
               schema:
@@ -2256,6 +2382,81 @@ components:
         eventName: OrderNotification
         content: "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\"}"
 
+    CreatePromotionRequest:
+      type: object
+      required: [domain, eventName]
+      additionalProperties: false
+      properties:
+        domain:
+          type: string
+          minLength: 1
+        eventName:
+          type: string
+          minLength: 1
+      example:
+        domain: orders
+        eventName: OrderNotification
+
+    PromotionConflictResponse:
+      type: object
+      required: [code, message, promotionId]
+      properties:
+        code:
+          type: string
+          example: ConflictException
+        message:
+          type: string
+        promotionId:
+          type: string
+          description: The id of the promotion currently active for this schema and environment.
+
+    PromotionStatusResponse:
+      type: object
+      required: [promotionId, schemaName, sourceEnvironment, targetEnvironment, requestedVersion, status, replayedVersions, createdAt, updatedAt]
+      properties:
+        promotionId:
+          type: string
+        schemaName:
+          type: string
+          description: The event name (detail-type) being promoted.
+        sourceEnvironment:
+          type: string
+        targetEnvironment:
+          type: string
+        requestedVersion:
+          type: integer
+          description: The source's latest version at request time; the promotion replays up to it.
+        status:
+          type: string
+          enum: [VALIDATING, REPLAYING, REPINNING, COMPLETED, FAILED, CANCELLED]
+        replayedVersions:
+          type: array
+          items:
+            type: integer
+          description: Source versions durably written to the target so far.
+        targetVersion:
+          type: integer
+          description: The target's latest version once replaying finished.
+        repin:
+          type: object
+          properties:
+            matched:
+              type: integer
+            repinned:
+              type: integer
+            failed:
+              type: integer
+          description: Re-pin tallies; present once re-pinning ran.
+        reason:
+          type: string
+          enum: [DIVERGED, REPLAY_FAILED]
+          description: Failure category; present when status is FAILED.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     SchemaMutationResponse:
       type: object
       properties:

@@ -51,21 +51,21 @@ function domainDetail(overrides: Record<string, unknown> = {}) {
 }
 
 async function installDomainApi(page: Page, detail: Record<string, unknown>) {
-  await page.route('**/dev/domains/orders', async (route) => {
+  await page.route('**/api/dev/domains/orders', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify(detail),
     })
   })
-  await page.route('**/dev/schemas**', async (route) => {
+  await page.route('**/api/dev/schemas**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ items: [] }),
     })
   })
-  await page.route('**/dev/subscriptions**', async (route) => {
+  await page.route('**/api/dev/subscriptions**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',

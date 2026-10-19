@@ -38,6 +38,7 @@ before treating an older claim as a current requirement.
 - [Publisher APIs and environment-named stages](add-publisher-apis.md)
 - [Validate at ingest, not at delivery](validate-at-ingest.md)
 - [Independent per-environment subscription materialization](follow-schema-promotion.md)
+- [Replay-based schema promotion with aligned version numbers](promote-schema-versions.md)
 - [Fail-closed schema compatibility proof](harden-schema-compatibility-checker.md)
 - [Independent platform metadata contracts](add-platform-metadata-composition.md)
 

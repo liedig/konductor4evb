@@ -27,8 +27,15 @@ export function parseKonductorConfig(raw: unknown): KonductorConfig {
   const environments = Array.isArray(candidate.environments)
     ? candidate.environments.filter((e): e is string => typeof e === 'string' && e !== '')
     : []
+  const apiBaseUrl = (candidate.apiBaseUrl as string).replace(/\/+$/, '')
+  const lastSegment = apiBaseUrl.split('/').pop() ?? ''
+  if (environments.includes(lastSegment)) {
+    throw new Error(
+      `config.json "apiBaseUrl" must be the API root (e.g. "/api"); it ends with the "${lastSegment}" stage segment`,
+    )
+  }
   return {
-    apiBaseUrl: candidate.apiBaseUrl as string,
+    apiBaseUrl,
     userPoolId: candidate.userPoolId as string,
     userPoolClientId: candidate.userPoolClientId as string,
     region: candidate.region as string,

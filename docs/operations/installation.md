@@ -161,6 +161,8 @@ make deploy-core
 This runs the same validation first, then deploys with parameter overrides rendered from `konductor-platform.toml`—deploy and validation cannot read different values.
 
 > **On `environments`**: this is an org-wide governance setting, fixed at setup. Every domain registered and approved on this Konductor deployment is provisioned across the full list. The preflight refuses a changed list against a deployed stack; adding or removing environments on a live platform is a provisioning-shaped migration deferred to a future change.
+>
+> The list also drives the API stages and the console's `/api/{environment}` routes: the first entry is the authoring environment and every later entry is a promotion target, rendered into the marked block in `konductor-core-stack.yaml` by `make build` (`scripts/validate-config.py --render-stages`). Deploys where the first entry is not `dev` rewrite the SAM-managed stage to match it. Because the stage resources keep stable logical IDs, adopting the rendered stages on an existing installation is an in-place update with no stage replacement; the phantom `Stage` stage that older deployments carry comes from SAM's generated `Deployment` resource and is inert.
 
 ### Existing installations: adopt the configuration file
 

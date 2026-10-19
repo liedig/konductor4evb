@@ -14,10 +14,21 @@ Consumers subscribe to a **schema**—the contract—not to a bus or an endpoint
 
 Each subscription materializes as **one rule per environment** on the producer's platform-side bus:
 
-- Rule name: `{consumerDomain}-{detailType}`. A future version migration updates the pattern on the same rule with `PutRule`, without deleting and recreating it. EventBridge enforces unique rule names within each bus, preventing duplicate subscriptions. `PutRule` upserts make workflow retries idempotent.
+- Rule name: `{consumerDomain}-{detailType}`. A version advancement updates the pattern on the same rule with `PutRule`, without deleting and recreating it.
+- Version pattern: the rule matches `detail.metadata.schemaVersion` against `[pinned, pinned + 1]`—the pin plus a one-version lookahead. A producer can append and immediately publish the next version without waiting for any re-pin; the lookahead slot is what makes re-pinning asynchronous. EventBridge enforces unique rule names within each bus, preventing duplicate subscriptions. `PutRule` upserts make workflow retries idempotent.
 - Target: the consumer's app-side domain bus (same env), delivered via the `konductor-subscription-delivery-role`, with `DeadLetterConfig` on the producer's per-env subscription DLQ.
 - Delivery authorization: a resource policy on the consumer's app-side bus granting the **platform account** `events:PutEvents`, attached once during `provision-env` (`SetAppBusDeliveryPolicy` step). No per-subscription IAM.
 - A per-subscription **zero-events alarm** (24 h without a delivery, missing data = breaching) flags silently-stopped streams—the failure mode when a producer bumps versions past a pinned subscriber.
+
+### Re-pinning (widen, drain, narrow)
+
+Advancing a pin never swaps a rule's pattern in place. Both pin transitions—an append in the authoring environment and a promotion landing in a later one—run the same three steps against a per-schema, per-environment `REPIN` item in the promotions table:
+
+1. **Widen** records `[min(existing floor, current pin) ..= target + 1]` as the pattern and bumps a generation counter, then applies that pattern to every affected rule (`mode: repin` on the shared materialize function, which preserves a disabled rule's state and touches nothing but the pattern).
+2. **Drain** waits out the producer flush SLA (`SchemaRepinDrainSeconds`, default 300 s, minimum 120): events already accepted under the old version keep matching the widened pattern while producers finish publishing it.
+3. **Narrow** commits `[to, to + 1]` per rule and records the new pin, but only on the generation its own widen wrote—a newer widen supersedes an older narrow, so two quick appends (or an append racing a promotion) converge instead of flapping.
+
+The generation is the coordination token: the REPIN item's conditional writes make the widen→narrow sequence safe under retries and overlapping flows. Failed per-entry re-pins are counted on the promotion's record (`repinFailed`) and surfaced by the zero-events alarm.
 
 ## Subscription flow
 

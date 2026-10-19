@@ -103,6 +103,9 @@ jobs:
       - name: Install build tools
         run: pip install cargo-lambda aws-sam-cli
 
+      - name: Check rendered stages match the default environment list
+        run: python3 scripts/validate-config.py --check-stages
+
       - name: Validate SAM template
         run: sam validate --config-file samconfig-core.toml --lint
 

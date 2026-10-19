@@ -7,6 +7,8 @@ import type {
   CreateSchemaRequest,
   ListSchemasResponse,
   ListSubscriptionsResponse,
+  PromotionView,
+  RequestPromotionRequest,
   SchemaDetail,
   SchemaMutationResponse,
   SubscribeRequest,
@@ -56,6 +58,22 @@ export function useCatalog() {
       api.post<SchemaMutationResponse>('/schemas', body),
     appendSchemaVersion: (body: AppendSchemaVersionRequest) =>
       api.post<SchemaMutationResponse>('/schemas/versions', body),
+    /** Start a replay-driven promotion against the target environment's
+     * stage (the stage selects the target; the source is its configured
+     * predecessor). 202 carries the in-flight view, 409 an already-running
+     * promotion's id in the error body. */
+    requestPromotion: (options: RequestPromotionRequest & { environment: string }) =>
+      useApi(options.environment).post<PromotionView>('/schemas/promotions', {
+        domain: options.domain,
+        eventName: options.eventName,
+      }),
+    /** Latest promotion for one (schema, target environment), read through
+     * the target stage; 404 when the schema was never promoted there. */
+    getPromotion: (options: { domain: string, eventName: string, environment: string }) =>
+      useApi(options.environment).get<PromotionView>('/schemas/promotions', {
+        domain: options.domain,
+        eventName: options.eventName,
+      }),
     subscribe: (body: SubscribeRequest) => api.post<CommandAccepted>('/subscriptions', body),
     listSubscriptions: (options: { domain: string, direction: 'inbound' | 'outbound', schema?: string, status?: string }) =>
       api.get<ListSubscriptionsResponse>('/subscriptions', {

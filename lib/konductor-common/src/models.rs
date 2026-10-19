@@ -188,12 +188,25 @@ pub struct AppendSchemaVersionRequest {
     pub content: String,
 }
 
+/// Flat promotion request: the request stage selects the target environment;
+/// the source is the previous entry of the platform environment list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreatePromotionRequest {
+    pub domain: String,
+    pub event_name: String,
+}
+
 /// The 201 response body for both schema mutations.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SchemaMutationResponse {
     pub schema_name: String,
     pub schema_version: i64,
+    /// Set when the registry reported a no-change conflict: the version
+    /// already holds this content (an ambiguous-retry duplicate).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -659,9 +672,11 @@ mod tests {
         let response = SchemaMutationResponse {
             schema_name: "acme-orders@OrderNotification".to_string(),
             schema_version: 3,
+            duplicate: None,
         };
         let value = serde_json::to_value(&response).unwrap();
         assert_eq!(value["schemaName"], "acme-orders@OrderNotification");
         assert_eq!(value["schemaVersion"], 3);
+        assert!(value.get("duplicate").is_none());
     }
 }

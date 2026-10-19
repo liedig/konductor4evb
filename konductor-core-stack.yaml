@@ -54,6 +54,15 @@ Parameters:
     Default: ""
     Description: Verified SES recipient that receives domain approval requests and lifecycle event notifications (the platform team inbox). Both this and NotificationSenderEmail must be non-empty to deploy notification resources.
 
+  SchemaRepinDrainSeconds:
+    Type: Number
+    Default: 300
+    MinValue: 120
+    Description: >
+      Seconds a promotion waits between widening subscription rule patterns
+      to admit in-flight events and narrowing them to the new pin. Must
+      outlast the producer flush SLA (event put to rule evaluation), which
+      is measured in minutes for batched producers.
   AccessTokenValidityMinutes:
     Type: Number
     Default: 60
@@ -201,6 +210,65 @@ Resources:
         AttributeName: expiresAt
         Enabled: true
 
+  # ---- DynamoDB (schema promotions) ----
+  # Promotion head items double as per-target leases; the NEW_AND_OLD_IMAGES
+  # stream starts the promotion workflow and emits lifecycle events. The
+  # REPIN sort key holds re-pin coordination state per schema and environment.
+  SchemaPromotionsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub "konductor-schema-promotions"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+  # ---- DynamoDB (schema version content) ----
+  # Canonical content of every schema version per environment. The registry
+  # serves only the latest version and normalizes whitespace, so this store
+  # is what makes replay and divergence detection possible. No stream: all
+  # side effects ride on the promotions table's stream.
+  SchemaVersionsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub "konductor-schema-versions"
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
   # ---- DynamoDB (authorization bindings) ----
   # Single-table grant store: RoleBinding items keyed by principal, AuditRecord
   # items keyed by binding. GSIs are sparse (bindings only) and serve
@@ -828,6 +896,26 @@ Resources:
             Resource: !Sub "arn:aws:events:${AWS::Region}:*:event-bus/${Organization}-*"
 
   # ---- API Gateway ----
+  # Account-level API Gateway logging role: any stage with AccessLogSetting
+  # requires it, and the service validates it at stage update time.
+  ApiGatewayCloudWatchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+
+  ApiGatewayAccount:
+    Type: AWS::ApiGateway::Account
+    Properties:
+      CloudWatchRoleArn: !GetAtt ApiGatewayCloudWatchRole.Arn
+
   IamApiAccessLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
@@ -842,10 +930,13 @@ Resources:
     UpdateReplacePolicy: Delete
     Properties:
       Name: !Sub "konductor-KonductorOAuthApi"
-      # Stages are environment selectors: SAM manages `dev`; `staging` and
-      # `prod` are explicit AWS::ApiGateway::Stage resources below sharing the
-      # same deployment.
-      StageName: dev
+      # Stages are environment selectors. SAM manages the authoring stage
+      # (the first configured environment); every other environment's stage is
+      # rendered into this template's marked block at deploy time, sharing
+      # this deployment. The marker comment lets scripts/validate-config.py
+      # --render-stages rewrite StageName when the authoring environment is
+      # not the default `dev`.
+      StageName: dev # konductor:authoring-stage
       TracingEnabled: true
       EndpointConfiguration:
         Type: REGIONAL
@@ -888,7 +979,7 @@ Resources:
     UpdateReplacePolicy: Delete
     Properties:
       Name: !Sub "konductor-KonductorIamApi"
-      StageName: dev
+      StageName: dev # konductor:authoring-stage
       TracingEnabled: true
       EndpointConfiguration:
         Type: REGIONAL
@@ -908,38 +999,28 @@ Resources:
           Parameters:
             Location: ./api/openapi-iam.yaml
 
-  # Environment-named stages sharing each API's SAM-managed deployment
-  # (!Ref <Api>.Deployment is SAM's referenceable property for the generated
-  # AWS::ApiGateway::Deployment). Settings mirror the SAM-managed dev stage.
+  # Environment-named stages beyond the authoring stage, sharing each API's
+  # SAM-managed deployment ({ Ref: <Api>.Deployment } is SAM's referenceable
+  # property for the generated AWS::ApiGateway::Deployment). Rendered inline
+  # at deploy time from the configured environment list by
+  # scripts/validate-config.py --render-stages; the committed block matches
+  # the default [dev, staging, prod] list.
+  # konductor:rendered-stages-begin
+  # Generated by scripts/validate-config.py --render-stages from the
+  # validated environment list (konductor-platform.toml). Do not edit
+  # by hand.
+
   KonductorOAuthApiStagingStage:
     Type: AWS::ApiGateway::Stage
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      RestApiId: !Ref KonductorOAuthApi
-      DeploymentId: !Ref KonductorOAuthApi.Deployment
+      RestApiId: { Ref: KonductorOAuthApi }
+      DeploymentId: { Ref: KonductorOAuthApi.Deployment }
       StageName: staging
       TracingEnabled: true
       AccessLogSetting:
-        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
-        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
-      MethodSettings:
-        - ResourcePath: "/*"
-          HttpMethod: "*"
-          ThrottlingBurstLimit: 100
-          ThrottlingRateLimit: 50
-
-  KonductorOAuthApiProdStage:
-    Type: AWS::ApiGateway::Stage
-    DeletionPolicy: Delete
-    UpdateReplacePolicy: Delete
-    Properties:
-      RestApiId: !Ref KonductorOAuthApi
-      DeploymentId: !Ref KonductorOAuthApi.Deployment
-      StageName: prod
-      TracingEnabled: true
-      AccessLogSetting:
-        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        DestinationArn: { Fn::GetAtt: [ApiAccessLogGroup, Arn] }
         Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
       MethodSettings:
         - ResourcePath: "/*"
@@ -952,12 +1033,30 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      RestApiId: !Ref KonductorIamApi
-      DeploymentId: !Ref KonductorIamApi.Deployment
+      RestApiId: { Ref: KonductorIamApi }
+      DeploymentId: { Ref: KonductorIamApi.Deployment }
       StageName: staging
       TracingEnabled: true
       AccessLogSetting:
-        DestinationArn: !GetAtt IamApiAccessLogGroup.Arn
+        DestinationArn: { Fn::GetAtt: [IamApiAccessLogGroup, Arn] }
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+
+  KonductorOAuthApiProdStage:
+    Type: AWS::ApiGateway::Stage
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      RestApiId: { Ref: KonductorOAuthApi }
+      DeploymentId: { Ref: KonductorOAuthApi.Deployment }
+      StageName: prod
+      TracingEnabled: true
+      AccessLogSetting:
+        DestinationArn: { Fn::GetAtt: [ApiAccessLogGroup, Arn] }
         Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
       MethodSettings:
         - ResourcePath: "/*"
@@ -970,18 +1069,19 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Properties:
-      RestApiId: !Ref KonductorIamApi
-      DeploymentId: !Ref KonductorIamApi.Deployment
+      RestApiId: { Ref: KonductorIamApi }
+      DeploymentId: { Ref: KonductorIamApi.Deployment }
       StageName: prod
       TracingEnabled: true
       AccessLogSetting:
-        DestinationArn: !GetAtt IamApiAccessLogGroup.Arn
+        DestinationArn: { Fn::GetAtt: [IamApiAccessLogGroup, Arn] }
         Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","resourcePath":"$context.resourcePath","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency"}'
       MethodSettings:
         - ResourcePath: "/*"
           HttpMethod: "*"
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
+  # konductor:rendered-stages-end
 
   # ---- Cognito Identity (interactive OAuth foundation) ----
   KonductorUserPool:
@@ -1700,7 +1800,7 @@ Resources:
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
             - Effect: Allow
-              Action: [events:PutRule, events:PutTargets]
+              Action: [events:DescribeRule, events:PutRule, events:PutTargets]
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/${Organization}-*"
             - Effect: Allow
               Action: [iam:PassRole]
@@ -1736,6 +1836,8 @@ Resources:
           DOMAINS_TABLE: !Ref DomainsTable
           MATERIALIZE_FUNCTION_ARN: !GetAtt MaterializeSubscriptionEnvFunction.Arn
           KONDUKTOR_EVENT_BUS: !GetAtt KonductorEventBus.Arn
+          ENVIRONMENTS: !Join [",", !Ref Environments]
+          REPIN_STATE_MACHINE_ARN: !Ref RepinSchemaEnvWorkflow
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1753,6 +1855,12 @@ Resources:
             - Effect: Allow
               Action: [events:PutEvents]
               Resource: !GetAtt KonductorEventBus.Arn
+            # An append in the authoring environment advances that
+            # environment's pins via the re-pin workflow (idempotent on the
+            # per-version execution name).
+            - Effect: Allow
+              Action: [states:StartExecution]
+              Resource: !Ref RepinSchemaEnvWorkflow
 
   SchemaVersionPublishedRule:
     Type: AWS::Events::Rule
@@ -1925,6 +2033,7 @@ Resources:
         Variables:
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
           ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+          SCHEMA_VERSIONS_TABLE: !Ref SchemaVersionsTable
           KONDUKTOR_EVENT_BUS: !GetAtt KonductorEventBus.Arn
       DeadLetterQueue:
         Type: SQS
@@ -1937,6 +2046,9 @@ Resources:
             - Effect: Allow
               Action: [dynamodb:GetItem]
               Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:PutItem]
+              Resource: !GetAtt SchemaVersionsTable.Arn
             - Effect: Allow
               Action: [schemas:CreateSchema, schemas:UpdateSchema, schemas:DescribeSchema]
               Resource:
@@ -1972,6 +2084,327 @@ Resources:
             RestApiId: !Ref KonductorIamApi
             Path: /schemas/versions
             Method: POST
+
+  # ---- Schema promotion request API ----
+  # Accepts and reports promotions; its only commit is the conditional
+  # PROMOTION head-item put, and every downstream effect rides the promotions
+  # table stream (side-effects rubric: docs/development/side-effects/schemas.md).
+  SchemaPromotionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-schema-promotions"
+      RetentionInDays: 30
+  SchemaPromotionsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SchemaPromotionsLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-schema-promotions"
+      CodeUri: ./event-streams/functions/schema-promotions
+      Handler: bootstrap
+      Environment:
+        Variables:
+          BINDINGS_TABLE: !Ref AuthorizationBindingsTable
+          ENTITLEMENTS_TABLE: !Ref AuthorizationEntitlementsTable
+          PROMOTIONS_TABLE: !Ref SchemaPromotionsTable
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - !Ref BindingsTableReadPolicy
+        - !Ref EntitlementsTableReadPolicy
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem]
+              Resource: !GetAtt SchemaPromotionsTable.Arn
+            # Source-registry existence and latest-version reads.
+            - Effect: Allow
+              Action: [schemas:DescribeSchema]
+              Resource:
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+      Events:
+        OAuthRequestPromotion:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /schemas/promotions
+            Method: POST
+        IamRequestPromotion:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorIamApi
+            Path: /schemas/promotions
+            Method: POST
+        OAuthGetPromotion:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorOAuthApi
+            Path: /schemas/promotions
+            Method: GET
+        IamGetPromotion:
+          Type: Api
+          Properties:
+            RestApiId: !Ref KonductorIamApi
+            Path: /schemas/promotions
+            Method: GET
+
+  # ---- Schema promotion stream consumer ----
+  # Watches the promotions table: a VALIDATING INSERT starts the promotion
+  # workflow (execution name is the idempotency key), MODIFY transitions emit
+  # lifecycle events. REPIN items are filtered at the event source.
+  SchemaPromotionStreamLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-schema-promotion-stream"
+      RetentionInDays: 30
+
+  SchemaPromotionStreamFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SchemaPromotionStreamLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-schema-promotion-stream"
+      CodeUri: ./event-streams/functions/schema-promotion-stream
+      Handler: bootstrap
+      Environment:
+        Variables:
+          PROMOTE_STATE_MACHINE_ARN: !Ref PromoteSchemaWorkflow
+          KONDUKTOR_EVENT_BUS: !Ref KonductorEventBus
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [states:StartExecution]
+              Resource: !Ref PromoteSchemaWorkflow
+            - Effect: Allow
+              Action: [events:PutEvents]
+              Resource: !GetAtt KonductorEventBus.Arn
+      Events:
+        PromotionsStream:
+          Type: DynamoDB
+          Properties:
+            Stream: !GetAtt SchemaPromotionsTable.StreamArn
+            StartingPosition: TRIM_HORIZON
+            BatchSize: 10
+            BisectBatchOnFunctionError: true
+            MaximumRetryAttempts: 3
+            MaximumRecordAgeInSeconds: 3600
+            FilterCriteria:
+              Filters:
+                - Pattern: '{"dynamodb": {"NewImage": {"sk": {"S": ["PROMOTION"]}}}}'
+            DestinationConfig:
+              OnFailure:
+                Type: SQS
+                Destination: !GetAtt SchemaPromotionStreamDlq.Arn
+
+  SchemaPromotionStreamDlq:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub "konductor-schema-promotion-stream-dlq"
+
+  SchemaPromotionStreamDlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-schema-promotion-stream-dlq-depth-alarm"
+      AlarmDescription: Promotion stream records permanently failed — redrive after fixing the cause; promotions stall until then
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SchemaPromotionStreamDlq.QueueName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  SchemaPromotionStreamIteratorAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-schema-promotion-stream-iterator-age-alarm"
+      AlarmDescription: Promotion stream consumer falling behind — workflow starts and lifecycle events delayed; recover before the 24-hour stream window closes
+      Namespace: AWS/Lambda
+      MetricName: IteratorAge
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SchemaPromotionStreamFunction
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 60000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  # ---- Schema promotion workflow steps ----
+  # Invoked only by the promote-schema state machine: plan (prefix
+  # verification), replay (single-version write + progress commit), widen and
+  # narrow (REPIN item coordination + entry enumeration).
+  SchemaPromotionStepsLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-schema-promotion-steps"
+      RetentionInDays: 30
+
+  SchemaPromotionStepsFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SchemaPromotionStepsLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-schema-promotion-steps"
+      CodeUri: ./event-streams/functions/schema-promotion-steps
+      Handler: bootstrap
+      Timeout: 120
+      Environment:
+        Variables:
+          SCHEMA_VERSIONS_TABLE: !Ref SchemaVersionsTable
+          PROMOTIONS_TABLE: !Ref SchemaPromotionsTable
+          EVENT_STREAMS_TABLE: !Ref EventStreamsTable
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            # Progress commits and repin coordination are conditional writes
+            # on the promotion head and REPIN items.
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem, dynamodb:PutItem]
+              Resource: !GetAtt SchemaPromotionsTable.Arn
+            # Replay reads the source version's content record and writes the
+            # target's; plan repairs missing latest records.
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem]
+              Resource: !GetAtt SchemaVersionsTable.Arn
+            # Widen and narrow enumerate affected subscriptions on the
+            # producer partition.
+            - Effect: Allow
+              Action: [dynamodb:Query]
+              Resource: !GetAtt EventStreamsTable.Arn
+            # Source reads and target writes, scoped to the org's registries.
+            - Effect: Allow
+              Action: [schemas:DescribeSchema, schemas:ListSchemaVersions]
+              Resource:
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
+                - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+            # UpdateSchema appends; CreateSchema lands v1 on first arrival.
+            - Effect: Allow
+              Action: [schemas:UpdateSchema, schemas:CreateSchema]
+              Resource: !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+
+  # ---- Schema promotion workflow ----
+  PromoteSchemaWorkflowRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "konductor-promote-schema-workflow-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+
+  PromoteSchemaWorkflowPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: PromoteSchemaWorkflowPolicy
+      Roles:
+        - !Ref PromoteSchemaWorkflowRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:UpdateItem
+            Resource: !GetAtt SchemaPromotionsTable.Arn
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !GetAtt SchemaPromotionStepsFunction.Arn
+              - !GetAtt MaterializeSubscriptionEnvFunction.Arn
+          - Effect: Allow
+            Action:
+              - events:PutEvents
+            Resource: !GetAtt KonductorEventBus.Arn
+
+  PromoteSchemaWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub "konductor-promote-schema"
+      Role: !GetAtt PromoteSchemaWorkflowRole.Arn
+      Tracing:
+        Enabled: true
+      DefinitionUri: ./event-streams/state-machines/promote-schema.asl.yaml
+      DefinitionSubstitutions:
+        PromotionsTable: !Ref SchemaPromotionsTable
+        StepsFunctionArn: !GetAtt SchemaPromotionStepsFunction.Arn
+        MaterializeEnvFunctionArn: !GetAtt MaterializeSubscriptionEnvFunction.Arn
+        KonductorEventBus: !GetAtt KonductorEventBus.Arn
+        DrainSeconds: !Ref SchemaRepinDrainSeconds
+  # ---- Authoring-environment re-pin workflow ----
+  # A schema append in the first configured environment triggers this (from
+  # the subscription extender) to advance that environment's pins with the
+  # same widen/drain/narrow discipline a promotion uses.
+  RepinSchemaEnvWorkflowRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "konductor-repin-schema-env-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+
+  RepinSchemaEnvWorkflowPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: RepinSchemaEnvWorkflowPolicy
+      Roles:
+        - !Ref RepinSchemaEnvWorkflowRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !GetAtt SchemaPromotionStepsFunction.Arn
+              - !GetAtt MaterializeSubscriptionEnvFunction.Arn
+
+  RepinSchemaEnvWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      Name: !Sub "konductor-repin-schema-env"
+      Role: !GetAtt RepinSchemaEnvWorkflowRole.Arn
+      Tracing:
+        Enabled: true
+      DefinitionUri: ./event-streams/state-machines/repin-schema-env.asl.yaml
+      DefinitionSubstitutions:
+        StepsFunctionArn: !GetAtt SchemaPromotionStepsFunction.Arn
+        MaterializeEnvFunctionArn: !GetAtt MaterializeSubscriptionEnvFunction.Arn
+        DrainSeconds: !Ref SchemaRepinDrainSeconds
 
   # ---- Metadata configuration bootstrap ----
   # Deployment-time custom resource: conditionally seeds revision 1 (the
@@ -3473,7 +3906,7 @@ Resources:
 
   # Rewrites client-side routes to index.html on the static behavior only.
   # Extension-bearing paths (/_nuxt/*.js, /config.json, /favicon.svg) pass
-  # through; the /{stage}/* API behaviors never invoke this function.
+  # through; the /api/* behavior never invokes this function.
   KonductorWebSpaFallbackFunction:
     Type: AWS::CloudFront::Function
     Properties:
@@ -3495,6 +3928,25 @@ Resources:
           return request;
         }
 
+  # Strips the /api prefix from API calls so /api/{environment}/... reaches
+  # the {environment} stage of the OAuth API. One prefix covers every
+  # configured environment: CacheBehaviors is a list, so per-environment
+  # behaviors could not be generated from the environment list.
+  KonductorWebApiRewriteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: konductor-web-api-rewrite
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Strips the /api prefix so the path segment selects the API stage
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        function handler(event) {
+          var request = event.request;
+          request.uri = request.uri.replace(/^\/api/, '');
+          return request;
+        }
+
   KonductorWebDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
@@ -3510,8 +3962,8 @@ Resources:
             S3OriginConfig:
               OriginAccessIdentity: ""
           # Same-origin API access: the console calls its own distribution at
-          # /{stage}/*, which proxies to the OAuth API. This keeps the browser
-          # same-origin (no CORS surface) and connect-src at 'self'.
+          # /api/{environment}/*, which proxies to the OAuth API. This keeps
+          # the browser same-origin (no CORS surface) and connect-src 'self'.
           - Id: oauth-api
             DomainName: !Sub "${KonductorOAuthApi}.execute-api.${AWS::Region}.amazonaws.com"
             CustomOriginConfig:
@@ -3540,7 +3992,10 @@ Resources:
             # Managed CachingDisabled policy
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             ResponseHeadersPolicyId: !Ref KonductorWebResponseHeadersPolicy
-          - PathPattern: /dev/*
+          # All API traffic shares one behavior: the viewer-request function
+          # strips /api, and the remaining path's first segment is the
+          # environment-named API Gateway stage.
+          - PathPattern: /api/*
             TargetOriginId: oauth-api
             ViewerProtocolPolicy: redirect-to-https
             Compress: true
@@ -3550,22 +4005,9 @@ Resources:
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
             OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
             ResponseHeadersPolicyId: !Ref KonductorWebResponseHeadersPolicy
-          - PathPattern: /staging/*
-            TargetOriginId: oauth-api
-            ViewerProtocolPolicy: redirect-to-https
-            Compress: true
-            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
-            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
-            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
-            ResponseHeadersPolicyId: !Ref KonductorWebResponseHeadersPolicy
-          - PathPattern: /prod/*
-            TargetOriginId: oauth-api
-            ViewerProtocolPolicy: redirect-to-https
-            Compress: true
-            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
-            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
-            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
-            ResponseHeadersPolicyId: !Ref KonductorWebResponseHeadersPolicy
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt KonductorWebApiRewriteFunction.FunctionMetadata.FunctionARN
         ViewerCertificate:
           CloudFrontDefaultCertificate: true
           MinimumProtocolVersion: TLSv1.2_2021

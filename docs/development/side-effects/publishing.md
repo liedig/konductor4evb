@@ -1,4 +1,4 @@
-# Publish and schema write paths
+# Publish write paths
 
 [Documentation home](../../README.md)
 
@@ -21,6 +21,8 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 - **Decision:** STAY. **Rationale:** single atomic service call after read-only gates; nothing to stream.
 
 ## `schema-admin`
+
+> **Moved (2026-02-11, `promote-schema-versions`):** the current record, including the version-content record write and conflict self-heal, lives in [schemas.md](schemas.md). The pre-promotion record below is preserved as history.
 
 - **Committed writes:** none to DynamoDB—`CreateSchema`/`UpdateSchema` against the schemas service is the only mutation.
 - **Side effects:** `SchemaVersionPublished` on the control-plane bus after every committed registry write (added by `follow-schema-promotion`, 2026-09-08), carrying `{producerDomain, schemaName, environment, version, publishedAt}`; before that change, none.

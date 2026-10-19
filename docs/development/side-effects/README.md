@@ -45,6 +45,7 @@ The index summarizes the classification and rationale for each write path.
 | `publish-events` | ENVELOPE-DRIVEN | Not applicable |
 | `publish-events-admission` | STAY | Not applicable |
 | `schema-admin` | STAY | Not applicable |
+| `schema-promotions` POST/GET | STAY | Not applicable |
 | `entitlement-admin` | STAY | Not applicable |
 | `binding-admin` | STAY | Not applicable |
 | `entitlement-stream-consumer` | Reference (exempt) | Not applicable |
@@ -56,7 +57,8 @@ The index summarizes the classification and rationale for each write path.
 
 - [Domain management](domain-management.md)
 - [Subscriptions](subscriptions.md)
-- [Publishing and schemas](publishing.md)
+- [Publishing](publishing.md)
+- [Schemas](schemas.md)
 - [Authorization](authorization.md)
 - [Metadata](metadata.md)
 - [Remaining inventory and rubric placement](inventory.md)

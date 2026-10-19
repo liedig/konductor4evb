@@ -13,6 +13,7 @@ pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
     pub lambda: aws_sdk_lambda::Client,
     pub eb: aws_sdk_eventbridge::Client,
+    pub sfn: aws_sdk_sfn::Client,
 }
 
 impl Clients {
@@ -21,15 +22,18 @@ impl Clients {
             ddb: aws_sdk_dynamodb::Client::new(config),
             lambda: aws_sdk_lambda::Client::new(config),
             eb: aws_sdk_eventbridge::Client::new(config),
+            sfn: aws_sdk_sfn::Client::new(config),
         }
     }
 }
 
-struct Settings {
-    streams_table: String,
-    domains_table: String,
-    materialize_arn: String,
-    control_plane_bus: String,
+pub(crate) struct Settings {
+    pub(crate) streams_table: String,
+    pub(crate) domains_table: String,
+    pub(crate) materialize_arn: String,
+    pub(crate) control_plane_bus: String,
+    pub(crate) environments: Vec<String>,
+    pub(crate) repin_state_machine: String,
 }
 
 impl Settings {
@@ -42,6 +46,9 @@ impl Settings {
                 .context("MATERIALIZE_FUNCTION_ARN not set")?,
             control_plane_bus: std::env::var("KONDUKTOR_EVENT_BUS")
                 .context("KONDUKTOR_EVENT_BUS not set")?,
+            environments: konductor_common::environments::configured_environments()?,
+            repin_state_machine: std::env::var("REPIN_STATE_MACHINE_ARN")
+                .context("REPIN_STATE_MACHINE_ARN not set")?,
         })
     }
 }
@@ -51,9 +58,27 @@ impl Settings {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromotionDetail {
-    producer_domain: String,
-    schema_name: String,
-    environment: String,
+    pub(crate) producer_domain: String,
+    /// The registry's full schema name (`{namespace}@{eventName}`).
+    pub(crate) schema_name: String,
+    pub(crate) environment: String,
+    pub(crate) version: Option<i64>,
+}
+
+impl PromotionDetail {
+    /// The authoring environment is the only one whose appends advance pins
+    /// directly; other environments advance through promotions.
+    pub(crate) fn is_authoring(&self, settings: &Settings) -> bool {
+        settings.environments.first() == Some(&self.environment)
+    }
+
+    pub(crate) fn event_name(&self) -> Result<&str> {
+        self.schema_name
+            .split_once('@')
+            .map(|(_, name)| name)
+            .filter(|name| !name.is_empty())
+            .context("schema name is not in {namespace}@{eventName} form")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,7 +98,9 @@ pub async fn handle(clients: &Clients, event: Value) -> Result<Value, Error> {
     let event: PromotionEvent =
         serde_json::from_value(event).context("invalid SchemaVersionPublished event")?;
     let settings = Settings::from_env()?;
-    Ok(extend(clients, &settings, &event.detail).await?)
+    let summary = extend(clients, &settings, &event.detail).await?;
+    crate::repin::maybe_start_repin(clients, &settings, &event.detail).await?;
+    Ok(summary)
 }
 
 /// Promotion-following extension: every ACTIVE subscription on the promoted
@@ -283,14 +310,47 @@ mod tests {
             "arn:aws:lambda:us-east-1:111122223333:function:konductor-materialize-subscription-env",
         );
         std::env::set_var("KONDUKTOR_EVENT_BUS", "konductor-bus");
+        std::env::set_var("ENVIRONMENTS", "dev,staging,prod");
+        std::env::set_var(
+            "REPIN_STATE_MACHINE_ARN",
+            "arn:aws:states:us-east-1:111122223333:stateMachine:konductor-repin-schema-env",
+        );
     }
 
-    fn clients(ddb_rules: &[&Rule], lambda_rules: &[&Rule], eb_rules: &[&Rule]) -> Clients {
+    fn clients(
+        ddb_rules: &[&Rule],
+        lambda_rules: &[&Rule],
+        eb_rules: &[&Rule],
+        sfn_rules: &[&Rule],
+    ) -> Clients {
         Clients {
             ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, ddb_rules),
             lambda: mock_client!(aws_sdk_lambda, RuleMode::MatchAny, lambda_rules),
             eb: mock_client!(aws_sdk_eventbridge, RuleMode::MatchAny, eb_rules),
+            sfn: mock_client!(aws_sdk_sfn, RuleMode::MatchAny, sfn_rules),
         }
+    }
+
+    fn repin_start_rule() -> Rule {
+        mock!(aws_sdk_sfn::Client::start_execution)
+            .match_requests(|req| {
+                if req.name() != Some("repin-orders-OrderNotification-dev-v7") {
+                    return false;
+                }
+                let input: Value =
+                    serde_json::from_str(req.input().unwrap()).unwrap();
+                input["domain"] == "orders"
+                    && input["schemaName"] == "OrderNotification"
+                    && input["environment"] == "dev"
+                    && input["version"] == 7
+            })
+            .then_output(|| {
+                aws_sdk_sfn::operation::start_execution::StartExecutionOutput::builder()
+                    .execution_arn("arn:aws:states:us-east-1:111122223333:execution:konductor-repin-schema-env:repin-orders-OrderNotification-dev-v7")
+                    .start_date(aws_sdk_sfn::primitives::DateTime::from_secs(0))
+                    .build()
+                    .unwrap()
+            })
     }
 
     fn env_entry(status: StreamStatus, enabled: bool) -> EnvStream {
@@ -425,7 +485,7 @@ mod tests {
         let domain = domain_rule();
         let invoke = invoke_rule("staging", true, succeeded_outcome(true));
         let published = extended_event_rule("staging", 7, true);
-        let clients = clients(&[&query, &domain], &[&invoke], &[&published]);
+        let clients = clients(&[&query, &domain], &[&invoke], &[&published], &[]);
 
         let summary = handle(&clients, promotion_event("staging")).await.unwrap();
 
@@ -459,7 +519,7 @@ mod tests {
                     .build()
             });
         let published = extended_event_rule("staging", 7, true);
-        let clients = clients(&[&query, &domain], &[&invoke], &[&published]);
+        let clients = clients(&[&query, &domain], &[&invoke], &[&published], &[]);
 
         let summary = handle(&clients, promotion_event("staging")).await.unwrap();
 
@@ -488,7 +548,7 @@ mod tests {
             vec![("staging", StreamStatus::Active, true)],
         );
         let query = streams_query_rule(vec![pending, failed, removed, materialized]);
-        let clients = clients(&[&query], &[], &[]);
+        let clients = clients(&[&query], &[], &[], &[]);
 
         let summary = handle(&clients, promotion_event("staging")).await.unwrap();
 
@@ -510,7 +570,7 @@ mod tests {
         let domain = domain_rule();
         let invoke = invoke_rule("staging", false, succeeded_outcome(false));
         let published = extended_event_rule("staging", 7, false);
-        let clients = clients(&[&query, &domain], &[&invoke], &[&published]);
+        let clients = clients(&[&query, &domain], &[&invoke], &[&published], &[]);
 
         let summary = handle(&clients, promotion_event("staging")).await.unwrap();
 
@@ -536,7 +596,7 @@ mod tests {
             "error": { "failedStep": "CreateSubscriptionRule", "cause": "throttled" }
         });
         let invoke = invoke_rule("staging", true, outcome);
-        let clients = clients(&[&query, &domain], &[&invoke], &[]);
+        let clients = clients(&[&query, &domain], &[&invoke], &[], &[]);
 
         let summary = handle(&clients, promotion_event("staging")).await.unwrap();
 
@@ -560,10 +620,58 @@ mod tests {
                     .build(),
             )
         });
-        let clients = clients(&[&query, &domain], &[&crashed], &[]);
+        let clients = clients(&[&query, &domain], &[&crashed], &[], &[]);
 
         let result = handle(&clients, promotion_event("staging")).await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn authoring_append_starts_the_repin_workflow() {
+        set_env();
+        let query = streams_query_rule(vec![]);
+        let repin = repin_start_rule();
+        let clients = clients(&[&query], &[], &[], &[&repin]);
+
+        let summary = handle(&clients, promotion_event("dev")).await.unwrap();
+
+        assert_eq!(summary["extended"], 0);
+        assert_eq!(repin.num_calls(), 1, "environments[0] appends advance pins");
+    }
+
+    #[tokio::test]
+    async fn non_authoring_environment_does_not_start_a_repin() {
+        set_env();
+        let query = streams_query_rule(vec![]);
+        let repin = repin_start_rule();
+        let clients = clients(&[&query], &[], &[], &[&repin]);
+
+        let summary = handle(&clients, promotion_event("staging")).await.unwrap();
+
+        assert_eq!(summary["extended"], 0);
+        assert_eq!(
+            repin.num_calls(),
+            0,
+            "later environments advance through promotions"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_already_running_repin_is_success() {
+        set_env();
+        let query = streams_query_rule(vec![]);
+        let already = mock!(aws_sdk_sfn::Client::start_execution).then_error(|| {
+            aws_sdk_sfn::operation::start_execution::StartExecutionError::ExecutionAlreadyExists(
+                aws_sdk_sfn::types::error::ExecutionAlreadyExists::builder()
+                    .message("exists")
+                    .build(),
+            )
+        });
+        let clients = clients(&[&query], &[], &[], &[&already]);
+
+        let result = handle(&clients, promotion_event("dev")).await;
+
+        assert!(result.is_ok(), "a replayed publish event must not fail");
     }
 }

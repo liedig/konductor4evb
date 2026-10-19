@@ -1,0 +1,187 @@
+# Re-pins the authoring environment's subscription rules after a new schema
+# version is appended there. The lookahead pattern already admits the new
+# version, so this flow advances the pin: widen to [old ..= v+1], drain, then
+# narrow to [v, v+1]. Shares the promotion steps function and REPIN item; the
+# execution name (repin-{domain}-{eventName}-{env}-v{version}) is the
+# idempotency key and doubles as the widen owner.
+Comment: >-
+  Advances the authoring environment's subscription pins after a schema
+  append (widen, drain, narrow against the shared REPIN item).
+QueryLanguage: JSONata
+StartAt: Widen
+TimeoutSeconds: 3600
+States:
+  Widen:
+    Type: Task
+    Resource: "arn:aws:states:::lambda:invoke"
+    Arguments:
+      FunctionName: "${StepsFunctionArn}"
+      Payload:
+        action: "widen"
+        promotionId: "{% $states.context.Execution.Name %}"
+        domain: "{% $states.input.domain %}"
+        schemaName: "{% $states.input.schemaName %}"
+        environment: "{% $states.input.environment %}"
+        through: "{% $states.input.version %}"
+        drainSeconds: "{% $number('${DrainSeconds}') %}"
+    Retry:
+      - ErrorEquals:
+          - Lambda.ClientExecutionTimeoutException
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 3
+        BackoffRate: 2
+    Assign:
+      widen: "{% $states.result.Payload %}"
+    Output: "{% $states.input %}"
+    Catch:
+      - ErrorEquals: [States.ALL]
+        Next: RepinFailed
+    Next: ApplyWidenedPattern
+
+  ApplyWidenedPattern:
+    Type: Map
+    MaxConcurrency: 10
+    Items: "{% $widen.entries %}"
+    ItemSelector:
+      mode: "repin"
+      commitPin: false
+      versions: "{% $widen.pattern %}"
+      producerDomain: "{% $states.context.Map.Item.Value.producerDomain %}"
+      consumerDomain: "{% $states.context.Map.Item.Value.consumerDomain %}"
+      source: "{% $states.context.Map.Item.Value.source %}"
+      detailType: "{% $states.context.Map.Item.Value.detailType %}"
+      schemaName: "{% $states.context.Map.Item.Value.schemaName %}"
+      ruleName: "{% $states.context.Map.Item.Value.ruleName %}"
+      environment: "{% $states.context.Map.Item.Value.environment %}"
+      enabled: "{% $states.context.Map.Item.Value.enabled %}"
+    ItemProcessor:
+      ProcessorConfig:
+        Mode: INLINE
+      StartAt: RepinEntryWiden
+      States:
+        RepinEntryWiden:
+          Type: Task
+          Resource: "arn:aws:states:::lambda:invoke"
+          Arguments:
+            FunctionName: "${MaterializeEnvFunctionArn}"
+            Payload: "{% $states.input %}"
+          Retry:
+            - ErrorEquals:
+                - Lambda.ClientExecutionTimeoutException
+                - Lambda.ServiceException
+                - Lambda.AWSLambdaException
+                - Lambda.SdkClientException
+                - Lambda.TooManyRequestsException
+              IntervalSeconds: 2
+              MaxAttempts: 3
+              BackoffRate: 2
+          Output: "{% $states.result.Payload %}"
+          Catch:
+            - ErrorEquals: [States.ALL]
+              Output:
+                status: "FAILED"
+                ruleName: "{% $states.input.ruleName %}"
+              Next: RepinEntryWidenFailed
+          End: true
+        RepinEntryWidenFailed:
+          Type: Pass
+          End: true
+    Output: "{% $states.input %}"
+    Next: DrainWait
+
+  DrainWait:
+    Type: Wait
+    Seconds: "{% $widen.drainSeconds %}"
+    Next: Narrow
+
+  Narrow:
+    Type: Task
+    Resource: "arn:aws:states:::lambda:invoke"
+    Arguments:
+      FunctionName: "${StepsFunctionArn}"
+      Payload:
+        action: "narrow"
+        promotionId: "{% $states.context.Execution.Name %}"
+        domain: "{% $states.input.domain %}"
+        schemaName: "{% $states.input.schemaName %}"
+        environment: "{% $states.input.environment %}"
+        generation: "{% $widen.generation %}"
+        to: "{% $states.input.version %}"
+    Retry:
+      - ErrorEquals:
+          - Lambda.ClientExecutionTimeoutException
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 3
+        BackoffRate: 2
+    Assign:
+      narrow: "{% $states.result.Payload %}"
+    Output: "{% $states.input %}"
+    Catch:
+      - ErrorEquals: [States.ALL]
+        Next: RepinFailed
+    Next: ApplyNarrowedPattern
+
+  ApplyNarrowedPattern:
+    Type: Map
+    MaxConcurrency: 10
+    Items: "{% $narrow.entries %}"
+    ItemSelector:
+      mode: "repin"
+      commitPin: true
+      versions: "{% $narrow.pattern %}"
+      producerDomain: "{% $states.context.Map.Item.Value.producerDomain %}"
+      consumerDomain: "{% $states.context.Map.Item.Value.consumerDomain %}"
+      source: "{% $states.context.Map.Item.Value.source %}"
+      detailType: "{% $states.context.Map.Item.Value.detailType %}"
+      schemaName: "{% $states.context.Map.Item.Value.schemaName %}"
+      ruleName: "{% $states.context.Map.Item.Value.ruleName %}"
+      environment: "{% $states.context.Map.Item.Value.environment %}"
+      enabled: "{% $states.context.Map.Item.Value.enabled %}"
+    ItemProcessor:
+      ProcessorConfig:
+        Mode: INLINE
+      StartAt: RepinEntryNarrow
+      States:
+        RepinEntryNarrow:
+          Type: Task
+          Resource: "arn:aws:states:::lambda:invoke"
+          Arguments:
+            FunctionName: "${MaterializeEnvFunctionArn}"
+            Payload: "{% $states.input %}"
+          Retry:
+            - ErrorEquals:
+                - Lambda.ClientExecutionTimeoutException
+                - Lambda.ServiceException
+                - Lambda.AWSLambdaException
+                - Lambda.SdkClientException
+                - Lambda.TooManyRequestsException
+              IntervalSeconds: 2
+              MaxAttempts: 3
+              BackoffRate: 2
+          Output: "{% $states.result.Payload %}"
+          Catch:
+            - ErrorEquals: [States.ALL]
+              Output:
+                status: "FAILED"
+                ruleName: "{% $states.input.ruleName %}"
+              Next: RepinEntryNarrowFailed
+          End: true
+        RepinEntryNarrowFailed:
+          Type: Pass
+          End: true
+    Output: "{% $states.input %}"
+    Next: RepinSucceeded
+
+  RepinSucceeded:
+    Type: Succeed
+
+  RepinFailed:
+    Type: Fail

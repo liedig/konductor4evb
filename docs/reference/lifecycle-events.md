@@ -27,10 +27,15 @@ The **konductor bus** (`konductor-bus`) carries all internal lifecycle events. I
 | `SubscriptionActivated` | `konductor.event-streams` | Activate-subscription workflow | Not applicable |
 | `SubscriptionActivationFailed` | `konductor.event-streams` | Activate-subscription workflow | Not applicable |
 | `SubscriptionRemoved` | `konductor.event-streams` | Remove-subscription workflow | Not applicable |
-| `SchemaVersionPublished` | `konductor.schema-management` | Schema-admin (after a committed create/append) | Subscription-extender Lambda |
+| `SchemaVersionPublished` | `konductor.schema-management` | Schema-admin (after a committed create/append); promote-schema workflow (after a replayed prefix lands) | Subscription-extender Lambda |
+| `SchemaPromotionStarted` | `konductor.schema-management` | Schema-promotion stream consumer (VALIDATING→REPLAYING) | Platform-operator notifications |
+| `SchemaPromotionCompleted` | `konductor.schema-management` | Schema-promotion stream consumer (→COMPLETED) | Platform-operator notifications |
+| `SchemaPromotionFailed` | `konductor.schema-management` | Schema-promotion stream consumer (→FAILED) | Platform-operator notifications |
 | `SubscriptionEnvironmentExtended` | `konductor.event-streams` | Subscription-extender Lambda | Not applicable |
 
 The `DomainProvisioningFailed` payload carries `failedEnvironment` (or `null` for domain-level failures), `failedStep`, `errorCode`, `errorMessage`, and an aggregated `compensationErrors` array from any rollback runs. `SubscriptionActivationFailed` carries `failedEnvironment`, `failedStep`, and `errorMessage` (no compensation errors—activation has no rollback; per-environment outcomes ride on both subscription lifecycle events).
+
+All three promotion events share a base payload: `promotionId`, `domain`, `schemaName` (the event name, not the registry's full name), `sourceEnvironment`, `targetEnvironment`, and `toVersion`, plus `fromVersion` once the replay prefix is known. `SchemaPromotionCompleted` adds a `repin` summary (`matched`, `repinned`, `failed`) when the re-pin phase ran; `SchemaPromotionFailed` adds `reason` (`DIVERGED` or `REPLAY_FAILED`) and `failedVersion` when the replay produced a partial prefix. They are emitted by the stream consumer off committed promotions-table transitions, so they are at-least-once and can arrive seconds after the transition.
 
 Domain-management events use the source `konductor.domain-management`; subscription events use `konductor.event-streams`. The `DomainRegistrationApproved` event is the key orchestration trigger—it initiates the provisioning workflow via an EventBridge rule on the konductor bus.
 

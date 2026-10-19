@@ -1,7 +1,7 @@
 import type { Page, Route } from '@playwright/test'
 
 /**
- * In-test route mock for `/dev/**` (the dev server's same-origin API path).
+ * In-test route mock for `/api/{env}/**` (the dev server's same-origin API path).
  * Every call the console makes is fulfilled here with synthetic data — no
  * deployed stack, no real credentials, deterministic state per test.
  *
@@ -29,6 +29,13 @@ export interface MockState {
   environments: MockEnvironment[]
   audits: Record<string, unknown>[]
   activationMode: 'ok' | 'stale' | 'backward'
+  /** In-flight or recorded promotions, keyed `${targetEnv}::${eventName}`. */
+  promotions: Record<string, MockPromotion>
+  /** auto: each status poll advances the phase until COMPLETED; hold: keep
+   * the seeded phase; conflict: POST always 409s; fail-*: the next polls
+   * land on FAILED with the matching reason. */
+  promotionMode: 'auto' | 'hold' | 'conflict' | 'fail-diverged' | 'fail-replay'
+  promotionTicks: Record<string, number>
 }
 
 const REVISION_DEFINITION = {
@@ -67,6 +74,51 @@ export const SCHEMAS: MockSchemaSummary[] = [
 /** Plain GET /domains returns the platform-wide set (mirrors the deployed
  * scoping: platform roles get the full listing). The My domains page must
  * not render this as an ownership list for platform roles. */
+export const SUBSCRIPTIONS = [
+  {
+    subscriptionId: 'sub-billing-orders',
+    consumerDomain: 'billing',
+    producerDomain: 'orders',
+    schemaName: 'acme-orders@OrderNotification',
+    status: 'ACTIVE',
+    environments: {
+      dev: { status: 'ACTIVE', enabled: true, pinnedVersion: 2 },
+      staging: { status: 'ACTIVE', enabled: true, pinnedVersion: 3 },
+      prod: { status: 'ACTIVE', enabled: true, pinnedVersion: 3 },
+    },
+    createdAt: '2026-08-02T09:00:00.000Z',
+  },
+  {
+    subscriptionId: 'sub-loyalty-orders',
+    consumerDomain: 'loyalty',
+    producerDomain: 'orders',
+    schemaName: 'acme-orders@OrderNotification',
+    status: 'ACTIVE',
+    environments: {
+      prod: { status: 'ACTIVE', enabled: false, pinnedVersion: 1 },
+    },
+    createdAt: '2026-08-03T09:00:00.000Z',
+  },
+]
+
+export interface MockPromotion {
+  promotionId: string
+  schemaName: string
+  sourceEnvironment: string
+  targetEnvironment: string
+  requestedVersion: number
+  status: 'VALIDATING' | 'REPLAYING' | 'REPINNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+  replayedVersions: number[]
+  targetVersion?: number
+  repin?: { matched: number, repinned: number, failed: number }
+  reason?: 'DIVERGED' | 'REPLAY_FAILED'
+  createdAt: string
+  updatedAt: string
+}
+
+/** Configured environment order (mirrors the fixtures.ts config.json). */
+const ENV_ORDER = ['dev', 'staging', 'prod']
+
 export const DOMAINS = [
   { domainName: 'orders', status: 'ACTIVE', description: 'Order lifecycle events', ownerEmail: 'owner@example.com', ownerAccountId: '111122223333', createdAt: '2026-08-01T09:00:00.000Z' },
   { domainName: 'billing', status: 'ACTIVE', description: 'Invoicing and payments', ownerEmail: 'billing@example.com', ownerAccountId: '444455556666', createdAt: '2026-08-12T09:00:00.000Z' },
@@ -109,6 +161,9 @@ export function freshState(): MockState {
     ],
     audits: [],
     activationMode: 'ok',
+    promotions: {},
+    promotionMode: 'auto',
+    promotionTicks: {},
   }
 }
 
@@ -125,10 +180,13 @@ async function fulfillJson(route: Route, status: number, body: unknown) {
  * (conflict injection, activation delays, error modes).
  */
 export async function installApi(page: Page, state: MockState = freshState()): Promise<MockState> {
-  await page.route('**/dev/**', async (route) => {
+  await page.route('**/api/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
-    const path = decodeURIComponent(url.pathname).replace(/^\/dev/, '')
+    // Strip the /api prefix and the environment segment; handlers match the
+    // bare OpenAPI paths.
+    const stage = decodeURIComponent(url.pathname).match(/^\/api\/([^/]+)/)?.[1] ?? 'dev'
+    const path = decodeURIComponent(url.pathname).replace(/^\/api\/[^/]+/, '')
     const query = url.searchParams
 
     if (request.method() === 'GET') {
@@ -169,6 +227,17 @@ export async function installApi(page: Page, state: MockState = freshState()): P
           return fulfillJson(route, 200, { items: SCHEMAS.slice(2) })
         }
         return fulfillJson(route, 200, { items: SCHEMAS.slice(0, 2), nextToken: 'page-2' })
+      }
+      if (path === '/subscriptions') {
+        const schema = query.get('schema')
+        const items = schema ? SUBSCRIPTIONS.filter(item => item.schemaName === schema) : SUBSCRIPTIONS
+        return fulfillJson(route, 200, { items })
+      }
+      if (path === '/schemas/promotions') {
+        const eventName = query.get('eventName') ?? ''
+        const promotion = state.promotions[promotionKey(stage, eventName)]
+        if (!promotion) return fulfillJson(route, 404, errorBody('NotFound', 'No promotion recorded for this schema in this environment'))
+        return fulfillJson(route, 200, advancePromotion(state, stage, eventName))
       }
       if (path.endsWith('/contract')) {
         return contractRoute(route, path, query, state)
@@ -258,6 +327,35 @@ export async function installApi(page: Page, state: MockState = freshState()): P
           alreadyActive,
         })
       }
+      if (path === '/schemas/promotions') {
+        const eventName = (payload.eventName as string) ?? ''
+        const key = promotionKey(stage, eventName)
+        const active = state.promotions[key]
+        if (state.promotionMode === 'conflict' || (active && ['VALIDATING', 'REPLAYING', 'REPINNING'].includes(active.status))) {
+          const id = active?.promotionId ?? 'promo-existing'
+          return fulfillJson(route, 409, {
+            code: 'PromotionInProgress',
+            message: `a promotion is already active for this schema in this environment: ${id}`,
+            promotionId: id,
+          })
+        }
+        const sourceIndex = ENV_ORDER.indexOf(stage) - 1
+        const source = ENV_ORDER[Math.max(0, sourceIndex)] ?? 'dev'
+        const schema = SCHEMAS.find(item => item.detailType === eventName)
+        const requested = schema?.latestVersions[source] ?? 1
+        state.promotions[key] = {
+          promotionId: `promo-${stage}-${eventName}`,
+          schemaName: eventName,
+          sourceEnvironment: source,
+          targetEnvironment: stage,
+          requestedVersion: requested,
+          status: 'VALIDATING',
+          replayedVersions: [],
+          createdAt: '2026-10-01T09:00:00.000Z',
+          updatedAt: '2026-10-01T09:00:00.000Z',
+        }
+        return fulfillJson(route, 202, state.promotions[key])
+      }
       if (path === '/schemas/contract-preview') {
         const environment = state.environments.find(item => item.environment === payload.environment)
         const revision = environment?.legacy ? 0 : environment?.activeRevision ?? 0
@@ -295,6 +393,59 @@ export async function installApi(page: Page, state: MockState = freshState()): P
     return fulfillJson(route, 200, {})
   })
   return state
+}
+
+function promotionKey(stage: string, eventName: string) {
+  return `${stage}::${eventName}`
+}
+
+/** Deterministic phase machine for promotion polls: auto advances one
+ * phase per read, fail-* land on FAILED with the matching reason, hold
+ * returns the seeded view untouched. */
+function advancePromotion(state: MockState, stage: string, eventName: string): MockPromotion {
+  const key = promotionKey(stage, eventName)
+  const promotion = state.promotions[key]!
+  if (state.promotionMode === 'hold' || state.promotionMode === 'conflict' || !['VALIDATING', 'REPLAYING', 'REPINNING'].includes(promotion.status)) {
+    return promotion
+  }
+  const tick = (state.promotionTicks[key] ?? 0) + 1
+  state.promotionTicks[key] = tick
+  const schema = SCHEMAS.find(item => item.detailType === eventName)
+  const from = schema?.latestVersions[stage] ?? 0
+  promotion.updatedAt = '2026-10-01T09:00:0' + String(Math.min(tick, 9)) + '.000Z'
+  if (state.promotionMode === 'fail-diverged') {
+    promotion.status = 'FAILED'
+    promotion.reason = 'DIVERGED'
+    return promotion
+  }
+  if (state.promotionMode === 'fail-replay') {
+    if (tick >= 2) {
+      promotion.status = 'FAILED'
+      promotion.reason = 'REPLAY_FAILED'
+    } else {
+      promotion.status = 'REPLAYING'
+      promotion.replayedVersions = from + 1 <= promotion.requestedVersion ? [from + 1] : []
+    }
+    return promotion
+  }
+  if (promotion.status === 'VALIDATING') {
+    promotion.status = 'REPLAYING'
+    promotion.replayedVersions = from + 1 <= promotion.requestedVersion ? [from + 1] : []
+    return promotion
+  }
+  if (promotion.status === 'REPLAYING') {
+    const last = promotion.replayedVersions[promotion.replayedVersions.length - 1] ?? from
+    if (last < promotion.requestedVersion) {
+      promotion.replayedVersions = [...promotion.replayedVersions, last + 1]
+      return promotion
+    }
+    promotion.status = 'REPINNING'
+    return promotion
+  }
+  promotion.status = 'COMPLETED'
+  promotion.targetVersion = promotion.requestedVersion
+  promotion.repin = { matched: 2, repinned: 2, failed: 0 }
+  return promotion
 }
 
 function contractRoute(

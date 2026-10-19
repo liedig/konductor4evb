@@ -7,6 +7,40 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Add explicit cross-environment schema promotion: `POST /schemas/promotions`
+  on a target stage commits a promotion head item (idempotent, `409` while one
+  is active), a promotions-table stream consumer starts the
+  `PromoteSchemaWorkflow` state machine (idempotent execution name), and the
+  workflow replays the missing versions into the target registry under the
+  same version numbers, validating the shared prefix first (`DIVERGED` stops
+  without touching the target; `REPLAY_FAILED` resumes where it stopped).
+  Completion re-pins the target environment's subscription rules through a
+  widen, drain (`SchemaRepinDrainSeconds`, default 300s), narrow sequence that
+  keeps delivery continuous, and `SchemaPromotion{Started,Completed,Failed}`
+  lifecycle events land on the platform bus. Status is readable via
+  `GET /schemas/promotions`. Authorization uses the new `schema:promote`
+  grant action on the producer domain.
+  [Decision](docs/decisions/promote-schema-versions.md),
+  [runbook](docs/operations/schema-promotion.md).
+- API stages are now derived from the configured environment list at
+  deploy time: the OAuth API renders one stage per environment (generated
+  fragment, drift-guarded by `make check-stages`), CloudFront routes
+  `/api/*` to the API with the stage segment preserved, and the console
+  resolves requests as `{apiBaseUrl}/{environment}`, rejecting unknown
+  stage segments. A stage-less `/api` request still hits the default stage.
+- The console gains a producer schema page per (domain, schema): a promotion
+  pipeline in configured environment order with behind counts, per-version
+  environment reach, subscriber pins, and the promote journey (confirmation
+  with replay scope and re-pin count, polled phase progress that survives
+  navigation, conflict and failure explanations). Schema management entry
+  points moved from the domain page to this page; the domain page keeps
+  Register schema only until the first schema exists. Environment displays
+  everywhere now follow the configured order instead of API payload order.
+- **Breaking:** schema creation and version appends are now accepted only on
+  the authoring stage (the first configured environment, `dev` by default).
+  Other stages answer `400 AuthoringEnvironmentOnly`, naming the authoring
+  environment; later environments receive schema versions only through
+  promotion (`POST /schemas/promotions`, added in the same change).
 - The repository moved to the `liedig` GitHub organization
   (`https://github.com/liedig/konductor4evb`). Old URLs redirect; update
   local remotes with `git remote set-url origin git@github.com:liedig/konductor4evb.git`.

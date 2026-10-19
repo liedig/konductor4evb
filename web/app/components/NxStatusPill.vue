@@ -21,6 +21,11 @@ const tones: Record<string, BadgeTone> = {
   REJECTED: 'danger',
   INACTIVE: 'neutral',
   REMOVED: 'neutral',
+  VALIDATING: 'info',
+  REPLAYING: 'info',
+  REPINNING: 'info',
+  COMPLETED: 'success',
+  CANCELLED: 'neutral',
 }
 
 const tone = computed<BadgeTone>(() => tones[props.status] ?? 'neutral')

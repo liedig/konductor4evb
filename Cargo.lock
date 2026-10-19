@@ -3416,6 +3416,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "schema-promotion-steps"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-sdk-schemas",
+ "aws-smithy-mocks",
+ "chrono",
+ "konductor-common",
+ "lambda_runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "schema-promotion-stream"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-sdk-eventbridge",
+ "aws-sdk-sfn",
+ "aws-smithy-mocks",
+ "chrono",
+ "konductor-common",
+ "lambda_runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "schema-promotions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-sdk-schemas",
+ "aws-smithy-mocks",
+ "chrono",
+ "konductor-common",
+ "lambda_runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3804,6 +3863,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws-sdk-eventbridge",
  "aws-sdk-lambda",
+ "aws-sdk-sfn",
  "aws-smithy-mocks",
  "chrono",
  "konductor-common",

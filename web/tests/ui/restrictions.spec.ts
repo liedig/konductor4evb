@@ -43,7 +43,7 @@ test('unauthenticated navigation lands on the login page', async ({ page }) => {
 test('entitlement-denied catalog detail explains the coverage gap', async ({ page }) => {
   await signIn(page, ['acme-orders'])
   await installApi(page)
-  await page.route('**/dev/schemas/**', async (route) => {
+  await page.route('**/api/dev/schemas/**', async (route) => {
     await route.fulfill({
       status: 403,
       contentType: 'application/json',
