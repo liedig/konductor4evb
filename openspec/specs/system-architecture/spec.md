@@ -10,7 +10,7 @@ TBD - created by archiving change architecture-decisions. Update Purpose after a
 
 The control plane SHALL expose separate Amazon API Gateway REST API surfaces for AWS_IAM-authenticated callers and Cognito OAuth-authenticated interactive users. The OAuth surface SHALL use the Konductor REQUEST Lambda authorizer and SHALL NOT use an API Gateway native Cognito user-pool authorizer. The API contracts SHALL be defined using OpenAPI specifications. Routes SHALL be assigned to the surface appropriate to their caller and SHALL NOT combine OAuth and IAM as interchangeable authorization mechanisms.
 
-Read operations and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Asynchronous write operations SHALL preserve `aws` service integrations that route commands directly through SQS queues. API Gateway mapping templates SHALL derive trusted principal context from the authenticated request context and inject it into queued commands. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI contract. Each API SHALL be served from environment-named stages (`dev`, `staging`, `prod`) sharing one deployment; the stage name SHALL be the environment selector for publish and schema write operations, and environment-agnostic operations SHALL behave identically on every stage. Domain-specific endpoints (`GET /domains/{domainName}`, `PUT /domains/{domainName}`) SHALL use the domain name as the path parameter.
+Read operations and synchronous action endpoints SHALL be backed by dedicated Lambda functions invoked directly via `aws_proxy` integration. Asynchronous write operations SHALL preserve `aws` service integrations that route commands directly through SQS queues. API Gateway mapping templates SHALL derive trusted principal context from the authenticated request context and inject it into queued commands. API Gateway SHALL enforce structural request body validation on all write operations using JSON schema models defined in the OpenAPI contract. Each API SHALL serve one stage per entry of the configured environment list, named after that entry and sharing one deployment; the stages SHALL be derived from the environment list at deploy time, never from a fixed set of names. The stage name SHALL be the environment selector for publish, schema write, and schema promotion operations, and environment-agnostic operations SHALL behave identically on every stage. Domain-specific endpoints (`GET /domains/{domainName}`, `PUT /domains/{domainName}`) SHALL use the domain name as the path parameter.
 
 The registration decision endpoint (`POST /domains/registrations/decide`) SHALL exist only on the OAuth surface, require `platform-admin`, and use `aws_proxy` Lambda integration for synchronous processing. AWS-native publishing, cross-account provisioning, and EventBridge delivery SHALL remain IAM based and outside the OAuth control-plane identity mechanism.
 
@@ -52,11 +52,16 @@ The registration decision endpoint (`POST /domains/registrations/decide`) SHALL 
 
 #### Scenario: APIs served from environment-named stages
 
-- **WHEN** the control-plane APIs are deployed
+- **WHEN** the control-plane APIs are deployed with the default environment list
 - **THEN** each API SHALL serve stages named `dev`, `staging`, and `prod` from one deployment
-- **AND THEN** publish and schema write operations SHALL infer the target environment from the stage name
+- **AND THEN** publish, schema write, and schema promotion operations SHALL infer the target environment from the stage name
 - **AND THEN** environment-agnostic operations SHALL behave identically on every stage
 
+#### Scenario: Stages follow a custom environment list
+
+- **WHEN** the control-plane APIs are deployed with the environment list `["sandbox", "qa", "live"]`
+- **THEN** each API SHALL serve stages named `sandbox`, `qa`, and `live`
+- **AND THEN** no stage named `dev`, `staging`, or `prod` SHALL exist
 ### Requirement: Lambda runtime and tooling
 
 All Lambda functions SHALL be compiled with cargo-lambda and deployed using the `provided.al2023` custom runtime. Functions SHALL use the raw Lambda event handler (not an HTTP framework adapter). Each function SHALL be a separate binary target.
@@ -253,3 +258,29 @@ The supported setup path SHALL keep customer-supplied values in a configuration 
 - **WHEN** an existing installation generates the configuration file from its deployed stack parameters
 - **THEN** validation SHALL pass against the deployed stack
 - **AND THEN** a subsequent redeployment with the generated file SHALL change no fixed-at-setup value
+
+### Requirement: Environment list order defines the promotion pipeline
+
+The order of the domain environment list SHALL define the schema promotion pipeline. The first entry SHALL be the authoring environment, where schemas are created and versions are appended. Each later entry SHALL receive versions only by promotion from the entry immediately before it. Promotion SHALL NOT skip environments. Because the list is fixed at setup, the pipeline order SHALL also be fixed for an installation.
+
+#### Scenario: Default list forms a three-stage pipeline
+
+- **WHEN** the environment list is `["dev", "staging", "prod"]`
+- **THEN** `dev` SHALL be the authoring environment
+- **AND THEN** `staging` SHALL be promoted from `dev`, and `prod` from `staging`
+
+#### Scenario: Custom environment names follow list order
+
+- **WHEN** the environment list is `["sandbox", "qa", "live"]`
+- **THEN** `sandbox` SHALL be the authoring environment, `qa` SHALL be promoted from `sandbox`, and `live` from `qa`
+
+#### Scenario: Single-environment installation
+
+- **WHEN** the environment list has one entry
+- **THEN** that entry SHALL be the authoring environment
+- **AND THEN** no promotion target SHALL exist
+
+#### Scenario: Pipeline order cannot change after setup
+
+- **WHEN** an operator redeploys with the same environments in a different order
+- **THEN** deployment tooling SHALL refuse the change as a changed fixed-at-setup setting
