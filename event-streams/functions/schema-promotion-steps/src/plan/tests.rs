@@ -39,6 +39,47 @@ async fn catch_up_replays_the_missing_tail() {
 }
 
 #[tokio::test]
+async fn non_adjacent_pair_is_refused_before_any_registry_read() {
+    set_env();
+    let clients = clients(&[], &[]);
+    let mut event = input("plan");
+    event["targetEnvironment"] = serde_json::json!("prod");
+
+    let out = run(&clients, &event).await.unwrap();
+
+    assert_eq!(out["ok"], false);
+    assert_eq!(out["skipped"], true);
+    assert!(out.get("divergedAt").is_none());
+}
+
+#[tokio::test]
+async fn authoring_environment_as_target_is_refused() {
+    set_env();
+    let clients = clients(&[], &[]);
+    let mut event = input("plan");
+    event["sourceEnvironment"] = serde_json::json!("staging");
+    event["targetEnvironment"] = serde_json::json!("dev");
+
+    let out = run(&clients, &event).await.unwrap();
+
+    assert_eq!(out["ok"], false);
+    assert_eq!(out["skipped"], true);
+}
+
+#[tokio::test]
+async fn unknown_target_environment_is_refused() {
+    set_env();
+    let clients = clients(&[], &[]);
+    let mut event = input("plan");
+    event["targetEnvironment"] = serde_json::json!("qa");
+
+    let out = run(&clients, &event).await.unwrap();
+
+    assert_eq!(out["ok"], false);
+    assert_eq!(out["skipped"], true);
+}
+
+#[tokio::test]
 async fn first_arrival_replays_everything() {
     set_env();
     let missing = list_not_found_rule(TARGET_REGISTRY);

@@ -22,6 +22,19 @@ tracking the current pin, CloudWatch Logs taps on all six consumer buses
 | Pre-existing schema | `OrderNotification` pins unchanged (dev 3, staging 1, prod AWAITING_PROMOTION); no content records required |
 | Idempotent replay | staging v1/v2 already existed at promotion #3; duplicate-refusal + canonical-verify accepted them (v2 recorded under the retry's id) |
 
+## Adjacency gate (11.3, added after the live run)
+
+The API already derives the source as the stage's immediate predecessor, so a
+skipped-environment promotion (dev straight into prod) is not expressible
+through it. The gap was the workflow itself: `plan` accepted any
+source/target pair, so a direct `StartExecution` with a planted lease could
+skip an environment. `plan` now verifies
+`promotion_source(target) == source` before its first registry read and the
+workflow fails the promotion with reason `SKIPPED_ENVIRONMENT`. Covered by
+unit tests (non-adjacent, authoring-as-target, unknown target — all refused
+with zero AWS calls) rather than a live probe, since exercising it requires
+planting a promotions-table item.
+
 ## Defects found and fixed during verification
 
 1. **`AWS::ApiGateway::Account` missing**: explicit per-env stages with

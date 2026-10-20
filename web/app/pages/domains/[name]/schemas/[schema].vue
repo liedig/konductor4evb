@@ -200,6 +200,9 @@ function phaseDetail(view: PromotionView): string {
     if (view.reason === 'DIVERGED') {
       return `Replay stopped: the version history in ${view.targetEnvironment} diverges from ${view.sourceEnvironment}. No versions were written — reconcile the target registry with the platform team before promoting again.`
     }
+    if (view.reason === 'SKIPPED_ENVIRONMENT') {
+      return `Refused: ${view.targetEnvironment} can only receive versions promoted from the environment immediately before it. Promote through each environment in order.`
+    }
     if (view.reason === 'REPLAY_FAILED') {
       const lastReplayed = view.replayedVersions[view.replayedVersions.length - 1]
       const reached = lastReplayed !== undefined

@@ -70,6 +70,10 @@ pub enum PromotionFailureReason {
     Diverged,
     /// A replay step failed and retries were exhausted.
     ReplayFailed,
+    /// The source is not the target's immediate predecessor in the
+    /// configured environment pipeline. Only reachable by invoking the
+    /// promotion workflow out-of-band; the API derives an adjacent pair.
+    SkippedEnvironment,
 }
 
 /// Re-pin tallies in the status view.
@@ -353,6 +357,8 @@ mod tests {
         let parsed: PromotionFailureReason =
             serde_json::from_value(json!("REPLAY_FAILED")).unwrap();
         assert_eq!(parsed, PromotionFailureReason::ReplayFailed);
+        let skipped = serde_json::to_value(PromotionFailureReason::SkippedEnvironment).unwrap();
+        assert_eq!(skipped, "SKIPPED_ENVIRONMENT");
     }
 
     #[test]

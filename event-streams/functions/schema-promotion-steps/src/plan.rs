@@ -11,6 +11,7 @@ use lambda_runtime::Error;
 use serde::Serialize;
 use serde_json::Value;
 
+use konductor_common::environments;
 use konductor_common::promotion::{
     canonical_content_eq, SchemaVersionContent, WRITTEN_BY_SCHEMA_ADMIN,
 };
@@ -23,6 +24,10 @@ use crate::store::{
 #[serde(rename_all = "camelCase")]
 pub struct PlanOutput {
     pub ok: bool,
+    /// True when the input's source is not the target's immediate
+    /// predecessor in the configured pipeline: the promotion is refused
+    /// before any registry read, regardless of target state.
+    pub skipped: bool,
     pub from_version: i64,
     pub versions: Vec<i64>,
     /// The registry's canonical schema name, for the publish signal's detail.
@@ -36,6 +41,7 @@ impl PlanOutput {
     fn ok(from_version: i64, requested: i64, full_schema_name: String) -> Self {
         Self {
             ok: true,
+            skipped: false,
             from_version,
             versions: ((from_version + 1)..=requested).collect(),
             full_schema_name: Some(full_schema_name),
@@ -46,10 +52,22 @@ impl PlanOutput {
     fn diverged(at: i64) -> Self {
         Self {
             ok: false,
+            skipped: false,
             from_version: 0,
             versions: vec![],
             full_schema_name: None,
             diverged_at: Some(at),
+        }
+    }
+
+    fn skipped() -> Self {
+        Self {
+            ok: false,
+            skipped: true,
+            from_version: 0,
+            versions: vec![],
+            full_schema_name: None,
+            diverged_at: None,
         }
     }
 }
@@ -66,6 +84,9 @@ pub async fn run(clients: &Clients, event: &Value) -> Result<Value, Error> {
 }
 
 async fn plan(clients: &Clients, input: &StepInput, requested: i64) -> Result<PlanOutput> {
+    if !is_adjacent(input) {
+        return Ok(PlanOutput::skipped());
+    }
     let latest = registry_latest(
         clients,
         &input.target_environment,
@@ -84,6 +105,15 @@ async fn plan(clients: &Clients, input: &StepInput, requested: i64) -> Result<Pl
     }
     let full_schema_name = store::full_schema_name(&input.domain, &input.schema_name)?;
     Ok(PlanOutput::ok(k, requested, full_schema_name))
+}
+
+/// The workflow-level adjacency gate: the API already derives the source as
+/// the stage's immediate predecessor, so a mismatch here means the execution
+/// was started out-of-band with a planted lease. Fail closed.
+fn is_adjacent(input: &StepInput) -> bool {
+    environments::promotion_source(&input.target_environment)
+        .map(|source| source.as_deref() == Some(input.source_environment.as_str()))
+        .unwrap_or(false)
 }
 
 /// One prefix position: the target's record must be a promotion write whose

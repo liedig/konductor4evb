@@ -72,6 +72,17 @@ either delete and recreate the divergent target schema (destructive: re-pin
 subscriptions afterwards) or accept the divergence permanently. The promotion
 cannot proceed until the prefixes match.
 
+### `FAILED` with reason `SKIPPED_ENVIRONMENT`
+
+The workflow refused the promotion before any registry read: the input's
+source is not the target's immediate predecessor in the configured
+environment list. The API always derives an adjacent pair, so this reason
+means the state machine was started directly with a planted lease. Treat it
+as an integrity signal, not an operator error: inspect who called
+`StartExecution` (CloudTrail) and delete the planted promotion item if the
+`promotionId` condition could not match (the terminal update is conditional
+on it, so a fabricated id leaves no record at all).
+
 ### `FAILED` with reason `REPLAY_FAILED`
 
 A single version failed to replay (registry throttling, content that no

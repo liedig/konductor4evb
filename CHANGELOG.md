@@ -14,6 +14,8 @@ Older rationale is available through the [decision index](docs/decisions/README.
   workflow replays the missing versions into the target registry under the
   same version numbers, validating the shared prefix first (`DIVERGED` stops
   without touching the target; `REPLAY_FAILED` resumes where it stopped).
+  The workflow also refuses a source that is not the target's immediate
+  predecessor (`SKIPPED_ENVIRONMENT`), gating executions started out-of-band.
   Completion re-pins the target environment's subscription rules through a
   widen, drain (`SchemaRepinDrainSeconds`, default 300s), narrow sequence that
   keeps delivery continuous, and `SchemaPromotion{Started,Completed,Failed}`

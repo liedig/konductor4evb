@@ -1462,7 +1462,7 @@ components:
           description: Re-pin tallies; present once re-pinning ran.
         reason:
           type: string
-          enum: [DIVERGED, REPLAY_FAILED]
+          enum: [DIVERGED, REPLAY_FAILED, SKIPPED_ENVIRONMENT]
           description: Failure category; present when status is FAILED.
         createdAt:
           type: string

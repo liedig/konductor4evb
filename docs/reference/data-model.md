@@ -83,7 +83,7 @@ The `konductor-schema-promotions` table holds promotion head items and re-pin co
 | `pk` | String (`{domain}#{eventName}#{environment}`) | Partition key (PK) |
 | `sk` | String (`PROMOTION` or `REPIN`) | Sort key (SK) |
 
-`PROMOTION` items carry `promotionId`, `sourceEnvironment`, `targetEnvironment`, `fromVersion`, `requestedVersion`, `lastWrittenVersion`, `phase` (`VALIDATING\|REPLAYING\|REPINNING\|COMPLETED\|FAILED\|CANCELLED`), `reason` (`DIVERGED\|REPLAY_FAILED`), `failedVersion`, `actor`, the `repinMatched`/`repinRepinned`/`repinFailed` counts, `drainUntil`, `createdAt`/`updatedAt`, and `expiresAt` (TTL). `REPIN` items carry `floorVersion`, `targetVersion`, `generation` (the optimistic-concurrency token that lets a newer re-pin win narrowing), `drainUntil`, and `updatedAt`; outside a re-pin, `floorVersion == targetVersion` is the pinned version and the derived rule pattern is `[pinned, pinned + 1]`.
+`PROMOTION` items carry `promotionId`, `sourceEnvironment`, `targetEnvironment`, `fromVersion`, `requestedVersion`, `lastWrittenVersion`, `phase` (`VALIDATING\|REPLAYING\|REPINNING\|COMPLETED\|FAILED\|CANCELLED`), `reason` (`DIVERGED\|REPLAY_FAILED\|SKIPPED_ENVIRONMENT`), `failedVersion`, `actor`, the `repinMatched`/`repinRepinned`/`repinFailed` counts, `drainUntil`, `createdAt`/`updatedAt`, and `expiresAt` (TTL). `REPIN` items carry `floorVersion`, `targetVersion`, `generation` (the optimistic-concurrency token that lets a newer re-pin win narrowing), `drainUntil`, and `updatedAt`; outside a re-pin, `floorVersion == targetVersion` is the pinned version and the derived rule pattern is `[pinned, pinned + 1]`.
 
 | Pattern | Index | Key condition |
 |---------|-------|---------------|

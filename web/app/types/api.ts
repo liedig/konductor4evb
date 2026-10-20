@@ -161,7 +161,7 @@ export interface SchemaMutationResponse {
 
 export type PromotionStatus = 'VALIDATING' | 'REPLAYING' | 'REPINNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
 
-export type PromotionFailureReason = 'DIVERGED' | 'REPLAY_FAILED'
+export type PromotionFailureReason = 'DIVERGED' | 'REPLAY_FAILED' | 'SKIPPED_ENVIRONMENT'
 
 export interface RepinCounts {
   matched: number

@@ -34,7 +34,7 @@ export interface MockState {
   /** auto: each status poll advances the phase until COMPLETED; hold: keep
    * the seeded phase; conflict: POST always 409s; fail-*: the next polls
    * land on FAILED with the matching reason. */
-  promotionMode: 'auto' | 'hold' | 'conflict' | 'fail-diverged' | 'fail-replay'
+  promotionMode: 'auto' | 'hold' | 'conflict' | 'fail-diverged' | 'fail-replay' | 'fail-skipped'
   promotionTicks: Record<string, number>
 }
 
@@ -111,7 +111,7 @@ export interface MockPromotion {
   replayedVersions: number[]
   targetVersion?: number
   repin?: { matched: number, repinned: number, failed: number }
-  reason?: 'DIVERGED' | 'REPLAY_FAILED'
+  reason?: 'DIVERGED' | 'REPLAY_FAILED' | 'SKIPPED_ENVIRONMENT'
   createdAt: string
   updatedAt: string
 }
@@ -416,6 +416,11 @@ function advancePromotion(state: MockState, stage: string, eventName: string): M
   if (state.promotionMode === 'fail-diverged') {
     promotion.status = 'FAILED'
     promotion.reason = 'DIVERGED'
+    return promotion
+  }
+  if (state.promotionMode === 'fail-skipped') {
+    promotion.status = 'FAILED'
+    promotion.reason = 'SKIPPED_ENVIRONMENT'
     return promotion
   }
   if (state.promotionMode === 'fail-replay') {

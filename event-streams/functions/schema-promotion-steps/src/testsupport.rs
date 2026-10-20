@@ -23,6 +23,7 @@ pub fn set_env() {
     std::env::set_var("SCHEMA_VERSIONS_TABLE", "versions-test");
     std::env::set_var("PROMOTIONS_TABLE", "promotions-test");
     std::env::set_var("EVENT_STREAMS_TABLE", "streams-test");
+    std::env::set_var("ENVIRONMENTS", "dev,staging,prod");
 }
 
 pub fn input(action: &str) -> Value {

@@ -183,6 +183,20 @@ test('a diverged history explains the stop and keeps replayed versions in place'
   await expect(promotions.getByText(/No versions were written/)).toBeVisible()
 })
 
+test('a skipped-environment refusal explains the pipeline order', async ({ page }) => {
+  const state = freshState()
+  state.promotionMode = 'fail-skipped'
+  await installApi(page, state)
+  await page.goto(PAGE)
+
+  await card(page, 'Promotion pipeline').getByRole('button', { name: 'Promote to staging' }).click()
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Promote', exact: true }).click()
+
+  const promotions = card(page, 'Promotions')
+  await expect(promotions.getByText('FAILED', { exact: true })).toBeVisible({ timeout: 15_000 })
+  await expect(promotions.getByText(/can only receive versions promoted from the environment immediately before it/)).toBeVisible()
+})
+
 test('a replay failure names the requested version and says replay skips what is already written', async ({ page }) => {
   const state = freshState()
   state.promotionMode = 'fail-replay'

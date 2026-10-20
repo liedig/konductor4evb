@@ -60,6 +60,7 @@ pub fn promotion_to_item(p: &Promotion) -> HashMap<String, AttributeValue> {
         let code = match reason {
             PromotionFailureReason::Diverged => "DIVERGED",
             PromotionFailureReason::ReplayFailed => "REPLAY_FAILED",
+            PromotionFailureReason::SkippedEnvironment => "SKIPPED_ENVIRONMENT",
         };
         item.insert("reason".to_string(), s(code));
     }

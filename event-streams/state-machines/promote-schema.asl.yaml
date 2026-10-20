@@ -47,7 +47,32 @@ States:
     Choices:
       - Condition: "{% $plan.ok %}"
         Next: MarkReplaying
+      - Condition: "{% $plan.skipped %}"
+        Next: MarkFailedSkipped
     Default: MarkFailedDiverged
+
+  # The source is not the target's immediate predecessor: the execution was
+  # started out-of-band with a planted lease. No registry reads happened.
+  MarkFailedSkipped:
+    Type: Task
+    Resource: "arn:aws:states:::dynamodb:updateItem"
+    Arguments:
+      TableName: "${PromotionsTable}"
+      Key:
+        pk:
+          S: "{% $states.input.domain & '#' & $states.input.schemaName & '#' & $states.input.targetEnvironment %}"
+        sk:
+          S: "PROMOTION"
+      UpdateExpression: "SET #phase = :failed, reason = :reason, updatedAt = :now"
+      ConditionExpression: "promotionId = :pid"
+      ExpressionAttributeNames:
+        "#phase": "phase"
+      ExpressionAttributeValues:
+        ":failed": {S: "FAILED"}
+        ":reason": {S: "SKIPPED_ENVIRONMENT"}
+        ":now": {S: "{% $states.context.State.EnteredTime %}"}
+        ":pid": {S: "{% $states.input.promotionId %}"}
+    End: true
 
   MarkFailedDiverged:
     Type: Task

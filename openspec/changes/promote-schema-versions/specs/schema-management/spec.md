@@ -32,6 +32,14 @@ Schema creation (`POST /schemas`) and version append (`POST /schemas/versions`) 
 
 Both API surfaces SHALL provide `POST /schemas/promotions` accepting `domain` and `eventName`. The stage SHALL select the target environment and the source SHALL be the environment immediately before it in the platform environment list. The grant engine SHALL allow `schema:promote` for the domain, which the `publisher` role grants. An accepted request SHALL return `202 Accepted` with a promotion identifier and SHALL complete asynchronously.
 
+The promotion workflow SHALL verify the same adjacency invariant before its first registry read: when the input's source is not the target's immediate predecessor (the pair the API would have derived), the promotion SHALL fail with reason `SKIPPED_ENVIRONMENT`, writing no version and changing no rule. This gates executions started out-of-band with a planted lease.
+
+#### Scenario: Out-of-band execution with a skipped environment
+
+- **WHEN** a promotion execution carries a source that is not the target's immediate predecessor (for example dev straight into prod)
+- **THEN** the promotion SHALL fail with reason `SKIPPED_ENVIRONMENT` before any registry read
+- **AND THEN** no version SHALL be written and no rule SHALL change
+
 #### Scenario: Publisher promotes into the next environment
 
 - **WHEN** a caller with a `publisher` binding for `orders` requests promotion of `OrderNotification` on the `staging` stage
