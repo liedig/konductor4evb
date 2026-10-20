@@ -53,7 +53,12 @@ pub struct AuthorizerOutput {
 }
 
 /// Builds the authorizer result for `principal` on the route identified by
-/// `method_arn`. `context_usage` never carries the raw token.
+/// `method_arn`. The policy resource wildcards the stage segment: the
+/// gateway caches this result under (token, httpMethod, resourcePath) —
+/// no stage — so a stage-exact policy would deny the same route on every
+/// other stage for the TTL. The route gate is stage-agnostic, so spanning
+/// stages changes no authorization semantics. `context_usage` never carries
+/// the raw token.
 pub fn build_output(
     principal: &TrustedPrincipal,
     method_arn: &str,
@@ -64,7 +69,7 @@ pub fn build_output(
         "Statement": [{
             "Action": "execute-api:Invoke",
             "Effect": effect.as_str(),
-            "Resource": method_arn,
+            "Resource": stage_wildcarded(method_arn),
         }],
     });
 
@@ -91,6 +96,18 @@ pub fn build_output(
         principal_id: principal.principal_id().to_string(),
         policy_document,
         context,
+    }
+}
+
+/// `arn:...:execute-api:...:{api}/{stage}/{METHOD}/{resource}` with the stage
+/// replaced by `*`. Malformed ARNs pass through unchanged.
+fn stage_wildcarded(method_arn: &str) -> String {
+    match method_arn.split_once('/') {
+        Some((api, rest)) => match rest.split_once('/') {
+            Some((_, route)) => format!("{api}/*/{route}"),
+            None => method_arn.to_string(),
+        },
+        None => method_arn.to_string(),
     }
 }
 
@@ -153,15 +170,18 @@ mod tests {
     }
 
     #[test]
-    fn policy_is_scoped_to_the_invoked_route() {
+    fn policy_spans_every_stage_of_the_invoked_route() {
+        // The gateway cache key is (token, httpMethod, resourcePath) — no
+        // stage — so the cached policy must cover the route on all stages,
+        // or switching environments replays a foreign stage's policy.
         let out = build_output(
             &principal(vec![GlobalRole::PlatformAdmin]),
-            "arn:aws:execute-api:r:acct:api/v1/POST/domains/registrations/decide",
+            "arn:aws:execute-api:r:acct:api/dev/POST/domains/registrations/decide",
             Effect::Allow,
         );
         assert_eq!(
             out.policy_document["Statement"][0]["Resource"],
-            "arn:aws:execute-api:r:acct:api/v1/POST/domains/registrations/decide"
+            "arn:aws:execute-api:r:acct:api/*/POST/domains/registrations/decide"
         );
         assert_eq!(out.policy_document["Statement"][0]["Effect"], "Allow");
     }

@@ -956,10 +956,10 @@ Resources:
             FunctionArn: !GetAtt OAuthAuthorizerFunction.Arn
             # TTL 0 (spec default: caching disabled) is dropped by the SAM
             # transform's zero-value omission, leaving the API Gateway default
-            # of 300s. The authorizer policy is scoped to the invoked route,
-            # so a token-only cache key would poison other routes of the same
-            # caller. Keying on httpMethod and resourcePath keeps the 300s
-            # cache route-scoped and within the token's one-hour validity.
+            # of 300s. The authorizer policy spans every stage of the invoked
+            # route, so the (token, httpMethod, resourcePath) cache key — which
+            # omits the stage — cannot poison the same route on another stage
+            # when the console switches environments.
             AuthorizerResultTtlInSeconds: 300
             Identity:
               Headers:

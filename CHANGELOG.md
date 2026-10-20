@@ -7,6 +7,10 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Fix OAuth authorizer caching denying console requests after an
+  environment switch: cached policies were scoped to one stage's method
+  ARN while the cache key omitted the stage, so the same route on another
+  stage was denied for up to five minutes without invoking the authorizer.
 - Add explicit cross-environment schema promotion: `POST /schemas/promotions`
   on a target stage commits a promotion head item (idempotent, `409` while one
   is active), a promotions-table stream consumer starts the
