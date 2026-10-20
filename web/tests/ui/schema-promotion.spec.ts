@@ -262,3 +262,93 @@ test('an auditor reads the pipeline and history without any promote affordance',
   await expect(page.getByRole('button', { name: /Promote to/ })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'New version' })).toHaveCount(0)
 })
+
+test('a publisher inspects an environment\'s content from the pipeline', async ({ page }) => {
+  await installApi(page)
+  await page.goto(PAGE)
+
+  await card(page, 'Promotion pipeline')
+    .getByRole('button', { name: 'View schema content in staging' })
+    .click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: 'staging · v3' })).toBeVisible()
+  await expect(dialog.locator('pre')).toContainText('"description": "OrderNotification v3"')
+  await expect(dialog.locator('pre')).toContainText('"orderId"')
+})
+
+test('the viewer copies the shown content to the clipboard', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+  await installApi(page)
+  await page.goto(PAGE)
+
+  await card(page, 'Promotion pipeline')
+    .getByRole('button', { name: 'View schema content in dev' })
+    .click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: 'dev · v5' })).toBeVisible()
+
+  const copyButton = dialog.getByRole('button', { name: 'Copy schema content JSON' })
+  await copyButton.click()
+  await expect(copyButton).toHaveText('Copied')
+  const clipboard = await page.evaluate(() => navigator.clipboard.readText())
+  expect(JSON.parse(clipboard).description).toBe('OrderNotification v5')
+})
+
+test('version history inspects the version that reached each environment', async ({ page }) => {
+  await installApi(page)
+  await page.goto(PAGE)
+
+  // dev runs v5, but the v3 history row must serve v3's content, not the latest.
+  const v3 = card(page, 'Version history').getByRole('row').filter({ hasText: 'v3' })
+  await v3.getByRole('button', { name: 'View v3 content in dev' }).click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: 'dev · v3', exact: true })).toBeVisible()
+  await expect(dialog.locator('pre')).toContainText('"description": "OrderNotification v3"')
+})
+
+test('an environment without the schema offers no view affordance', async ({ page }) => {
+  SCHEMAS[0]!.latestVersions = { prod: 3, dev: 5 }
+  await installApi(page)
+  await page.goto(PAGE)
+
+  const stagingNode = card(page, 'Promotion pipeline')
+    .getByRole('listitem')
+    .filter({ hasText: 'not promoted yet' })
+  await expect(stagingNode.getByRole('button', { name: 'View schema content in staging' })).toHaveCount(0)
+})
+
+test('an auditor inspects content read-only', async ({ page }) => {
+  await signIn(page, ['platform-auditor'])
+  await installApi(page)
+  await page.goto(PAGE)
+
+  await card(page, 'Promotion pipeline')
+    .getByRole('button', { name: 'View schema content in prod' })
+    .click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: 'prod · v3' })).toBeVisible()
+  await expect(dialog.locator('pre')).toContainText('"orderId"')
+  await expect(page.getByRole('button', { name: /Promote to/ })).toHaveCount(0)
+})
+
+test('a content lookup failure surfaces as a toast and the dialog stays dismissible', async ({ page }) => {
+  const state = freshState()
+  state.failContent = true
+  await installApi(page, state)
+  await page.goto(PAGE)
+
+  await card(page, 'Promotion pipeline')
+    .getByRole('button', { name: 'View schema content in dev' })
+    .click()
+
+  await expect(
+    page.locator('[data-state="open"]').filter({ hasText: 'schema lookup failed' }),
+  ).toBeVisible()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('alert')).toHaveText('The content could not be loaded.')
+  await dialog.getByRole('button', { name: 'Close' }).last().click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+})

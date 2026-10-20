@@ -38,6 +38,9 @@ pub async fn handle(
         .and_then(Value::as_str)
         .unwrap_or_default();
     match resource {
+        crate::content::CONTENT_RESOURCE => {
+            crate::content::content(ddb, schemas, &event.payload, &principal).await
+        }
         crate::contract::CONTRACT_RESOURCE => {
             crate::contract::contract(ddb, schemas, &event.payload, &principal).await
         }
@@ -1375,5 +1378,254 @@ mod tests {
         .unwrap();
 
         assert_eq!(resp["statusCode"], 403);
+    }
+
+    fn content_request(context: Value, params: Value) -> LambdaEvent<Value> {
+        LambdaEvent::new(
+            json!({
+                "resource": crate::content::CONTENT_RESOURCE,
+                "requestContext": context,
+                "pathParameters": { "schemaName": SCHEMA },
+                "queryStringParameters": params,
+            }),
+            LambdaContext::default(),
+        )
+    }
+
+    fn publisher_account_binding_rule(account: &'static str, domain: &'static str) -> Rule {
+        let binding = RoleBinding::new(
+            "b-pub-acct",
+            BindingPrincipal::aws_account(account).unwrap(),
+            ResourceRole::Publisher,
+            domain,
+            Utc::now(),
+            "test",
+        )
+        .unwrap();
+        let item = binding_to_item(&binding);
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| req.table_name() == Some("bindings"))
+            .then_output(move || {
+                GetItemOutput::builder()
+                    .set_item(Some(item.clone()))
+                    .build()
+            })
+    }
+
+    #[tokio::test]
+    async fn publisher_reads_the_environments_latest_content_by_default() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let prod = describe_rule("prod", 3, BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&binding, &domain], &[&prod]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            content_request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders", "environment": "prod" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let body = body(&resp);
+        assert_eq!(body["schemaName"], SCHEMA);
+        assert_eq!(body["domain"], "orders");
+        assert_eq!(body["environment"], "prod");
+        assert_eq!(body["version"], 3, "no selector resolves the latest");
+        assert_eq!(body["content"], BUSINESS_SCHEMA);
+    }
+
+    #[tokio::test]
+    async fn explicit_version_reads_the_historical_content() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let first = versioned_describe_rule("prod", "1", OLD_BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&binding, &domain], &[&first]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            content_request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders", "environment": "prod", "version": "1" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let body = body(&resp);
+        assert_eq!(body["version"], 1);
+        assert_eq!(body["content"], OLD_BUSINESS_SCHEMA);
+    }
+
+    #[tokio::test]
+    async fn schema_absent_from_the_environment_is_not_found() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let missing = describe_missing_rule();
+        let (ddb, schemas) = clients(&[&binding, &domain], &[&missing]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            content_request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders", "environment": "prod" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 404);
+    }
+
+    #[tokio::test]
+    async fn unknown_version_is_not_found() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let missing = describe_missing_rule();
+        let (ddb, schemas) = clients(&[&binding, &domain], &[&missing]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            content_request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders", "environment": "prod", "version": "9" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 404);
+        assert!(body(&resp)["message"]
+            .as_str()
+            .unwrap()
+            .contains("version 9"));
+    }
+
+    #[tokio::test]
+    async fn environment_outside_the_domain_is_not_found() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule();
+        let (ddb, schemas) = clients(&[&binding, &domain], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            content_request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders", "environment": "staging" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 404);
+    }
+
+    #[tokio::test]
+    async fn caller_without_a_publisher_binding_is_forbidden() {
+        set_env();
+        let no_binding = mock!(aws_sdk_dynamodb::Client::get_item)
+            .then_output(|| GetItemOutput::builder().build());
+        let (ddb, schemas) = clients(&[&no_binding], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            content_request(
+                oauth_team_context("team-payments"),
+                json!({ "domain": "orders", "environment": "prod" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 403);
+        assert_eq!(body(&resp)["code"], "AccessDeniedException");
+    }
+
+    #[tokio::test]
+    async fn consumer_context_has_no_path_to_content() {
+        set_env();
+        let binding = subscriber_binding_rule("111122223333", "checkout");
+        let entitlements = entitlements_rule("checkout", vec!["*"]);
+        let no_publisher = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("bindings"))
+            .then_output(|| GetItemOutput::builder().build());
+        let (ddb, schemas) = clients(&[&binding, &entitlements, &no_publisher], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            content_request(
+                iam_context("111122223333"),
+                json!({
+                    "domain": "orders",
+                    "environment": "prod",
+                    "consumerDomain": "checkout"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            resp["statusCode"], 403,
+            "a subscriber with full entitlement coverage still has no consumer path"
+        );
+    }
+
+    #[tokio::test]
+    async fn iam_publisher_binding_reads_the_same_content() {
+        set_env();
+        let binding = publisher_account_binding_rule("111122223333", "orders");
+        let domain = domain_rule();
+        let prod = describe_rule("prod", 3, BUSINESS_SCHEMA);
+        let (ddb, schemas) = clients(&[&binding, &domain], &[&prod]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            content_request(
+                iam_context("111122223333"),
+                json!({ "domain": "orders", "environment": "prod" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        assert_eq!(body(&resp)["content"], BUSINESS_SCHEMA);
+    }
+
+    #[tokio::test]
+    async fn invalid_version_selector_answers_400() {
+        set_env();
+        let (ddb, schemas) = clients(&[], &[]);
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            content_request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders", "environment": "prod", "version": "latest" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 400);
     }
 }

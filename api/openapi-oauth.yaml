@@ -1173,6 +1173,83 @@ paths:
         uri:
           Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
 
+  /schemas/{schemaName}/content:
+    get:
+      operationId: GetSchemaContent
+      summary: Schema content for one version in one environment
+      description: >
+        The registry content of one schema version in one environment, for
+        publishers inspecting what their environments run. Without version
+        the environment's latest is returned; an explicit version reads
+        the registry's immutable per-version record. Content comes from
+        the environment's registry, not the version-content store, so
+        schemas that predate content recording remain readable.
+        Authorization mirrors the schema detail route: a publisher binding
+        on the producer domain or a platform role; there is no
+        consumer-context path.
+      parameters:
+        - name: schemaName
+          in: path
+          required: true
+          description: "Format: {source}@{detail-type}, URL-encoded"
+          schema:
+            type: string
+        - name: domain
+          in: query
+          required: true
+          description: The producer domain.
+          schema:
+            type: string
+        - name: environment
+          in: query
+          required: true
+          description: Environment whose registry serves the read.
+          schema:
+            type: string
+        - name: version
+          in: query
+          required: false
+          description: Version to read; defaults to the environment's latest.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Content of the resolved version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SchemaEnvironmentContent"
+        "400":
+          description: Missing domain or environment, or an invalid version selector
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: No publisher binding on the producer domain and no platform role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Domain, environment, schema, or version not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: The registry lookup failed or returned a malformed response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+      x-amazon-apigateway-integration:
+        type: aws_proxy
+        httpMethod: POST
+        uri:
+          Fn::Sub: "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DescribeSchemaFunction.Arn}/invocations"
+
   /schemas/contract-preview:
     post:
       operationId: PreviewSchemaContract
@@ -2380,6 +2457,33 @@ components:
       example:
         domain: orders
         eventName: OrderNotification
+        content: "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\"}"
+
+    SchemaEnvironmentContent:
+      type: object
+      required: [schemaName, domain, environment, version, content]
+      additionalProperties: false
+      properties:
+        schemaName:
+          type: string
+          description: "{source}@{detail-type}"
+        domain:
+          type: string
+        environment:
+          type: string
+        version:
+          type: integer
+          minimum: 1
+          description: The version returned (the environment's latest when the request omitted one).
+        content:
+          type: string
+          minLength: 1
+          description: The JSON Schema document as a string.
+      example:
+        schemaName: acme-sales@OrderPlaced
+        domain: sales
+        environment: staging
+        version: 2
         content: "{\"$schema\":\"http://json-schema.org/draft-04/schema#\",\"type\":\"object\"}"
 
     CreatePromotionRequest:

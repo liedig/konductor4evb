@@ -22,7 +22,7 @@ The console (`web/`) conventions are documented under `docs/development/` and ap
 
 Hard rules for new UI content:
 
-- Compose `Nx*` primitives; raw HTML controls only where no primitive fits (e.g., toggle-button groups with `aria-pressed`, checkboxes) — match the accessibility semantics of the existing examples
+- Compose `Nx*` primitives; raw HTML controls only where no primitive fits (e.g., toggle-button groups with `aria-pressed`, checkboxes, badge-wrapping inspection buttons) — match the accessibility semantics of the existing examples
 - Semantic token utilities (`bg-surface`, `text-muted`, `border-border`, …), never raw palette values; `rounded-lg`/`rounded-xl` and `shadow-sm` only; three surface layers, never a fourth
 - Async action outcomes surface via `useToast()` with `error instanceof ApiError ? error.message : '…'` fallbacks; copy affordances confirm inline via `useCopyToClipboard()`
 - Overlays keep their contracts: confirmation is Cancel-first and blocks dismissal while busy; modals restore focus to the opener

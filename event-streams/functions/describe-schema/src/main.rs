@@ -1,3 +1,4 @@
+mod content;
 mod contract;
 mod handler;
 mod preview;

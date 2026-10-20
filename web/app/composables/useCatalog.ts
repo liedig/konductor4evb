@@ -10,6 +10,7 @@ import type {
   PromotionView,
   RequestPromotionRequest,
   SchemaDetail,
+  SchemaEnvironmentContent,
   SchemaMutationResponse,
   SubscribeRequest,
   SubscriptionDetail,
@@ -34,6 +35,17 @@ export function useCatalog() {
       api.get<SchemaDetail>(`/schemas/${encodeURIComponent(schemaName)}`, {
         consumerDomain: options.consumerDomain,
         domain: options.producerDomain,
+      }),
+    /** Registry content of one schema version in one environment (producer
+     * view); `version` defaults to the environment's latest. */
+    getSchemaContent: (
+      schemaName: string,
+      options: { domain: string, environment: string, version?: number },
+    ) =>
+      api.get<SchemaEnvironmentContent>(`/schemas/${encodeURIComponent(schemaName)}/content`, {
+        domain: options.domain,
+        environment: options.environment,
+        version: options.version,
       }),
     /** Current or historical composed contract for one exact
      * (business version, metadata revision) pair. Historical reads require

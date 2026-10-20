@@ -26,6 +26,8 @@ export interface MockState {
   /** Simulates an API stage that predates the contract route: API Gateway
    * answers 403 with a non-ErrorResponse body before the Lambda runs. */
   failContract: boolean
+  /** Simulates a content-lookup failure on the producer content route. */
+  failContent: boolean
   environments: MockEnvironment[]
   audits: Record<string, unknown>[]
   activationMode: 'ok' | 'stale' | 'backward'
@@ -155,6 +157,7 @@ export function freshState(): MockState {
     activationDelayMs: 0,
     failEnvironments: false,
     failContract: false,
+    failContent: false,
     environments: [
       { environment: 'dev', activeRevision: 2, generation: 3, activatedBy: 'platform-admin@example.com', activatedAt: '2026-09-20T10:05:00.000Z', legacy: false },
       { environment: 'prod', activeRevision: 0, generation: 0, activatedBy: '', activatedAt: '', legacy: true },
@@ -238,6 +241,9 @@ export async function installApi(page: Page, state: MockState = freshState()): P
         const promotion = state.promotions[promotionKey(stage, eventName)]
         if (!promotion) return fulfillJson(route, 404, errorBody('NotFound', 'No promotion recorded for this schema in this environment'))
         return fulfillJson(route, 200, advancePromotion(state, stage, eventName))
+      }
+      if (path.endsWith('/content')) {
+        return contentRoute(route, path, query, state)
       }
       if (path.endsWith('/contract')) {
         return contractRoute(route, path, query, state)
@@ -499,6 +505,44 @@ function contractRoute(
   })
 }
 
+/**
+ * GET /schemas/{schemaName}/content (producer view): the registry content of
+ * one version in one environment; `version` defaults to the environment's
+ * latest. `failContent` simulates a lookup failure so specs can assert the
+ * toast path.
+ */
+function contentRoute(
+  route: Route,
+  path: string,
+  query: URLSearchParams,
+  state: MockState,
+) {
+  if (state.failContent) {
+    return fulfillJson(route, 500, errorBody('InternalError', 'schema lookup failed'))
+  }
+  const schemaName = path.slice('/schemas/'.length, -'/content'.length)
+  const schema = SCHEMAS.find(item => item.schemaName === schemaName)
+  const environmentName = query.get('environment')
+  if (!schema || !query.get('domain') || !environmentName) {
+    return fulfillJson(route, 400, errorBody('InvalidRequest', 'schemaName, domain and environment are required'))
+  }
+  const latest = schema.latestVersions[environmentName]
+  if (latest === undefined) {
+    return fulfillJson(route, 404, errorBody('NotFound', `schema '${schemaName}' not found in environment '${environmentName}'`))
+  }
+  const versionParam = query.get('version')
+  const version = versionParam ? Number(versionParam) : latest
+  if (!Number.isInteger(version) || version < 1 || version > latest) {
+    return fulfillJson(route, 404, errorBody('NotFound', `schema '${schemaName}' version ${versionParam} not found in environment '${environmentName}'`))
+  }
+  return fulfillJson(route, 200, {
+    schemaName: schema.schemaName,
+    domain: query.get('domain'),
+    environment: environmentName,
+    version,
+    content: JSON.stringify({ ...BUSINESS_CONTENT, description: `${schema.detailType} v${version}` }),
+  })
+}
 /**
  * Dev-only session seam (`konductorTestSession` in sessionStorage): mirrors a
  * Cognito ID-token payload so the harness can exercise every role without

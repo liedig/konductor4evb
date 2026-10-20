@@ -81,6 +81,10 @@ function inFlight(view?: PromotionView): boolean {
 
 const anyInFlight = computed(() => targetEnvs.value.some(env => inFlight(promotions.value[env])))
 
+// Content inspection: pipeline nodes view the environment's latest; history
+// rows pin the row's version. Read-only, so the auditor role keeps it.
+const contentView = ref<{ environment: string, version?: number } | null>(null)
+
 const activePromotionEnvs = computed(() => targetEnvs.value.filter(env => promotions.value[env] !== undefined))
 
 async function loadSchema() {
@@ -305,6 +309,15 @@ onBeforeUnmount(() => {
               <NxBadge v-if="node.behind > 0" tone="warning">{{ node.behind }} behind</NxBadge>
             </div>
             <NxButton
+              v-if="node.version !== undefined"
+              variant="ghost"
+              size="sm"
+              :aria-label="`View schema content in ${node.env}`"
+              @click="contentView = { environment: node.env }"
+            >
+              View content
+            </NxButton>
+            <NxButton
               v-if="canManage && node.promotable && !inFlight(promotions[node.env])"
               size="sm"
               @click="askPromote(node.env)"
@@ -335,7 +348,16 @@ onBeforeUnmount(() => {
           </template>
           <template #cell-reached="{ item }">
             <span class="flex flex-wrap gap-1">
-              <NxBadge v-for="env in (item.reached as string[])" :key="env" tone="neutral">{{ env }}</NxBadge>
+              <button
+                v-for="env in (item.reached as string[])"
+                :key="env"
+                type="button"
+                class="cursor-pointer"
+                :aria-label="`View v${item.version} content in ${env}`"
+                @click="contentView = { environment: env, version: item.version as number }"
+              >
+                <NxBadge tone="neutral">{{ env }}</NxBadge>
+              </button>
             </span>
           </template>
           <template #cell-awaiting="{ item }">
@@ -370,6 +392,15 @@ onBeforeUnmount(() => {
         </NxTable>
       </NxCard>
     </template>
+
+    <SchemaContentViewer
+      :open="contentView !== null"
+      :schema-name="schemaName"
+      :domain="domain"
+      :environment="contentView?.environment ?? ''"
+      :version="contentView?.version"
+      @close="contentView = null"
+    />
 
     <SchemaAuthoringForm
       :open="appendOpen"

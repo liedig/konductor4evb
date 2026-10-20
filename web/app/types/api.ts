@@ -136,6 +136,15 @@ export interface SchemaDetail extends SchemaSummary {
   content?: string
 }
 
+/** Registry content of one schema version in one environment (producer view). */
+export interface SchemaEnvironmentContent {
+  schemaName?: string
+  domain?: string
+  environment?: string
+  version?: number
+  content?: string
+}
+
 export interface ListSchemasResponse {
   items?: SchemaSummary[]
   nextToken?: string

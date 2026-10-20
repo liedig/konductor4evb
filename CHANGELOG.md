@@ -7,6 +7,11 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Add `GET /schemas/{schemaName}/content` on both API surfaces: publishers
+  (and platform roles) read one schema version's content from one
+  environment's registry, defaulting to the environment's latest. The
+  producer schema page opens the content in a viewer from pipeline nodes
+  (environment latest) and version-history rows (the row's version).
 - Fix OAuth authorizer caching denying console requests after an
   environment switch: cached policies were scoped to one stage's method
   ARN while the cache key omitted the stage, so the same route on another
