@@ -136,6 +136,46 @@ async fn in_sync_replays_nothing() {
 }
 
 #[tokio::test]
+async fn an_unrecorded_source_version_verifies_against_the_source_registry() {
+    set_env();
+    let list = list_versions_rule(TARGET_REGISTRY, &["1"]);
+    let s1 = get_record_rule("dev", 1, None);
+    let source = describe_version_rule(SOURCE_REGISTRY, "1", content(1));
+    let t1 = get_record_rule(
+        "staging",
+        1,
+        Some(record_item(&record("staging", 1, &content(1), "promo-0"))),
+    );
+    let clients = clients(&[&s1, &t1], &[&list, &source]);
+
+    let out = run(&clients, &input("plan")).await.unwrap();
+
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["fromVersion"], 1);
+    assert_eq!(out["versions"], serde_json::json!([2, 3]));
+}
+
+#[tokio::test]
+async fn a_fallback_source_still_catches_a_tampered_target() {
+    set_env();
+    let list = list_versions_rule(TARGET_REGISTRY, &["1"]);
+    let s1 = get_record_rule("dev", 1, None);
+    let source = describe_version_rule(SOURCE_REGISTRY, "1", content(1));
+    let tampered = "{\"v\":1,\"extra\":true}".to_string();
+    let t1 = get_record_rule(
+        "staging",
+        1,
+        Some(record_item(&record("staging", 1, &tampered, "promo-0"))),
+    );
+    let clients = clients(&[&s1, &t1], &[&list, &source]);
+
+    let out = run(&clients, &input("plan")).await.unwrap();
+
+    assert_eq!(out["ok"], false);
+    assert_eq!(out["divergedAt"], 1);
+}
+
+#[tokio::test]
 async fn hash_mismatch_diverges_at_the_first_differing_version() {
     set_env();
     let list = list_versions_rule(TARGET_REGISTRY, &["1", "2"]);
@@ -303,12 +343,13 @@ async fn a_missing_source_record_diverges_because_it_is_unverifiable() {
     set_env();
     let list = list_versions_rule(TARGET_REGISTRY, &["1"]);
     let s1 = get_record_rule("dev", 1, None);
+    let missing = describe_not_found_rule(SOURCE_REGISTRY);
     let t1 = get_record_rule(
         "staging",
         1,
         Some(record_item(&record("staging", 1, &content(1), "promo-0"))),
     );
-    let clients = clients(&[&s1, &t1], &[&list]);
+    let clients = clients(&[&s1, &t1], &[&list, &missing]);
 
     let out = run(&clients, &input("plan")).await.unwrap();
 

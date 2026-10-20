@@ -85,6 +85,41 @@ async fn writes_the_next_version_and_records_it() {
 }
 
 #[tokio::test]
+async fn an_unrecorded_source_version_replays_from_the_source_registry() {
+    set_env();
+    use aws_smithy_mocks::mock;
+    let expected = content(1);
+    let no_record = get_record_rule("dev", 1, None);
+    let source = describe_version_rule(SOURCE_REGISTRY, "1", expected.clone());
+    let missing = describe_not_found_rule(TARGET_REGISTRY);
+    let write = mock!(aws_sdk_schemas::Client::create_schema)
+        .match_requests(move |req| {
+            req.registry_name() == Some(TARGET_REGISTRY) && req.content() == Some(expected.as_str())
+        })
+        .then_output(|| {
+            aws_sdk_schemas::operation::create_schema::CreateSchemaOutput::builder()
+                .schema_version("1")
+                .build()
+        });
+    let record_write = put_record_rule("staging", 1);
+    let commit = head_commit_rule(1);
+    let clients = clients(
+        &[&no_record, &record_write, &commit],
+        &[&source, &missing, &write],
+    );
+
+    let out = run(&clients, &replay_input(1)).await.unwrap();
+
+    assert_eq!(out["version"], 1);
+    assert_eq!(write.num_calls(), 1);
+    assert_eq!(
+        source.num_calls(),
+        1,
+        "content fell back to the source registry"
+    );
+}
+
+#[tokio::test]
 async fn first_arrival_writes_version_one() {
     set_env();
     use aws_smithy_mocks::mock;
@@ -288,12 +323,17 @@ async fn a_gap_fails_instead_of_skipping() {
 }
 
 #[tokio::test]
-async fn a_missing_source_record_fails() {
+async fn a_source_version_missing_from_store_and_registry_fails() {
     set_env();
-    let source = get_record_rule("dev", 3, None);
-    let clients = clients(&[&source], &[]);
+    let no_record = get_record_rule("dev", 3, None);
+    let missing = describe_not_found_rule(SOURCE_REGISTRY);
+    let clients = clients(&[&no_record], &[&missing]);
 
-    let result = run(&clients, &replay_input(3)).await;
+    let err = run(&clients, &replay_input(3)).await.unwrap_err();
 
-    assert!(result.is_err());
+    assert!(
+        err.to_string()
+            .contains("content store nor the dev registry"),
+        "{err}"
+    );
 }

@@ -49,6 +49,14 @@ planting a promotions-table item.
 4. **`UpdateSchema` rejects `ClientTokenId`** ("Malformed request"): removed
    from the replay write; the minted-version check + conflict-verify carry
    idempotency. (CreateSchema has no token field in the SDK model at all.)
+5. **Pre-recording schemas could not promote (found 2026-10-20)**:
+   `sales@OrderPlaced` dev→staging failed `REPLAY_FAILED` with "source record
+   missing for sales/OrderPlaced v1" — the schema predates content recording
+   and no append can ever backfill v1. Replay and prefix verification now
+   fall back to the source registry's immutable per-version content
+   (`DescribeSchema` with `SchemaVersion`; spike 1.1's "versions unreadable"
+   claim was wrong, corrected in design.md). A source version found in
+   neither store nor registry still fails the step.
 
 Cleanup: subscriptions removed (REMOVED), smoke schemas deleted from all
 registries, version records deleted, tap rules/log groups/policies removed in

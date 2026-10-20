@@ -16,6 +16,7 @@ use konductor_common::promotion_store::version_content_to_item;
 use crate::store::Clients;
 
 pub const TARGET_REGISTRY: &str = "acme-staging-orders-schema-registry";
+pub const SOURCE_REGISTRY: &str = "acme-dev-orders-schema-registry";
 pub const FULL_SCHEMA: &str = "acme-orders@OrderNotification";
 
 pub fn set_env() {
@@ -143,6 +144,37 @@ pub fn describe_rule(registry: &'static str, version: &'static str, content: Str
                 .schema_version(version)
                 .content(&content)
                 .build()
+        })
+}
+
+/// Like `describe_rule`, but pins the requested `SchemaVersion`: the source
+/// fallback's correctness rests on reading version N, not the latest.
+pub fn describe_version_rule(
+    registry: &'static str,
+    version: &'static str,
+    content: String,
+) -> Rule {
+    mock!(aws_sdk_schemas::Client::describe_schema)
+        .match_requests(move |req| {
+            req.registry_name() == Some(registry) && req.schema_version() == Some(version)
+        })
+        .then_output(move || {
+            aws_sdk_schemas::operation::describe_schema::DescribeSchemaOutput::builder()
+                .schema_version(version)
+                .content(&content)
+                .build()
+        })
+}
+
+pub fn describe_not_found_rule(registry: &'static str) -> Rule {
+    mock!(aws_sdk_schemas::Client::describe_schema)
+        .match_requests(move |req| req.registry_name() == Some(registry))
+        .then_error(|| {
+            aws_sdk_schemas::operation::describe_schema::DescribeSchemaError::NotFoundException(
+                aws_sdk_schemas::types::error::NotFoundException::builder()
+                    .message("none")
+                    .build(),
+            )
         })
 }
 

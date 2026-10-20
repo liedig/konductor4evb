@@ -17,7 +17,8 @@ use konductor_common::promotion::{
 };
 
 use crate::store::{
-    self, describe_latest, read_record, registry_latest, write_record, Clients, StepInput,
+    self, describe_latest, read_record, registry_latest, resolve_source_content, write_record,
+    Clients, StepInput,
 };
 
 #[derive(Debug, Serialize)]
@@ -117,7 +118,9 @@ fn is_adjacent(input: &StepInput) -> bool {
 }
 
 /// One prefix position: the target's record must be a promotion write whose
-/// hash matches the source's. A missing record for the latest version is
+/// hash matches the source's. The source side resolves through the content
+/// record, falling back to the immutable source-registry version for schemas
+/// that predate recording; a missing target record for the latest version is
 /// repairable because only the latest is registry-readable.
 async fn verify_version(
     clients: &Clients,
@@ -125,14 +128,8 @@ async fn verify_version(
     version: i64,
     is_latest: bool,
 ) -> Result<bool> {
-    let Some(source) = read_record(
-        clients,
-        &input.domain,
-        &input.schema_name,
-        &input.source_environment,
-        version,
-    )
-    .await?
+    let Some((source_content, source_hash)) =
+        resolve_source_content(clients, input, version).await?
     else {
         return Ok(false);
     };
@@ -145,9 +142,12 @@ async fn verify_version(
     )
     .await?;
     match target {
-        Some(record) => Ok(record.written_by != WRITTEN_BY_SCHEMA_ADMIN
-            && record.content_hash == source.content_hash),
-        None if is_latest => repair_latest(clients, input, &source, version).await,
+        Some(record) => {
+            Ok(record.written_by != WRITTEN_BY_SCHEMA_ADMIN && record.content_hash == source_hash)
+        }
+        None if is_latest => {
+            repair_latest(clients, input, &source_content, &source_hash, version).await
+        }
         None => Ok(false),
     }
 }
@@ -157,7 +157,8 @@ async fn verify_version(
 async fn repair_latest(
     clients: &Clients,
     input: &StepInput,
-    source: &SchemaVersionContent,
+    source_content: &str,
+    source_hash: &str,
     version: i64,
 ) -> Result<bool> {
     let current = describe_latest(
@@ -170,7 +171,7 @@ async fn repair_latest(
     let Some((latest, content)) = current else {
         return Ok(false);
     };
-    if latest != version || canonical_content_eq(&content, &source.content) != Some(true) {
+    if latest != version || canonical_content_eq(&content, source_content) != Some(true) {
         return Ok(false);
     }
     let repair = SchemaVersionContent {
@@ -178,8 +179,8 @@ async fn repair_latest(
         schema_name: input.schema_name.clone(),
         environment: input.target_environment.clone(),
         version,
-        content: source.content.clone(),
-        content_hash: source.content_hash.clone(),
+        content: source_content.to_string(),
+        content_hash: source_hash.to_string(),
         written_by: input.promotion_id.clone(),
         written_at: Utc::now(),
     };

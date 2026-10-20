@@ -86,9 +86,12 @@ on it, so a fabricated id leaves no record at all).
 ### `FAILED` with reason `REPLAY_FAILED`
 
 A single version failed to replay (registry throttling, content that no
-longer compiles). The target keeps the versions already written. Fix the
-cause, then re-request the promotion: replay resumes after the last written
-version and skips everything before it.
+longer compiles, a source version found in neither the content store nor the
+source registry). Schemas authored before version recording existed replay
+from the source registry's immutable version content, so they need no
+backfill. The target keeps the versions already written. Fix the cause, then
+re-request the promotion: replay resumes after the last written version and
+skips everything before it.
 
 ### Re-pin failures after `COMPLETED`
 

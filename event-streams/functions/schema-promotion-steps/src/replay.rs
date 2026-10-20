@@ -1,12 +1,13 @@
 //! `replay`: writes one source version to the target registry, idempotently.
 //!
 //! The guard is read-before-write under the single-writer lease: write only
-//! when the target's latest is N−1, with `ClientTokenId = {promotionId}-v{N}`
-//! so an ambiguous retry returns the originally minted version. A latest of
-//! N is accepted after a canonical comparison against the source record (an
-//! earlier attempt landed the write), completing the record if the write was
-//! ambiguous. Every other state fails the step; the workflow's Catch turns
-//! it into `REPLAY_FAILED`.
+//! when the target's latest is N−1, accepting the write only when the
+//! registry mints N; a no-change conflict is accepted only after verifying
+//! the version landed with equal content. A latest of N with equal content
+//! means an earlier attempt landed the write. Source content comes from the
+//! version record, falling back to the immutable source-registry version for
+//! schemas that predate content recording. Every other state fails the step;
+//! the workflow's Catch turns it into `REPLAY_FAILED`.
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
@@ -18,8 +19,8 @@ use aws_sdk_schemas::error::ProvideErrorMetadata;
 use konductor_common::promotion::{canonical_content_eq, SchemaVersionContent};
 
 use crate::store::{
-    commit_progress, describe_latest, full_schema_name, read_record, registry_name, write_record,
-    Clients, StepInput,
+    commit_progress, describe_latest, full_schema_name, registry_name, resolve_source_content,
+    write_record, Clients, StepInput,
 };
 
 #[derive(Debug, Serialize)]
@@ -41,21 +42,16 @@ pub async fn run(clients: &Clients, event: &Value) -> Result<Value, Error> {
 }
 
 async fn replay(clients: &Clients, input: &StepInput, version: i64) -> Result<ReplayOutput> {
-    let source = read_record(
-        clients,
-        &input.domain,
-        &input.schema_name,
-        &input.source_environment,
-        version,
-    )
-    .await?
-    .ok_or_else(|| {
-        anyhow!(
-            "source record missing for {}/{} v{version}",
+    let Some((source_content, source_hash)) =
+        resolve_source_content(clients, input, version).await?
+    else {
+        return Err(anyhow!(
+            "source v{version} exists in neither the content store nor the {} registry ({}/{})",
+            input.source_environment,
             input.domain,
             input.schema_name
-        )
-    })?;
+        ));
+    };
     let target = describe_latest(
         clients,
         &input.target_environment,
@@ -66,12 +62,12 @@ async fn replay(clients: &Clients, input: &StepInput, version: i64) -> Result<Re
 
     let wrote = match target {
         None if version == 1 => {
-            match create_first_version(clients, input, &source.content).await? {
+            match create_first_version(clients, input, &source_content).await? {
                 WriteOutcome::Written => true,
                 WriteOutcome::RefusedAsDuplicate => {
                     // An ambiguous earlier attempt created the schema without
                     // this step learning about it.
-                    verify_landed(clients, input, version, &source.content).await?;
+                    verify_landed(clients, input, version, &source_content).await?;
                     false
                 }
             }
@@ -82,7 +78,7 @@ async fn replay(clients: &Clients, input: &StepInput, version: i64) -> Result<Re
             ))
         }
         Some((latest, content)) if latest == version => {
-            if canonical_content_eq(&content, &source.content) != Some(true) {
+            if canonical_content_eq(&content, &source_content) != Some(true) {
                 return Err(anyhow!(
                     "target v{version} content differs from the source record"
                 ));
@@ -94,13 +90,13 @@ async fn replay(clients: &Clients, input: &StepInput, version: i64) -> Result<Re
             false
         }
         Some((latest, _)) if latest == version - 1 => {
-            match write_version(clients, input, version, &source.content).await? {
+            match write_version(clients, input, version, &source_content).await? {
                 WriteOutcome::Written => true,
                 WriteOutcome::RefusedAsDuplicate => {
                     // Identical content mints nothing (spike 1.1). Accept only
                     // if the version landed anyway (an ambiguous first attempt);
                     // otherwise the registry is refusing the write.
-                    verify_landed(clients, input, version, &source.content).await?;
+                    verify_landed(clients, input, version, &source_content).await?;
                     false
                 }
             }
@@ -118,8 +114,8 @@ async fn replay(clients: &Clients, input: &StepInput, version: i64) -> Result<Re
         schema_name: input.schema_name.clone(),
         environment: input.target_environment.clone(),
         version,
-        content: source.content.clone(),
-        content_hash: source.content_hash.clone(),
+        content: source_content,
+        content_hash: source_hash,
         written_by: input.promotion_id.clone(),
         written_at: Utc::now(),
     };

@@ -10,7 +10,9 @@ use serde::Deserialize;
 use konductor_common::dynamodb::{n, s};
 use konductor_common::envelope::SchemaName;
 use konductor_common::namespace::NamespaceResolver;
-use konductor_common::promotion::{promotion_pk, version_sk, SchemaVersionContent, PROMOTION_SK};
+use konductor_common::promotion::{
+    canonical_content_hash, promotion_pk, version_sk, SchemaVersionContent, PROMOTION_SK,
+};
 use konductor_common::promotion_store::{version_content_from_item, version_content_to_item};
 
 pub struct Clients {
@@ -189,6 +191,81 @@ pub async fn describe_latest(
             }
         }
     }
+}
+
+/// The registry's content for one version (registry-normalized), or `None`
+/// when the schema or version does not exist.
+pub async fn describe_version(
+    clients: &Clients,
+    environment: &str,
+    domain: &str,
+    event_name: &str,
+    version: i64,
+) -> Result<Option<String>> {
+    let registry = registry_name(environment, domain)?;
+    let schema = full_schema_name(domain, event_name)?;
+    let result = clients
+        .schemas
+        .describe_schema()
+        .registry_name(registry)
+        .schema_name(schema)
+        .schema_version(version.to_string())
+        .send()
+        .await;
+    match result {
+        Ok(output) => {
+            let content = output
+                .content()
+                .context("describe schema version carried no content")?;
+            Ok(Some(content.to_string()))
+        }
+        Err(e) => {
+            // Versions are not deletable, so NotFoundException here means the
+            // schema itself is absent from this registry.
+            let err = e.into_service_error();
+            if err.is_not_found_exception() {
+                Ok(None)
+            } else {
+                Err(anyhow::Error::new(err).context("describe schema version failed"))
+            }
+        }
+    }
+}
+
+/// A source version's content and hash: the content record when present,
+/// otherwise the source registry. Registry version content is immutable, so
+/// schemas authored before content recording existed stay promotable.
+pub async fn resolve_source_content(
+    clients: &Clients,
+    input: &StepInput,
+    version: i64,
+) -> Result<Option<(String, String)>> {
+    if let Some(record) = read_record(
+        clients,
+        &input.domain,
+        &input.schema_name,
+        &input.source_environment,
+        version,
+    )
+    .await?
+    {
+        return Ok(Some((record.content, record.content_hash)));
+    }
+    let Some(content) = describe_version(
+        clients,
+        &input.source_environment,
+        &input.domain,
+        &input.schema_name,
+        version,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    let hash = canonical_content_hash(&content).ok_or_else(|| {
+        anyhow::anyhow!("source registry content for v{version} is not valid JSON")
+    })?;
+    Ok(Some((content, hash)))
 }
 
 /// Committed replay progress on the head item, guarded by the promotion id

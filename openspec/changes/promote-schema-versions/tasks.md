@@ -74,6 +74,7 @@
 - [x] 11.1 Run `make check` and `rtk cargo test --workspace`, and run the `rust-reviewer` droid on the backend diff. Verify that everything is clean and the review has no blocking findings.
 - [x] 11.2 On a deployed dev installation with a subscriber in each environment: append v2 and v3 in dev while publishing continuously, promote to staging and then prod, and confirm zero dropped events (consumer bus counts), aligned version content across registries, final pins at v3, the lifecycle event sequence, and that a deliberately diverged target fails with `DIVERGED` and writes nothing. Record the results in the change's verification notes.
 - [x] 11.3 Gate the promotion workflow on pipeline adjacency: `plan` refuses a source that is not the target's immediate predecessor (`SKIPPED_ENVIRONMENT`, no registry reads), covering executions started out-of-band with a planted lease. Add the failure reason to both OpenAPI surfaces, the console copy, and the runbook; cover the gate with unit tests and the copy with a Playwright spec.
+- [x] 11.4 Let pre-recording schemas promote: replay and prefix verification fall back to the source registry's immutable per-version content when no content record exists (live-found defect: `REPLAY_FAILED` "source record missing"). Correct design.md's spike-1.1 claim that per-version content is unreadable. Verify with `cargo test -p schema-promotion-steps`.
 
 ## Workflow follow-up
 

@@ -96,13 +96,20 @@ A promotion SHALL write each source version newer than the target's latest into 
 
 ### Requirement: Schema version content is durably recorded
 
-Konductor SHALL record the canonical content and a content hash of every version created or appended in the authoring environment in a durable version-content store; registries normalize content and expose only the latest version, so this store is the only replayable history. Replay steps SHALL read version content from this store, never from a registry's version history.
+Konductor SHALL record the canonical content, a content hash, and the writer of every version created or appended in the authoring environment in a durable version-content store; registries normalize content and carry no provenance, so this store is the basis of replay and divergence detection. Replay and prefix verification SHALL resolve source-version content from this store first, falling back to the source registry's immutable per-version content for versions that predate recording; a source version found in neither SHALL fail the promotion.
 
 #### Scenario: Append records the new version's content
 
 - **WHEN** a publisher successfully appends v4 in the authoring environment
 - **THEN** the version-content store SHALL hold v4's canonical content and hash for the authoring environment
 - **AND THEN** a later promotion SHALL replay v4 from that record
+
+#### Scenario: A schema that predates content recording promotes from the registry
+
+- **GIVEN** a schema whose source versions were created before content recording existed, so the store holds no records for them
+- **WHEN** the schema is promoted
+- **THEN** replay SHALL read each missing source version's content from the source registry, whose per-version content is immutable
+- **AND THEN** the promotion SHALL proceed as for recorded versions, writing promotion-owned records in the target
 
 #### Scenario: Ambiguous append retry completes the record
 

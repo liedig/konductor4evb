@@ -16,6 +16,9 @@ Older rationale is available through the [decision index](docs/decisions/README.
   without touching the target; `REPLAY_FAILED` resumes where it stopped).
   The workflow also refuses a source that is not the target's immediate
   predecessor (`SKIPPED_ENVIRONMENT`), gating executions started out-of-band.
+  Schemas authored before version recording existed replay from the source
+  registry's immutable per-version content, so they promote without any
+  backfill.
   Completion re-pins the target environment's subscription rules through a
   widen, drain (`SchemaRepinDrainSeconds`, default 300s), narrow sequence that
   keeps delivery continuous, and `SchemaPromotion{Started,Completed,Failed}`
