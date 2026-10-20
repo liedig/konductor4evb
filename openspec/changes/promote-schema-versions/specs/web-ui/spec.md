@@ -55,6 +55,13 @@ The producer schema page SHALL offer "Promote to {environment}" for each environ
 - **WHEN** an environment's latest version equals its source's latest version
 - **THEN** no promote action SHALL be offered for that environment
 
+#### Scenario: Promote is offered only where the predecessor holds new versions
+
+- **WHEN** dev is at v5 and both staging and prod are at v3
+- **THEN** "Promote to staging" SHALL be offered, because dev holds versions staging lacks
+- **AND THEN** "Promote to prod" SHALL NOT be offered, because staging holds nothing prod lacks
+- **AND THEN** once staging is promoted to v5, "Promote to prod" SHALL be offered
+
 #### Scenario: Concurrent promotion is surfaced
 
 - **WHEN** the API returns `409 Conflict` because a promotion into that environment is already running
