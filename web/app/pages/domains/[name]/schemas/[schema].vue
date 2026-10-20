@@ -37,13 +37,21 @@ const authoringLatest = computed(() => latestByEnv.value[authoringEnv.value] ?? 
 const canManage = computed(() => !session.globalRoles.includes('platform-auditor'))
 
 // Pipeline nodes follow the configured order; a target the schema has not
-// reached still renders so the gap is visible.
-const pipeline = computed(() => config.environments.map(env => ({
-  env,
-  version: latestByEnv.value[env] as number | undefined,
-  behind: Math.max(0, authoringLatest.value - (latestByEnv.value[env] ?? 0)),
-  isAuthoring: env === authoringEnv.value,
-})))
+// reached still renders so the gap is visible. The promote affordance is
+// offered only where the immediate predecessor holds versions the target
+// lacks — the same adjacency rule the API and workflow enforce.
+const pipeline = computed(() => config.environments.map((env, index) => {
+  const predecessor = index > 0 ? config.environments[index - 1] : undefined
+  const predecessorLatest = predecessor === undefined ? 0 : (latestByEnv.value[predecessor] ?? 0)
+  const version = latestByEnv.value[env] as number | undefined
+  return {
+    env,
+    version,
+    behind: Math.max(0, authoringLatest.value - (latestByEnv.value[env] ?? 0)),
+    isAuthoring: env === authoringEnv.value,
+    promotable: predecessor !== undefined && predecessorLatest > (version ?? 0),
+  }
+}))
 
 const maxVersion = computed(() => Math.max(0, ...Object.values(latestByEnv.value)))
 
@@ -297,7 +305,7 @@ onBeforeUnmount(() => {
               <NxBadge v-if="node.behind > 0" tone="warning">{{ node.behind }} behind</NxBadge>
             </div>
             <NxButton
-              v-if="canManage && !node.isAuthoring && node.behind > 0 && !inFlight(promotions[node.env])"
+              v-if="canManage && node.promotable && !inFlight(promotions[node.env])"
               size="sm"
               @click="askPromote(node.env)"
             >

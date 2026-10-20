@@ -47,6 +47,27 @@ test('pipeline nodes follow the configured order with behind counts and not-yet-
   await expect(nodes.nth(2)).toContainText('2 behind')
 })
 
+test('only the environment whose predecessor holds new versions offers the promote button', async ({ page }) => {
+  // dev v5, staging v3, prod v3: prod's predecessor (staging) holds nothing
+  // prod lacks, so only staging is promotable.
+  await installApi(page)
+  await page.goto(PAGE)
+
+  const pipeline = card(page, 'Promotion pipeline')
+  await expect(pipeline.getByRole('button', { name: 'Promote to staging' })).toBeVisible()
+  await expect(pipeline.getByRole('button', { name: 'Promote to prod' })).toHaveCount(0)
+})
+
+test('a caught-up middle environment moves the affordance to the next gap', async ({ page }) => {
+  SCHEMAS[0]!.latestVersions = { prod: 3, dev: 5, staging: 5 }
+  await installApi(page)
+  await page.goto(PAGE)
+
+  const pipeline = card(page, 'Promotion pipeline')
+  await expect(pipeline.getByRole('button', { name: 'Promote to staging' })).toHaveCount(0)
+  await expect(pipeline.getByRole('button', { name: 'Promote to prod' })).toBeVisible()
+})
+
 test('domain page badges follow the configured order and link to the producer schema page', async ({ page }) => {
   await installApi(page)
   await page.goto('/domains/orders')
