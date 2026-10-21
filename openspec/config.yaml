@@ -5,9 +5,9 @@ context: |
   - Rust AWS Lambda functions on Amazon Linux 2023 (arm64), built with cargo-lambda, deployed via AWS SAM/CloudFormation templates
   - lambda_runtime, tokio, serde/serde_json, tracing (JSON logs)
   - Errors: thiserror typed errors in konductor-common, anyhow with .context() at Lambda edges
-  - AWS SDK for Rust: DynamoDB, EventBridge, SES, Step Functions, SQS, SSM, STS, Schemas, CloudWatch
+  - AWS SDK for Rust: DynamoDB, EventBridge, SES, SNS, Step Functions, SQS, SSM, STS, Schemas, Lambda, CloudWatch
   - jsonwebtoken + reqwest for the Cognito JWT/JWKS OAuth authorizer; uuid, chrono, sha2
-  - Testing: aws-smithy-mocks (mock!/mock_client! rules), per-binary integration-style tests
+  - Testing: aws-smithy-mocks (mock!/mock_client! rules), per-binary integration-style tests; Python suites for scripts and state-machine fixtures under scripts/tests (`uv run --with pytest pytest scripts/tests`)
   - Lint gates: cargo fmt, clippy -D warnings (workspace lints: cognitive_complexity, too_many_lines, type_complexity)
   - Architecture: Step Functions ASL state machines, DynamoDB single-table design, EventBridge buses/rules, SQS queues, SES email, Cognito, CloudWatch log metric filters + alarms, API Gateway defined by OpenAPI specs in api/
 
@@ -17,11 +17,17 @@ context: |
   - Tailwind CSS via Vite plugin
   - TypeScript + vue-tsc (nuxi typecheck), ESLint
   - pnpm (pinned via packageManager field in web/package.json)
+  - Playwright browser suite under web/tests/ui against a mocked API (`pnpm test:ui`; run locally, not in CI)
+
+  ## Tech Stack — Documentation
+  - MkDocs (Material) site built from docs/ with `mkdocs build --strict`; link hooks under docs-site/ (tested by docs-site/test_hooks.py)
 
   For architecture overview: read docs/architecture/README.md (topic map to focused pages)
   For testing patterns: read docs/development/testing.md
   For past decisions: read docs/decisions/README.md (topic index of decision records)
   For Vue conventions: read docs/development/vue.md
+  For the design system, Nx* kit, and UI interaction contracts: read docs/development/design-system.md
+  For classifying handler write paths: read docs/development/side-effects/README.md
   For TypeScript conventions: read docs/development/typescript.md
   For documentation maintenance rules: read docs/development/documentation.md
 
@@ -43,6 +49,7 @@ context: |
 
   ## Conventions
   - Coding style, testing strategy, and git workflow: AGENTS.md is the single source of truth — do not restate its rules here
+  - Implementation (apply): every task that adds or changes behavior follows AGENTS.md → Testing Strategy, so its failing test is written and run before the production code
   - Spec-driven development via OpenSpec for all feature planning
 
 rules:
@@ -51,8 +58,16 @@ rules:
       Before creating a new spec, check existing specs in openspec/specs/ for a suitable domain match.
       This project follows DDD - prefer extending an existing spec over creating a new one.
       Only create a new spec if the change introduces a genuinely new bounded context.
+  specs:
+    - When a change alters user-visible console behavior, include a delta for the web-ui capability (openspec/specs/web-ui/spec.md), per AGENTS.md → Web UI
+  design:
+    - For each new or changed handler write path, classify it against the side-effects rubric (AGENTS.md → Side Effects and Durability; docs/development/side-effects/README.md) - answer the six questions and state the decision (STAY, MIGRATE, ENVELOPE-DRIVEN, or stream-driven) with its reason
   tasks:
     - For a meaningful choice about behavior, boundaries, or trade-offs, include a task to add or update a decision record under docs/decisions/ and its index (docs/decisions/README.md)
     - If the change affects architecture (workflows, APIs, resources, data model, events, cross-account trust), include a task to update the affected topic pages under docs/architecture/ and docs/reference/
     - For notable user, operator, or contributor changes, include a task to add an entry under Unreleased in CHANGELOG.md
     - Keep documentation edits within the maintenance rules in docs/development/documentation.md
+    - For each handler write path classified in design.md, include a task to add its dated record to the matching topic file under docs/development/side-effects/ and its row in that directory's README decision index
+    - When the change adds an interactive console surface or changes UI behavior, keep its Playwright coverage (web/tests/ui, API mocked via tests/ui/api.ts) in the same test-first task as the UI code, per AGENTS.md → Web UI
+    - End with a review task - run the rust-reviewer droid on Rust changes and the ui-reviewer droid on web/ changes, and resolve every finding before marking it complete
+    - Phrase each task that adds or changes behavior test-first (AGENTS.md → Testing Strategy) - name the failing tests to write and run first, then the implementation that makes them pass. Keep a behavior's tests in the same task as its implementation; never collect tests into a trailing task or group

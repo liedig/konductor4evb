@@ -218,3 +218,91 @@ payload retention for the projector, and do not claim to satisfy a 30-day
 promise. Review the 30-day requirement against the SQS limit and either adjust
 the expectation or add a long-retention mechanism in a separate change.
 
+## D16
+
+**Playwright suite is not gated in CI.** AGENTS.md → Web UI requires new
+interactive surfaces to ship Playwright coverage, and the ui-reviewer droid
+previously listed `pnpm test:ui` as a CI-enforced gate. CI's Web job runs
+`pnpm lint`, `pnpm typecheck`, and `pnpm build` only, so the suite runs only
+when a contributor runs it locally. Review whether to add `pnpm test:ui` (with
+a Playwright browser install) to the Web job.
+
+## D17
+
+**Platform resource names in AGENTS.md versus the resource-topology spec.**
+AGENTS.md → Product Naming lists `konductor-trust-role` and `konductor-bus`,
+which match the deployed core template. The
+[resource-topology spec](../../openspec/specs/resource-topology/spec.md)
+requires `{org}-konductor-trust-role` and `{org}-konductor-*` platform
+resources. This is the agent-facing side of [D13](#d13); decide which naming
+is authoritative before changing either.
+
+## D18
+
+**Feature-branch workflow versus practice.** AGENTS.md → Git Workflow calls
+for short-lived feature branches per change. The promote-schema-versions,
+schema-content-per-environment, and domain-system-events changes were
+committed directly on `main` (12 commits ahead of `origin/main` on
+2026-10-21). Review whether the rule or the practice should change.
+
+## D19
+
+**`null` rule versus console code.** The
+[TypeScript conventions](../development/typescript.md) say `undefined` means
+absent and `null` is introduced only where the API contract uses it. The
+console uses `null` about 127 times, including 25 `ref<T | null>(null)` UI
+state declarations, and Vue template refs (`useTemplateRef`) return `null`
+by framework contract. Review whether to amend the rule (for example, allow
+`null` for UI selection state and framework refs) or migrate the code.
+
+## D20
+
+**Radius and raw-control exceptions.** The
+[design system](../development/design-system.md) and AGENTS.md allow only
+`rounded-lg` and `rounded-xl`. The console also uses `rounded-full` (the
+System events unread dot in `layouts/default.vue` and the `NxButton`
+spinner), `rounded-md` (the settings menu item in `layouts/default.vue`), and
+plain `rounded` (`MetadataEnvironmentPanel.vue`). The raw-control exception
+list does not name the environment disclosure button on the domain page
+(`aria-expanded`) or the settings menu trigger (`aria-haspopup`). Review
+whether to document these as exceptions or change the code.
+
+## D21
+
+**Lifecycle-event catalog omits `konductor.control-plane`.** The
+metadata-stream-consumer and entitlement-stream-consumer publish to
+`konductor-bus` with source `konductor.control-plane`, but the
+[lifecycle-event catalog](lifecycle-events.md) lists no events for that
+source. Review the catalog against both consumers.
+
+## D22
+
+**File-size guideline versus current code.** AGENTS.md → Code Style asks for
+files under 300 production lines (excluding `#[cfg(test)]` modules), and the
+rust-reviewer droid uses its own per-type thresholds (300 lines for Lambda
+handlers, 400 for shared-library modules). On 2026-10-21, 13 Rust files
+exceeded 300 production lines (non-blank, non-comment lines outside test
+code):
+
+| File | Lines |
+| ---- | ----: |
+| `event-streams/functions/publish-events-admission/src/handler.rs` | 814 |
+| `domain-management/functions/domain-registrations/src/register.rs` | 623 |
+| `event-streams/functions/schema-admin/src/handler.rs` | 538 |
+| `lib/konductor-common/src/streams_db.rs` | 459 |
+| `domain-management/functions/list-domains/src/handler.rs` | 383 |
+| `event-streams/functions/materialize-subscription-env/src/handler.rs` | 377 |
+| `event-streams/functions/materialize-subscription-env/src/repin.rs` | 369 |
+| `lib/konductor-common/src/schema_compatibility/mod.rs` | 359 |
+| `event-streams/functions/describe-schema/src/contract.rs` | 348 |
+| `event-streams/functions/subscriptions/src/update_state.rs` | 341 |
+| `event-streams/functions/system-schema-bootstrap/src/handler.rs` | 337 |
+| `lib/konductor-common/src/grant_engine.rs` | 328 |
+| `event-streams/functions/subscriptions/src/subscribe.rs` | 312 |
+
+A `make check` gate with an allowlist of these files was tried and removed
+the same day; the rule was relaxed to a review guideline instead. Assess
+whether to split the files by role (most separate cleanly; the
+publish-events admission handler needs boundary design), keep the guideline,
+or change the limit, and align AGENTS.md with the reviewer thresholds.
+

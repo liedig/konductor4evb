@@ -29,5 +29,6 @@ By signing off, you certify that you wrote the contribution or otherwise have th
 - [ ] `cargo fmt --check` passes
 - [ ] `cargo clippy --workspace -- -D warnings` passes
 - [ ] `cargo test --workspace` passes
+- [ ] New behavior was built test-first (red/green/refactor), and bug fixes include a reproducing test; see [Testing Strategy](AGENTS.md#testing-strategy)
 - [ ] Commit messages follow Conventional Commits with `Signed-off-by`
 - [ ] Docs updated if applicable, following the [documentation maintenance rules](docs/development/documentation.md)

@@ -33,9 +33,10 @@ Before reviewing, read the project conventions:
 | Type errors, prop/type mismatches | `pnpm typecheck` (vue-tsc) |
 | Unused imports/variables | eslint |
 | Auto-import resolution (`useToast`, `Nx*`, …) | Nuxt build |
-| Existing UI suite regressions | `pnpm test:ui` (CI Web job) |
 
 > These fire in CI. Re-reviewing them wastes tokens; focus on what tooling cannot see.
+>
+> CI's Web job runs lint, typecheck, and build only; it does **not** run the Playwright suite. Do not assume `pnpm test:ui` passed in CI: check that the change records a local `pnpm test:ui` run, and treat a missing run for a UI behavior change as NEEDS FIX.
 
 ## Checks (What Linters Miss)
 
@@ -79,6 +80,7 @@ New interactive surfaces and behavior changes ship UI tests:
 - Locators are role/label-based and scoped by card heading (`getByRole`, `getByLabel`); no brittle CSS selectors.
 - Toast assertions use `{ exact: true }` — Reka renders an aria-hidden announce duplicate of every toast message, so a bare `getByText` matches two elements and flakes on announce timing.
 - Viewport-sensitive specs call `page.setViewportSize` themselves; no reliance on config defaults.
+- Work is test-first (AGENTS.md → Testing Strategy): each new or changed behavior has a test that would fail if the change were reverted, and no existing assertion was loosened to fit the change.
 
 ### 7. Docs and spec stay in sync
 
@@ -97,7 +99,7 @@ New interactive surfaces and behavior changes ship UI tests:
 
 ### ALL FINDINGS MUST BE ADDRESSED
 
-- **BLOCK**: Cannot proceed until fixed (parallel primitives, raw colors, broken interaction contracts, missing coverage for new interactive behavior).
+- **BLOCK**: Cannot proceed until fixed (parallel primitives, raw colors, broken interaction contracts, missing coverage for new interactive behavior, assertions weakened to fit the change).
 - **NEEDS FIX**: Must fix before marking the task complete (missing doc sync, accessibility gaps, non-scoped locators).
 - **APPROVE**: No issues found.
 

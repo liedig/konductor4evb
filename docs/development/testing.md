@@ -1,13 +1,14 @@
 # Testing Guide
 
-Use this guide to test critical behavior in Konductor for Amazon EventBridge. It covers the development cycle, Rust handler tests, browser tests, and local validation commands. For test scope, see the [priority test flows in AGENTS.md](../../AGENTS.md#testing-strategy).
+Use this guide to test critical behavior in Konductor for Amazon EventBridge. It covers the development cycle, Rust handler tests, browser tests, and local validation commands. For the test-first rule and the priority test flows, see [Testing Strategy in AGENTS.md](../../AGENTS.md#testing-strategy).
 
 ## TDD: red/green/refactor
 
-> **Scope:** Test the critical paths defined in AGENTS.md, not every function.
-> Use the red, green, refactor cycle when implementing those flows.
+> **Scope:** Every new behavior in a feature or fix (Rust handlers and shared
+> library, the web console, and scripts) is built test-first. Test behavior,
+> not every function; the priority flows in AGENTS.md get the deepest coverage.
 
-Follow test-driven development (TDD) when implementing the priority flows:
+Follow test-driven development (TDD) for each behavior you add or change:
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
@@ -35,9 +36,24 @@ Apply these principles:
 - Keep each cycle short (minutes, not hours)
 - Commit after each green phase locally, then consolidate into conventional commits before review. See [Git workflow](../../AGENTS.md#git-workflow).
 
+### Seeing RED
+
+Run only the new test so the failure is easy to read:
+
+| Stack | Command |
+| ----- | ------- |
+| Rust | `cargo test -p <crate> <test_name>` |
+| Web console (from `web/`) | `pnpm exec playwright test tests/ui/<spec>.spec.ts -g "<test title>"` |
+| Scripts | `uv run --with pytest pytest scripts/tests/<file>.py -k <test_name>` |
+
+The failure must come from the missing behavior: an assertion failure, or in Rust a compile error naming only the function, field, or variant the test introduces. A typo, an unrelated compile error, or a fixture that fails during setup is not RED; fix it and run again.
+
+A bug fix starts RED with a test that reproduces the bug. A pure refactor adds no behavior, so it has no RED step; the existing tests stay green throughout.
+
 Avoid these practices:
 
 - Writing implementation first, then tests to match
+- Treating a test written after its implementation as RED without seeing it fail
 - Writing multiple tests before any implementation
 - Changing test assertions to match buggy behavior
 - Skipping the refactor phase

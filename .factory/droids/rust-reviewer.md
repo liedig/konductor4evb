@@ -508,6 +508,15 @@ async fn main() -> Result<(), Error> {
 > excluded — otherwise well-tested files (e.g. a 700-line file with 450 lines
 > of tests) false-positive despite compliant production code.
 
+### 9. Tests for New Behavior
+
+AGENTS.md → Testing Strategy requires red/green/refactor for all new behavior. The diff does not show the order the code was written in, so check the result:
+
+- **BLOCK**: new or changed behavior (handler branch, error mapping, event field, DynamoDB write, state transition) with no test that would fail if the change were reverted.
+- **BLOCK**: an existing assertion loosened or deleted to fit the new implementation, without a spec change that justifies it.
+- **NEEDS FIX**: a test that only asserts what its own mock returns, or pins implementation details instead of observable behavior (response, written item, emitted event, outbound request).
+- **NEEDS FIX**: a bug fix without a test that reproduces the bug.
+
 ## Review Process
 
 ### 1. Load conventions
@@ -575,6 +584,12 @@ Exclude the `#[cfg(test)]` module when comparing against size thresholds.
 - AWS clients constructed in `main` and passed by reference, never inside the handler.
 - `pub` visibility is minimal; prefer `pub(crate)` for internal helpers.
 - Domain status and other domain concepts use enums, not raw strings.
+
+### 10. Check tests for new behavior (§9)
+
+- Each new or changed behavior has a test that fails when the change is reverted.
+- No existing assertion was weakened to match the new implementation.
+- Bug fixes carry a reproducing test.
 
 ## Enforcement
 

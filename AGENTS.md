@@ -4,7 +4,7 @@
 
 - No inline `//` comments explaining *what* code does — write self-explanatory code with clear, intention-revealing names. Exceptions: `///` doc comments on `konductor-common` public items, and brief *why*-comments for non-obvious decisions
 - Import grouping: external crates first, then `konductor_common`/local modules, separated by a blank line; ordering within groups is rustfmt's job (`make check`)
-- Files under 300 production lines, excluding `#[cfg(test)]` modules; split when it improves clarity
+- Aim for files under 300 production lines, excluding `#[cfg(test)]` modules, and split by role when it improves clarity. This is a review guideline, not a gate; several existing files exceed it (under review, see D22 in `docs/reference/documentation-discrepancies.md`)
 - Make invalid states unrepresentable: enums over stringly-typed values (`DomainStatus`, `Decision`), narrow purpose-built types over primitives
 - Separation of concerns without over-engineering; start simple, add complexity only when clearly required
 - Errors: typed variants via `thiserror` in `konductor-common` (`ControlPlaneError`) for control flow; `anyhow` with specific `.context()` only at Lambda binary edges
@@ -52,11 +52,16 @@ A handler performs exactly one synchronous commit; drive everything else from th
 
 ## Testing Strategy
 
-- Write tests for critical paths only, not every function
-- AAA pattern (Arrange, Act, Assert)
+- Work test-first (red/green/refactor) for all new behavior in features and fixes: Rust handlers and shared library, the web console, and scripts. Mechanics and per-stack commands: docs/development/testing.md
+  - RED: write a test for the next behavior and run it; it must fail for the expected reason (the behavior is missing, not a typo or a broken fixture)
+  - GREEN: write the minimal production code that makes it pass
+  - REFACTOR: clean up with every test green, then repeat for the next behavior
+- A bug fix starts with a test that reproduces the bug
+- Never write production code ahead of its failing test, and never weaken a valid assertion to fit the implementation
+- Pure refactors add no behavior and keep the existing tests green
+- Test behavior, not every function; AAA pattern (Arrange, Act, Assert)
 - Prefer integration and behavior tests over unit test coverage metrics
-- When implementing the priority flows below, work test-first (red/green/refactor); test mechanics and tooling: see docs/development/testing.md
-- Priority test flows:
+- Priority test flows (deepest coverage):
   - Domain registration and lifecycle (register, update, list, describe, decide)
   - Event publishing (source convention, payload correctness, failed entry handling)
   - Approval workflow integration (decide handler, task token lifecycle, already-processed detection)
@@ -70,7 +75,8 @@ A handler performs exactly one synchronous commit; drive everything else from th
 - The product is called **Konductor for Amazon EventBridge** (short form: **Konductor**)
 - Resource namespace convention: `{org}-{env}-{domain}` (e.g., `acme-prod-payments`)
 - Trust role: `konductor-trust-role`
-- Event source: `konductor.domain-management`
+- Event sources on `konductor-bus`: `konductor.domain-management` (domain lifecycle), `konductor.event-streams` (subscriptions), `konductor.schema-management` (schema versions and promotion), `konductor.control-plane` (metadata and entitlement stream consumers); catalog: docs/reference/lifecycle-events.md
+- Public system events: source `konductor.system` on `{org}-konductor-system-bus`; contracts: docs/reference/system-events.md
 - Lifecycle event bus: `konductor-bus`
 
 ## Git Workflow
