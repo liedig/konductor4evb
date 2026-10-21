@@ -186,3 +186,35 @@ names `ApprovalFromEmail` and `ApprovalToEmail` as the SES parameters. The
 nowhere in templates or code. The `configure-customer-platform` change uses
 the template names. Review whether the spec requirement should be corrected to
 the implemented names; not resolved here.
+## D13
+
+**Resource naming convention versus deployed names.** The naming convention
+(`{org}-{env}-{domain}` and `{org}-konductor-*` prefixes in project context)
+does not match the deployed core template, which uses unprefixed names such as
+`konductor-event-streams` and `konductor-bus`. The `domain-system-events`
+change names its new resources `{org}-konductor-system-bus`,
+`{org}-konductor-system-schemas`, and `{org}-konductor-system-events-archive`
+per the convention while leaving every existing unprefixed resource unchanged.
+Review whether existing resources should migrate to the prefixed convention;
+renaming them is destructive and not authorized here.
+
+## D14
+
+**Registry serves more than the latest version.** The
+[schema architecture](../architecture/schemas.md) describes the EventBridge
+schema registry as serving the latest version only. Promotion replay, consumer
+re-pinning, and per-environment content reads all address historical versions
+by number through `DescribeSchema`, and the `{org}-konductor-system-schemas`
+registry relies on the same versioned reads. Review the architecture text
+against the versioned-read implementation; not resolved here.
+
+## D15
+
+**Domain DLQ retention exceeds the SQS maximum.** Project context and
+operational guidance ask for 30-day retention on domain dead-letter queues,
+but SQS supports at most 14 days of message retention. The system-event
+failure paths use 14-day SQS queues (the supported maximum) plus 90-day S3
+payload retention for the projector, and do not claim to satisfy a 30-day
+promise. Review the 30-day requirement against the SQS limit and either adjust
+the expectation or add a long-retention mechanism in a separate change.
+

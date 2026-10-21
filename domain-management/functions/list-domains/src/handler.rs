@@ -323,7 +323,7 @@ async fn directory_listing(
 
 fn full_item_json(org: &str, item: &HashMap<String, AttributeValue>) -> Value {
     let domain_name = get_s(item, "domainName");
-    json!({
+    let mut summary = json!({
         "domainName": domain_name,
         "domainNamespace": domain_name.as_ref().map(|name| format!("{org}-{name}")),
         "description": get_s(item, "description"),
@@ -332,7 +332,16 @@ fn full_item_json(org: &str, item: &HashMap<String, AttributeValue>) -> Value {
         "secondaryOwnerEmails": get_string_set(item, "secondaryOwnerEmails"),
         "status": get_s(item, "status"),
         "createdAt": get_s(item, "createdAt"),
-    })
+    });
+    // Freshness marker for the console's unread indicator; omitted (never
+    // null) until the first delivered event, and describe-only for the ARN.
+    if let Some(v) = get_s(item, "systemEventsLastEventAt") {
+        summary["systemEventsLastEventAt"] = json!(v);
+    }
+    if let Some(v) = get_s(item, "systemEventsLastEventType") {
+        summary["systemEventsLastEventType"] = json!(v);
+    }
+    summary
 }
 
 fn directory_item_json(org: &str, item: &HashMap<String, AttributeValue>) -> Value {
@@ -800,5 +809,48 @@ mod tests {
             "billing"
         );
         assert_eq!(restored.get("status").unwrap().as_s().unwrap(), "ACTIVE");
+    }
+    #[tokio::test]
+    async fn full_summary_carries_the_system_event_marker_but_not_the_arn() {
+        set_env();
+        let bindings = bindings_query_rule(vec![owner_binding_item("orders", "team-payments")]);
+        let no_pending = status_query_rule("PENDING_APPROVAL", vec![]);
+        let no_rejected = status_query_rule("REJECTED", vec![]);
+        let mut marked = domain_item("orders", "ACTIVE", "111122223333");
+        marked.insert(
+            "systemEventsLastEventAt".to_string(),
+            s("2026-10-21T09:15:00.000Z"),
+        );
+        marked.insert(
+            "systemEventsLastEventType".to_string(),
+            s("SubscriptionUpgraded"),
+        );
+        let batch = batch_get_rule(vec![marked]);
+        let ddb = mock_client!(
+            aws_sdk_dynamodb,
+            [&bindings, &no_pending, &no_rejected, &batch]
+        );
+
+        let resp = handle(
+            &ddb,
+            event_with(oauth_ctx(&[], &["team-payments"]), Value::Null),
+        )
+        .await
+        .unwrap();
+
+        let domains = body_domains(&resp);
+        assert_eq!(domains.len(), 1);
+        assert_eq!(
+            domains[0]["systemEventsLastEventAt"],
+            "2026-10-21T09:15:00.000Z"
+        );
+        assert_eq!(
+            domains[0]["systemEventsLastEventType"],
+            "SubscriptionUpgraded"
+        );
+        assert!(
+            domains[0].get("systemEventsTopicArn").is_none(),
+            "the topic ARN stays describe-only"
+        );
     }
 }

@@ -377,6 +377,7 @@ mod tests {
                 .into_iter()
                 .map(|(name, status, enabled)| (name.to_string(), env_entry(status, enabled)))
                 .collect(),
+            upgrade_events: None,
             request_id: None,
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),

@@ -31,7 +31,7 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 - **Rationale:** there is no committed write in this handler for a stream to carry—the fix is not a migration but restoring the established execution-name idempotency convention.
 - **Follow-up:** `fix-unsubscribe-execution-idempotency` (deterministic name, for example, `remove-{subscriptionId}` or the SQS messageId; verify the removal workflow's reentrancy).
 
-## `materialize-subscription-env` (`follow-schema-promotion`, 2026-09-08; `mode: repin` added by `promote-schema-versions`, 2026-02-11)
+## `materialize-subscription-env` (`follow-schema-promotion`, 2026-09-08; `mode: repin` added by `promote-schema-versions`, 2026-02-11; upgrade phase commits added by `domain-system-events`, 2026-10-20)
 
 - **Committed writes:** one `UpdateItem` per invocation—the per-env merge (`SET environments.#env = :entry, updatedAt = :now`) recording the materialization outcome (ACTIVE with `ruleArn`/`pinnedVersion`, AWAITING_PROMOTION, or FAILED with `errorDetail`).
 - **Side effects:** before the commit, in order—`DescribeSchema` (read), entitlements query (read, skipped for disabled envs and self-subscriptions), `PutRule` upsert, `PutTargets` (consumer bus + platform DLQ), `PutMetricAlarm` (zero-events). No compensation between steps.
@@ -39,7 +39,14 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 - **Decision:** ENVELOPE-DRIVEN.
 - **Rationale:** the caller's execution context already provides durability; the handler's single commit records the outcome and is the read surface for the workflow's post-map aggregation and the UI's failure display.
 
-`mode: repin` addendum: the re-pin path performs no schema lookup, entitlement check, target, or alarm write—one `DescribeRule` (to preserve the rule's current state) and one `PutRule` with the caller-supplied version list, then, only when `commitPin` is set, a `SET environments.#env.pinnedVersion` update that touches nothing else in the entry. A `PutRule` failure returns a per-entry FAILED outcome, and—again only when `commitPin` is set—also marks the entry `FAILED` with `errorDetail` on the record, so the failing subscriber is visible and re-enabling repairs it; during widen a failure leaves the old pattern delivering and the workflow retries instead. The narrow-phase record write is best effort: it must not mask the step outcome the workflow tallies. The invoking workflow (promotion or re-pin) is the durable envelope, exactly as for the create path; the REPIN item's generation condition (written by the caller, `schema-promotion-steps`) is the concurrency guard.
+`mode: repin` addendum: the re-pin path performs no schema lookup, entitlement check, target, or alarm write—one `DescribeRule` (to preserve the rule's current state) and one `PutRule` with the caller-supplied version list, then, only when `commitPin` is set, the narrow-phase record commit. A `PutRule` failure returns a per-entry FAILED outcome, and—again only when `commitPin` is set—also marks the entry `FAILED` with `errorDetail` on the record, so the failing subscriber is visible and re-enabling repairs it; during widen a failure leaves the old pattern delivering and the workflow retries instead. The invoking workflow (promotion or re-pin) is the durable envelope, exactly as for the create path; the REPIN item's generation condition (written by the caller, `schema-promotion-steps`) is the concurrency guard.
+
+`mode: repin` upgrade-phase commits (2026-10-20): when the workflow enumerates entries with upgrade facts (system-event emission enabled), the record writes change shape:
+
+- **Committed writes:** widen: a conditional `UpdateItem` committing the `STARTED` snapshot to `upgradeEvents.{env}` *before* any rule change, guarded by the generation-derived resource revision plus an eligibility re-check (entry exists and `ACTIVE`, stream not `REMOVED`). Narrow: one conditional `UpdateItem` landing the pin (`environments.{env}.pinnedVersion`) and the `TERMINAL` snapshot together; on rule failure, one conditional `UpdateItem` landing the `FAILED` marker and the terminal failure snapshot together. Without upgrade facts the writes stay exactly as before (`SET ... pinnedVersion` / `set_env_failed`).
+- **Rubric:** (1) yes—the snapshot is self-contained: operation id, trigger, generation, revision, idempotency key, version facts, contract selectors, and enablement; the stream projector needs no other read; (2) yes—both phase commits hang on committed conditional transitions, and the terminal snapshot is atomic with the business state it describes; (3) yes—the idempotency key is operation- and phase-unique (`system-event/v1/` over org, subscription id, environment, operation id, phase), and a conditional-check failure rereads the record to classify `AlreadyCommitted`/`Superseded`/retry; (4) yes—seconds of stream latency are the design (consumers poll or subscribe to topics, never synchronously); (5) yes—the projector (group 3) is a standard stream consumer with per-record events well under shard limits; (6) yes—the invoking Step Functions execution remains the durable envelope.
+- **Failure walk:** widen: snapshot commit rejected because a newer revision exists → step returns SUPERSEDED and the rule is untouched (the newer widen owns the entry); ambiguous conditional failure → reread: own key present → AlreadyCommitted → proceed (the retry-after-commit case loses no event); entry gone/removed → SUPERSEDED, no fabricated terminal. Narrow: pin+snapshot commit fails conditionally → same reread classification; duplicate commit after ambiguous failure → AlreadyCommitted → REPINNED. Rule failure → failure marker + terminal snapshot commit is *required and retriable* (it replaced the previous best-effort write): a write error now fails the step so the workflow retries instead of losing the failure record; a superseded record skips the marker without masking the FAILED outcome. A pin below the requested version commits `PARTIAL`/`REPLAY_PARTIAL` truthfully rather than claiming completion.
+- **Decision:** ENVELOPE-DRIVEN (unchanged).
 
 ## `subscription-extender` (`follow-schema-promotion`, 2026-09-08; re-pin trigger added by `promote-schema-versions`, 2026-02-11)
 
@@ -50,3 +57,87 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 - **Re-pin addendum:** when the published environment is the authoring environment, the extender also starts the `repin-schema-env` workflow as `repin-{domain}-{eventName}-{env}-v{version}`. The execution name is the idempotency key (`ExecutionAlreadyExists` is success), the committed schema version it reacts to is durable, and the start runs after the extension loop so a start failure fails the event into the retry path with extension already converged. Non-authoring environments never start it—their pins advance through promotion.
 - **Decision:** ENVELOPE-DRIVEN.
 - **Rationale:** the handler performs no commit of its own; the bus rule plus the invoked function's idempotent merge provide durability, and the lifecycle event hangs on the SUCCEEDED outcome the function committed.
+
+## `system-event-router` (updated by `domain-system-events`, 2026-10-21)
+
+- **Committed writes:** one conditional `UpdateItem` on the domains table per
+  routed event, setting `systemEventsLastEventAt`/`systemEventsLastEventType`
+  (the console's unread-indicator marker). The write runs after the SNS
+  publish it records and hangs on the same `konductor.system` bus event that
+  drove the publish; the router performs no other writes.
+- **Rubric:** (1) n/a — the marker is console-facing freshness metadata, not
+  state a stream consumer needs (the domains table has no stream, so no
+  consumer can react to it); (2) yes — the stamp hangs on the delivered
+  system event, which the projector emitted from a committed snapshot
+  transition; (3) yes — a retried delivery re-publishes the byte-identical
+  event and re-stamps the same timestamp; the condition
+  (`attribute_not_exists(...) OR ... <= :at`) makes superseded stamps a
+  no-op; (4) yes — the marker may lag seconds without violating anything,
+  and a lost stamp only means a stale unread dot; (5) n/a — no stream
+  consumption; (6) yes — the bus rule's retry/DLQ envelope is the durable
+  source, and the stamp is a pure function of that envelope's payload.
+- **Failure walk:** conditional-check failure (an equal or newer marker
+  already recorded) → silent no-op. Any other `UpdateItem` error (throttle,
+  dispatch, timeout) → warn-only; the handler never fails or republishes an
+  event over a marker, and the next event self-heals the timestamp.
+- **Decision:** STAY. **Rationale:** the marker must land on the domain
+  record the console already reads, synchronously with delivery; no stream
+  exists on the domains table to drive it from, and adding one to carry
+  cosmetic freshness would be complexity without a consumer. The write is
+  idempotent, newer-wins, and strictly best-effort.
+## `system-event-projector` (added by `domain-system-events`, 2026-07-30)
+
+- **Committed writes:** none of its own — it consumes the event-streams table's
+  stream (`NEW_AND_OLD_IMAGES`) and diffs old/new `upgradeEvents` snapshots.
+  Its only effect is `PutEvents` of the public `konductor.system` envelope onto
+  the system bus for snapshots whose idempotency key or resource revision
+  advanced.
+- **Rubric:** (1) yes — the stream image carries the complete snapshot the
+  public event is built from; (2) yes — every event hangs on the committed
+  conditional write in `materialize-subscription-env`, never on a workflow
+  response; (3) yes — the event's deterministic `idempotencyKey` and
+  `resourceRevision` are stable across retries, redrives, and replays, so a
+  re-publication is byte-identical and consumers deduplicate on it; (4) yes —
+  notification latency is seconds-tolerant by contract; (5) yes — the event
+  source mapping bisects, retries boundedly (3 attempts, one-hour record age),
+  reports partial batch failures, and delivers the full failed payload to an
+  S3 bucket with 90-day retention, so a poison record cannot block the shard
+  past the 24-hour stream window; (6) yes — the stream record itself is the
+  durable envelope.
+- **Failure walk:** bus throttled or an entry rejected → the record fails and
+  retries, then bisects, then lands in the failure bucket with the original
+  payload; the [recovery runbook](../../operations/system-events.md) re-invokes
+  the projector with the extracted records and identity is preserved. A
+  malformed snapshot entry fails the record loudly (never a silent skip). An
+  out-of-order delivery whose old image already holds a newer resource
+  revision emits nothing. REMOVE records and ordinary mutations without
+  snapshot changes emit nothing.
+- **Decision:** Reference (exempt). **Rationale:** a pure stream consumer in
+  the pattern the rubric exists to promote; no synchronous fan-out on any
+  write path.
+
+## `system-event-notifier` (added by `domain-system-events`, 2026-07-30)
+
+- **Committed writes:** none of its own — it is an EventBridge rule target on
+  the system bus (consumer-facing events) and the control-plane bus
+  (`SchemaPromotionFailed`). Its only effects are a `GetItem` for recipient
+  lookup and `ses:SendEmail`.
+- **Rubric:** (1) n/a — it writes nothing; (2) yes — both triggering events
+  hang on committed state transitions (the conditional upgrade-phase write
+  via the projector; the committed failure record for promotion); (3) yes —
+  the event's deterministic `idempotencyKey` makes a redelivered email
+  byte-identical, and EventBridge target retries plus the rule DLQ bound
+  duplicates to transient windows; (4) yes — email is advisory, seconds of
+  delay are within contract; (5) n/a — no stream consumption; (6) yes — the
+  rule's DLQ (`SystemEventTargetDlq`) plus two target retries is the durable
+  envelope.
+- **Failure walk:** transient SES failure (throttling) → returned to
+  EventBridge, retried, then dead-lettered for targeted redrive per the
+  [operations guide](../../operations/system-events.md). Permanent SES
+  failure (`MessageRejected`, `BadRequestException` — e.g., an unverified
+  sender) is acknowledged without retry: retrying cannot help, and machine
+  consumers are unaffected. A missing domain record skips the email with a
+  log line. Emails are never sent for authoring-triggered upgrades.
+- **Decision:** ENVELOPE-DRIVEN. **Rationale:** a read-plus-send consumer
+  whose durability comes from the bus rule's retry/DLQ envelope; identical
+  event payloads make duplicate sends harmless to dedupe.

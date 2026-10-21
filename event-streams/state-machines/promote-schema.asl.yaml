@@ -138,6 +138,7 @@ States:
         environment: "{% $states.input.targetEnvironment %}"
         through: "{% $states.input.requestedVersion %}"
         drainSeconds: "{% $number('${DrainSeconds}') %}"
+        trigger: "PROMOTION"
     Retry:
       - ErrorEquals:
           - Lambda.ClientExecutionTimeoutException
@@ -173,6 +174,7 @@ States:
       ruleName: "{% $states.context.Map.Item.Value.ruleName %}"
       environment: "{% $states.context.Map.Item.Value.environment %}"
       enabled: "{% $states.context.Map.Item.Value.enabled %}"
+      upgrade: "{% $states.context.Map.Item.Value.upgrade %}"
     ItemProcessor:
       ProcessorConfig:
         Mode: INLINE
@@ -352,6 +354,9 @@ States:
         environment: "{% $states.input.targetEnvironment %}"
         generation: "{% $widen.generation %}"
         to: "{% $lastWritten > 0 ? $lastWritten : $widen.oldPin %}"
+        trigger: "PROMOTION"
+        requestedVersion: "{% $states.input.requestedVersion %}"
+        startMetadataRevision: "{% $widen.metadataRevision %}"
     Retry:
       - ErrorEquals:
           - Lambda.ClientExecutionTimeoutException
@@ -387,6 +392,7 @@ States:
       ruleName: "{% $states.context.Map.Item.Value.ruleName %}"
       environment: "{% $states.context.Map.Item.Value.environment %}"
       enabled: "{% $states.context.Map.Item.Value.enabled %}"
+      upgrade: "{% $states.context.Map.Item.Value.upgrade %}"
     ItemProcessor:
       ProcessorConfig:
         Mode: INLINE

@@ -10,16 +10,24 @@ const route = useRoute()
 const displayName = computed(() => session.username?.split('@')[0] ?? '')
 
 const navItems = computed(() => {
-  const items = [
+  const items: { to: string; label: string; icon?: boolean }[] = [
     { to: '/domains', label: 'Domains' },
     { to: '/catalog', label: 'Catalog' },
     { to: '/subscriptions', label: 'Subscriptions' },
+    { to: '/system-events', label: 'System events', icon: true },
   ]
   if (session.isPlatformRole) {
     items.unshift({ to: '/admin', label: 'Approvals' })
   }
   return items
 })
+
+const { unread: systemEventsUnread, refresh: refreshSystemEvents } = useSystemEventsUnread()
+
+// Freshness check on shell mount and on navigation; the markers come from
+// the domain list, so this is one inexpensive request per route change.
+onMounted(refreshSystemEvents)
+watch(() => route.path, () => refreshSystemEvents())
 
 // Approvals matches exactly — /admin/* children belong to the sections that
 // own them. All domains is grouped under Domains, so /admin/domains also
@@ -80,15 +88,28 @@ async function logout() {
           <img src="/brand/konductor-logo-dark-bg.svg" alt="Konductor for Amazon EventBridge" class="h-7 w-auto" >
         </NuxtLink>
         <nav class="flex items-center gap-1">
-          <NuxtLink
+                    <NuxtLink
             v-for="item in navItems"
             :key="item.to"
             :to="item.to"
-            class="rounded-lg px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground"
+            class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground"
             :class="{ 'bg-surface-raised text-foreground': isActive(item.to) }"
           >
+            <span v-if="item.icon" class="relative">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-4 w-4" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+              </svg>
+              <span
+                v-if="systemEventsUnread"
+                data-testid="system-events-unread-dot"
+                class="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-warning"
+                aria-label="New system events"
+                role="status"
+              />
+            </span>
             {{ item.label }}
           </NuxtLink>
+
         </nav>
         <div class="flex items-center gap-3">
           <div v-if="session.isPlatformRole" ref="settingsRoot" class="relative">

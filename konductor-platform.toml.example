@@ -39,6 +39,11 @@ platform_operator_email = ""
 # Cognito access-token validity in minutes (5-1440). Updateable.
 access_token_validity_minutes = 60
 
+# Emit SubscriptionUpgradeStarted/SubscriptionUpgraded system events during
+# schema re-pins. Rollout gate: deploy with false, stand up the system-events
+# infrastructure, then enable (docs/guides/system-events.md). Updateable.
+system_event_emission_enabled = false
+
 # OAuth redirect URLs for the console. HTTPS required; plain HTTP is allowed
 # only for http://localhost[:port] during local development. Updateable.
 oauth_callback_urls = ["http://localhost:3000/callback"]

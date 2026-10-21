@@ -107,6 +107,30 @@ else
   fi
 fi
 
+# Domain-level system-events topic: deleted through the topic manager, which
+# verifies the Konductor ownership tags before removing anything. A domain
+# provisioned before system events has no recorded ARN — nothing to do.
+TOPIC_ARN=$(echo "${ITEM}" | jq -r '.systemEventsTopicArn.S // empty')
+if [ -n "${TOPIC_ARN}" ]; then
+  echo -n "  system-events topic: deleting..."
+  INVOKE_OUT=$(mktemp)
+  aws lambda invoke \
+    --function-name konductor-system-topic-manager \
+    --payload "$(jq -nc --arg arn "${TOPIC_ARN}" --arg domain "${DOMAIN_NAME}" \
+      '{action: "delete", topicArn: $arn, domainName: $domain}')" \
+    --region "${AWS_REGION}" \
+    "${INVOKE_OUT}" >/dev/null
+  FN_ERROR=$(jq -r '.FunctionError // empty' "${INVOKE_OUT}" 2>/dev/null || true)
+  if [ -n "${FN_ERROR}" ]; then
+    echo " FAILED — see Lambda logs; domain record NOT deleted" >&2
+    cat "${INVOKE_OUT}" >&2
+    rm -f "${INVOKE_OUT}"
+    exit 1
+  fi
+  rm -f "${INVOKE_OUT}"
+  echo " done"
+fi
+
 aws dynamodb delete-item \
   --table-name konductor-domains \
   --key "{\"domainName\":{\"S\":\"${DOMAIN_NAME}\"}}" \

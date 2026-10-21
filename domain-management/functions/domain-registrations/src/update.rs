@@ -108,6 +108,22 @@ pub async fn handle(
         }
     }
 
+    // The owner-email reconciliation consumer needs the replaced address;
+    // UpdateItem can only return one side, so read the current value first.
+    let previous_owner_email = if message.body.owner_email.is_some() {
+        ddb.get_item()
+            .table_name(&table)
+            .key("domainName", s(domain_name))
+            .projection_expression("ownerEmail")
+            .send()
+            .await
+            .map_err(|e| ControlPlaneError::DynamoDb(e.into_service_error().to_string()))?
+            .item
+            .and_then(|item| get_s(&item, "ownerEmail"))
+    } else {
+        None
+    };
+
     let now = chrono::Utc::now().to_rfc3339();
     let (update_expression, expr_values, changed_fields) =
         build_update_expression(&message.body, &now, &org, domain_name);
@@ -154,6 +170,8 @@ pub async fn handle(
             status: get_s(&attrs, "status"),
             changed_fields: &changed_fields,
             cost_center: message.body.cost_center.as_deref(),
+            owner_email: message.body.owner_email.as_deref(),
+            previous_owner_email: previous_owner_email.as_deref(),
         },
     )
     .await
@@ -209,6 +227,8 @@ struct SuccessDetail<'a> {
     status: Option<String>,
     changed_fields: &'a [&'a str],
     cost_center: Option<&'a str>,
+    owner_email: Option<&'a str>,
+    previous_owner_email: Option<&'a str>,
 }
 
 async fn emit_success(
@@ -225,6 +245,10 @@ async fn emit_success(
     });
     if let Some(cost_center) = outcome.cost_center {
         detail["costCenter"] = json!(cost_center);
+    }
+    if let Some(owner_email) = outcome.owner_email {
+        detail["ownerEmail"] = json!(owner_email);
+        detail["previousOwnerEmail"] = json!(outcome.previous_owner_email);
     }
 
     let result = eb
@@ -814,6 +838,65 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
+        assert_eq!(eb_rule.num_calls(), 1);
+    }
+    #[tokio::test]
+    async fn owner_email_update_enriches_the_event_with_both_addresses() {
+        set_env();
+
+        let old_item_rule = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.table_name() == Some("domains"))
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("ownerEmail", s("old-owner@example.com"))
+                    .build()
+            });
+        let updated_attrs = HashMap::from([
+            ("domainName".into(), s("billing")),
+            ("status".into(), s("ACTIVE")),
+            ("ownerEmail".into(), s("new-owner@example.com")),
+        ]);
+        let update_rule = mock!(aws_sdk_dynamodb::Client::update_item).then_output(move || {
+            UpdateItemOutput::builder()
+                .set_attributes(Some(updated_attrs.clone()))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&old_item_rule, &update_rule]);
+
+        let eb_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                let entry = &req.entries()[0];
+                let detail: serde_json::Value =
+                    serde_json::from_str(entry.detail().unwrap()).unwrap();
+                entry.detail_type() == Some("UpdateDomainSucceeded")
+                    && detail["changedFields"]
+                        .as_array()
+                        .is_some_and(|f| f.iter().any(|f| f == "ownerEmail"))
+                    && detail["ownerEmail"] == "new-owner@example.com"
+                    && detail["previousOwnerEmail"] == "old-owner@example.com"
+            })
+            .then_output(|| PutEventsOutput::builder().build());
+        let eb = mock_client!(aws_sdk_eventbridge, [&eb_rule]);
+
+        let message = UpdateDomainMessage {
+            domain_name: "billing".into(),
+            body: UpdateDomainBody {
+                owner_email: Some("new-owner@example.com".into()),
+                ..Default::default()
+            },
+        };
+        let result = handle(
+            &ddb,
+            &eb,
+            &message,
+            &TrustedPrincipal::iam("111122223333", None),
+            REQUEST_ID,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(old_item_rule.num_calls(), 1);
+        assert_eq!(update_rule.num_calls(), 1);
         assert_eq!(eb_rule.num_calls(), 1);
     }
 }

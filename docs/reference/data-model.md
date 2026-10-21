@@ -25,6 +25,7 @@ A single `domains` DynamoDB table stores both domain metadata and registration s
 | `environmentAccounts` | Map<String,String> |—(sparse per-environment account overrides, stored exactly as submitted; keys are members of the stamped environment list, values are 12-digit account IDs; absent when the registration carried no overrides and on records predating the field) |
 | `resourceArns` | Map<env, PerEnvResourceArns> |—(populated after provisioning; keyed by environment) |
 | `namespaceParameter` | String |—(for example, `/namespace/billing`) |
+| `systemEventsTopicArn` | String |—(platform-owned SNS topic ARN for the domain's system events; recorded at provisioning or by the backfill, absent on records predating the feature) |
 | `taskToken` | String |—(Step Functions task token) |
 | `decidedBy` | String | Not applicable |
 | `justification` | String | Not applicable |
@@ -63,8 +64,20 @@ The `konductor-event-streams` table is the **source of intent** for subscription
 | `source` / `detailType` / `schemaName` | String | Not applicable |
 | `status` | String (`PENDING\|ACTIVE\|FAILED\|REMOVED`) | Not applicable |
 | `environments` | Map<env, {pinnedVersion, ruleName, ruleArn, enabled, status}> | Not applicable |
+| `upgradeEvents` | Map<env, upgrade snapshot> | Not applicable |
 | `createdAt` / `updatedAt` / `removedAt` | String (ISO 8601) | Not applicable |
 | `expiresAt` | Number (epoch) | TTL (removal + 90 days) |
+
+`upgradeEvents` holds the latest committed upgrade phase snapshot per
+environment (present only when system-event emission is enabled): the re-pin
+workflow's widen/narrow steps commit `STARTED`/`TERMINAL` snapshots with the
+operation id, generation-derived resource revision, deterministic idempotency
+key, version facts, and contract selectors. A conditional write guards each
+commit so a newer re-pin is never regressed, and the terminal snapshot lands
+in the same `UpdateItem` as the pin (or failure marker) it describes. The
+table's stream projector turns snapshots into the public
+[system events](system-events.md); snapshots live outside `environments` so
+materialization merges cannot erase them.
 
 | Pattern | Index | Key condition |
 |---------|-------|---------------|

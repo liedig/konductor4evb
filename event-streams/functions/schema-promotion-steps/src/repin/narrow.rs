@@ -3,14 +3,18 @@
 //! update also requires the drain deadline to have elapsed.
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use konductor_common::dynamodb::{n, s};
 use konductor_common::promotion::{promotion_pk, RepinState, REPIN_SK};
 
-use super::{enumerate, is_conditional_failure, pattern, read_repin_item, rfc3339, RepinEntry};
+use super::{
+    active_metadata_revision, emission_enabled, enumerate, is_conditional_failure, pattern,
+    read_repin_item, rfc3339, RepinEntry, StepFacts,
+};
 use crate::store::{promotions_table, Clients};
+use konductor_common::system_events::UpgradeTrigger;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +27,19 @@ pub struct NarrowInput {
     /// The generation this promotion's widen committed; narrowing any other
     /// generation would clobber a newer re-pin.
     pub generation: i64,
+    /// Promotion trigger for system-event snapshots. Absent in legacy
+    /// in-flight executions, which emit nothing.
+    #[serde(default)]
+    pub trigger: Option<UpgradeTrigger>,
+    /// The version this operation was asked to land; `to` may be lower when
+    /// the replay stopped early, which the terminal snapshot records as a
+    /// partial outcome.
+    #[serde(default)]
+    pub requested_version: Option<i64>,
+    /// The metadata revision widen observed; from/requested selectors pin
+    /// to it so both phases reference one generation of contract metadata.
+    #[serde(default)]
+    pub start_metadata_revision: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,6 +83,7 @@ async fn run_narrow(clients: &Clients, input: &NarrowInput) -> Result<NarrowOutp
     {
         return Ok(superseded(state));
     }
+    let expected_repin_at = state.drain_until;
     let now = rfc3339(&Utc::now());
     let result = clients
         .ddb
@@ -114,11 +132,13 @@ async fn run_narrow(clients: &Clients, input: &NarrowInput) -> Result<NarrowOutp
             return Err(err).context("narrow update failed");
         }
     }
+    let facts = narrow_facts(clients, input, expected_repin_at).await?;
     let entries = enumerate(
         clients,
         &input.domain,
         &input.schema_name,
         &input.environment,
+        facts.as_ref(),
     )
     .await?;
     Ok(NarrowOutput {
@@ -127,6 +147,37 @@ async fn run_narrow(clients: &Clients, input: &NarrowInput) -> Result<NarrowOutp
         pattern: fallback,
         entries,
     })
+}
+
+/// Terminal-phase facts: present only when the workflow passed its trigger
+/// and the widen-phase metadata revision, and emission is enabled. The
+/// terminal revision is read fresh — metadata may have activated mid-drain.
+async fn narrow_facts(
+    clients: &Clients,
+    input: &NarrowInput,
+    expected_repin_at: Option<DateTime<Utc>>,
+) -> Result<Option<StepFacts>> {
+    Ok(
+        match (
+            input.trigger,
+            input.requested_version,
+            input.start_metadata_revision,
+            emission_enabled(),
+        ) {
+            (Some(trigger), Some(requested), Some(start_revision), true) => Some(StepFacts {
+                operation_id: input.promotion_id.clone(),
+                trigger,
+                generation: input.generation as u64,
+                requested_version: requested,
+                start_metadata_revision: start_revision,
+                terminal_metadata_revision: Some(
+                    active_metadata_revision(clients, &input.environment).await?,
+                ),
+                expected_repin_at,
+            }),
+            _ => None,
+        },
+    )
 }
 
 fn superseded(state: RepinState) -> NarrowOutput {

@@ -39,3 +39,24 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 
 - **Committed writes:** none. A consistent `GetItem` of the head item after the same authorization and domain gates as POST.
 - **Decision:** STAY (read-only). **Rationale:** listed for completeness; the rubric covers write paths.
+
+## `system-schema-bootstrap` (added by `domain-system-events`, 2026-07-30)
+
+- **Committed writes:** none to DynamoDB. Its side effects are
+  `CreateSchema`/`UpdateSchema` on the `{org}-konductor-system-schemas`
+  registry, driven by the deploy-time custom-resource envelope.
+- **Rubric:** (1) not applicable — no table item; the durable record is the
+  registry itself plus the checked-in manifest and schema files; (2) yes — a
+  registry append follows the manifest/compatibility verification, and a
+  failed deploy aborts before any projection of the new version; (3) yes —
+  redeploys are no-ops when content and version match, and
+  drift/unexpected-history aborts the deployment instead of mutating;
+  (4) yes — deploy-time; (5) not applicable — no stream consumer; (6) yes —
+  the CloudFormation custom-resource invocation is the durable envelope, and
+  provider retries are idempotent by the manifest comparison.
+- **Failure walk:** incompatible or drifting registry content → the custom
+  resource fails and the deployment rolls back; the registry is never edited
+  out of band. Transient registry errors → CloudFormation retries the custom
+  resource per its lifecycle.
+- **Decision:** ENVELOPE-DRIVEN. **Rationale:** the deployment envelope owns
+  durability; the bootstrap only reconciles declared state.

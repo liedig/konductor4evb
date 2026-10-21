@@ -82,6 +82,10 @@ pub struct EventStream {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_detail: Option<String>,
     pub environments: HashMap<String, EnvStream>,
+    /// Latest committed upgrade phase per environment, kept outside
+    /// `environments.<env>` so per-env repair writes cannot erase it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgrade_events: Option<HashMap<String, crate::system_events::UpgradeEventSnapshot>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     pub created_at: DateTime<Utc>,

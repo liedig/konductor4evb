@@ -193,5 +193,146 @@ class TestStateMachines(unittest.TestCase):
                 self.assertEqual(used, provided, "used vs provided mismatch")
 
 
+REPIN_MACHINE = REPO / "event-streams/state-machines/repin-schema-env.asl.yaml"
+PROMOTE_MACHINE = REPO / "event-streams/state-machines/promote-schema.asl.yaml"
+UPGRADE_PASSTHROUGH = 'upgrade: "{% $states.context.Map.Item.Value.upgrade %}"'
+
+
+class TestUpgradeFactPropagation(unittest.TestCase):
+    """Both re-pin workflows forward the per-entry upgrade facts the
+    materialize step needs for its phase commits; without the passthrough
+    the emission gate silently emits nothing."""
+
+    def test_repin_schema_env_propagates_upgrade_facts(self):
+        text = REPIN_MACHINE.read_text()
+        self.assertIn('trigger: "AUTHORING"', text)
+        self.assertEqual(text.count(UPGRADE_PASSTHROUGH), 2)
+        self.assertIn('requestedVersion: "{% $states.input.version %}"', text)
+        self.assertIn('startMetadataRevision: "{% $widen.metadataRevision %}"', text)
+
+    def test_promote_schema_propagates_upgrade_facts(self):
+        text = PROMOTE_MACHINE.read_text()
+        self.assertIn('trigger: "PROMOTION"', text)
+        self.assertEqual(text.count(UPGRADE_PASSTHROUGH), 2)
+        self.assertIn('requestedVersion: "{% $states.input.requestedVersion %}"', text)
+        self.assertIn('startMetadataRevision: "{% $widen.metadataRevision %}"', text)
+
+
+
+PROVISION_DOMAIN_MACHINE = REPO / "domain-management/state-machines/provision-domain.asl.yaml"
+CORE_TEMPLATE = REPO / "konductor-core-stack.yaml"
+
+
+class TestSystemTopicLifecycle(unittest.TestCase):
+    """The provisioning workflow configures the domain's system-events topic
+    once before environment provisioning, records the ARN only in the ACTIVE
+    commit, and cleans up the owned topic on every failure path."""
+
+    def setUp(self):
+        self.text = PROVISION_DOMAIN_MACHINE.read_text()
+        self.states, _ = parse_machine(PROVISION_DOMAIN_MACHINE)
+
+    def test_topic_is_ensured_before_environment_provisioning(self):
+        self.assertIn("EnsureSystemTopic", self.states)
+        self.assertIn("EnsureRAMResourceShare", self.states["EnsureSystemTopic"]["refs"])
+        self.assertIn("EnsureSystemTopic", self.states["TagNamespaceParameter"]["refs"])
+        for field in [
+            "domainName",
+            "ownerAccountId",
+            "environmentAccounts",
+            "costCenter",
+            "ownerEmail",
+        ]:
+            self.assertRegex(self.text, rf"        {field}: ", f"{field} passed to ensure")
+
+    def test_active_commit_records_the_topic_arn(self):
+        self.assertIn("systemEventsTopicArn = :topic", self.text)
+        self.assertIn('S: "{% $systemEventsTopicArn %}"', self.text)
+
+    def test_domain_level_failures_cleanup_the_topic(self):
+        self.assertIn("DeleteSystemTopicDomainLevel", self.states)
+        for source in [
+            "CreateNamespaceParameter",
+            "TagNamespaceParameter",
+            "EnsureSystemTopic",
+            "EnsureRAMResourceShare",
+            "CreateRAMResourceShare",
+            "AssociateParameterToExistingShare",
+        ]:
+            self.assertIn(
+                "DeleteSystemTopicDomainLevel",
+                self.states[source]["refs"],
+                f"{source} failure must route through topic cleanup",
+            )
+        self.assertIn(
+            "EmitProvisioningFailedDomainLevel",
+            self.states["DeleteSystemTopicDomainLevel"]["refs"],
+        )
+
+    def test_rollback_path_cleans_up_and_reports_compensation_errors(self):
+        self.assertIn(
+            "DeleteSystemTopicAfterRollback", self.states["RollbackSucceededEnvs"]["refs"]
+        )
+        self.assertIn(
+            "NoteSystemTopicCleanupFailure",
+            self.states["DeleteSystemTopicAfterRollback"]["refs"],
+            "a failed cleanup still emits the failure event with a recorded error",
+        )
+        self.assertIn("System topic cleanup failed: ", self.text)
+
+    def test_delete_uses_the_deterministic_managed_topic_arn(self):
+        count = self.text.count(
+            "topicArn: \"{% 'arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:'"
+        )
+        self.assertEqual(count, 2, "both cleanup states compute the deterministic ARN")
+
+    def test_template_wires_manager_function_and_invoke_permission(self):
+        template = CORE_TEMPLATE.read_text()
+        self.assertIn("SystemTopicManagerFunction:", template)
+        self.assertIn("konductor-system-topic-manager", template)
+        self.assertIn(
+            "SystemTopicManagerFunctionArn: !GetAtt SystemTopicManagerFunction.Arn",
+            template,
+        )
+        self.assertIn("lambda:InvokeFunction", template)
+        self.assertIn("${Organization}-*-system-events", template)
+        manager = re.search(
+            r"SystemTopicManagerFunction:.*?(?=\n  [A-Za-z])", template, re.S
+        ).group(0)
+        for action in [
+            "sns:CreateTopic",
+            "sns:DeleteTopic",
+            "sns:SetTopicAttributes",
+            "sns:ListTagsForResource",
+            "sns:TagResource",
+            "sns:UntagResource",
+        ]:
+            self.assertIn(action, manager)
+
+
+
+class TestSystemTopicRetagAndTeardown(unittest.TestCase):
+    """Retag covers the recorded domain topic, disable retains it, and only
+    explicit ownership-checked teardown removes it."""
+
+    def test_retag_skips_domains_without_a_recorded_topic(self):
+        text = (REPO / "domain-management/state-machines/retag-domain.asl.yaml").read_text()
+        self.assertIn('Condition: "{% $exists($domain.systemEventsTopicArn) %}"', text)
+        self.assertIn('Resource: "arn:aws:states:::aws-sdk:sns:tagResource"', text)
+        self.assertIn('ResourceArn: "{% $domain.systemEventsTopicArn.S %}"', text)
+        self.assertIn('{"Key": "cost-center", "Value": $domain.costCenter.S}', text)
+
+    def test_per_environment_cleanup_never_touches_the_domain_topic(self):
+        deprovision = (REPO / "domain-management/state-machines/deprovision-env.asl.yaml").read_text()
+        self.assertNotIn("sns:", deprovision)
+        self.assertNotIn("system-events", deprovision)
+
+    def test_teardown_deletes_the_topic_through_the_ownership_checked_manager(self):
+        script = (REPO / "scripts/teardown-domain.sh").read_text()
+        self.assertIn("systemEventsTopicArn.S", script)
+        self.assertIn("konductor-system-topic-manager", script)
+        self.assertIn('"delete"', script.replace("'", '"'))
+        self.assertNotIn("aws sns delete-topic", script)
+
 if __name__ == "__main__":
     unittest.main()

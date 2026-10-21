@@ -5,14 +5,15 @@
 //! `widen.rs` and `narrow.rs`.
 
 use anyhow::{Context, Result};
-use chrono::{SecondsFormat, Utc};
-use serde::Serialize;
+use chrono::{DateTime, SecondsFormat, Utc};
+use serde::{Deserialize, Serialize};
 
 use konductor_common::dynamodb::s;
 use konductor_common::promotion::{promotion_pk, RepinState, REPIN_SK};
 use konductor_common::promotion_store::repin_from_item;
 use konductor_common::streams::StreamStatus;
 use konductor_common::streams_db::query_streams_by_schema;
+use konductor_common::system_events::UpgradeTrigger;
 
 use crate::store::{full_schema_name, promotions_table, Clients};
 
@@ -37,6 +38,80 @@ pub struct RepinEntry {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pinned_version: Option<i64>,
+    /// Facts for the upgrade phase snapshot the materialize step commits.
+    /// Always serialized (`null` when emission is disabled) so JSONata
+    /// passthrough in the state machines stays well-formed.
+    pub upgrade: Option<EntryUpgrade>,
+}
+
+/// Per-entry facts for one phase commit. Everything except `original_pin`
+/// is identical across a step call's entries.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryUpgrade {
+    pub operation_id: String,
+    pub trigger: UpgradeTrigger,
+    pub generation: u64,
+    pub requested_version: i64,
+    pub original_pin: i64,
+    pub start_metadata_revision: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_metadata_revision: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_repin_at: Option<String>,
+}
+
+/// The step-level inputs every entry's upgrade facts share.
+#[derive(Debug, Clone)]
+pub(crate) struct StepFacts {
+    pub operation_id: String,
+    pub trigger: UpgradeTrigger,
+    pub generation: u64,
+    pub requested_version: i64,
+    pub start_metadata_revision: u32,
+    pub terminal_metadata_revision: Option<u32>,
+    pub expected_repin_at: Option<DateTime<Utc>>,
+}
+
+/// System-event emission is a deployment gate: disabled means repin entries
+/// carry no upgrade facts and the materialize step behaves exactly as
+/// before. Steps of legacy in-flight executions (no `trigger` field) skip
+/// emission the same way.
+pub(crate) fn emission_enabled() -> bool {
+    std::env::var("SYSTEM_EVENT_EMISSION_ENABLED").as_deref() == Ok("true")
+}
+
+/// The environment's authoritative active metadata revision, including the
+/// valid legacy revision 0. Read only when emission is enabled.
+pub(crate) async fn active_metadata_revision(clients: &Clients, environment: &str) -> Result<u32> {
+    let table = std::env::var("METADATA_TABLE").context("METADATA_TABLE not set")?;
+    let store =
+        konductor_common::metadata::revisions::MetadataStore::new(clients.ddb.clone(), table);
+    let pointer = store
+        .get_environment_pointer(environment)
+        .await
+        .map_err(|e| anyhow::anyhow!("metadata pointer read failed: {e}"))?;
+    Ok(pointer
+        .ok_or_else(|| anyhow::anyhow!("no metadata pointer for {environment}"))?
+        .active_revision)
+}
+
+/// Attaches upgrade facts to an enumerated entry. Entries without a
+/// recorded pin are awaiting promotion and never carry facts.
+pub(crate) fn with_facts(entry: &mut RepinEntry, facts: Option<&StepFacts>) {
+    entry.upgrade = match (facts, entry.pinned_version) {
+        (Some(facts), Some(original_pin)) => Some(EntryUpgrade {
+            operation_id: facts.operation_id.clone(),
+            trigger: facts.trigger,
+            generation: facts.generation,
+            requested_version: facts.requested_version,
+            original_pin,
+            start_metadata_revision: facts.start_metadata_revision,
+            terminal_metadata_revision: facts.terminal_metadata_revision,
+            expected_repin_at: facts.expected_repin_at.map(|t| rfc3339(&t)),
+        }),
+        _ => None,
+    };
 }
 
 /// `[floor ..= target] ∪ {target + 1}` — the contiguous widened range plus
@@ -87,6 +162,7 @@ async fn enumerate(
     domain: &str,
     event_name: &str,
     environment: &str,
+    facts: Option<&StepFacts>,
 ) -> Result<Vec<RepinEntry>> {
     let table = std::env::var("EVENT_STREAMS_TABLE").context("EVENT_STREAMS_TABLE not set")?;
     let full = full_schema_name(domain, event_name)?;
@@ -99,7 +175,7 @@ async fn enumerate(
         if env.status != StreamStatus::Active {
             continue;
         }
-        entries.push(RepinEntry {
+        let mut entry = RepinEntry {
             producer_domain: stream.producer_domain.clone(),
             consumer_domain: stream.consumer_domain.clone(),
             source: stream.source.clone(),
@@ -109,7 +185,10 @@ async fn enumerate(
             environment: environment.to_string(),
             enabled: env.enabled,
             pinned_version: env.pinned_version,
-        });
+            upgrade: None,
+        };
+        with_facts(&mut entry, facts);
+        entries.push(entry);
     }
     Ok(entries)
 }

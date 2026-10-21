@@ -54,5 +54,36 @@ class DriftGuardTest(unittest.TestCase):
         self.assertEqual(vc.drift_guard(cfg, "konductor-core", "r", None, fixture, False), [])
 
 
+class BoolSettingTest(unittest.TestCase):
+    def test_bool_settings_render_as_lowercase_parameter_values(self):
+        cfg = dict(vc.DEFAULTS)
+        cfg.update(
+            {
+                "organization": "acme",
+                "aws_organization_arn": "arn:aws:organizations::123456789012:organization/o-abc123def4",
+                "system_event_emission_enabled": True,
+            }
+        )
+        overrides = vc.render_overrides(cfg)
+        self.assertIn("SystemEventEmissionEnabled=true", overrides)
+
+    def test_bool_settings_reject_string_values(self):
+        import io
+        from contextlib import redirect_stderr
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as handle:
+            handle.write(
+                'organization = "acme"\n'
+                'aws_organization_arn = "arn:aws:organizations::123456789012:organization/o-abc123def4"\n'
+                'system_event_emission_enabled = "true"\n'
+            )
+            path = handle.name
+        buffer = io.StringIO()
+        with redirect_stderr(buffer):
+            cfg = vc.load_config(path)
+        self.assertIsNone(cfg)
+        self.assertIn("must be a bool", buffer.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -91,10 +91,13 @@ nav:
   - Publish and subscribe:
       - Publish events: guides/publishing-events.md
       - Subscribe to events: guides/subscriptions.md
+      - System events: guides/system-events.md
   - Operate:
       - operations/README.md
       - Domain recovery and cleanup: operations/domain-recovery.md
       - Metadata rollout: operations/metadata-rollout.md
+      - Schema promotion: operations/schema-promotion.md
+      - System event recovery: operations/system-events.md
       - Organization guardrails: operations/guardrails.md
       - Uninstall: operations/uninstall.md
   - Concepts:
@@ -115,6 +118,7 @@ nav:
       - API contracts: reference/api.md
       - Access-token claims: reference/authentication.md
       - Event envelope: reference/event-envelope.md
+      - System events: reference/system-events.md
       - Domain statuses: reference/domain-statuses.md
       - Resources and naming: reference/resources.md
       - Lifecycle events: reference/lifecycle-events.md

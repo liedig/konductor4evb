@@ -49,6 +49,11 @@ The index summarizes the classification and rationale for each write path.
 | `entitlement-admin` | STAY | Not applicable |
 | `binding-admin` | STAY | Not applicable |
 | `entitlement-stream-consumer` | Reference (exempt) | Not applicable |
+| `system-event-projector` | Reference (exempt) | Not applicable |
+| `system-schema-bootstrap` | ENVELOPE-DRIVEN | Not applicable |
+| `system-event-notifier` | ENVELOPE-DRIVEN | Not applicable |
+| `system-event-router` marker stamp | STAY | Not applicable |
+| `system-topic-manager` | ENVELOPE-DRIVEN | Not applicable |
 | `entitlement-revocation-worker` | ENVELOPE-DRIVEN | Not applicable |
 | `entitlement-coverage-sweep` | STAY | Not applicable |
 | `grant-benchmark` | STAY (non-production) | Not applicable |

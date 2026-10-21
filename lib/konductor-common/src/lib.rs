@@ -25,4 +25,5 @@ pub mod ses;
 pub mod streams;
 pub mod streams_db;
 pub mod subscription_resource;
+pub mod system_events;
 pub mod tags;

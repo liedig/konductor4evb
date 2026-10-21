@@ -14,7 +14,7 @@ The **konductor bus** (`konductor-bus`) carries all internal lifecycle events. I
 |------------|--------|-----------|----------|
 | `RegisterDomainSucceeded` | `konductor.domain-management` | Command handler (register) | Not applicable |
 | `RegisterDomainFailed` | `konductor.domain-management` | Command handler (register) | Registration-failed notification Lambda |
-| `UpdateDomainSucceeded` | `konductor.domain-management` | Command handler (update) | Not applicable |
+| `UpdateDomainSucceeded` | `konductor.domain-management` | Command handler (update) | Retag workflow (cost-center changes); system-topic-manager owner-email reconciliation (owner changes) |
 | `UpdateDomainFailed` | `konductor.domain-management` | Command handler (update) | Not applicable |
 | `DomainRegistrationApproved` | `konductor.domain-management` | Approval workflow | Provision-domain workflow (outer); approval-outcome notification Lambda |
 | `DomainRegistrationRejected` | `konductor.domain-management` | Approval workflow | Rejection notification Lambda |
@@ -30,7 +30,7 @@ The **konductor bus** (`konductor-bus`) carries all internal lifecycle events. I
 | `SchemaVersionPublished` | `konductor.schema-management` | Schema-admin (after a committed create/append); promote-schema workflow (after a replayed prefix lands) | Subscription-extender Lambda |
 | `SchemaPromotionStarted` | `konductor.schema-management` | Schema-promotion stream consumer (VALIDATING→REPLAYING) | Platform-operator notifications |
 | `SchemaPromotionCompleted` | `konductor.schema-management` | Schema-promotion stream consumer (→COMPLETED) | Platform-operator notifications |
-| `SchemaPromotionFailed` | `konductor.schema-management` | Schema-promotion stream consumer (→FAILED) | Platform-operator notifications |
+| `SchemaPromotionFailed` | `konductor.schema-management` | Schema-promotion stream consumer (→FAILED), system-event-notifier (producer email) | Platform-operator notifications |
 | `SubscriptionEnvironmentExtended` | `konductor.event-streams` | Subscription-extender Lambda | Not applicable |
 
 The `DomainProvisioningFailed` payload carries `failedEnvironment` (or `null` for domain-level failures), `failedStep`, `errorCode`, `errorMessage`, and an aggregated `compensationErrors` array from any rollback runs. `SubscriptionActivationFailed` carries `failedEnvironment`, `failedStep`, and `errorMessage` (no compensation errors—activation has no rollback; per-environment outcomes ride on both subscription lifecycle events).

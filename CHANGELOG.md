@@ -7,6 +7,25 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Add domain system events: the platform projects committed subscription
+  upgrade phases onto a central system bus as versioned public contracts
+  (`SubscriptionUpgradeStarted`, `SubscriptionUpgraded`, source
+  `konductor.system`) and routes each event to the recipient domain's
+  platform-owned SNS topic `{org}-{domain}-system-events` (SQS, Lambda, and
+  email subscriptions, restricted to the domain's own accounts; the domain
+  owner email is subscribed by default at provisioning and re-pointed when
+  the owner changes). Consumers
+  deduplicate on the deterministic `idempotencyKey` and order on
+  `resourceRevision`; a 90-day bus archive is audit-only with no replay.
+  Topic ARNs appear on `GET /domains/{domainName}` and on the console's
+  top-level **System events** page; the router records a latest-event marker
+  (`systemEventsLastEventAt`/`systemEventsLastEventType`) on the domain,
+  which the console's nav uses for a browser-local unread dot. Existing
+  domains gain topics via
+  `scripts/backfill-system-event-topics.sh`. When SES notifications are
+  enabled, owners also get advisory emails for promotion-triggered upgrades
+  and promotion failures. Emission is gated by the new
+  `SystemEventEmissionEnabled` stack parameter (default off).
 - Add `GET /schemas/{schemaName}/content` on both API surfaces: publishers
   (and platform roles) read one schema version's content from one
   environment's registry, defaulting to the environment's latest. The

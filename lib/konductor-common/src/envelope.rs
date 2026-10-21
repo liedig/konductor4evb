@@ -251,7 +251,7 @@ impl EventEnvelope {
 
 /// ISO 8601 with exactly millisecond precision and a `Z` suffix, matching the
 /// SQS `SentTimestamp` epoch-milliseconds origin of `publishedAt`.
-mod iso8601_millis {
+pub(crate) mod iso8601_millis {
     use chrono::{DateTime, SecondsFormat, Utc};
     use serde::{Deserialize, Deserializer, Serializer};
 

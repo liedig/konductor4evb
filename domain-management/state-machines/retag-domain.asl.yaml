@@ -67,13 +67,49 @@ States:
           {"Key": "cost-center", "Value": $domain.costCenter.S}
         ] %}
     Output: "{% $states.input %}"
-    Next: RetagEnvironments
+    Next: TopicRecorded
     Catch:
       - ErrorEquals:
           - States.ALL
         Next: EmitRetagFailed
         Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'TagNamespaceParameter', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause } }]) %}"
 
+  # Domain-level topic: retag the recorded system-events topic with platform
+  # credentials. Domains provisioned before system events (or with the gate
+  # never enabled) have no ARN recorded — the choice skips them.
+  TopicRecorded:
+    Type: Choice
+    Choices:
+      - Condition: "{% $exists($domain.systemEventsTopicArn) %}"
+        Next: TagSystemTopic
+    Default: RetagEnvironments
+
+  TagSystemTopic:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:sns:tagResource"
+    Retry:
+      - ErrorEquals:
+          - Sns.TooManyRequestsException
+          - Sns.InternalErrorException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Arguments:
+      ResourceArn: "{% $domain.systemEventsTopicArn.S %}"
+      Tags: |-
+        {% [
+          {"Key": "konductor:managed-by", "Value": "konductor"},
+          {"Key": "konductor:domain", "Value": $states.input.detail.domainName},
+          {"Key": "cost-center", "Value": $domain.costCenter.S}
+        ] %}
+    Output: "{% $states.input %}"
+    Next: RetagEnvironments
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitRetagFailed
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'TagSystemTopic', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause } }]) %}"
   # Iterates the environments recorded as provisioned (keys of resourceArns).
   # Iterations fail soft: a failed step records the error and the map moves on
   # so healthy environments still converge; RetagOutcome reports the first

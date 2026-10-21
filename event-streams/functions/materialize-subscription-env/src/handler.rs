@@ -64,6 +64,11 @@ pub struct MaterializeInput {
     /// rule update commits (the narrow step; widen leaves the recorded pin).
     #[serde(default)]
     pub(crate) commit_pin: bool,
+    /// `mode: repin` only: operation facts for the upgrade phase snapshots.
+    /// Absent when system-event emission is disabled or for legacy in-flight
+    /// executions; the step then writes no snapshots.
+    #[serde(default)]
+    pub(crate) upgrade: Option<crate::repin::UpgradeFactsInput>,
 }
 
 pub async fn handle(clients: &Clients, event: Value) -> Result<Value, Error> {

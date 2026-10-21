@@ -150,6 +150,15 @@ fn render_domain(item: &HashMap<String, AttributeValue>, org: &str) -> Value {
     if let Some(v) = get_s(item, "errorDetail") {
         body["errorDetail"] = json!(v);
     }
+    if let Some(v) = get_s(item, "systemEventsTopicArn") {
+        body["systemEventsTopicArn"] = json!(v);
+    }
+    if let Some(v) = get_s(item, "systemEventsLastEventAt") {
+        body["systemEventsLastEventAt"] = json!(v);
+    }
+    if let Some(v) = get_s(item, "systemEventsLastEventType") {
+        body["systemEventsLastEventType"] = json!(v);
+    }
 
     api::success_response(200, &body)
 }
@@ -259,6 +268,67 @@ mod tests {
         assert_eq!(get_rule.num_calls(), 1);
     }
 
+    #[tokio::test]
+    async fn recorded_system_events_topic_arn_is_returned() {
+        let mut item = domain_item();
+        item.insert(
+            "systemEventsTopicArn".to_string(),
+            s("arn:aws:sns:us-east-1:111122223333:acme-billing-system-events"),
+        );
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let resp = fetch_domain(
+            &ddb,
+            "domains",
+            "bindings",
+            &event,
+            &iam_principal(),
+            "acme",
+        )
+        .await;
+
+        assert_eq!(resp["statusCode"], 200);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            body["systemEventsTopicArn"],
+            "arn:aws:sns:us-east-1:111122223333:acme-billing-system-events"
+        );
+    }
+
+    #[tokio::test]
+    async fn unrecorded_system_events_topic_arn_is_absent() {
+        let item = domain_item();
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let resp = fetch_domain(
+            &ddb,
+            "domains",
+            "bindings",
+            &event,
+            &iam_principal(),
+            "acme",
+        )
+        .await;
+
+        assert_eq!(resp["statusCode"], 200);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert!(
+            body.get("systemEventsTopicArn").is_none(),
+            "domains predating the feature omit the field entirely"
+        );
+    }
     #[tokio::test]
     async fn namespace_is_the_environment_independent_identity() {
         let mut item = domain_item();
@@ -621,5 +691,39 @@ mod tests {
 
         assert_eq!(resp["statusCode"], 200);
         assert_eq!(get_rule.num_calls(), 1);
+    }
+    #[tokio::test]
+    async fn recorded_system_event_marker_is_returned() {
+        let mut item = domain_item();
+        item.insert(
+            "systemEventsLastEventAt".to_string(),
+            s("2026-10-21T09:15:00.000Z"),
+        );
+        item.insert(
+            "systemEventsLastEventType".to_string(),
+            s("SubscriptionUpgraded"),
+        );
+        let get_rule = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            GetItemOutput::builder()
+                .set_item(Some(item.clone()))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, [&get_rule]);
+
+        let event = json!({"pathParameters": {"domainName": "billing"}});
+        let resp = fetch_domain(
+            &ddb,
+            "domains",
+            "bindings",
+            &event,
+            &iam_principal(),
+            "acme",
+        )
+        .await;
+
+        assert_eq!(resp["statusCode"], 200);
+        let body: Value = serde_json::from_str(resp["body"].as_str().unwrap()).unwrap();
+        assert_eq!(body["systemEventsLastEventAt"], "2026-10-21T09:15:00.000Z");
+        assert_eq!(body["systemEventsLastEventType"], "SubscriptionUpgraded");
     }
 }

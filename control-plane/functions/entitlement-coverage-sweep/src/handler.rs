@@ -166,6 +166,7 @@ mod tests {
             status,
             error_detail: None,
             environments,
+            upgrade_events: None,
             request_id: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),

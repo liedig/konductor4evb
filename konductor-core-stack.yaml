@@ -63,6 +63,16 @@ Parameters:
       to admit in-flight events and narrowing them to the new pin. Must
       outlast the producer flush SLA (event put to rule evaluation), which
       is measured in minutes for batched producers.
+  SystemEventEmissionEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Emits SubscriptionUpgradeStarted/SubscriptionUpgraded system events
+      during schema re-pins and projects them onto per-domain system-events
+      topics. Deploy with false; enable only after the system-events
+      infrastructure (registry, bus archive, topics) is in place, per
+      docs/guides/system-events.md.
   AccessTokenValidityMinutes:
     Type: Number
     Default: 60
@@ -209,6 +219,8 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: expiresAt
         Enabled: true
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
 
   # ---- DynamoDB (schema promotions) ----
   # Promotion head items double as per-target leases; the NEW_AND_OLD_IMAGES
@@ -2249,6 +2261,384 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
+  # ---- System events (platform -> domain notifications) ----
+  # The event-streams table projects committed upgrade snapshots onto a
+  # platform-owned system bus. The registry holds the versioned public
+  # contracts (registered by the bootstrap custom resource at deploy time),
+  # the archive keeps an audit-only copy for 90 days, and undeliverable
+  # stream payloads land in the failure bucket for manual recovery.
+  # The router (recipient fan-out) attaches to the bus separately.
+  SystemEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub "${Organization}-konductor-system-bus"
+
+  SystemEventBusArchive:
+    Type: AWS::Events::Archive
+    Properties:
+      ArchiveName: !Sub "${Organization}-konductor-system-events-archive"
+      SourceArn: !GetAtt SystemEventBus.Arn
+      Description: Audit-only capture of konductor.system events; no replay procedure (MVP)
+      RetentionDays: 90
+
+  SystemSchemaRegistry:
+    Type: AWS::EventSchemas::Registry
+    # Registries containing schemas cannot be deleted by CloudFormation;
+    # retaining avoids a stuck stack delete. Teardown removes it explicitly.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      RegistryName: !Sub "${Organization}-konductor-system-schemas"
+      Description: Versioned public system-event contracts (source konductor.system)
+
+  SystemSchemaBootstrapLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-system-schema-bootstrap"
+      RetentionInDays: 30
+
+  SystemSchemaBootstrapFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SystemSchemaBootstrapLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-system-schema-bootstrap"
+      CodeUri: ./event-streams/functions/system-schema-bootstrap
+      Handler: bootstrap
+      Timeout: 60
+      Environment:
+        Variables:
+          SYSTEM_SCHEMA_REGISTRY: !Ref SystemSchemaRegistry
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [schemas:DescribeSchema]
+              Resource: !Sub "arn:${AWS::Partition}:schemas:${AWS::Region}:${AWS::AccountId}:schema/${SystemSchemaRegistry}/*"
+            - Effect: Allow
+              Action: [schemas:CreateSchema, schemas:UpdateSchema]
+              Resource: !Sub "arn:${AWS::Partition}:schemas:${AWS::Region}:${AWS::AccountId}:schema/${SystemSchemaRegistry}/*"
+
+  SystemSchemaBootstrap:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: SystemSchemaRegistry
+    Properties:
+      ServiceToken: !GetAtt SystemSchemaBootstrapFunction.Arn
+
+  SystemEventProjectorLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-system-event-projector"
+      RetentionInDays: 30
+
+  SystemEventProjectorFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SystemEventProjectorLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-system-event-projector"
+      CodeUri: ./event-streams/functions/system-event-projector
+      Handler: bootstrap
+      Environment:
+        Variables:
+          SYSTEM_EVENT_BUS: !Ref SystemEventBus
+          ORGANIZATION: !Ref Organization
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [events:PutEvents]
+              Resource: !GetAtt SystemEventBus.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:DescribeStream
+                - dynamodb:GetRecords
+                - dynamodb:GetShardIterator
+                - dynamodb:ListStreams
+              Resource: !GetAtt EventStreamsTable.StreamArn
+            - Effect: Allow
+              Action: [s3:PutObject]
+              Resource: !Sub "${SystemEventProjectorFailureBucket.Arn}/*"
+
+  # Explicit mapping (not the SAM DynamoDB shorthand) because the on-failure
+  # destination is S3: payloads that survive bounded retries land there for
+  # recovery, with bisect and partial-batch reporting enabled.
+  SystemEventProjectorEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: SystemSchemaBootstrap
+    Properties:
+      FunctionName: !Ref SystemEventProjectorFunction
+      EventSourceArn: !GetAtt EventStreamsTable.StreamArn
+      StartingPosition: TRIM_HORIZON
+      BatchSize: 10
+      BisectBatchOnFunctionError: true
+      MaximumRetryAttempts: 3
+      MaximumRecordAgeInSeconds: 3600
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+      DestinationConfig:
+        OnFailure:
+          Destination: !GetAtt SystemEventProjectorFailureBucket.Arn
+
+  SystemEventProjectorFailureBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Organization}-konductor-system-event-failures-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-failed-payloads
+            Status: Enabled
+            ExpirationInDays: 90
+
+  SystemEventProjectorIteratorAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-system-event-projector-iterator-age-alarm"
+      AlarmDescription: System event projector falling behind — upgrade notifications delayed; recover before the 24-hour stream window closes
+      Namespace: AWS/Lambda
+      MetricName: IteratorAge
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SystemEventProjectorFunction
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 60000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  SystemEventProjectorErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-system-event-projector-errors-alarm"
+      AlarmDescription: System event projector invocations failing — retries and bisect are in progress; check the failure bucket for permanently undeliverable payloads
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref SystemEventProjectorFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  SystemEventRouterLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-system-event-router"
+      RetentionInDays: 30
+
+  SystemEventRouterFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SystemEventRouterLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-system-event-router"
+      CodeUri: ./event-streams/functions/system-event-router
+      Handler: bootstrap
+      Environment:
+        Variables:
+          DOMAINS_TABLE: !Ref DomainsTable
+          ORGANIZATION: !Ref Organization
+          PLATFORM_PARTITION: !Ref "AWS::Partition"
+          PLATFORM_ACCOUNT_ID: !Ref "AWS::AccountId"
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              # UpdateItem stamps the console freshness marker (latest-event
+              # timestamp/type), conditional on a newer value.
+              Action: [dynamodb:GetItem, dynamodb:UpdateItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [sns:Publish]
+              Resource: !Sub "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${Organization}-*-system-events"
+
+  # One rule for every domain: the projector emits one recipient-scoped event
+  # per affected subscription, so routing never fans out per domain and the
+  # rule count stays constant as domains are added.
+  SystemEventRoutingRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "konductor-system-event-routing"
+      EventBusName: !Ref SystemEventBus
+      EventPattern:
+        source:
+          - konductor.system
+        detail-type:
+          - SubscriptionUpgradeStarted
+          - SubscriptionUpgraded
+      Targets:
+        - Arn: !GetAtt SystemEventRouterFunction.Arn
+          Id: system-event-router
+          DeadLetterConfig:
+            Arn: !GetAtt SystemEventTargetDlq.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+            MaximumEventAgeInSeconds: 300
+
+  SystemEventRouterInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SystemEventRouterFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SystemEventRoutingRule.Arn
+
+  # Shared target-invocation DLQ for system-event rule targets: 14-day SQS
+  # retention (the service maximum). Distinct from the projector's Lambda
+  # on-failure S3 destination, which covers stream-processing failures.
+  SystemEventTargetDlq:
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      QueueName: !Sub "konductor-system-events-target-dlq"
+      MessageRetentionPeriod: 1209600
+
+  SystemEventTargetDlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-system-events-target-dlq-depth-alarm"
+      AlarmDescription: System event target invocations failed after retries — redrive to the router after fixing the cause; messages expire after 14 days
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt SystemEventTargetDlq.QueueName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # ---- System event emails (optional, SES) ----
+  # Human-readable upgrade emails ride the same events as machine delivery but
+  # are fully independent of it: everything here is conditioned on
+  # NotificationsEnabled, while topics/routing deploy unconditionally.
+  SystemEventNotifierLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Condition: NotificationsEnabled
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-system-event-notifier"
+      RetentionInDays: 30
+
+  SystemEventNotifierFunction:
+    Type: AWS::Serverless::Function
+    Condition: NotificationsEnabled
+    DependsOn: SystemEventNotifierLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-system-event-notifier"
+      CodeUri: ./event-streams/functions/system-event-notifier
+      Handler: bootstrap
+      Environment:
+        Variables:
+          NOTIFICATION_SENDER_EMAIL: !Ref NotificationSenderEmail
+          DOMAINS_TABLE: !Ref DomainsTable
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaFailureDlq.Arn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt DomainsTable.Arn
+            - Effect: Allow
+              Action: [ses:SendEmail]
+              Resource: "*"
+
+  # Consumer-facing emails: only promotion-triggered events (authoring
+  # re-pins stay silent). Filtering here keeps the notifier simple; the SNS
+  # path is unaffected either way.
+  SystemEventConsumerEmailRule:
+    Type: AWS::Events::Rule
+    Condition: NotificationsEnabled
+    Properties:
+      Name: !Sub "konductor-system-event-consumer-email"
+      EventBusName: !Ref SystemEventBus
+      EventPattern:
+        source:
+          - konductor.system
+        detail-type:
+          - SubscriptionUpgradeStarted
+          - SubscriptionUpgraded
+        detail:
+          data:
+            trigger:
+              - PROMOTION
+      Targets:
+        - Arn: !GetAtt SystemEventNotifierFunction.Arn
+          Id: system-event-notifier
+          DeadLetterConfig:
+            Arn: !GetAtt SystemEventTargetDlq.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+            MaximumEventAgeInSeconds: 300
+
+  SystemEventConsumerEmailRulePermission:
+    Type: AWS::Lambda::Permission
+    Condition: NotificationsEnabled
+    Properties:
+      FunctionName: !Ref SystemEventNotifierFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SystemEventConsumerEmailRule.Arn
+
+  # Producer-facing email: the internal promotion-failure lifecycle event.
+  SchemaPromotionFailedEmailRule:
+    Type: AWS::Events::Rule
+    Condition: NotificationsEnabled
+    Properties:
+      Name: !Sub "konductor-schema-promotion-failed-email"
+      EventBusName: !Ref KonductorEventBus
+      EventPattern:
+        source:
+          - konductor.schema-management
+        detail-type:
+          - SchemaPromotionFailed
+      Targets:
+        - Arn: !GetAtt SystemEventNotifierFunction.Arn
+          Id: schema-promotion-failed-notifier
+          DeadLetterConfig:
+            Arn: !GetAtt SystemEventTargetDlq.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+            MaximumEventAgeInSeconds: 300
+
+  SchemaPromotionFailedEmailRulePermission:
+    Type: AWS::Lambda::Permission
+    Condition: NotificationsEnabled
+    Properties:
+      FunctionName: !Ref SystemEventNotifierFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SchemaPromotionFailedEmailRule.Arn
   # ---- Schema promotion workflow steps ----
   # Invoked only by the promote-schema state machine: plan (prefix
   # verification), replay (single-version write + progress commit), widen and
@@ -2276,6 +2666,8 @@ Resources:
           SCHEMA_VERSIONS_TABLE: !Ref SchemaVersionsTable
           PROMOTIONS_TABLE: !Ref SchemaPromotionsTable
           EVENT_STREAMS_TABLE: !Ref EventStreamsTable
+          METADATA_TABLE: !Ref MetadataConfigurationTable
+          SYSTEM_EVENT_EMISSION_ENABLED: !Ref SystemEventEmissionEnabled
       DeadLetterQueue:
         Type: SQS
         TargetArn: !GetAtt LambdaFailureDlq.Arn
@@ -2297,6 +2689,11 @@ Resources:
             - Effect: Allow
               Action: [dynamodb:Query]
               Resource: !GetAtt EventStreamsTable.Arn
+            # Upgrade snapshots pin contract selectors to the environment's
+            # active metadata revision.
+            - Effect: Allow
+              Action: [dynamodb:GetItem]
+              Resource: !GetAtt MetadataConfigurationTable.Arn
             # Source reads and target writes, scoped to the org's registries.
             - Effect: Allow
               Action: [schemas:DescribeSchema, schemas:ListSchemaVersions]
@@ -3557,6 +3954,10 @@ Resources:
               - !Sub "${DomainsTable.Arn}/index/by-owner"
           - Effect: Allow
             Action:
+              - lambda:InvokeFunction
+            Resource: !GetAtt SystemTopicManagerFunction.Arn
+          - Effect: Allow
+            Action:
               - sts:AssumeRole
             Resource:
               - !Sub "arn:aws:iam::*:role/${Organization}-konductor-trust-role"
@@ -3620,6 +4021,82 @@ Resources:
       DefinitionSubstitutions:
         Organization: !Ref Organization
 
+  # ---- System-events topic manager ----
+  # Single-domain SNS ensure/delete for the provisioning workflow's topic
+  # lifecycle steps; the workflow owns all domain-record commits.
+  SystemTopicManagerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/konductor-system-topic-manager"
+      RetentionInDays: 30
+
+  SystemTopicManagerFunction:
+    Type: AWS::Serverless::Function
+    DependsOn: SystemTopicManagerLogGroup
+    Metadata:
+      BuildMethod: rust-cargolambda
+    Properties:
+      FunctionName: !Sub "konductor-system-topic-manager"
+      CodeUri: ./domain-management/functions/system-topic-manager
+      Handler: bootstrap
+      Environment:
+        Variables:
+          ORGANIZATION: !Ref Organization
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - sns:CreateTopic
+                - sns:DeleteTopic
+                - sns:SetTopicAttributes
+                - sns:ListTagsForResource
+                - sns:TagResource
+                - sns:UntagResource
+                - sns:Subscribe
+                - sns:Unsubscribe
+                - sns:ListSubscriptionsByTopic
+              Resource: !Sub "arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:${Organization}-*-system-events"
+  # Owner-email reconciliation: a committed owner change moves the topic's
+  # default email subscription. Unconditioned — this is core topic lifecycle,
+  # not part of the optional SES notification surface.
+  DomainOwnerEmailChangeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "konductor-domain-owner-email-change"
+      EventBusName: !Ref KonductorEventBus
+      EventPattern:
+        source:
+          - konductor.domain-management
+        detail-type:
+          - UpdateDomainSucceeded
+        detail:
+          changedFields:
+            - "ownerEmail"
+      Targets:
+        - Arn: !GetAtt SystemTopicManagerFunction.Arn
+          Id: system-topic-owner-email
+          InputTransformer:
+            InputPathsMap:
+              domainName: "$.detail.domainName"
+              ownerEmail: "$.detail.ownerEmail"
+              previousOwnerEmail: "$.detail.previousOwnerEmail"
+            InputTemplate: '{"action":"reconcileOwnerEmail","domainName":<domainName>,"ownerEmail":<ownerEmail>,"previousOwnerEmail":<previousOwnerEmail>}'
+          DeadLetterConfig:
+            Arn: !GetAtt EventBridgeRuleFailureDlq.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+            MaximumEventAgeInSeconds: 300
+
+  DomainOwnerEmailChangeRulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SystemTopicManagerFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DomainOwnerEmailChangeRule.Arn
   ProvisionDomainWorkflow:
     Type: AWS::Serverless::StateMachine
     Properties:
@@ -3636,6 +4113,8 @@ Resources:
         "AWS::Region": !Ref "AWS::Region"
         "AWS::AccountId": !Ref "AWS::AccountId"
         AwsOrganizationArn: !Ref AwsOrganizationArn
+        SystemTopicManagerFunctionArn: !GetAtt SystemTopicManagerFunction.Arn
+        "AWS::Partition": !Ref "AWS::Partition"
         ProvisionEnvStateMachineArn: !Ref ProvisionEnvWorkflow
         DeprovisionEnvStateMachineArn: !Ref DeprovisionEnvWorkflow
       Events:
@@ -3708,6 +4187,11 @@ Resources:
               - sqs:TagQueue
               - sqs:UntagQueue
             Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Organization}-*"
+          - Effect: Allow
+            Action:
+              - sns:TagResource
+              - sns:UntagResource
+            Resource: !Sub "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${Organization}-*-system-events"
           - Effect: Allow
             Action:
               - cloudwatch:TagResource

@@ -2197,6 +2197,20 @@ components:
         createdAt:
           type: string
           format: date-time
+        systemEventsLastEventAt:
+          type: string
+          format: date-time
+          description: >
+            Publication timestamp of the most recent system event delivered
+            to this domain's topic. Powers the console's unread indicator;
+            absent until the first delivered event.
+          example: "2026-10-21T09:15:00.000Z"
+        systemEventsLastEventType:
+          type: string
+          description: >
+            Detail type of that most recent system event; absent until the
+            first delivered event.
+          example: "SubscriptionUpgraded"
 
     DomainDetail:
       type: object
@@ -2257,6 +2271,31 @@ components:
           type: string
           description: SSM parameter path where the domain namespace is published (env-independent).
           example: "/namespace/sales"
+        systemEventsTopicArn:
+          type: string
+          description: >
+            Platform-owned SNS topic that publishes this domain's system
+            events (one topic per domain, shared across environments).
+            Present once provisioning has recorded it or the backfill has
+            run; absent on responses from stacks predating the field. Read
+            via the console or this endpoint, then subscribe SQS queues or
+            Lambda functions from your own accounts.
+          example: "arn:aws:sns:us-east-1:111122223333:acme-sales-system-events"
+        systemEventsLastEventAt:
+          type: string
+          format: date-time
+          description: >
+            Publication timestamp of the most recent system event delivered
+            to this domain's topic. Powers the console's unread indicator;
+            absent until the first delivered event.
+          example: "2026-10-21T09:15:00.000Z"
+        systemEventsLastEventType:
+          type: string
+          description: >
+            Detail type of that most recent system event (for example
+            SubscriptionUpgradeStarted or SubscriptionUpgraded); absent until
+            the first delivered event.
+          example: "SubscriptionUpgraded"
         createdAt:
           type: string
           format: date-time

@@ -19,6 +19,31 @@ pub const TARGET_REGISTRY: &str = "acme-staging-orders-schema-registry";
 pub const SOURCE_REGISTRY: &str = "acme-dev-orders-schema-registry";
 pub const FULL_SCHEMA: &str = "acme-orders@OrderNotification";
 
+/// Serializes tests that mutate process environment variables and restores
+/// the emission gate to disabled on drop, so a panicked test cannot leak
+/// configuration into its peers.
+pub struct EnvGuard(#[allow(dead_code)] std::sync::MutexGuard<'static, ()>);
+
+impl EnvGuard {
+    pub fn emission_on(&self) {
+        std::env::set_var("SYSTEM_EVENT_EMISSION_ENABLED", "true");
+        std::env::set_var("METADATA_TABLE", "metadata-test");
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        std::env::remove_var("SYSTEM_EVENT_EMISSION_ENABLED");
+        std::env::remove_var("METADATA_TABLE");
+    }
+}
+
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn env_lock() -> EnvGuard {
+    EnvGuard(ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
 pub fn set_env() {
     std::env::set_var("ORGANIZATION", "acme");
     std::env::set_var("SCHEMA_VERSIONS_TABLE", "versions-test");

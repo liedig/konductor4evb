@@ -43,6 +43,16 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 - **Decision:** STAY—no new synchronous side effect in the handler (single commit, one event); convergence is workflow-envelope-driven. When `stream-domain-lifecycle-events` lands, the rule can be re-pointed at stream-derived events without changing the workflow contract.
 - **Follow-up:** —
 
+
+## `update.rs` ownerEmail → topic subscription reconciliation (`domain-system-events`, 2026-10-21)
+
+- **Committed writes:** none new—the same conditional `UpdateItem` audited above; a `GetItem` before the update reads the replaced `ownerEmail` so the event can name it.
+- **Side effects:** `UpdateDomainSucceeded` (carrying `ownerEmail` and `previousOwnerEmail` when the owner changed) is matched by an EventBridge rule that invokes `system-topic-manager` (`reconcileOwnerEmail`); the function subscribes the new owner address to the domain's system-events topic and unsubscribes the previous one. SNS effects only; no DynamoDB write.
+- **Rubric:** (1) yes—the event carries both addresses and the topic ARN is deterministic from organization and domain name; (2) yes—the rule fires only on the post-commit success event; (3) yes—reconciliation is idempotent (an existing subscription is reused, an absent previous address is a no-op), so redelivery converges; (4) yes—subscription setup tolerates delay and the owner confirms asynchronously; (5) n/a—no stream consumer involved; (6) yes—the rule's retry policy and DLQ cover target-invocation failure.
+- **Failure walk:** target invocation fails → rule DLQ, redrivable; SNS call exhausts → function error → DLQ; a still-pending old subscription cannot be unsubscribed (SNS reports `PendingConfirmation` instead of an ARN) and is left to expire; two rapid owner changes can strand an intermediate address until it expires or an operator removes it—accepted and documented in the change design.
+- **Decision:** STAY.
+- **Follow-up:** —
+
 ## `domain-state` — retry-provisioning
 
 - **Committed writes:** conditional `UpdateItem` (`PROVISIONING_FAILED` → `APPROVED`, removes `errorDetail`).

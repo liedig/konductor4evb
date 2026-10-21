@@ -12,8 +12,12 @@ use konductor_common::dynamodb::{n, s};
 use konductor_common::promotion::{promotion_pk, RepinState, REPIN_SK};
 use konductor_common::promotion_store::repin_to_item;
 
-use super::{enumerate, is_conditional_failure, pattern, read_repin_item, rfc3339, RepinEntry};
+use super::{
+    active_metadata_revision, emission_enabled, enumerate, is_conditional_failure, pattern,
+    read_repin_item, rfc3339, with_facts, RepinEntry, StepFacts,
+};
 use crate::store::{promotions_table, Clients};
+use konductor_common::system_events::UpgradeTrigger;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +28,10 @@ pub struct WidenInput {
     pub environment: String,
     pub through: i64,
     pub drain_seconds: i64,
+    /// Promotion trigger for system-event snapshots. Absent in legacy
+    /// in-flight executions, which emit nothing.
+    #[serde(default)]
+    pub trigger: Option<UpgradeTrigger>,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +45,9 @@ pub struct WidenOutput {
     pub drain_seconds: i64,
     pub drain_until: String,
     pub entries: Vec<RepinEntry>,
+    /// The metadata revision the start-phase selectors pin to. Serialized
+    /// as `null` when emission is disabled.
+    pub metadata_revision: Option<u32>,
 }
 
 pub async fn widen(
@@ -50,11 +61,19 @@ pub async fn widen(
 }
 
 async fn run_widen(clients: &Clients, input: &WidenInput) -> Result<WidenOutput> {
+    let emission = match (input.trigger, emission_enabled()) {
+        (Some(trigger), true) => Some((
+            trigger,
+            active_metadata_revision(clients, &input.environment).await?,
+        )),
+        _ => None,
+    };
     let entries = enumerate(
         clients,
         &input.domain,
         &input.schema_name,
         &input.environment,
+        None,
     )
     .await?;
     // Bounded re-read loop: a concurrent widen (an authoring-environment
@@ -70,7 +89,7 @@ async fn run_widen(clients: &Clients, input: &WidenInput) -> Result<WidenOutput>
         .await?;
         if let Some(state) = &existing {
             if state.widened_by.as_deref() == Some(input.promotion_id.as_str()) {
-                return Ok(widen_output(input, state, entries));
+                return Ok(widen_output(input, state, entries, emission));
             }
         }
         let current_pin = entries.iter().filter_map(|e| e.pinned_version).min();
@@ -100,7 +119,7 @@ async fn run_widen(clients: &Clients, input: &WidenInput) -> Result<WidenOutput>
             updated_at: Utc::now(),
         };
         match put_repin(clients, input, &state, old_generation).await {
-            Ok(()) => return Ok(widen_output(input, &state, entries)),
+            Ok(()) => return Ok(widen_output(input, &state, entries, emission)),
             Err(e) if is_conditional_failure(&e) => continue,
             Err(e) => return Err(e),
         }
@@ -108,7 +127,24 @@ async fn run_widen(clients: &Clients, input: &WidenInput) -> Result<WidenOutput>
     anyhow::bail!("widen lost the generation race three times");
 }
 
-fn widen_output(input: &WidenInput, state: &RepinState, entries: Vec<RepinEntry>) -> WidenOutput {
+fn widen_output(
+    input: &WidenInput,
+    state: &RepinState,
+    mut entries: Vec<RepinEntry>,
+    emission: Option<(UpgradeTrigger, u32)>,
+) -> WidenOutput {
+    let facts = emission.map(|(trigger, revision)| StepFacts {
+        operation_id: input.promotion_id.clone(),
+        trigger,
+        generation: state.generation as u64,
+        requested_version: input.through,
+        start_metadata_revision: revision,
+        terminal_metadata_revision: None,
+        expected_repin_at: state.drain_until,
+    });
+    for entry in &mut entries {
+        with_facts(entry, facts.as_ref());
+    }
     WidenOutput {
         generation: state.generation,
         old_pin: state.pinned_before.unwrap_or(state.floor_version),
@@ -118,6 +154,7 @@ fn widen_output(input: &WidenInput, state: &RepinState, entries: Vec<RepinEntry>
             .drain_until
             .map(|t| rfc3339(&t))
             .unwrap_or_else(|| rfc3339(&Utc::now())),
+        metadata_revision: facts.as_ref().map(|f| f.start_metadata_revision),
         entries,
     }
 }

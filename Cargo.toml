@@ -7,6 +7,7 @@ members = [
     "domain-management/functions/domain-count-reporter",
     "domain-management/functions/domain-registrations",
     "domain-management/functions/domain-state",
+    "domain-management/functions/system-topic-manager",
     "domain-management/functions/finalize-approval",
     "domain-management/functions/list-domains",
     "domain-management/functions/pending-registrations",
@@ -32,6 +33,10 @@ members = [
     "event-streams/functions/describe-schema",
     "event-streams/functions/metadata-bootstrap",
     "event-streams/functions/metadata-admin",
+    "event-streams/functions/system-event-projector",
+    "event-streams/functions/system-event-router",
+    "event-streams/functions/system-event-notifier",
+    "event-streams/functions/system-schema-bootstrap",
     "control-plane/functions/oauth-authorizer",
     "control-plane/functions/binding-admin",
     "control-plane/functions/entitlement-admin",
@@ -54,6 +59,7 @@ aws-sdk-eventbridge = { version = "1", default-features = false, features = ["rt
 aws-sdk-sesv2 = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-sfn = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-sqs = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
+aws-sdk-sns = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-ssm = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-sts = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 aws-sdk-schemas = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }

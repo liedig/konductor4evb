@@ -23,6 +23,10 @@ export interface DomainSummary {
   environments?: string[]
   secondaryOwnerEmails?: string[]
   createdAt?: string
+  /** Publication time of the newest delivered system event; absent until the first one. */
+  systemEventsLastEventAt?: string
+  /** Detail type of that event (e.g. SubscriptionUpgraded). */
+  systemEventsLastEventType?: string
 }
 
 /** Names-only directory projection (`GET /domains?view=directory`). */
@@ -53,6 +57,12 @@ export interface DomainDetail {
   tags?: Record<string, string>
   resourceArns?: Record<string, PerEnvResourceArns>
   namespaceParameter?: string
+  /** Platform-owned system-events topic (one per domain); absent until provisioning or the backfill records it. */
+  systemEventsTopicArn?: string
+  /** Publication time of the newest delivered system event; absent until the first one. */
+  systemEventsLastEventAt?: string
+  /** Detail type of that event (e.g. SubscriptionUpgraded). */
+  systemEventsLastEventType?: string
   /** Resolved account per environment (sparse overrides applied); absent on responses from stacks predating the field. */
   environmentAccounts?: Record<string, string>
   createdAt?: string

@@ -33,6 +33,7 @@ When your domain reaches `ACTIVE`, Konductor has created resources in two AWS ac
 |----------|------|---------|
 | SSM parameter | `/namespace/{domain}` | Namespace identifier shared across the organization via RAM |
 | AWS Resource Access Manager (AWS RAM) resource share | `{org}-domain-namespaces` | Organization-wide sharing of domain namespace parameters |
+| System-events SNS topic | `{org}-{domain}-system-events` | Platform-to-domain notifications; accounts on the domain record subscribe their own SQS queues or Lambda functions (see [System events](system-events.md)) |
 
 ### Naming convention example
 
@@ -46,6 +47,7 @@ acme-dev-billing-dashboard          (platform account)
 acme-dev-billing-event-bus          (domain account)
 acme-dev-billing-integration-dlq    (domain account)
 /namespace/billing                  (SSM parameter, shared via RAM)
+acme-billing-system-events          (SNS topic, platform account)
 ```
 
 The platform-side and app-side event buses share the same name—they live in different accounts, so there is no collision.

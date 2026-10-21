@@ -42,6 +42,7 @@ DEFAULTS = {
     "notification_sender_email": "",
     "platform_operator_email": "",
     "access_token_validity_minutes": 60,
+    "system_event_emission_enabled": False,
     "oauth_callback_urls": ["http://localhost:3000/callback"],
     "oauth_logout_urls": ["http://localhost:3000/logout"],
 }
@@ -55,6 +56,7 @@ SETTINGS = {
     "notification_sender_email": ("NotificationSenderEmail", "updateable"),
     "platform_operator_email": ("PlatformOperatorEmail", "updateable"),
     "access_token_validity_minutes": ("AccessTokenValidityMinutes", "updateable"),
+    "system_event_emission_enabled": ("SystemEventEmissionEnabled", "updateable"),
     "oauth_callback_urls": ("OAuthCallbackUrls", "updateable"),
     "oauth_logout_urls": ("OAuthLogoutUrls", "updateable"),
 }
@@ -91,9 +93,13 @@ def load_config(path):
 
     for key, value in cfg.items():
         expected = list if key in ("environments", "oauth_callback_urls", "oauth_logout_urls") else (
-            int if key == "access_token_validity_minutes" else str
+            bool if key == "system_event_emission_enabled"
+            else int if key == "access_token_validity_minutes" else str
         )
-        if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
+        if expected is bool:
+            if not isinstance(value, bool):
+                errors.append(f"{path}: '{key}' must be a bool (got {type(value).__name__} {value!r}).")
+        elif not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
             errors.append(f"{path}: '{key}' must be a {expected.__name__} (got {type(value).__name__} {value!r}).")
 
     for key in ("environments", "oauth_callback_urls", "oauth_logout_urls"):
@@ -307,8 +313,7 @@ def drift_guard(cfg, stack_name, region, profile, stack_fixture, skip_aws):
 
     def configured(parameter):
         key = next(k for k, v in SETTINGS.items() if v[0] == parameter)
-        value = cfg[key]
-        return ",".join(value) if isinstance(value, list) else str(value)
+        return render_value(cfg[key])
 
     errors = []
     for key, (parameter, lifecycle) in SETTINGS.items():
@@ -445,12 +450,18 @@ def stage_render_config(args):
     note(f"{args.config} not found — rendering stages with defaults: {DEFAULTS['environments']}")
     return dict(DEFAULTS)
 
+def render_value(value):
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return ",".join(value)
+    return str(value)
+
+
 def render_overrides(cfg):
     parts = []
     for key, (parameter, _) in SETTINGS.items():
-        value = cfg[key]
-        rendered = ",".join(value) if isinstance(value, list) else str(value)
-        parts.append(f"{parameter}={rendered}")
+        parts.append(f"{parameter}={render_value(cfg[key])}")
     return " ".join(parts)
 
 
@@ -471,7 +482,9 @@ def init_from_stack(stack_name, region, profile, stack_fixture):
             cfg[key] = DEFAULTS.get(key)
             continue
         default = DEFAULTS.get(key)
-        if isinstance(default, list):
+        if isinstance(default, bool):
+            cfg[key] = raw == "true"
+        elif isinstance(default, list):
             cfg[key] = [entry for entry in raw.split(",") if entry]
         elif isinstance(default, int):
             cfg[key] = int(raw)

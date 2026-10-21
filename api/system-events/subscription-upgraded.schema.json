@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "title": "SubscriptionUpgraded",
+  "description": "Konductor system event emitted when a committed subscription upgrade phase reaches a terminal outcome for one subscription entry in one environment.",
+  "type": "object",
+  "required": ["version", "id", "detail-type", "source", "account", "time", "region", "resources", "detail"],
+  "properties": {
+    "version": { "type": "string" },
+    "id": { "type": "string" },
+    "detail-type": { "enum": ["SubscriptionUpgraded"] },
+    "source": { "enum": ["konductor.system"] },
+    "account": { "type": "string" },
+    "time": { "type": "string", "format": "date-time" },
+    "region": { "type": "string" },
+    "resources": { "type": "array", "items": { "type": "string" } },
+    "detail": {
+      "type": "object",
+      "required": ["metadata", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "required": ["schemaVersion", "idempotencyKey", "publishedAt", "correlationId", "resourceRevision"],
+          "additionalProperties": false,
+          "properties": {
+            "schemaVersion": { "type": "integer", "minimum": 1 },
+            "idempotencyKey": { "type": "string", "minLength": 1 },
+            "publishedAt": { "type": "string", "format": "date-time" },
+            "correlationId": { "type": "string", "minLength": 1 },
+            "resourceRevision": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "data": {
+          "type": "object",
+          "required": [
+            "audience", "domain", "environment", "resource", "producerDomain",
+            "schemaName", "trigger", "fromVersion", "requestedVersion",
+            "resultingVersion", "intermediateVersions", "enabled",
+            "subscriptionStatus", "expectedRepinAt", "contracts", "outcome"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "audience": { "enum": ["CONSUMER"] },
+            "domain": { "type": "string", "minLength": 1 },
+            "environment": { "type": ["string", "null"] },
+            "resource": {
+              "type": "object",
+              "required": ["type", "id"],
+              "additionalProperties": false,
+              "properties": {
+                "type": { "enum": ["SUBSCRIPTION"] },
+                "id": { "type": "string", "minLength": 1 }
+              }
+            },
+            "producerDomain": { "type": "string", "minLength": 1 },
+            "schemaName": { "type": "string", "minLength": 1 },
+            "trigger": { "enum": ["PROMOTION", "AUTHORING"] },
+            "fromVersion": { "type": "integer", "minimum": 1 },
+            "requestedVersion": { "type": "integer", "minimum": 1 },
+            "resultingVersion": { "type": "integer", "minimum": 1 },
+            "intermediateVersions": {
+              "type": ["object", "null"],
+              "required": ["fromVersion", "toVersion"],
+              "additionalProperties": false,
+              "properties": {
+                "fromVersion": { "type": "integer", "minimum": 1 },
+                "toVersion": { "type": "integer", "minimum": 1 }
+              }
+            },
+            "enabled": { "type": "boolean" },
+            "subscriptionStatus": { "enum": ["PENDING", "ACTIVE", "FAILED", "REMOVED", "AWAITING_PROMOTION"] },
+            "expectedRepinAt": { "type": ["string", "null"], "format": "date-time" },
+            "contracts": {
+              "type": "object",
+              "required": ["from", "requested", "resulting"],
+              "additionalProperties": false,
+              "properties": {
+                "from": { "$ref": "#/definitions/contractSelector" },
+                "requested": { "$ref": "#/definitions/contractSelector" },
+                "resulting": { "$ref": "#/definitions/contractSelector" }
+              }
+            },
+            "outcome": { "enum": ["COMPLETED", "PARTIAL"] },
+            "reason": { "enum": ["REPLAY_PARTIAL", "REPIN_FAILED"] }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "contractSelector": {
+      "type": "object",
+      "required": ["producerDomain", "schemaName", "environment", "schemaVersion", "metadataRevision"],
+      "additionalProperties": false,
+      "properties": {
+        "producerDomain": { "type": "string", "minLength": 1 },
+        "schemaName": { "type": "string", "minLength": 1 },
+        "environment": { "type": "string", "minLength": 1 },
+        "schemaVersion": { "type": "integer", "minimum": 1 },
+        "metadataRevision": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

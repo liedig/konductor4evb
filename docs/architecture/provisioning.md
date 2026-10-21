@@ -35,18 +35,22 @@ Failures in the domain-level steps (namespace parameter, RAM share) that happen 
 graph TD
     start["SetProvisioningStatus<br/>(DDB: PROVISIONING)"] --> check["CheckNewAccount<br/>(Query by-owner GSI)"]
     check --> param["CreateNamespaceParameter<br/>(SSM Advanced)"]
-    param --> ramcheck["EnsureRAMResourceShare"]
+    param --> topic["EnsureSystemTopic<br/>(system-topic-manager Lambda:<br/>topic + policy + owner email subscription)"]
+    topic --> ramcheck["EnsureRAMResourceShare"]
     ramcheck --> mapenvs{{"Map over environments<br/>(unbounded concurrency)"}}
     mapenvs -->|invokes provision-env.sync:2| inner["ProvisionEnvWorkflow<br/>(one per env)"]
     inner --> envresult{"All envs succeeded?"}
     envresult -->|yes| update["UpdateDomainActive<br/>(resourceArns: per-env map)"]
     update --> emit["EmitDomainProvisioningSucceeded"]
     envresult -->|no| rollback{{"Map over succeeded envs<br/>(deprovision-env.sync:2)"}}
-    rollback --> failemit["EmitDomainProvisioningFailed<br/>(failedEnvironment, compensationErrors)"]
+    rollback --> topiccleanup["DeleteSystemTopicAfterRollback"]
+    topiccleanup --> failemit["EmitDomainProvisioningFailed<br/>(failedEnvironment, compensationErrors)"]
     failemit --> failupdate["UpdateDomainProvisioningFailed"]
 
-    param -->|"error"| domainfail["EmitDomainProvisioningFailed<br/>(failedEnvironment: null)"]
-    ramcheck -->|"error"| domainfail
+    param -->|"error"| cleanup["DeleteSystemTopicDomainLevel<br/>(no-op if never created)"]
+    topic -->|"error"| cleanup
+    ramcheck -->|"error"| cleanup
+    cleanup --> domainfail["EmitDomainProvisioningFailed<br/>(failedEnvironment: null)"]
 
     style emit fill:#6b6,color:#fff
     style failemit fill:#f66,color:#fff
@@ -98,6 +102,7 @@ There are **two layers** of compensation:
 
 1. **Inner saga** (`provision-env`): if a per-env step fails, the inner workflow walks backwards through the resources already created **in that env** and deletes them. Best-effort—delete failures are captured in `compensationErrors` so the env fails deterministically instead of hanging.
 2. **Outer rollback** (`provision-domain`): if any env's inner execution fails, the outer workflow starts `deprovision-env` for every env that had already reported success. Each deprovision is idempotent (treats "already gone" as a no-op) and collects its own per-step `compensationErrors`, which the outer workflow aggregates into the `DomainProvisioningFailed` event payload.
+3. **Domain-level topic cleanup**: every failure path (domain-level step failure, or rollback after environment failures — including zero successful environments) deletes the managed `{org}-{domain}-system-events` SNS topic through the `system-topic-manager` Lambda, which verifies the Konductor ownership tags before deleting (topic deletion removes its subscriptions, including the default owner email one). A cleanup failure is recorded in `compensationErrors`; a missing topic is a no-op, so paths that failed before `EnsureSystemTopic` stay safe. The ACTIVE commit records the ARN as top-level `systemEventsTopicArn` on the domain record. `EnsureSystemTopic` also subscribes the domain owner email as the topic's default endpoint; the subscription stays pending until the owner confirms the SNS email. A later committed owner-email change re-points that default subscription through the `konductor-domain-owner-email-change` rule.
 
 > Workflow definitions:
 >

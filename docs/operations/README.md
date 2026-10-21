@@ -20,6 +20,7 @@ not authorization to deploy, change access, activate a revision, or delete data.
 - [Domain recovery and cleanup](domain-recovery.md)
 - [Metadata rollout and consumer sign-off](metadata-rollout.md)
 - [Schema promotion operations](schema-promotion.md)
+- [System event operations](system-events.md)
 - [Uninstall](uninstall.md)
 
 ## Separately authorized protection

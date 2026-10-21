@@ -21,6 +21,7 @@ by redeploying with new values.
 | Access-token validity | `AccessTokenValidityMinutes` | Integer 5–1440 | `60` | Updateable |
 | OAuth callback URLs | `OAuthCallbackUrls` | Comma-delimited URLs; HTTPS except `http://localhost[:port]` | `http://localhost:3000/callback` | Updateable |
 | OAuth logout URLs | `OAuthLogoutUrls` | Comma-delimited URLs; HTTPS except `http://localhost[:port]` | `http://localhost:3000/logout` | Updateable |
+| System-event emission | `SystemEventEmissionEnabled` | Boolean | `false` | Updateable |
 
 ## Why these bounds
 
@@ -37,6 +38,10 @@ by redeploying with new values.
   strictest services in use (SQS queue names allow only `[A-Za-z0-9_-]`).
   Placeholder *presence* is checked by preflight validation; the template
   enforces the charset.
+- **System-event emission.** The rollout gate for [system events](system-events.md):
+  deploy with `false`, stand up the system-events infrastructure, then flip to
+  `true`. While `false`, re-pin lifecycles behave exactly as before and write
+  no upgrade snapshots.
 - **Fixed versus updateable.** The fixed four are baked into resource names,
   trust-role names in every domain account, RAM share scope, API stage names,
   and Lambda environment. Changing them on a live installation would rename,

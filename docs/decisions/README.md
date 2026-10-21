@@ -40,6 +40,7 @@ before treating an older claim as a current requirement.
 - [Independent per-environment subscription materialization](follow-schema-promotion.md)
 - [Replay-based schema promotion with aligned version numbers](promote-schema-versions.md)
 - [Fail-closed schema compatibility proof](harden-schema-compatibility-checker.md)
+- [Public system events for subscription upgrades](domain-system-events.md)
 - [Independent platform metadata contracts](add-platform-metadata-composition.md)
 
 ## Trust and operations

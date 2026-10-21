@@ -115,7 +115,9 @@ Each subscribing domain account SHALL receive events on a dedicated domain event
 
 ### Requirement: Application team responsibility boundary
 
-Application teams SHALL only interact directly with domain event buses in their own account for integration-rule management. They SHALL create integration rules on those buses to process events, including triggering Lambda functions, SQS queues, or other targets. Application teams SHALL NOT create or manage rules on the platform domain bus. Konductor SHALL retain management of the application bus infrastructure and integration DLQ configuration. In member accounts with the organization guardrails installed, application teams, including local administrators within SCP coverage, SHALL NOT delete or reconfigure those managed resources.
+Application teams SHALL manage business-event integration rules only on domain event buses in their own account. They SHALL create integration rules on those buses to process events, including triggering Lambda functions, SQS queues, or other targets. Application teams SHALL NOT create or manage rules on the platform domain bus. Konductor SHALL retain management of the application bus infrastructure and integration DLQ configuration. In member accounts with the organization guardrails installed, application teams, including local administrators within SCP coverage, SHALL NOT delete or reconfigure those managed resources.
+
+As a separate system-notification path, principals in a domain's registered accounts SHALL be permitted, with the necessary IAM and endpoint permissions, to subscribe allowed SQS and Lambda endpoints to that domain's platform-owned system-events SNS topic. This permission SHALL NOT confer topic administration, publication rights, or access to manage platform event-bus rules.
 
 #### Scenario: Application team creates integration rules
 
@@ -146,34 +148,11 @@ Application teams SHALL only interact directly with domain event buses in their 
 - **WHEN** an application team manages resources outside the protected Konductor selectors
 - **THEN** these guardrails SHALL NOT deny the operation merely because the resources share the organization's general naming prefix
 
-### Requirement: Event flow path
+#### Scenario: Team connects system-event automation without platform-bus access
 
-Events SHALL flow through a three-stage path: (1) the publishing application calls PutEvents on the domain event bus in the platform account, (2) subscription rules on the platform domain bus match and route events to the subscriber's domain event bus in their domain account, authorized by the provision-time resource policy permitting the platform account to PutEvents on the subscriber's bus, (3) the subscriber's integration rules on their own bus deliver events to their consuming applications.
-
-#### Scenario: End-to-end event delivery
-
-- **WHEN** a publishing application sends an event to the domain event bus in the platform account
-- **THEN** the event SHALL be evaluated against subscription rules on that bus
-- **AND THEN** matching subscription rules SHALL deliver the event to the target domain event bus in the subscriber's domain account under the platform-account resource policy on that bus
-- **AND THEN** the subscriber's integration rules SHALL process the event on their own bus
-
-#### Scenario: Subscription rule delivery failure
-
-- **WHEN** a subscription rule on the platform domain bus fails to deliver an event to the subscriber's domain account bus
-- **THEN** the event SHALL be sent to the subscription rule DLQ in the platform account
-- **AND THEN** the DLQ message SHALL include error details (error code, error message, rule ARN, target ARN)
-
-#### Scenario: Integration rule delivery failure
-
-- **WHEN** an integration rule on the subscriber's domain bus fails to deliver an event to the consuming application
-- **THEN** the event SHALL be sent to the integration rule DLQ in the domain account
-- **AND THEN** the DLQ message SHALL include error details for troubleshooting
-
-#### Scenario: Unmatched events are not delivered and not dead-lettered
-
-- **WHEN** an event on the platform domain bus matches no subscription rule (e.g., its stamped schema version differs from every subscriber's pinned version)
-- **THEN** the event SHALL NOT be delivered to any subscriber and SHALL NOT appear in any DLQ
-- **AND THEN** detection of unexpectedly silent streams is an observability concern (zero-events alarming), not a delivery-path concern
+- **WHEN** an authorized domain-account principal subscribes a permitted endpoint to its domain's system-events topic
+- **THEN** SNS subscription authorization SHALL be evaluated independently of business-event integration-rule permissions
+- **AND** platform event-bus rule management SHALL remain denied
 
 ### Requirement: Domain namespace convention
 
@@ -181,26 +160,29 @@ Domain resources SHALL be named according to a configurable pattern defaulting t
 
 Konductor platform resources — the control plane itself — SHALL NOT use this convention. Platform resources follow the fixed `{org}-konductor-*` pattern (see system-architecture spec) because Konductor is a singleton per organisation and has no environment concept at the platform layer.
 
+The domain-wide system-events SNS topic SHALL be an explicit environment-independent exception: its fixed name SHALL be `{org}-{domain}-system-events`, derived from the domain namespace rather than the configurable per-environment pattern.
+
 #### Scenario: Default namespace applied to domain resources
 
 - **WHEN** a domain is provisioned with org `acme`, domain name `billing`, and environment `dev`
 - **THEN** the domain event bus in the platform account SHALL be named `acme-dev-billing-event-bus` (or according to the configured convention)
-- **AND THEN** the schema registry, DLQs, and other domain resources SHALL follow the same convention with appropriate suffixes
+- **AND THEN** the schema registry, DLQs, and other per-environment domain resources SHALL follow the same convention with appropriate suffixes
 
 #### Scenario: Platform team configures custom convention
 
 - **WHEN** a platform team specifies a custom namespace convention
-- **THEN** all subsequently provisioned domain resources SHALL use the custom convention for naming
+- **THEN** all subsequently provisioned per-environment domain resources SHALL use the custom convention for naming
 - **AND THEN** existing resources SHALL NOT be renamed (convention changes are forward-only)
-- **AND THEN** custom conventions SHALL apply only to domain resources; Konductor platform resources SHALL remain named `{org}-konductor-*`
+- **AND THEN** custom conventions SHALL apply only to per-environment domain resources; Konductor platform resources SHALL remain named `{org}-konductor-*`
+- **AND THEN** the domain-wide system-events topic SHALL retain `{org}-{domain}-system-events`
 
 #### Scenario: Environment isolation between domain resources
 
 - **WHEN** the same domain (e.g., `billing`) is provisioned across dev, staging, and prod environments
-- **THEN** each environment SHALL have its own independent set of domain resources (buses, registries, DLQs)
-- **AND THEN** there SHALL be no cross-environment event routing unless explicitly configured
+- **THEN** each environment SHALL have its own independent set of business-event resources (buses, registries, DLQs)
+- **AND THEN** there SHALL be no cross-environment business-event routing unless explicitly configured
 - **AND THEN** the domain namespace `{org}-{domain}` SHALL be the same across all environments
-
+- **AND THEN** sharing a system-events topic SHALL NOT create cross-environment business-event routing
 ### Requirement: Domain namespace identity
 
 Each domain SHALL have a stable, environment-independent namespace of the form `{org}-{domain}` (e.g., `acme-billing`). The namespace SHALL be the domain's logical identity within the organisation. The namespace SHALL NOT include an environment component. The namespace SHALL be stored as an SSM Advanced Parameter at `/namespace/{domain}` with the namespace value as the parameter value.
@@ -244,3 +226,21 @@ All domain namespace SSM parameters SHALL be shared with the AWS Organisation vi
 - **WHEN** a domain account accesses a shared namespace parameter
 - **THEN** the account SHALL be able to read the parameter value
 - **AND THEN** the account SHALL NOT be able to modify or delete the parameter
+
+### Requirement: System-event resources
+
+The platform SHALL own one `{org}-konductor-system-bus`, its audit archive, and a `{org}-konductor-system-schemas` registry per installation. Each provisioned domain SHALL have one platform-account SNS topic named `{org}-{domain}-system-events`, shared across all its environments. These resources SHALL be separate from business-event buses, internal lifecycle buses, and operator notification topics.
+
+#### Scenario: Multi-environment domain has one notification topic
+- **WHEN** a domain is provisioned into dev, staging, and prod
+- **THEN** it SHALL have one system-events topic, not three
+- **AND** its existing per-environment business resources SHALL remain distinct
+
+#### Scenario: Topic count grows without per-domain system-bus rules
+- **WHEN** a platform provisions additional domains up to its 1,000-domain cap
+- **THEN** each domain SHALL receive its own topic
+- **AND** recipient routing SHALL NOT require one system-bus rule per domain
+
+#### Scenario: System notifications remain available without email
+- **WHEN** optional SES or operator email notifications are disabled
+- **THEN** the system bus, archive, registry, and domain topics SHALL still be provisioned

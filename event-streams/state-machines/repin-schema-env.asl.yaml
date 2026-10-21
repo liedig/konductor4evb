@@ -24,6 +24,7 @@ States:
         environment: "{% $states.input.environment %}"
         through: "{% $states.input.version %}"
         drainSeconds: "{% $number('${DrainSeconds}') %}"
+        trigger: "AUTHORING"
     Retry:
       - ErrorEquals:
           - Lambda.ClientExecutionTimeoutException
@@ -58,6 +59,7 @@ States:
       ruleName: "{% $states.context.Map.Item.Value.ruleName %}"
       environment: "{% $states.context.Map.Item.Value.environment %}"
       enabled: "{% $states.context.Map.Item.Value.enabled %}"
+      upgrade: "{% $states.context.Map.Item.Value.upgrade %}"
     ItemProcessor:
       ProcessorConfig:
         Mode: INLINE
@@ -111,6 +113,9 @@ States:
         environment: "{% $states.input.environment %}"
         generation: "{% $widen.generation %}"
         to: "{% $states.input.version %}"
+        trigger: "AUTHORING"
+        requestedVersion: "{% $states.input.version %}"
+        startMetadataRevision: "{% $widen.metadataRevision %}"
     Retry:
       - ErrorEquals:
           - Lambda.ClientExecutionTimeoutException
@@ -145,6 +150,7 @@ States:
       ruleName: "{% $states.context.Map.Item.Value.ruleName %}"
       environment: "{% $states.context.Map.Item.Value.environment %}"
       enabled: "{% $states.context.Map.Item.Value.enabled %}"
+      upgrade: "{% $states.context.Map.Item.Value.upgrade %}"
     ItemProcessor:
       ProcessorConfig:
         Mode: INLINE

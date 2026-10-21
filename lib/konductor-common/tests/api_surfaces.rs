@@ -550,6 +550,8 @@ fn schema_promotion_steps_has_least_privilege_permissions() {
             "dynamodb:GetItem",
             // versions content records
             "dynamodb:GetItem",
+            // metadata pointer reads for upgrade snapshot selectors
+            "dynamodb:GetItem",
             "dynamodb:PutItem",
             "dynamodb:PutItem",
             // event-streams entry enumeration
@@ -1809,4 +1811,354 @@ fn pending_registrations_route_is_oauth_only_and_wired() {
         text(at(props(event), "Path")),
         "/domains/registrations/pending"
     );
+}
+
+// ---- System events (platform -> domain notifications) ----
+
+#[test]
+fn event_streams_table_streams_new_and_old_images() {
+    let doc = core_template();
+    let table = resource(&doc, "EventStreamsTable");
+    assert_eq!(
+        text(at(
+            at(props(table), "StreamSpecification"),
+            "StreamViewType"
+        )),
+        "NEW_AND_OLD_IMAGES",
+        "the projector diffs old/new upgradeEvents snapshots"
+    );
+}
+
+#[test]
+fn system_event_projector_mapping_is_bounded_and_partial_batch_aware() {
+    let doc = core_template();
+    let mapping_res = resource(&doc, "SystemEventProjectorEventSourceMapping");
+    assert_eq!(
+        text(at(mapping_res, "Type")),
+        "AWS::Lambda::EventSourceMapping"
+    );
+    let p = props(mapping_res);
+    assert_eq!(text(at(p, "StartingPosition")), "TRIM_HORIZON");
+    assert_eq!(int(at(p, "BatchSize")), 10);
+    assert_eq!(int(at(p, "MaximumRetryAttempts")), 3);
+    assert_eq!(int(at(p, "MaximumRecordAgeInSeconds")), 3600);
+    assert!(boolean(at(p, "BisectBatchOnFunctionError")));
+    assert_eq!(text(at(p, "EventSourceArn")), "EventStreamsTable.StreamArn");
+    let responses: Vec<&str> = seq(at(p, "FunctionResponseTypes"))
+        .iter()
+        .map(text)
+        .collect();
+    assert_eq!(responses, ["ReportBatchItemFailures"]);
+    assert_eq!(
+        text(at(
+            at(at(p, "DestinationConfig"), "OnFailure"),
+            "Destination"
+        )),
+        "SystemEventProjectorFailureBucket.Arn",
+        "permanently undeliverable payloads land in the S3 failure bucket"
+    );
+}
+
+#[test]
+fn system_event_archive_retains_ninety_days() {
+    let doc = core_template();
+    let archive = resource(&doc, "SystemEventBusArchive");
+    assert_eq!(int(at(props(archive), "RetentionDays")), 90);
+    assert_eq!(text(at(props(archive), "SourceArn")), "SystemEventBus.Arn");
+}
+
+#[test]
+fn system_event_projector_registers_schemas_before_consuming() {
+    let doc = core_template();
+    let mapping_res = resource(&doc, "SystemEventProjectorEventSourceMapping");
+    assert_eq!(
+        text(at(mapping_res, "DependsOn")),
+        "SystemSchemaBootstrap",
+        "contracts land in the registry before projection begins"
+    );
+}
+
+#[test]
+fn system_event_resources_do_not_depend_on_the_ses_condition() {
+    let doc = core_template();
+    for logical_id in [
+        "SystemEventBus",
+        "SystemEventBusArchive",
+        "SystemSchemaRegistry",
+        "SystemSchemaBootstrapFunction",
+        "SystemSchemaBootstrap",
+        "SystemEventProjectorFunction",
+        "SystemEventProjectorEventSourceMapping",
+        "SystemEventProjectorFailureBucket",
+        "SystemEventRouterFunction",
+        "SystemEventRoutingRule",
+        "SystemTopicManagerFunction",
+        "SystemEventTargetDlq",
+        "DomainOwnerEmailChangeRule",
+        "DomainOwnerEmailChangeRulePermission",
+    ] {
+        let res = resource(&doc, logical_id);
+        assert!(
+            mapping(res).get("Condition").is_none(),
+            "{logical_id} must deploy independently of NotificationsEnabled"
+        );
+    }
+}
+#[test]
+fn owner_email_change_rule_routes_to_the_topic_manager_unconditioned() {
+    let doc = core_template();
+    let rule = resource(&doc, "DomainOwnerEmailChangeRule");
+    assert_eq!(text(at(props(rule), "EventBusName")), "KonductorEventBus");
+    let pattern = at(props(rule), "EventPattern");
+    assert_eq!(seq(at(pattern, "detail-type")), &["UpdateDomainSucceeded"]);
+    let changed = at(at(pattern, "detail"), "changedFields");
+    assert_eq!(seq(changed), &["ownerEmail"]);
+    let target = &seq(at(props(rule), "Targets"))[0];
+    assert_eq!(text(at(target, "Arn")), "SystemTopicManagerFunction.Arn");
+    assert_eq!(
+        text(at(at(target, "DeadLetterConfig"), "Arn")),
+        "EventBridgeRuleFailureDlq.Arn"
+    );
+    let transformer = at(target, "InputTransformer");
+    let template = text(at(transformer, "InputTemplate"));
+    assert!(template.contains("reconcileOwnerEmail"), "{template}");
+    assert!(template.contains("<previousOwnerEmail>"), "{template}");
+
+    let permission = resource(&doc, "DomainOwnerEmailChangeRulePermission");
+    assert_eq!(
+        text(at(props(permission), "SourceArn")),
+        "DomainOwnerEmailChangeRule.Arn"
+    );
+}
+#[test]
+fn system_events_topic_arn_is_describe_only_and_oauth_iam_identical() {
+    for contract in [oauth_contract(), iam_contract()] {
+        let schemas = at(at(&contract, "components"), "schemas");
+        let detail = at(schemas, "DomainDetail");
+        let field = at(at(detail, "properties"), "systemEventsTopicArn");
+        assert_eq!(text(at(field, "type")), "string");
+        let required: Vec<&str> = detail
+            .get("required")
+            .map(|r| seq(r).iter().map(text).collect())
+            .unwrap_or_default();
+        assert!(
+            !required.contains(&"systemEventsTopicArn"),
+            "recorded only after provisioning or backfill"
+        );
+        for schema in [
+            "DomainSummary",
+            "RegisterDomainRequest",
+            "UpdateDomainRequest",
+        ] {
+            assert!(
+                mapping(at(at(schemas, schema), "properties"))
+                    .get("systemEventsTopicArn")
+                    .is_none(),
+                "{schema} must not carry or accept the platform-owned topic ARN"
+            );
+        }
+    }
+}
+#[test]
+fn system_events_marker_is_on_summary_and_detail_in_both_contracts() {
+    for contract in [oauth_contract(), iam_contract()] {
+        let schemas = at(at(&contract, "components"), "schemas");
+        for schema in ["DomainSummary", "DomainDetail"] {
+            let props = at(at(schemas, schema), "properties");
+            for field in ["systemEventsLastEventAt", "systemEventsLastEventType"] {
+                assert_eq!(
+                    text(at(at(props, field), "type")),
+                    "string",
+                    "{schema}.{field}"
+                );
+            }
+            let required: Vec<&str> = at(schemas, schema)
+                .get("required")
+                .map(|r| seq(r).iter().map(text).collect())
+                .unwrap_or_default();
+            assert!(
+                !required.contains(&"systemEventsLastEventAt"),
+                "{schema}: marker absent until the first delivered event"
+            );
+        }
+        for schema in ["RegisterDomainRequest", "UpdateDomainRequest"] {
+            let props = mapping(at(at(schemas, schema), "properties"));
+            assert!(
+                props.get("systemEventsLastEventAt").is_none()
+                    && props.get("systemEventsLastEventType").is_none(),
+                "{schema} must not accept the platform-owned marker"
+            );
+        }
+    }
+}
+#[test]
+fn system_event_email_rules_are_conditioned_and_scoped() {
+    let doc = core_template();
+    let cases: [(&str, &str, &str, &[&str]); 2] = [
+        (
+            "SystemEventConsumerEmailRule",
+            "SystemEventBus",
+            "konductor.system",
+            &["SubscriptionUpgradeStarted", "SubscriptionUpgraded"],
+        ),
+        (
+            "SchemaPromotionFailedEmailRule",
+            "KonductorEventBus",
+            "konductor.schema-management",
+            &["SchemaPromotionFailed"],
+        ),
+    ];
+    for (logical_id, bus, source, detail_types) in cases {
+        let rule = resource(&doc, logical_id);
+        assert_eq!(
+            mapping(rule).get("Condition").map(text),
+            Some("NotificationsEnabled"),
+            "{logical_id} deploys only when notifications are enabled"
+        );
+        let pattern = at(props(rule), "EventPattern");
+        assert_eq!(
+            text(at(pattern, "source").get(0).unwrap_or(pattern)),
+            source,
+            "{logical_id}"
+        );
+        let declared: Vec<&str> = seq(at(pattern, "detail-type")).iter().map(text).collect();
+        assert_eq!(declared, detail_types, "{logical_id}");
+        let target = &seq(at(props(rule), "Targets"))[0];
+        assert_eq!(
+            text(at(target, "Arn")),
+            "SystemEventNotifierFunction.Arn",
+            "{logical_id}"
+        );
+        assert_eq!(
+            text(at(at(target, "DeadLetterConfig"), "Arn")),
+            "SystemEventTargetDlq.Arn",
+            "{logical_id}"
+        );
+        let permission_id = format!("{logical_id}Permission");
+        assert_eq!(
+            mapping(resource(&doc, &permission_id))
+                .get("Condition")
+                .map(text),
+            Some("NotificationsEnabled"),
+            "{permission_id}"
+        );
+    }
+    let consumer = at(
+        props(resource(&doc, "SystemEventConsumerEmailRule")),
+        "EventPattern",
+    );
+    let trigger = seq(at(at(at(consumer, "detail"), "data"), "trigger"));
+    assert_eq!(
+        trigger.iter().map(text).collect::<Vec<_>>(),
+        vec!["PROMOTION"],
+        "authoring re-pins never produce consumer emails"
+    );
+}
+
+#[test]
+fn system_event_failure_bucket_is_private_encrypted_and_expires() {
+    let doc = core_template();
+    let bucket = resource(&doc, "SystemEventProjectorFailureBucket");
+    let p = props(bucket);
+    let block = at(p, "PublicAccessBlockConfiguration");
+    for key in [
+        "BlockPublicAcls",
+        "BlockPublicPolicy",
+        "IgnorePublicAcls",
+        "RestrictPublicBuckets",
+    ] {
+        assert!(boolean(at(block, key)));
+    }
+    let encryption = seq(at(
+        at(p, "BucketEncryption"),
+        "ServerSideEncryptionConfiguration",
+    ));
+    assert_eq!(encryption.len(), 1);
+    let rules = seq(at(at(p, "LifecycleConfiguration"), "Rules"));
+    assert_eq!(rules.len(), 1);
+    assert_eq!(int(at(&rules[0], "ExpirationInDays")), 90);
+}
+
+#[test]
+fn system_event_routing_uses_one_rule_regardless_of_domain_count() {
+    let doc = core_template();
+    let resources = mapping(at(&doc, "Resources"));
+    let rules: Vec<&str> = resources
+        .keys()
+        .filter_map(|k| k.as_str())
+        .filter(|id| {
+            let res = resource(&doc, id);
+            text(at(res, "Type")) == "AWS::Events::Rule"
+                && props(res).get("EventBusName").and_then(|v| v.as_str()) == Some("SystemEventBus")
+        })
+        .collect();
+    assert_eq!(
+        rules,
+        ["SystemEventRoutingRule", "SystemEventConsumerEmailRule"],
+        "constant rules only; domains never add rules"
+    );
+    assert_eq!(
+        mapping(resource(&doc, "SystemEventConsumerEmailRule"))
+            .get("Condition")
+            .map(text),
+        Some("NotificationsEnabled"),
+        "the email rule is optional; routing is not"
+    );
+    let rule = resource(&doc, "SystemEventRoutingRule");
+    let targets = seq(at(props(rule), "Targets"));
+    assert_eq!(targets.len(), 1);
+    assert_eq!(
+        text(at(at(&targets[0], "DeadLetterConfig"), "Arn")),
+        "SystemEventTargetDlq.Arn"
+    );
+    let dlq = resource(&doc, "SystemEventTargetDlq");
+    assert_eq!(
+        int(at(props(dlq), "MessageRetentionPeriod")),
+        1209600,
+        "14-day SQS maximum retention"
+    );
+}
+
+#[test]
+fn system_event_permissions_stay_scoped() {
+    let doc = core_template();
+    let resources = mapping(at(&doc, "Resources"));
+    // The system bus accepts publishes only from the projector: no
+    // EventBusPolicy may widen it, and the router role must not carry
+    // events:PutEvents.
+    for (id, res) in resources {
+        let id = id.as_str().expect("resource id");
+        assert_ne!(
+            text(at(res, "Type")),
+            "AWS::Events::EventBusPolicy",
+            "{id}: the system bus must not gain a resource policy"
+        );
+    }
+    let router = resource(&doc, "SystemEventRouterFunction");
+    let router_rendered = serde_yaml::to_string(router).unwrap();
+    assert!(!router_rendered.contains("events:PutEvents"));
+    assert!(router_rendered.contains("sns:Publish"));
+    assert!(router_rendered.contains("-system-events"));
+    // No stack-managed topic policy may target the system topics; subscribe
+    // restrictions live in the helper-set policy, not the stack. (The
+    // pre-existing SES notifications topic policy is unrelated.)
+    for (id, res) in resources {
+        let id = id.as_str().expect("resource id");
+        if text(at(res, "Type")) == "AWS::SNS::TopicPolicy" {
+            assert!(
+                !id.contains("SystemEvent"),
+                "{id}: system topic policies are managed by the topic manager, not the stack"
+            );
+        }
+    }
+}
+
+#[test]
+fn system_event_emission_defaults_to_disabled() {
+    let doc = core_template();
+    let params = mapping(at(&doc, "Parameters"));
+    let param = params
+        .get("SystemEventEmissionEnabled")
+        .expect("gate parameter");
+    assert_eq!(text(at(param, "Default")), "false");
 }

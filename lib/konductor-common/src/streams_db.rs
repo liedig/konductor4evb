@@ -80,6 +80,21 @@ pub fn stream_to_item(stream: &EventStream) -> HashMap<String, AttributeValue> {
         .map(|(env, es)| (env.clone(), env_stream_to_attr(es)))
         .collect();
     item.insert("environments".to_string(), AttributeValue::M(envs));
+    if let Some(upgrade_events) = &stream.upgrade_events {
+        let snapshots: HashMap<String, AttributeValue> = upgrade_events
+            .iter()
+            .map(|(env, snapshot)| {
+                (
+                    env.clone(),
+                    crate::system_events::store::upgrade_snapshot_to_attr(snapshot),
+                )
+            })
+            .collect();
+        item.insert(
+            crate::system_events::store::UPGRADE_EVENTS.to_string(),
+            AttributeValue::M(snapshots),
+        );
+    }
     if let Some(request_id) = &stream.request_id {
         item.insert("requestId".to_string(), s(request_id));
     }
@@ -108,6 +123,27 @@ pub fn item_to_stream(item: &HashMap<String, AttributeValue>) -> Option<EventStr
         })
         .unwrap_or_default();
 
+    let upgrade_events = item
+        .get(crate::system_events::store::UPGRADE_EVENTS)
+        .and_then(|v| v.as_m().ok())
+        .map(|m| {
+            m.iter()
+                .filter_map(|(env, av)| {
+                    let parsed = av
+                        .as_m()
+                        .ok()
+                        .and_then(crate::system_events::store::attr_to_upgrade_snapshot);
+                    if parsed.is_none() {
+                        tracing::warn!(
+                            environment = %env,
+                            "dropping a present-but-malformed upgradeEvents entry"
+                        );
+                    }
+                    Some((env.clone(), parsed?))
+                })
+                .collect()
+        });
+
     Some(EventStream {
         producer_domain: get_s(item, PK)?,
         consumer_domain: get_s(item, "consumerDomain")?,
@@ -117,6 +153,7 @@ pub fn item_to_stream(item: &HashMap<String, AttributeValue>) -> Option<EventStr
         status: get_s(item, "status")?.parse().ok()?,
         error_detail: get_s(item, "errorDetail"),
         environments,
+        upgrade_events,
         request_id: get_s(item, "requestId"),
         created_at: get_dt(item, "createdAt")?,
         updated_at: get_dt(item, "updatedAt")?,
@@ -173,11 +210,51 @@ pub async fn get_stream(
     schema_name: &str,
     consumer_domain: &str,
 ) -> Result<Option<EventStream>> {
+    get_stream_consistency(
+        ddb,
+        table,
+        producer_domain,
+        schema_name,
+        consumer_domain,
+        false,
+    )
+    .await
+}
+
+/// Strongly consistent variant for conflict resolution immediately after a
+/// conditional write fails, where a stale read would misclassify the retry.
+pub async fn get_stream_consistent(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    producer_domain: &str,
+    schema_name: &str,
+    consumer_domain: &str,
+) -> Result<Option<EventStream>> {
+    get_stream_consistency(
+        ddb,
+        table,
+        producer_domain,
+        schema_name,
+        consumer_domain,
+        true,
+    )
+    .await
+}
+
+async fn get_stream_consistency(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    producer_domain: &str,
+    schema_name: &str,
+    consumer_domain: &str,
+    consistent: bool,
+) -> Result<Option<EventStream>> {
     let output = ddb
         .get_item()
         .table_name(table)
         .key(PK, s(producer_domain))
         .key(SK, s(&EventStream::sort_key(schema_name, consumer_domain)))
+        .consistent_read(consistent)
         .send()
         .await
         .context("failed to get event stream record")?;
@@ -477,6 +554,7 @@ mod tests {
             status: StreamStatus::Pending,
             error_detail: None,
             environments,
+            upgrade_events: None,
             request_id: Some("req-123".to_string()),
             created_at: "2026-07-15T00:00:00Z".parse().unwrap(),
             updated_at: "2026-07-15T00:00:00Z".parse().unwrap(),

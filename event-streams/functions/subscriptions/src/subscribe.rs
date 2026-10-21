@@ -208,6 +208,7 @@ fn build_pending_stream(
         status: StreamStatus::Pending,
         error_detail: None,
         environments: env_map,
+        upgrade_events: None,
         request_id: Some(request_id.to_string()),
         created_at: now,
         updated_at: now,

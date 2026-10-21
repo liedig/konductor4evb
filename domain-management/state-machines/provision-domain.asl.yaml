@@ -85,7 +85,7 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitProvisioningFailedDomainLevel
+        Next: DeleteSystemTopicDomainLevel
         Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'CreateNamespaceParameter', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
 
   # SSM PutParameter cannot combine Tags with Overwrite — tagging is an
@@ -112,12 +112,44 @@ States:
           {"Key": "konductor:namespace", "Value": "${Organization}" & "-" & $states.input.detail.domainName}
         ], $states.input.detail.costCenter ? [{"Key": "cost-center", "Value": $states.input.detail.costCenter}] : []) %}
     Output: "{% $states.input %}"
+    Next: EnsureSystemTopic
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: DeleteSystemTopicDomainLevel
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'TagNamespaceParameter', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
+
+  EnsureSystemTopic:
+    Type: Task
+    Resource: "arn:aws:states:::lambda:invoke"
+    Retry:
+      - ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Arguments:
+      FunctionName: "${SystemTopicManagerFunctionArn}"
+      Payload:
+        action: ensure
+        domainName: "{% $states.input.detail.domainName %}"
+        ownerAccountId: "{% $states.input.detail.ownerAccountId %}"
+        environmentAccounts: "{% $states.input.detail.environmentAccounts %}"
+        costCenter: "{% $states.input.detail.costCenter %}"
+        ownerEmail: "{% $states.input.detail.ownerEmail %}"
+    Assign:
+      systemEventsTopicArn: "{% $states.result.Payload.topicArn %}"
+    Output: "{% $states.input %}"
     Next: EnsureRAMResourceShare
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitProvisioningFailedDomainLevel
-        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'TagNamespaceParameter', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
+        Next: DeleteSystemTopicDomainLevel
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'EnsureSystemTopic', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
   EnsureRAMResourceShare:
     Type: Task
     Resource: "arn:aws:states:::aws-sdk:ram:getResourceShares"
@@ -141,7 +173,7 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitProvisioningFailedDomainLevel
+        Next: DeleteSystemTopicDomainLevel
         Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'EnsureRAMResourceShare', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
 
   CheckRAMShareExists:
@@ -177,7 +209,7 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitProvisioningFailedDomainLevel
+        Next: DeleteSystemTopicDomainLevel
         Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'CreateRAMResourceShare', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
 
   AssociateParameterToExistingShare:
@@ -203,7 +235,7 @@ States:
     Catch:
       - ErrorEquals:
           - States.ALL
-        Next: EmitProvisioningFailedDomainLevel
+        Next: DeleteSystemTopicDomainLevel
         Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': 'AssociateParameterToExistingShare', 'errorCode': $states.errorOutput.Error, 'errorMessage': $states.errorOutput.Cause, 'compensationErrors': [], 'succeededResults': [] } }]) %}"
 
   ProvisionEnvironments:
@@ -292,12 +324,14 @@ States:
       Key:
         domainName:
           S: "{% $states.input.detail.domainName %}"
-      UpdateExpression: "SET #s = :status, resourceArns = :arns, namespaceParameter = :ns, updatedAt = :now"
+      UpdateExpression: "SET #s = :status, resourceArns = :arns, namespaceParameter = :ns, systemEventsTopicArn = :topic, updatedAt = :now"
       ExpressionAttributeNames:
         "#s": status
       ExpressionAttributeValues:
         ":status":
           S: ACTIVE
+        ":topic":
+          S: "{% $systemEventsTopicArn %}"
         ":arns":
           M: "{% $merge($succeededResults.{ $.environment: { 'M': { 'platformEventBusArn': { 'S': $.result.resourceArns.platformEventBusArn }, 'appEventBusArn': { 'S': $.result.resourceArns.appEventBusArn }, 'schemaRegistryArn': { 'S': $.result.resourceArns.schemaRegistryArn }, 'subscriptionDlqArn': { 'S': $.result.resourceArns.subscriptionDlqArn }, 'integrationDlqArn': { 'S': $.result.resourceArns.integrationDlqArn }, 'dashboardArn': { 'S': $.result.resourceArns.dashboardArn } } } }) %}"
         ":ns":
@@ -380,7 +414,7 @@ States:
     Assign:
       rollbackResults: "{% $states.result %}"
     Output: "{% $states.input %}"
-    Next: EmitProvisioningFailedAfterRollback
+    Next: DeleteSystemTopicAfterRollback
 
   EmitProvisioningFailedAfterRollback:
     Type: Task
@@ -416,6 +450,68 @@ States:
     Output: "{% $states.input %}"
     Next: UpdateDomainProvisioningFailed
 
+  # Compensation for the domain-level topic: runs on every failure path,
+  # including failures before the topic existed (a missing topic is a no-op).
+  DeleteSystemTopicDomainLevel:
+    Type: Task
+    Resource: "arn:aws:states:::lambda:invoke"
+    Retry:
+      - ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Arguments:
+      FunctionName: "${SystemTopicManagerFunctionArn}"
+      Payload:
+        action: delete
+        topicArn: "{% 'arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:' & '${Organization}' & '-' & $states.input.detail.domainName & '-system-events' %}"
+        domainName: "{% $states.input.detail.domainName %}"
+    Output: "{% $states.input %}"
+    Next: EmitProvisioningFailedDomainLevel
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitProvisioningFailedDomainLevel
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': $states.input.failure.failedStep, 'errorCode': $states.input.failure.errorCode, 'errorMessage': $states.input.failure.errorMessage, 'compensationErrors': ['System topic cleanup failed: ' & ($states.errorOutput.Cause ? $states.errorOutput.Cause : $states.errorOutput.Error)], 'succeededResults': [] } }]) %}"
+
+  DeleteSystemTopicAfterRollback:
+    Type: Task
+    Resource: "arn:aws:states:::lambda:invoke"
+    Retry:
+      - ErrorEquals:
+          - Lambda.ServiceException
+          - Lambda.AWSLambdaException
+          - Lambda.SdkClientException
+          - Lambda.TooManyRequestsException
+        IntervalSeconds: 2
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Arguments:
+      FunctionName: "${SystemTopicManagerFunctionArn}"
+      Payload:
+        action: delete
+        topicArn: "{% 'arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:' & '${Organization}' & '-' & $states.input.detail.domainName & '-system-events' %}"
+        domainName: "{% $states.input.detail.domainName %}"
+    Output: "{% $states.input %}"
+    Next: EmitProvisioningFailedAfterRollback
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: NoteSystemTopicCleanupFailure
+        Output: "{% $merge([$states.input, { 'topicCleanupError': $states.errorOutput.Cause ? $states.errorOutput.Cause : $states.errorOutput.Error }]) %}"
+
+  NoteSystemTopicCleanupFailure:
+    Type: Pass
+    Assign:
+      rollbackResults: "{% $append($rollbackResults, { 'compensationErrors': ['System topic cleanup failed: ' & $states.input.topicCleanupError] }) %}"
+    Output: "{% $states.input %}"
+    Next: EmitProvisioningFailedAfterRollback
   EmitProvisioningFailedDomainLevel:
     Type: Task
     Resource: "arn:aws:states:::events:putEvents"

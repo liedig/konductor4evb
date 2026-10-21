@@ -156,6 +156,7 @@ fn stream_item(
         status: StreamStatus::Active,
         error_detail: None,
         environments,
+        upgrade_events: None,
         request_id: None,
         created_at: at(),
         updated_at: at(),
@@ -185,6 +186,7 @@ fn clients_with(ddb_rules: &[&Rule]) -> Clients {
 #[tokio::test]
 async fn widen_covers_the_current_pin_through_the_target() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     let streams = streams_rule(vec![stream_item(
         "shipping",
         Some(("staging", StreamStatus::Active, Some(3))),
@@ -210,6 +212,7 @@ async fn widen_covers_the_current_pin_through_the_target() {
 #[tokio::test]
 async fn widen_takes_the_min_floor_and_max_target_and_bumps_the_generation() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     let streams = streams_rule(vec![stream_item(
         "shipping",
         Some(("staging", StreamStatus::Active, Some(3))),
@@ -228,6 +231,7 @@ async fn widen_takes_the_min_floor_and_max_target_and_bumps_the_generation() {
 #[tokio::test]
 async fn widen_retry_short_circuits_on_its_own_widening() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     let streams = streams_rule(vec![]);
     let own = get_repin_rule(Some(repin_item(&repin_state(2, 5, 2, Some("promo-1")))));
     let put = put_repin_rule(2, 5, 3, 2);
@@ -247,6 +251,7 @@ async fn widen_retry_short_circuits_on_its_own_widening() {
 #[tokio::test]
 async fn widen_without_subscribers_pins_to_the_requested_version() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     let streams = streams_rule(vec![]);
     let no_repin = get_repin_rule(None);
     let put = put_repin_rule(5, 5, 1, 0);
@@ -261,6 +266,7 @@ async fn widen_without_subscribers_pins_to_the_requested_version() {
 #[tokio::test]
 async fn widen_ignores_non_active_and_other_env_entries() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     let streams = streams_rule(vec![
         stream_item("shipping", Some(("staging", StreamStatus::Active, Some(3)))),
         stream_item(
@@ -283,6 +289,7 @@ async fn widen_ignores_non_active_and_other_env_entries() {
 #[tokio::test]
 async fn narrow_commits_the_final_pin_on_its_own_generation() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     let existing = get_repin_rule(Some(repin_item(&repin_state(3, 5, 2, Some("promo-1")))));
     let update = narrow_update_rule(5, 2);
     let streams = streams_rule(vec![stream_item(
@@ -303,6 +310,7 @@ async fn narrow_commits_the_final_pin_on_its_own_generation() {
 #[tokio::test]
 async fn narrow_exits_when_a_newer_widen_superseded_it() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     // Two quick appends: promo-1 widened to gen 2, then promo-2's flow (or a
     // re-pin from a second append) widened to gen 3 before promo-1 drained.
     let newer = get_repin_rule(Some(repin_item(&repin_state(3, 6, 3, Some("promo-2")))));
@@ -323,6 +331,7 @@ async fn narrow_exits_when_a_newer_widen_superseded_it() {
 #[tokio::test]
 async fn narrow_without_a_repin_item_is_vacuous() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     let missing = get_repin_rule(None);
     let update = narrow_update_rule(5, 2);
     let streams = streams_rule(vec![]);
@@ -339,6 +348,7 @@ async fn narrow_without_a_repin_item_is_vacuous() {
 #[tokio::test]
 async fn narrow_condition_loss_to_a_newer_generation_exits_unnarrowed() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     // Sequential: the pre-check read sees our generation, the conditional
     // update loses a race, and the re-read shows the newer generation.
     let before = get_repin_rule(Some(repin_item(&repin_state(3, 5, 2, Some("promo-1")))));
@@ -368,6 +378,7 @@ async fn narrow_condition_loss_to_a_newer_generation_exits_unnarrowed() {
 #[tokio::test]
 async fn narrow_condition_failure_on_its_own_generation_fails() {
     set_env();
+    let _guard = crate::testsupport::env_lock();
     // drainUntil <= :now tripping on our own generation means the workflow
     // narrowed before the drain elapsed — that is a bug, not a race.
     let ours = get_repin_rule(Some(repin_item(&repin_state(3, 5, 2, Some("promo-1")))));
@@ -397,4 +408,175 @@ async fn narrow_condition_failure_on_its_own_generation_fails() {
 fn pattern_is_the_widened_range_plus_lookahead() {
     assert_eq!(pattern(3, 5), vec![3, 4, 5, 6]);
     assert_eq!(pattern(5, 5), vec![5, 6]);
+}
+
+fn metadata_pointer_rule(environment: &'static str, revision: i64) -> Rule {
+    mock!(aws_sdk_dynamodb::Client::get_item)
+        .match_requests(move |req| {
+            req.table_name() == Some("metadata-test")
+                && req
+                    .key()
+                    .and_then(|k| k.get("SK"))
+                    .and_then(|v| v.as_s().ok())
+                    .map(String::as_str)
+                    == Some(environment)
+        })
+        .then_output(move || {
+            GetItemOutput::builder()
+                .item("PK", s("ENV"))
+                .item("SK", s(environment))
+                .item("activeRevision", AttributeValue::N(revision.to_string()))
+                .item("generation", AttributeValue::N("1".to_string()))
+                .item("activatedBy", s("bootstrap"))
+                .item("activatedAt", s("2026-02-01T00:00:00Z"))
+                .build()
+        })
+}
+
+#[tokio::test]
+async fn widen_attaches_upgrade_facts_when_emission_is_enabled() {
+    set_env();
+    let guard = crate::testsupport::env_lock();
+    guard.emission_on();
+    let streams = streams_rule(vec![stream_item(
+        "shipping",
+        Some(("staging", StreamStatus::Active, Some(3))),
+    )]);
+    let get_repin = get_repin_rule(None);
+    let put = put_repin_rule(3, 5, 1, 0);
+    let pointer = metadata_pointer_rule("staging", 5);
+    let clients = clients_with(&[&pointer, &get_repin, &put, &streams]);
+
+    let mut input = widen_input(5);
+    input["trigger"] = json!("PROMOTION");
+    let out = widen(&clients, &input).await.unwrap();
+
+    assert_eq!(out["metadataRevision"], 5);
+    assert_eq!(pointer.num_calls(), 1);
+    let upgrade = &out["entries"][0]["upgrade"];
+    assert_eq!(upgrade["operationId"], "promo-1");
+    assert_eq!(upgrade["trigger"], "PROMOTION");
+    assert_eq!(upgrade["generation"], 1);
+    assert_eq!(upgrade["originalPin"], 3);
+    assert_eq!(upgrade["requestedVersion"], 5);
+    assert_eq!(upgrade["startMetadataRevision"], 5);
+    assert!(upgrade.get("terminalMetadataRevision").is_none());
+    assert_eq!(upgrade["expectedRepinAt"], out["drainUntil"]);
+}
+
+#[tokio::test]
+async fn widen_omits_upgrade_facts_when_emission_is_disabled() {
+    set_env();
+    let _guard = crate::testsupport::env_lock();
+    let streams = streams_rule(vec![stream_item(
+        "shipping",
+        Some(("staging", StreamStatus::Active, Some(3))),
+    )]);
+    let get_repin = get_repin_rule(None);
+    let put = put_repin_rule(3, 5, 1, 0);
+    let clients = clients_with(&[&get_repin, &put, &streams]);
+
+    let mut input = widen_input(5);
+    input["trigger"] = json!("PROMOTION");
+    let out = widen(&clients, &input).await.unwrap();
+
+    assert!(out["metadataRevision"].is_null());
+    assert!(out["entries"][0]["upgrade"].is_null());
+}
+
+#[tokio::test]
+async fn narrow_attaches_terminal_facts_with_the_fresh_metadata_revision() {
+    set_env();
+    let guard = crate::testsupport::env_lock();
+    guard.emission_on();
+    let state = repin_state(3, 5, 2, Some("promo-1"));
+    let expected_repin_at = state.drain_until.unwrap();
+    let get_repin = get_repin_rule(Some(repin_item(&state)));
+    let update = narrow_update_rule(5, 2);
+    let pointer = metadata_pointer_rule("staging", 7);
+    let streams = streams_rule(vec![stream_item(
+        "shipping",
+        Some(("staging", StreamStatus::Active, Some(3))),
+    )]);
+    let clients = clients_with(&[&pointer, &get_repin, &update, &streams]);
+
+    let mut input = narrow_input(5, 2);
+    input["trigger"] = json!("PROMOTION");
+    input["requestedVersion"] = json!(5);
+    input["startMetadataRevision"] = json!(5);
+    let out = narrow(&clients, &input).await.unwrap();
+
+    assert_eq!(out["narrowed"], true);
+    let upgrade = &out["entries"][0]["upgrade"];
+    assert_eq!(upgrade["operationId"], "promo-1");
+    assert_eq!(upgrade["generation"], 2);
+    assert_eq!(upgrade["originalPin"], 3);
+    assert_eq!(upgrade["requestedVersion"], 5);
+    assert_eq!(upgrade["startMetadataRevision"], 5);
+    assert_eq!(upgrade["terminalMetadataRevision"], 7);
+    assert_eq!(
+        upgrade["expectedRepinAt"].as_str().unwrap(),
+        rfc3339(&expected_repin_at),
+        "the estimate survives the drain-until removal"
+    );
+}
+
+#[tokio::test]
+async fn widen_facts_carry_each_entrys_own_original_pin() {
+    set_env();
+    let guard = crate::testsupport::env_lock();
+    guard.emission_on();
+    let streams = streams_rule(vec![
+        stream_item("shipping", Some(("staging", StreamStatus::Active, Some(3)))),
+        stream_item("tracking", Some(("staging", StreamStatus::Active, Some(4)))),
+    ]);
+    let get_repin = get_repin_rule(None);
+    let put = put_repin_rule(3, 5, 1, 0);
+    let pointer = metadata_pointer_rule("staging", 5);
+    let clients = clients_with(&[&pointer, &get_repin, &put, &streams]);
+
+    let mut input = widen_input(5);
+    input["trigger"] = json!("PROMOTION");
+    let out = widen(&clients, &input).await.unwrap();
+
+    let pin_of = |consumer: &str| {
+        out["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["consumerDomain"] == consumer)
+            .map(|e| e["upgrade"]["originalPin"].as_i64().unwrap())
+    };
+    assert_eq!(pin_of("shipping"), Some(3));
+    assert_eq!(pin_of("tracking"), Some(4));
+}
+
+#[tokio::test]
+async fn superseded_narrow_emits_no_terminal_facts() {
+    set_env();
+    let guard = crate::testsupport::env_lock();
+    guard.emission_on();
+    let state = repin_state(3, 6, 3, Some("promo-9"));
+    let get_repin = get_repin_rule(Some(repin_item(&state)));
+    let pointer = metadata_pointer_rule("staging", 7);
+    let streams = streams_rule(vec![stream_item(
+        "shipping",
+        Some(("staging", StreamStatus::Active, Some(3))),
+    )]);
+    let clients = clients_with(&[&pointer, &get_repin, &streams]);
+
+    let mut input = narrow_input(5, 2);
+    input["trigger"] = json!("PROMOTION");
+    input["requestedVersion"] = json!(5);
+    input["startMetadataRevision"] = json!(5);
+    let out = narrow(&clients, &input).await.unwrap();
+
+    assert_eq!(out["narrowed"], false);
+    assert_eq!(
+        out["entries"].as_array().unwrap().len(),
+        0,
+        "a superseded narrow enumerates nothing and fabricates no terminal event"
+    );
+    assert_eq!(pointer.num_calls(), 0);
+    assert_eq!(streams.num_calls(), 0);
 }
