@@ -1,18 +1,23 @@
+import type { Page } from '@playwright/test'
 import { test, expect } from './fixtures'
+import { openGalleryWithClock } from './clock'
 
-test.beforeEach(async ({ page }) => {
-  await page.goto('/design-system')
-})
+async function focusNotifications(page: Page) {
+  await page.keyboard.press('F8')
+  await expect(page.getByRole('region', { name: 'Notifications (F8)' }).getByRole('list')).toBeFocused()
+}
 
 test('notifications announce politely, preserve focus and expire', async ({ page }) => {
-  await page.clock.install()
+  await openGalleryWithClock(page)
   const button = page.getByRole('button', { name: 'Success', exact: true })
   await button.click()
   const toast = page.locator('[data-state="open"]').filter({ hasText: 'Registration request accepted' })
   await expect(toast).toBeVisible()
   await expect(button).toBeFocused()
+  // Reka renders announcement text after two animation frames.
+  await page.clock.runFor(50)
   await expect(page.locator('[aria-live="polite"]').filter({ hasText: 'Registration request accepted' })).toHaveCount(1)
-  await page.clock.runFor(5900)
+  await page.clock.runFor(5850)
   await expect(toast).toBeVisible()
   await page.clock.runFor(200)
   await expect(toast).toHaveCount(0)
@@ -20,18 +25,25 @@ test('notifications announce politely, preserve focus and expire', async ({ page
 
 for (const interaction of ['hover', 'focus', 'window'] as const) {
   test(`notification expiry pauses for ${interaction} and resumes`, async ({ page }) => {
-    await page.clock.install()
+    await openGalleryWithClock(page)
     await page.getByRole('button', { name: 'Success', exact: true }).click()
     const toast = page.locator('[data-state="open"]').filter({ hasText: 'Registration request accepted' })
     await expect(toast).toBeVisible()
     await page.clock.runFor(1000)
-    if (interaction === 'hover') await toast.hover()
-    if (interaction === 'focus') await page.keyboard.press('F8')
+    if (interaction === 'hover') {
+      await toast.hover()
+      await expect.poll(() => toast.evaluate(el => el.matches(':hover'))).toBe(true)
+    }
+    if (interaction === 'focus') await focusNotifications(page)
     if (interaction === 'window') await page.evaluate(() => window.dispatchEvent(new Event('blur')))
     await page.clock.runFor(7000)
     await expect(toast).toBeVisible()
     if (interaction === 'hover') await page.mouse.move(0, 0)
-    if (interaction === 'focus') await page.getByRole('button', { name: 'Success', exact: true }).focus()
+    if (interaction === 'focus') {
+      const opener = page.getByRole('button', { name: 'Success', exact: true })
+      await opener.focus()
+      await expect(opener).toBeFocused()
+    }
     if (interaction === 'window') await page.evaluate(() => window.dispatchEvent(new Event('focus')))
     await page.clock.runFor(5100)
     await expect(toast).toHaveCount(0)
@@ -40,6 +52,7 @@ for (const interaction of ['hover', 'focus', 'window'] as const) {
 
 test('keyboard dismissal removes only its message and narrow messages fit', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 })
+  await page.goto('/design-system')
   await page.getByRole('button', { name: 'Success', exact: true }).click()
   await page.getByRole('button', { name: 'Long notification', exact: true }).click()
   const toasts = page.locator('[data-state="open"]')
@@ -59,14 +72,16 @@ test('keyboard dismissal removes only its message and narrow messages fit', asyn
 })
 
 test('leaving keyboard focus does not resume expiry while still hovered', async ({ page }) => {
-  await page.clock.install()
+  await openGalleryWithClock(page)
   const opener = page.getByRole('button', { name: 'Success', exact: true })
   await opener.click()
   const toast = page.locator('[data-state="open"]').filter({ hasText: 'Registration request accepted' })
   await expect(toast).toBeVisible()
   await toast.hover()
-  await page.keyboard.press('F8')
+  await expect.poll(() => toast.evaluate(el => el.matches(':hover'))).toBe(true)
+  await focusNotifications(page)
   await opener.focus()
+  await expect(opener).toBeFocused()
   await page.clock.runFor(7000)
   await expect(toast).toBeVisible()
   await page.mouse.move(0, 0)
@@ -75,15 +90,21 @@ test('leaving keyboard focus does not resume expiry while still hovered', async 
 })
 
 test('notifications added while paused receive their full lifetime on resume', async ({ page }) => {
-  await page.clock.install()
+  await openGalleryWithClock(page)
   await page.getByRole('button', { name: 'Success', exact: true }).click()
-  await page.keyboard.press('F8')
+  const initialToast = page.locator('[data-state="open"]').filter({ hasText: 'Registration request accepted' })
+  await expect(initialToast).toBeVisible()
+  await focusNotifications(page)
   await page.clock.runFor(7000)
+  await expect(initialToast).toBeVisible()
   await page.getByRole('button', { name: 'Information', exact: true }).dispatchEvent('click')
   const toast = page.locator('[data-state="open"]').filter({ hasText: 'Subscription is enabling' })
   await expect(toast).toBeVisible()
   await page.clock.runFor(7000)
-  await page.getByRole('button', { name: 'Information', exact: true }).focus()
+  await expect(toast).toBeVisible()
+  const opener = page.getByRole('button', { name: 'Information', exact: true })
+  await opener.focus()
+  await expect(opener).toBeFocused()
   await page.clock.runFor(5900)
   await expect(toast).toBeVisible()
   await page.clock.runFor(200)

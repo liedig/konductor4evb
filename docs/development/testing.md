@@ -133,6 +133,33 @@ The browser-opener helper has separate dependency-free tests: run `node --test t
 
 Screenshots/traces go to ignored `web/test-results/`; preserve review evidence in ignored `web/ui-evidence/` before another run clears results. Capture the gallery at 390 px and 1440 px before and after visual changes. Inspect the images rather than treating screenshot creation as visual approval.
 
+For timing-sensitive tests, `page.clock.install()` alone does not freeze time. Use `tests/ui/clock.ts` to install before gallery navigation and explicitly pause after page readiness, before creating notifications. Advance only simulated time with `runFor`; account for any rendering frames in the total lifetime (the polite-announcement test spends 50ms on Reka's two animation frames, then 5850ms before checking the six-second expiry boundary). Keep non-clock tests on ordinary browser time. Assert focus or hover before advancing a paused interval, and wait for dialogs to be visible before taking one-shot bounding boxes. Do not replace these preconditions with sleeps, forced clicks, or retries.
+
+For an investigation, use a unique output directory per invocation so an isolated rerun cannot erase a full-suite failure. The following captures unfiltered output, revision, command, elapsed time, and the actual test exit status. Run from the repository root; replace the test arguments as needed:
+
+```bash
+(
+  set -eu
+  cd web
+  mkdir -p "$PWD/ui-evidence/stabilize-ui-test-timing"
+  run_dir=$(mktemp -d "$PWD/ui-evidence/stabilize-ui-test-timing/run.XXXXXX")
+  git rev-parse HEAD > "$run_dir/revision.txt"
+  printf '%s\n' "pnpm exec playwright test --reporter=list --output=$run_dir/results" > "$run_dir/command.txt"
+  started=$(date +%s)
+  date -u > "$run_dir/started.txt"
+  set +e
+  pnpm exec playwright test --reporter=list --output="$run_dir/results" > "$run_dir/output.log" 2>&1
+  code=$?
+  set -e
+  finished=$(date +%s)
+  printf 'exit=%s\nelapsed_seconds=%s\nevidence=%s\n' "$code" "$((finished-started))" "$run_dir" | tee "$run_dir/result.txt"
+  cat "$run_dir/output.log"
+  exit "$code"
+)
+```
+
+Inspect the failed assertion and trace before rerunning. These are isolated mocked tests; keep evidence local and do not record credentials or live user data. A passing isolated test does not explain a full-suite failure, and current machine load does not establish the cause of an earlier slow run.
+
 Automated accessible-name/description checks are not a screen-reader audit. Before acceptance, review the gallery with a screen reader, true browser zoom, keyboard-only operation, and reduced motion. The automated 200% root-font-size case covers enlarged text, not browser zoom. Verify modal focus entry/restoration and confinement, confirmation Cancel-first/busy states, F8 notification navigation, polite announcements, and independent dismissal. Record unavailable tooling or authentication-blocked consumer checks explicitly; do not claim those checks passed.
 
 ## Keeping `target/` small

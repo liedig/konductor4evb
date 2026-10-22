@@ -58,6 +58,7 @@ before treating an older claim as a current requirement.
 - [SDK test features scoped to development dependencies](sdk-test-util-scoping.md)
 - [Schema authoring in the console](schema-authoring-ui.md)
 - [Reka primitives and local notification lifetime](refine-ui-with-reka.md)
+- [Controlled browser time in UI tests](stabilize-ui-test-timing.md)
 - [Documentation organization and maintenance](documentation-organization.md)
 
 ## Durability and unresolved work
