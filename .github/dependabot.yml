@@ -28,6 +28,11 @@ updates:
     labels: ["type:deps", "area:deps"]
     cooldown:
       default-days: 7
+    # vue-tsc (nuxi typecheck) resolves typescript/lib/tsc, which TypeScript 7
+    # no longer exports. Lift once vue-tsc supports the native compiler.
+    ignore:
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
     groups:
       nuxt-vue:
         patterns: ["nuxt", "@nuxt/*", "vue", "vue-router", "@pinia/*", "pinia"]
