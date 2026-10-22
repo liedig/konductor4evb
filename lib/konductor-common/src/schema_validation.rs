@@ -578,6 +578,35 @@ mod tests {
     }
 
     #[test]
+    fn draft4_format_keywords_are_asserted() {
+        let timestamped = LatestSchema {
+            content: r#"{"type": "string", "format": "date-time"}"#.to_string(),
+            version: 1,
+        };
+        assert!(validate_against_latest(
+            &timestamped,
+            &serde_json::json!("2026-07-30T10:30:00.123Z")
+        )
+        .is_ok());
+        assert!(matches!(
+            validate_against_latest(&timestamped, &serde_json::json!("not-a-date")),
+            Err(ValidationError::Violations(_))
+        ));
+    }
+
+    #[test]
+    fn a_remote_reference_is_unusable_and_never_fetched() {
+        let remote = LatestSchema {
+            content: r#"{"$ref": "https://example.com/schema.json"}"#.to_string(),
+            version: 1,
+        };
+        assert!(matches!(
+            validate_against_latest(&remote, &serde_json::json!(1)),
+            Err(ValidationError::SchemaUnusable(_))
+        ));
+    }
+
+    #[test]
     fn unparseable_schema_is_unusable_not_a_violation() {
         let broken = LatestSchema {
             content: "not json".to_string(),

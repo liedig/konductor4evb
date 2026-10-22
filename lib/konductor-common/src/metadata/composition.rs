@@ -200,15 +200,19 @@ pub fn compile_composed(
                 "composed document is missing its business identifier reference".to_string(),
             )
         })?;
-    let registry = jsonschema::Registry::options()
+    let registry = jsonschema::Registry::new()
         .draft(jsonschema::Draft::Draft4)
-        .build([(identifier, jsonschema::Resource::from_contents(business))])
+        .add(
+            identifier,
+            jsonschema::Draft::Draft4.create_resource(business),
+        )
+        .and_then(|builder| builder.prepare())
         .map_err(|e| {
             CompositionError::BusinessUnusable(format!("business resource is unusable: {e}"))
         })?;
     jsonschema::options()
         .with_draft(jsonschema::Draft::Draft4)
-        .with_registry(registry)
+        .with_registry(&registry)
         .build(&composed.document)
         .map_err(|e| CompositionError::BusinessUnusable(e.to_string()))
 }

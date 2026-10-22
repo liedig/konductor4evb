@@ -66,10 +66,10 @@ aws-sdk-schemas = { version = "1", default-features = false, features = ["rt-tok
 aws-sdk-lambda = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
 sha2 = "0.11"
 aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["rt-tokio", "default-https-client"] }
-jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 chrono = { version = "0.4", features = ["serde"] }
-lambda_runtime = "0.13"
+lambda_runtime = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -79,7 +79,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 aws-smithy-mocks = "0.3"
 uuid = { version = "1", features = ["v4", "v5"] }
 urlencoding = "2"
-jsonschema = { version = "0.37", default-features = false }
+jsonschema = { version = "0.59", default-features = false }
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"

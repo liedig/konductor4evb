@@ -121,6 +121,7 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use jsonwebtoken::{encode, DecodingKey, EncodingKey, Header};
     use rsa::pkcs1::EncodeRsaPrivateKey;
+    use rsa::rand_core::OsRng;
     use rsa::traits::PublicKeyParts;
     use rsa::{RsaPrivateKey, RsaPublicKey};
     use serde_json::json;
@@ -142,8 +143,7 @@ mod tests {
     }
 
     fn generate_key(kid: &str) -> TestKey {
-        let mut rng = rand::thread_rng();
-        let private = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
         let public = RsaPublicKey::from(&private);
         let n = URL_SAFE_NO_PAD.encode(public.n().to_bytes_be());
         let e = URL_SAFE_NO_PAD.encode(public.e().to_bytes_be());
@@ -343,6 +343,35 @@ mod tests {
         let other_key = generate_key("kid-1");
         let token = sign(&signing_key, &valid_claims(&["platform-admin"]));
         let resolver = StaticResolver::with_keys(&[&other_key]);
+        assert!(handle(&resolver, &config(), event(GET_ARN, &token))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn hmac_token_is_unauthorized_even_with_a_known_key_id() {
+        let key = generate_key("kid-1");
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some(key.kid.clone());
+        let token = encode(
+            &header,
+            &valid_claims(&["platform-admin"]),
+            &EncodingKey::from_secret(b"attacker-chosen-secret"),
+        )
+        .unwrap();
+        let resolver = StaticResolver::with_keys(&[&key]);
+        assert!(handle(&resolver, &config(), event(GET_ARN, &token))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn unsigned_alg_none_token_is_unauthorized() {
+        let key = generate_key("kid-1");
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"none","typ":"JWT","kid":"kid-1"}"#);
+        let payload = URL_SAFE_NO_PAD.encode(valid_claims(&["platform-admin"]).to_string());
+        let token = format!("{header}.{payload}.");
+        let resolver = StaticResolver::with_keys(&[&key]);
         assert!(handle(&resolver, &config(), event(GET_ARN, &token))
             .await
             .is_err());

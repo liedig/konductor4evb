@@ -15,8 +15,10 @@ async fn main() -> Result<(), Error> {
     let clients = handler::Clients::new(&config);
     let clients_ref = &clients;
 
-    lambda_runtime::run(service_fn(move |event| async move {
-        handler::handle(clients_ref, event).await
+    // Boxed so the handler future's depth does not overflow the compiler's
+    // layout query limit under lambda_runtime 1.x's deeper service stack.
+    lambda_runtime::run(service_fn(move |event| {
+        Box::pin(handler::handle(clients_ref, event))
     }))
     .await
 }
