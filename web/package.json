@@ -13,21 +13,21 @@
     "test:unit": "node --test \"tests/unit/*.test.ts\""
   },
   "dependencies": {
-    "@pinia/nuxt": "^0.11.2",
-    "aws-amplify": "^6.15.0",
-    "nuxt": "^4.2.0",
-    "pinia": "^3.0.3",
-    "reka-ui": "^2.10.4",
-    "vue": "^3.5.18",
-    "vue-router": "^5.3.1"
+    "@pinia/nuxt": "^1.0.3",
+    "aws-amplify": "^6.22.2",
+    "nuxt": "^4.6.2",
+    "pinia": "^4.1.0",
+    "reka-ui": "^2.11.0",
+    "vue": "^3.5.44",
+    "vue-router": "^5.4.0"
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.9.0",
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/vite": "^4.1.12",
-    "eslint": "^9.34.0",
+    "eslint": "^10.13.0",
     "tailwindcss": "^4.1.12",
-    "typescript": "^5.9.2",
-    "vue-tsc": "^3.3.11"
+    "typescript": "^6.0.3",
+    "vue-tsc": "^3.3.13"
   }
 }
