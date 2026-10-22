@@ -1017,6 +1017,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_schema_with_an_inexact_multiple_of_divisor_returns_400() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let clients = clients(&[], &[], &[]);
+        let mut bad = create_body();
+        bad["content"] = json!(
+            r#"{"type": "object", "properties": {"units": {"type": "integer", "multipleOf": 9007199254740993}}}"#
+        );
+
+        let resp = handle(&clients, &authorizer, event(oauth_event("/schemas", bad)))
+            .await
+            .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let message = body(&resp)["message"].as_str().unwrap().to_string();
+        assert!(
+            message.contains("multipleOf") && message.contains("'#/properties/units'"),
+            "400 must name the keyword and its location: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_version_with_an_inexact_multiple_of_divisor_returns_400() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let clients = clients(&[], &[], &[]);
+        let mut bad = append_body();
+        bad["content"] = json!(r#"{"type": "integer", "multipleOf": 1e20}"#);
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            event(oauth_event("/schemas/versions", bad)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 400);
+        let message = body(&resp)["message"].as_str().unwrap().to_string();
+        assert!(
+            message.contains("multipleOf") && message.contains("'#'"),
+            "400 must name the keyword and its location: {message}"
+        );
+    }
+
+    #[tokio::test]
     async fn append_version_creates_the_next_version() {
         set_env();
         let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);

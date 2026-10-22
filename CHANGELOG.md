@@ -7,6 +7,12 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Reject `multipleOf` divisors above 9007199254740991 (2^53 - 1) on
+  `POST /schemas` and `POST /schemas/versions` with `400 Bad Request`. The
+  validator cannot decide divisibility exactly above that bound, so such
+  schemas could admit non-multiples or reject true multiples. Already
+  stored schemas keep validating at publish. See the
+  [decision record](docs/decisions/refuse-inexact-multiple-of-divisors.md).
 - Add domain system events: the platform projects committed subscription
   upgrade phases onto a central system bus as versioned public contracts
   (`SubscriptionUpgradeStarted`, `SubscriptionUpgraded`, source

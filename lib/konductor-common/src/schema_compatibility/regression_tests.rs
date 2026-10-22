@@ -19,7 +19,9 @@ use crate::metadata::definition::{
 };
 use crate::metadata::schema::{compile_metadata_schema, CompiledMetadataSchema};
 use crate::metadata::selector::MetadataRevision;
-use crate::schema_validation::{validate_against_latest, LatestSchema};
+use crate::schema_validation::{
+    check_draft4_document, validate_against_latest, LatestSchema, ValidationError,
+};
 
 /// Validates `payload` against `schema` through the same draft-4
 /// compilation the admission path uses.
@@ -179,13 +181,38 @@ fn integer_bounds_compare_exactly_beyond_two_pow_53() {
 }
 
 #[test]
-fn integer_multiples_compare_exactly_beyond_two_pow_53() {
-    let schema = json!({"multipleOf": 9_007_199_254_740_993_i64});
+fn integer_multiples_compare_exactly_up_to_the_largest_safe_divisor() {
+    let schema = json!({"multipleOf": 9_007_199_254_740_991_i64});
     assert!(
-        accepts(&schema, &json!(18_014_398_509_481_986_i64)),
-        "2 * (2^53+1) is an exact multiple; f64 division would miss it"
+        accepts(&schema, &json!(18_014_398_509_481_982_i64)),
+        "2 * (2^53-1) is an exact multiple"
     );
-    assert!(!accepts(&schema, &json!(18_014_398_509_481_987_i64)));
+    assert!(!accepts(&schema, &json!(18_014_398_509_481_983_i64)));
+    assert!(!accepts(&schema, &json!(9_007_199_254_740_992_i64)));
+}
+
+#[test]
+fn integer_multiple_of_divisors_above_two_pow_53_minus_1_are_refused_at_authoring() {
+    let content = json!({"multipleOf": 9_007_199_254_740_993_i64}).to_string();
+    assert!(
+        matches!(
+            check_draft4_document(&content),
+            Err(ValidationError::SchemaUnusable(_))
+        ),
+        "the validator cannot decide divisibility exactly above 2^53-1, so \
+         authoring must refuse the divisor"
+    );
+    let stored = LatestSchema {
+        content,
+        version: 1,
+    };
+    assert!(
+        !matches!(
+            validate_against_latest(&stored, &json!(1)),
+            Err(ValidationError::SchemaUnusable(_))
+        ),
+        "a document stored before the gate keeps compiling at publish"
+    );
 }
 
 #[test]

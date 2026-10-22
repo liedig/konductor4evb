@@ -92,7 +92,7 @@ A caller holding a `publisher` binding on a producer domain SHALL be able to vie
 
 ### Requirement: Flat publisher schema creation API
 
-The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /schemas` as a flat verb endpoint for creating an event schema. The request SHALL accept `domain`, `eventName`, `schemaType`, and `content` in the request body. The target environment SHALL be inferred from the API Gateway stage (`$context.stage`). Both surfaces SHALL normalize their authenticated principal and require the DynamoDB-backed grant engine to allow the publisher action for that domain. Konductor SHALL derive the canonical schema name `{namespaceIdentity}@{eventName}` and the stage-selected environment's registry. Both route contracts SHALL reject a duplicate schema rather than replacing it. The `schemaType` SHALL be `JSONSchemaDraft4` and the `content` SHALL parse as a valid JSON Schema draft-4 document: admission-time payload validation requires an unambiguous draft-4 document, and `OpenApi3` content (whose payload shape selection is conventional and whose dialect differs from draft 4) SHALL be rejected with `400 Bad Request`.
+The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /schemas` as a flat verb endpoint for creating an event schema. The request SHALL accept `domain`, `eventName`, `schemaType`, and `content` in the request body. The target environment SHALL be inferred from the API Gateway stage (`$context.stage`). Both surfaces SHALL normalize their authenticated principal and require the DynamoDB-backed grant engine to allow the publisher action for that domain. Konductor SHALL derive the canonical schema name `{namespaceIdentity}@{eventName}` and the stage-selected environment's registry. Both route contracts SHALL reject a duplicate schema rather than replacing it. The `schemaType` SHALL be `JSONSchemaDraft4` and the `content` SHALL parse as a valid JSON Schema draft-4 document: admission-time payload validation requires an unambiguous draft-4 document, and `OpenApi3` content (whose payload shape selection is conventional and whose dialect differs from draft 4) SHALL be rejected with `400 Bad Request`. Content whose `multipleOf` divisors exceed 9007199254740991 (2^53 - 1), the largest the validator decides exactly, SHALL be rejected with `400 Bad Request`.
 
 #### Scenario: Authorized publisher creates a schema
 
@@ -111,6 +111,12 @@ The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /sche
 
 - **WHEN** a publisher requests schema creation with `content` that does not parse as a valid JSON Schema draft-4 document
 - **THEN** the API SHALL return `400 Bad Request` identifying the parse failure
+- **AND THEN** no schema SHALL be created
+
+#### Scenario: Inexact multipleOf divisor rejected at creation
+
+- **WHEN** a publisher requests schema creation with `content` containing a `multipleOf` divisor above 9007199254740991 (2^53 - 1) at any subschema position
+- **THEN** the API SHALL return `400 Bad Request` naming `multipleOf`, its JSON-pointer location, and the bound
 - **AND THEN** no schema SHALL be created
 
 #### Scenario: Caller lacks a binding for the target domain
@@ -133,7 +139,7 @@ The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /sche
 
 ### Requirement: Flat append-only schema version API
 
-The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /schemas/versions` as a flat verb endpoint for appending a schema version. The request SHALL accept `domain`, `eventName`, and `content` in the request body. The target environment SHALL be inferred from the API Gateway stage, and appends SHALL be accepted only on the authoring environment's stage (see Schema authoring is restricted to the authoring environment). Both surfaces SHALL normalize their authenticated principal and require the grant engine to allow the publisher action for that domain. Konductor SHALL derive the canonical schema name and SHALL use the AWS Schemas version-producing operation so existing versions remain immutable. The appended `content` SHALL parse as a valid JSON Schema draft-4 document, and SHALL be rejected with `400 Bad Request` otherwise.
+The separate OAuth and IAM control-plane surfaces SHALL each provide `POST /schemas/versions` as a flat verb endpoint for appending a schema version. The request SHALL accept `domain`, `eventName`, and `content` in the request body. The target environment SHALL be inferred from the API Gateway stage, and appends SHALL be accepted only on the authoring environment's stage (see Schema authoring is restricted to the authoring environment). Both surfaces SHALL normalize their authenticated principal and require the grant engine to allow the publisher action for that domain. Konductor SHALL derive the canonical schema name and SHALL use the AWS Schemas version-producing operation so existing versions remain immutable. The appended `content` SHALL parse as a valid JSON Schema draft-4 document with no `multipleOf` divisor above 9007199254740991 (2^53 - 1), and SHALL be rejected with `400 Bad Request` otherwise.
 
 Before writing, Konductor SHALL read the current latest version in the stage-selected registry as the comparison predecessor. An accepted candidate SHALL preserve every payload accepted by that predecessor under the application's supported Draft-4 validation semantics. Acceptance SHALL require a sound proof within the supported comparison rules and bounded comparison work; unsupported interactions, precision-sensitive comparisons without a sound rule, and exhausted proof budgets SHALL fail closed with `400 Bad Request` and no registry write. Compatibility SHALL be judged against the predecessor read for this append, never historical versions chosen by the caller. This pairwise check SHALL NOT be represented as serialization of concurrent appends or as protection against a competing write between predecessor lookup and registry update.
 
@@ -190,6 +196,12 @@ Rejections SHALL identify relevant paths and reasons using the existing validati
 
 - **WHEN** a publisher appends content that does not parse as a valid JSON Schema draft-4 document
 - **THEN** the API SHALL return `400 Bad Request` identifying the failure
+- **AND THEN** no new version SHALL be created
+
+#### Scenario: Inexact multipleOf divisor rejected at append
+
+- **WHEN** a publisher appends content containing a `multipleOf` divisor above 9007199254740991 (2^53 - 1) at any subschema position
+- **THEN** the API SHALL return `400 Bad Request` naming `multipleOf`, its JSON-pointer location, and the bound
 - **AND THEN** no new version SHALL be created
 
 #### Scenario: Version target does not exist

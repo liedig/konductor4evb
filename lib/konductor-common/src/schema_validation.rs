@@ -102,6 +102,10 @@ const DRAFT4_DECLARATIONS: [&str; 4] = [
 /// agree (or be absent): the registry only accepts `JSONSchemaDraft4`
 /// documents, so ambiguity is a defect, never a silent interpretation.
 fn compile_draft4(content: &str) -> Result<jsonschema::Validator, ValidationError> {
+    build_draft4(&parse_draft4(content)?)
+}
+
+fn parse_draft4(content: &str) -> Result<Value, ValidationError> {
     let schema: Value = serde_json::from_str(content)
         .map_err(|e| ValidationError::SchemaUnusable(format!("not parseable JSON: {e}")))?;
     if !schema.is_object() {
@@ -116,17 +120,98 @@ fn compile_draft4(content: &str) -> Result<jsonschema::Validator, ValidationErro
             )));
         }
     }
+    Ok(schema)
+}
+
+fn build_draft4(schema: &Value) -> Result<jsonschema::Validator, ValidationError> {
     jsonschema::options()
         .with_draft(jsonschema::Draft::Draft4)
-        .build(&schema)
+        .build(schema)
         .map_err(|e| ValidationError::SchemaUnusable(e.to_string()))
 }
 
+/// The largest `multipleOf` divisor the validator decides exactly
+/// (2^53 - 1). Above it, divisibility runs through `f64` and both accepts
+/// non-multiples and rejects true multiples.
+const MAX_EXACT_MULTIPLE_OF: u64 = 9_007_199_254_740_991;
+
+/// Keywords whose values are instances, not subschemas: a `multipleOf`
+/// inside them is data and never constrains validation.
+const INSTANCE_KEYWORDS: [&str; 2] = ["enum", "default"];
+
+/// Keywords whose values map names to subschemas: the names are data, so a
+/// property called `multipleOf` or `default` is still walked as a schema.
+const SCHEMA_MAP_KEYWORDS: [&str; 4] = [
+    "properties",
+    "patternProperties",
+    "definitions",
+    "dependencies",
+];
+
 /// Validates that `content` is a usable JSON Schema draft-4 document — the
 /// create/append-time gate, so nothing unvalidatable is ever stored in a
-/// registry.
+/// registry. Beyond compiling, the gate refuses `multipleOf` divisors above
+/// 2^53 - 1, which the validator cannot decide exactly. Publish-time
+/// compilation deliberately skips this check so documents stored before it
+/// existed keep validating instead of failing as unusable.
 pub fn check_draft4_document(content: &str) -> Result<(), ValidationError> {
-    compile_draft4(content).map(|_| ())
+    let schema = parse_draft4(content)?;
+    build_draft4(&schema)?;
+    reject_inexact_multiple_of(&schema, "#")
+}
+
+/// Walks every position that can hold a subschema, including unknown
+/// keywords (a `$ref` can target them), and rejects the first `multipleOf`
+/// divisor the validator cannot decide exactly.
+fn reject_inexact_multiple_of(schema: &Value, path: &str) -> Result<(), ValidationError> {
+    match schema {
+        Value::Object(keywords) => {
+            for (keyword, value) in keywords {
+                if INSTANCE_KEYWORDS.contains(&keyword.as_str()) {
+                    continue;
+                }
+                if keyword == "multipleOf" {
+                    if let Value::Number(divisor) = value {
+                        if exceeds_exact_multiple_of(divisor) {
+                            return Err(ValidationError::SchemaUnusable(format!(
+                                "multipleOf at '{path}' is {divisor}, above \
+                                 {MAX_EXACT_MULTIPLE_OF}, the largest divisor validated exactly"
+                            )));
+                        }
+                    }
+                    continue;
+                }
+                let child = format!("{path}/{}", escape_pointer_token(keyword));
+                match value {
+                    Value::Object(entries) if SCHEMA_MAP_KEYWORDS.contains(&keyword.as_str()) => {
+                        for (name, subschema) in entries {
+                            let entry = format!("{child}/{}", escape_pointer_token(name));
+                            reject_inexact_multiple_of(subschema, &entry)?;
+                        }
+                    }
+                    _ => reject_inexact_multiple_of(value, &child)?,
+                }
+            }
+            Ok(())
+        }
+        Value::Array(items) => items.iter().enumerate().try_for_each(|(index, item)| {
+            reject_inexact_multiple_of(item, &format!("{path}/{index}"))
+        }),
+        _ => Ok(()),
+    }
+}
+
+fn exceeds_exact_multiple_of(divisor: &serde_json::Number) -> bool {
+    match (divisor.as_u64(), divisor.as_i64(), divisor.as_f64()) {
+        (Some(unsigned), _, _) => unsigned > MAX_EXACT_MULTIPLE_OF,
+        (None, Some(_), _) => false,
+        (None, None, Some(float)) => float > MAX_EXACT_MULTIPLE_OF as f64,
+        (None, None, None) => true,
+    }
+}
+
+fn escape_pointer_token(token: &str) -> String {
+    token.replace('~', "~0").replace('/', "~1")
 }
 
 /// Compiles `latest.content` as JSON Schema draft-4 and validates `data`.
@@ -378,6 +463,81 @@ mod tests {
             r#"{"$schema": "https://json-schema.org/draft-04/schema", "type": "object"}"#
         )
         .is_ok());
+    }
+
+    #[test]
+    fn integer_multiple_of_divisors_above_the_exact_bound_are_rejected_wherever_they_appear() {
+        let cases = [
+            (r#"{"multipleOf": 9007199254740992}"#, "#"),
+            (
+                r#"{"properties": {"ledger": {"properties": {"units": {"multipleOf": 9007199254740993}}}}}"#,
+                "#/properties/ledger/properties/units",
+            ),
+            (
+                r#"{"properties": {"default": {"multipleOf": 1e20}}}"#,
+                "#/properties/default",
+            ),
+            (r#"{"items": {"multipleOf": 1e20}}"#, "#/items"),
+            (
+                r#"{"items": [{"type": "integer"}, {"multipleOf": 18446744073709551615}]}"#,
+                "#/items/1",
+            ),
+            (
+                r#"{"additionalItems": {"multipleOf": 1e20}}"#,
+                "#/additionalItems",
+            ),
+            (
+                r#"{"additionalProperties": {"multipleOf": 1e20}}"#,
+                "#/additionalProperties",
+            ),
+            (
+                r#"{"patternProperties": {"^a/b$": {"multipleOf": 1e20}}}"#,
+                "#/patternProperties/^a~1b$",
+            ),
+            (
+                r#"{"definitions": {"big": {"multipleOf": 1e20}}}"#,
+                "#/definitions/big",
+            ),
+            (
+                r#"{"dependencies": {"a": {"properties": {"b": {"multipleOf": 1e20}}}}}"#,
+                "#/dependencies/a/properties/b",
+            ),
+            (
+                r#"{"allOf": [{"not": {"multipleOf": 1e20}}]}"#,
+                "#/allOf/0/not",
+            ),
+            (r#"{"anyOf": [{}, {"multipleOf": 1e20}]}"#, "#/anyOf/1"),
+            (r#"{"oneOf": [{"multipleOf": 1e20}]}"#, "#/oneOf/0"),
+            (r#"{"x-vendor": {"multipleOf": 1e20}}"#, "#/x-vendor"),
+        ];
+        for (content, path) in cases {
+            let err = check_draft4_document(content).expect_err(content);
+            let ValidationError::SchemaUnusable(message) = &err else {
+                panic!("expected SchemaUnusable for {content}, got {err:?}");
+            };
+            assert!(
+                message.contains("multipleOf")
+                    && message.contains(&format!("'{path}'"))
+                    && message.contains("9007199254740991"),
+                "rejection must name the keyword, its location, and the bound for {content}: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_multiple_of_divisors_and_non_schema_values_are_not_rejected() {
+        let accepted = [
+            r#"{"multipleOf": 9007199254740991}"#,
+            r#"{"multipleOf": 0.5}"#,
+            r#"{"enum": [{"multipleOf": 1e20}], "default": {"multipleOf": 1e20}}"#,
+            r#"{"properties": {"multipleOf": {"type": "integer", "multipleOf": 3}}, "required": ["multipleOf"]}"#,
+        ];
+        for content in accepted {
+            assert!(
+                check_draft4_document(content).is_ok(),
+                "{content} must stay accepted"
+            );
+        }
     }
 
     #[test]
