@@ -52,7 +52,7 @@ Navigation SHALL reflect the caller's groups: platform roles see the admin area;
 
 ### Requirement: Domain request and owner management
 
-The console SHALL provide a domain-request form collecting domain name, owning team (picked from the caller's team groups; pre-selected when exactly one), owner account ID, owner email, at least one secondary owner email, optional description and an optional cost center. The form SHALL also offer one optional account-override field per platform-configured environment (read from the runtime configuration's environment list): an empty field means the owner account hosts that environment, and a filled field pins that environment to the given account. Client validation SHALL mirror the API contract (name pattern, 12-digit account, email formats, min one secondary owner, cost center non-empty when supplied and at most 256 characters, each account override either empty or a 12-digit account ID). The submitted request SHALL carry only the overridden environments as a sparse `environmentAccounts` map, omitting the field entirely when every environment uses the owner account. Owners SHALL be able to edit description, owner email, secondary owner emails, and cost center from the domain detail page; all other attributes SHALL render read-only, including the effective environment → account map when the API provides it. Console links to per-environment domain resources SHALL resolve against the environment's effective account rather than the owner account. Platform admins SHALL be able to disable and re-enable domains from the admin domain list.
+The console SHALL provide a domain-request form collecting domain name, owning team (picked from the caller's team groups; pre-selected when exactly one), owner email, at least one secondary owner email, optional description, an optional cost center, and one required account field per platform-configured environment (read from the runtime configuration's environment list). The form SHALL NOT ask for an owner account separately. Client validation SHALL mirror the API contract (name pattern, email formats, min one secondary owner, cost center non-empty when supplied and at most 256 characters, each environment account a 12-digit account ID) and SHALL gate submission through the form's inline errors, with native browser validation disabled so every contract violation renders inline. The submitted request SHALL carry the complete environment → account map as `environmentAccounts` and SHALL derive `ownerAccountId` from the authoring (first) environment's account, which the domain record's `by-owner` index and trust-stack advisory key on. Owners SHALL be able to edit description, owner email, secondary owner emails, and cost center from the domain detail page; all other attributes SHALL render read-only, including the effective environment → account map when the API provides it. Console links to per-environment domain resources SHALL resolve against the environment's effective account rather than the owner account. Platform admins SHALL be able to disable and re-enable domains from the admin domain list.
 
 #### Scenario: Request submits as an async command
 
@@ -60,17 +60,17 @@ The console SHALL provide a domain-request form collecting domain name, owning t
 - **THEN** the console SHALL POST the registration (including `owningTeam`) and show the accepted command with its request ID
 - **AND THEN** the new domain SHALL appear in the caller's list as pending
 
-#### Scenario: Override fields render per configured environment
+#### Scenario: Account fields render per configured environment
 
 - **WHEN** an owner opens the domain-request form on a platform configured with environments `dev`, `staging`, and `prod`
-- **THEN** the form SHALL show one optional account field per environment
-- **AND THEN** every field SHALL present empty as "use the owner account"
+- **THEN** the form SHALL show one required account field per environment
+- **AND THEN** the form SHALL NOT offer an owner-account field
 
-#### Scenario: Sparse overrides submit
+#### Scenario: Complete map submits with a derived owner account
 
-- **WHEN** an owner fills only the `prod` override with a 12-digit account ID and submits
-- **THEN** the request body SHALL carry `environmentAccounts: {"prod": "…"}` and no keys for untouched environments
-- **AND THEN** a request with every override empty SHALL omit `environmentAccounts` entirely
+- **WHEN** an owner fills every environment account and submits
+- **THEN** the request body SHALL carry `environmentAccounts` naming every configured environment's account
+- **AND THEN** `ownerAccountId` SHALL equal the authoring (first) environment's account
 
 #### Scenario: Malformed override is caught before submission
 
@@ -124,7 +124,7 @@ Platform admins SHALL review pending registrations from a dedicated inbox showin
 
 ### Requirement: Catalog discovery and subscription journeys
 
-The console SHALL offer the entitlement-scoped catalog with producer and environment filters, schema detail (per-environment latest versions, JSON content), and a subscribe action that confirms the consumer domain and reports activation progress by polling until the subscription settles (surfacing the failure reason when one is recorded). When the schema is present in only some environments, the subscribe journey SHALL state which environments will materialize now and which will follow automatically on promotion. "My subscriptions" SHALL list inbound subscriptions with pause/resume/unsubscribe, SHALL render per-environment state including awaiting-promotion and per-environment failure with its recorded detail, and SHALL allow pausing or resuming environments that have not materialized yet; the domain detail page SHALL show outbound subscriptions (who consumes this domain's schemas). Producers SHALL see their own domain's schemas on the domain page without needing an entitlement.
+The console SHALL offer the entitlement-scoped catalog with producer and environment filters, schema detail (per-environment latest versions, JSON content), and a subscribe action that confirms the consumer domain and reports activation progress by polling until the subscription settles (surfacing the failure reason when one is recorded). When the schema is present in only some environments, the subscribe journey SHALL state which environments will materialize now and which will follow automatically on promotion. "My subscriptions" SHALL list inbound subscriptions with pause/resume/unsubscribe, SHALL render per-environment state including awaiting-promotion and per-environment failure with its recorded detail, and SHALL allow pausing or resuming environments that have not materialized yet; the domain detail page SHALL show outbound subscriptions (who consumes this domain's schemas) as a summary — at most the five most recently created subscriptions, newest first — and SHALL link to a dedicated subscriptions view listing every outbound subscription with the same columns. Producers SHALL see their own domain's schemas on the domain page without needing an entitlement.
 
 #### Scenario: Subscribe confirms and tracks activation
 
@@ -162,9 +162,20 @@ The console SHALL offer the entitlement-scoped catalog with producer and environ
 - **THEN** the console SHALL call the state endpoint and reflect the paused desired state
 - **AND THEN** when promotion later materializes the environment, it SHALL materialize disabled
 
+#### Scenario: Outbound subscriptions panel summarizes
+
+- **WHEN** the domain has more than five outbound subscriptions
+- **THEN** the domain page's panel SHALL show the five most recently created, newest first, and link to the dedicated subscriptions view
+- **AND THEN** the dedicated view SHALL list every outbound subscription, ordered newest first
+
+#### Scenario: Outbound subscriptions fit without a link
+
+- **WHEN** the domain has five or fewer outbound subscriptions
+- **THEN** the panel SHALL show all of them and offer no view-all link
+
 ### Requirement: Schema authoring journeys
 
-The producer's domain page schemas panel SHALL offer a "Register schema" action to callers with a `publisher` binding on that domain. The form SHALL accept an event name and JSON Schema draft-4 content; `schemaType` SHALL be fixed to `JSONSchemaDraft4` and SHALL NOT be selectable. Authoring SHALL always target the authoring environment, which is the first entry of the runtime configuration's environment list. The form SHALL display that environment and SHALL NOT offer an environment selector. Each listed schema SHALL offer an "append version" action with the same content editor. Each listed schema SHALL also show compact per-environment version badges in configured order and SHALL link to its producer schema page. Content SHALL be validated as parseable JSON client-side before submission. Success SHALL report the schema name and resulting version and SHALL refresh the panel's per-environment version badges. Failure responses SHALL be surfaced inline — `409 Conflict` for a duplicate schema, `403 Forbidden` for missing authorization, `400 Bad Request` with the server's validation detail — and SHALL NOT clear the form's entered content. Callers without a `publisher` binding SHALL see no authoring affordances.
+The producer's domain page schemas panel SHALL offer a "Register schema" action to callers with a `publisher` binding on that domain. The form SHALL accept an event name and JSON Schema draft-4 content; `schemaType` SHALL be fixed to `JSONSchemaDraft4` and SHALL NOT be selectable. Authoring SHALL always target the authoring environment, which is the first entry of the runtime configuration's environment list. The form SHALL display that environment and SHALL NOT offer an environment selector. Each listed schema SHALL offer an "append version" action with the same content editor. Each listed schema SHALL also show compact per-environment version badges in configured order, its modification date when the catalog reports one, and SHALL link to its producer schema page. The panel SHALL summarize: it SHALL list at most the five most recently modified schemas — newest `lastModifiedAt` first, schemas without one after them, then by canonical name — and, when the loaded page holds more than five schemas or the catalog reports further pages, SHALL link to the domain's dedicated schemas view. The dedicated view SHALL list every loaded schema in catalog order with the same badges, modification dates, and detail-page links, and SHALL load successive catalog pages on demand. Content SHALL be validated as parseable JSON client-side before submission. Success SHALL report the schema name and resulting version and SHALL refresh the panel's per-environment version badges. Failure responses SHALL be surfaced inline — `409 Conflict` for a duplicate schema, `403 Forbidden` for missing authorization, `400 Bad Request` with the server's validation detail — and SHALL NOT clear the form's entered content. Callers without a `publisher` binding SHALL see no authoring affordances.
 
 #### Scenario: Publisher registers a schema
 
@@ -177,6 +188,18 @@ The producer's domain page schemas panel SHALL offer a "Register schema" action 
 - **WHEN** a publisher submits new content via a schema's append-version action
 - **THEN** the console SHALL append the version in the authoring environment and display the new version number
 - **AND THEN** the panel's version badge for the authoring environment SHALL update
+
+#### Scenario: Panel caps at the five most recently modified
+
+- **WHEN** the domain's catalog page returns more than five schemas
+- **THEN** the panel SHALL show the five with the newest `lastModifiedAt`, newest first
+- **AND THEN** the panel SHALL link to the domain's dedicated schemas view, and the omitted schemas SHALL remain reachable there
+
+#### Scenario: Dedicated view lists every schema
+
+- **WHEN** a viewer opens the domain's dedicated schemas view and the catalog pages its results
+- **THEN** the view SHALL list the first page and offer continuation until every page is loaded
+- **AND THEN** each row SHALL link to the producer schema page
 
 #### Scenario: Malformed JSON caught before submission
 
@@ -213,9 +236,10 @@ The producer's domain page schemas panel SHALL offer a "Register schema" action 
 - **WHEN** a caller without a `publisher` binding on the domain views the domain page
 - **THEN** the register and append-version actions SHALL NOT be rendered
 - **AND THEN** the read-only schema list behavior SHALL remain unchanged
+
 ### Requirement: Access grants on the producer domain page
 
-The producer's domain page SHALL include an access panel listing the domain's entitlements (consumer domain, scope pattern, created metadata) and allowing a publisher (or platform admin) to grant or revoke access. The grant form SHALL select the consumer domain from the names-only directory picker (no free text) and the covered schemas via a schema picker with an explicit wildcard option. Revocation SHALL require confirmation and SHALL explain that active subscriptions will be disabled asynchronously.
+The producer's domain page SHALL include an access panel listing the domain's entitlements (consumer domain, scope pattern, created metadata) and allowing a publisher (or platform admin) to grant or revoke access. The panel SHALL summarize: at most the five most recently granted entitlements, newest first, and, when more exist, a link to a dedicated grants view. The dedicated view SHALL list every entitlement with the same columns and SHALL keep the full management surface — granting and revoking SHALL work there identically. The grant form SHALL select the consumer domain from the names-only directory picker (no free text) and the covered schemas via a schema picker with an explicit wildcard option. Revocation SHALL require confirmation and SHALL explain that active subscriptions will be disabled asynchronously.
 
 #### Scenario: Grant access via picker
 
@@ -228,6 +252,17 @@ The producer's domain page SHALL include an access panel listing the domain's en
 - **WHEN** a publisher revokes an entitlement
 - **THEN** the console SHALL require confirmation stating that covered active subscriptions will be disabled
 - **AND THEN** the entitlement SHALL disappear from the panel on success
+
+#### Scenario: Access grants panel summarizes
+
+- **WHEN** the domain has more than five entitlements
+- **THEN** the domain page's panel SHALL show the five most recently granted, newest first, with revoke available on the shown rows
+- **AND THEN** the panel SHALL link to the dedicated grants view, and every entitlement SHALL remain manageable there
+
+#### Scenario: Access grants fit without a link
+
+- **WHEN** the domain has five or fewer entitlements
+- **THEN** the panel SHALL show all of them and offer no view-all link
 
 ### Requirement: Documented visual design system
 
@@ -603,7 +638,7 @@ On the producer schema page, every pipeline node whose environment holds the sch
 
 ### Requirement: System events navigation and topic reference
 
-The console SHALL provide a top-level System events navigation item with a dedicated icon. Its page SHALL list the caller's visible domains with each recorded system-events topic ARN as a read-only, copyable reference with inline copy confirmation, and SHALL link to the subscription setup guide. No event feed, topic administration, subscription management, or replay controls.
+The console SHALL provide a top-level System events navigation item rendered as its dedicated bell icon alone, with no visible text label; its accessible name SHALL still identify it as System events, and it SHALL carry the unread indicator. Its page SHALL list the caller's visible domains with each recorded system-events topic ARN as a read-only, copyable reference with inline copy confirmation, and SHALL link to the subscription setup guide. No event feed, topic administration, subscription management, or replay controls.
 
 #### Scenario: Unread indicator signals new activity
 - **WHEN** any visible domain's `systemEventsLastEventAt` is newer than the timestamp stored from the user's last System events visit

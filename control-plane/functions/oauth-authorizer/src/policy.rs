@@ -53,12 +53,15 @@ pub struct AuthorizerOutput {
 }
 
 /// Builds the authorizer result for `principal` on the route identified by
-/// `method_arn`. The policy resource wildcards the stage segment: the
-/// gateway caches this result under (token, httpMethod, resourcePath) —
-/// no stage — so a stage-exact policy would deny the same route on every
-/// other stage for the TTL. The route gate is stage-agnostic, so spanning
-/// stages changes no authorization semantics. `context_usage` never carries
-/// the raw token.
+/// `method_arn`. The policy resource wildcards the stage and resource
+/// segments: the gateway caches this result under (token, httpMethod,
+/// resourcePath), where `resourcePath` is the route template
+/// (`/domains/{name}`) — no stage and no literal path — so an exact-scoped
+/// policy would be replayed for sibling stages and paths on the same route
+/// for the TTL and deny them. The route gate is method-level, so spanning
+/// stages and resources changes no authorization semantics; the method stays
+/// exact so an auditor's read-only denial cannot widen to mutations.
+/// `context_usage` never carries the raw token.
 pub fn build_output(
     principal: &TrustedPrincipal,
     method_arn: &str,
@@ -69,7 +72,7 @@ pub fn build_output(
         "Statement": [{
             "Action": "execute-api:Invoke",
             "Effect": effect.as_str(),
-            "Resource": stage_wildcarded(method_arn),
+            "Resource": route_scoped_arn(method_arn),
         }],
     });
 
@@ -99,12 +102,16 @@ pub fn build_output(
     }
 }
 
-/// `arn:...:execute-api:...:{api}/{stage}/{METHOD}/{resource}` with the stage
-/// replaced by `*`. Malformed ARNs pass through unchanged.
-fn stage_wildcarded(method_arn: &str) -> String {
+/// `arn:...:execute-api:...:{api}/{stage}/{METHOD}/{resource}` with the
+/// stage and resource replaced by `*`, the method kept exact. Malformed ARNs
+/// pass through unchanged.
+fn route_scoped_arn(method_arn: &str) -> String {
     match method_arn.split_once('/') {
         Some((api, rest)) => match rest.split_once('/') {
-            Some((_, route)) => format!("{api}/*/{route}"),
+            Some((_, route)) => match route.split_once('/') {
+                Some((method, _)) => format!("{api}/*/{method}/*"),
+                None => format!("{api}/*/{route}"),
+            },
             None => method_arn.to_string(),
         },
         None => method_arn.to_string(),
@@ -170,10 +177,13 @@ mod tests {
     }
 
     #[test]
-    fn policy_spans_every_stage_of_the_invoked_route() {
-        // The gateway cache key is (token, httpMethod, resourcePath) — no
-        // stage — so the cached policy must cover the route on all stages,
-        // or switching environments replays a foreign stage's policy.
+    fn policy_spans_every_stage_and_resource_of_the_invoked_route() {
+        // The gateway cache key is (token, httpMethod, resourcePath), and
+        // `resourcePath` is the route template (`/domains/{name}`), not the
+        // literal path. A path-exact policy would be replayed for sibling
+        // paths on the same route for the TTL and deny them with a confusing
+        // IAM-style 403; the stage and resource must both be wildcarded. The
+        // method stays exact — it anchors the auditor's read-only gate.
         let out = build_output(
             &principal(vec![GlobalRole::PlatformAdmin]),
             "arn:aws:execute-api:r:acct:api/dev/POST/domains/registrations/decide",
@@ -181,7 +191,7 @@ mod tests {
         );
         assert_eq!(
             out.policy_document["Statement"][0]["Resource"],
-            "arn:aws:execute-api:r:acct:api/*/POST/domains/registrations/decide"
+            "arn:aws:execute-api:r:acct:api/*/POST/*"
         );
         assert_eq!(out.policy_document["Statement"][0]["Effect"], "Allow");
     }

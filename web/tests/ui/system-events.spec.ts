@@ -83,12 +83,16 @@ test.beforeEach(async ({ page }) => {
   await installApi(page)
 })
 
-test('top-level nav carries System events with its own icon', async ({ page }) => {
+test('top-level nav carries System events as an icon-only link', async ({ page }) => {
   await page.goto('/')
 
   const link = navLink(page)
   await expect(link).toBeVisible()
   await expect(link.locator('svg')).toHaveCount(1)
+  // Icon-only: no visible text label; the accessible name carries the
+  // destination for screen readers and the role-name lookup above.
+  await expect(link).not.toContainText('System events')
+  await expect(link).not.toContainText('Domains')
 })
 
 test('unread dot appears when a delivered event is newer than the last visit', async ({ page }) => {

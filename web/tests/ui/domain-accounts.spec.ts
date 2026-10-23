@@ -5,11 +5,11 @@ import { installApi, signIn } from './api'
 
 /**
  * Per-environment account overrides across the three console surfaces:
- *   Request form  — one optional account field per configured environment
+ *   Request form  — one required account field per configured environment
  *     (dev/staging/prod come from the config.json interception in
  *     fixtures.ts, not from a deployed stack),
- *     12-digit validation, sparse payload (only overridden environments
- *     are sent; empty fields are omitted).
+ *     12-digit validation, complete payload (every environment is pinned;
+ *     the owner account is derived from the authoring environment).
  *   Approval card — the pending-registration inbox shows the resolved
  *     env → account map so approvers see where resources would land.
  *   Domain detail — the Overview card renders the effective map, and
@@ -69,19 +69,20 @@ async function routeJson(page: Page, glob: string, body: unknown) {
   })
 }
 
-test('request form renders one account override per configured environment', async ({ page }) => {
+test('request form renders one required account field per configured environment', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await signIn(page, ['team-orders'], 'owner@example.com')
   await installApi(page)
   await page.goto('/domains/new')
 
-  await expect(page.getByText('Per-environment accounts (optional)')).toBeVisible()
+  await expect(page.getByText('Per-environment accounts')).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'dev account ID' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'staging account ID' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'prod account ID' })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Owner AWS account ID' })).toHaveCount(0)
 })
 
-test('request form validates overrides and submits only the sparse map', async ({ page }) => {
+test('request form requires every environment account and submits the complete map', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
   await signIn(page, ['team-orders'], 'owner@example.com')
   await installApi(page)
@@ -99,14 +100,19 @@ test('request form validates overrides and submits only the sparse map', async (
 
   await page.goto('/domains/new')
   await page.getByRole('textbox', { name: 'Domain name' }).fill('orders')
-  await page.getByRole('textbox', { name: 'Owner AWS account ID' }).fill(OWNER_ACCOUNT)
   await page.getByRole('textbox', { name: 'Owner email *', exact: true }).fill('owner@example.com')
   await page.getByRole('textbox', { name: 'Secondary owner emails' }).fill('second@example.com')
+  await page.getByRole('textbox', { name: 'dev account ID' }).fill(OWNER_ACCOUNT)
+  await page.getByRole('textbox', { name: 'staging account ID' }).fill(OWNER_ACCOUNT)
 
   const prodField = page.getByRole('textbox', { name: 'prod account ID' })
+  await page.getByRole('button', { name: 'Submit request' }).click()
+  await expect(page.getByText('A 12-digit AWS account ID.', { exact: true })).toHaveCount(1)
+  expect(captured).toBeNull()
+
   await prodField.fill('123')
   await page.getByRole('button', { name: 'Submit request' }).click()
-  await expect(page.getByText('A 12-digit AWS account ID, or leave empty to use the owner account.')).toBeVisible()
+  await expect(page.getByText('A 12-digit AWS account ID.', { exact: true })).toHaveCount(1)
   expect(captured).toBeNull()
 
   await prodField.fill(OVERRIDE_ACCOUNT)
@@ -114,7 +120,12 @@ test('request form validates overrides and submits only the sparse map', async (
   await expect(page.getByText('Registration request accepted', { exact: true })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Request received' })).toBeVisible()
   expect(captured).not.toBeNull()
-  expect(captured!['environmentAccounts']).toEqual({ prod: OVERRIDE_ACCOUNT })
+  expect(captured!['environmentAccounts']).toEqual({
+    dev: OWNER_ACCOUNT,
+    staging: OWNER_ACCOUNT,
+    prod: OVERRIDE_ACCOUNT,
+  })
+  expect(captured!['ownerAccountId']).toBe(OWNER_ACCOUNT)
 })
 
 test('approval card shows the resolved account per environment', async ({ page }) => {

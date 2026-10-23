@@ -44,6 +44,9 @@ pub struct CatalogEntry {
     pub schema_name: String,
     pub latest_versions: BTreeMap<String, i64>,
     pub metadata_revisions: BTreeMap<String, u32>,
+    /// The newest version-creation date across the schema's environments,
+    /// epoch seconds; `None` when no environment's describe reported a date.
+    pub last_modified: Option<i64>,
 }
 
 /// A filled page plus the watermark the next page continues from.
@@ -200,10 +203,15 @@ async fn assemble_entries(
             .unwrap_or_default();
         let mut latest_versions = BTreeMap::new();
         let mut metadata_revisions = BTreeMap::new();
+        let mut last_modified: Option<i64> = None;
         for env_name in &environments {
             let registry = format!("{organization}-{env_name}-{producer}-schema-registry");
-            if let Some(version) = discovery::latest_version(schemas, &registry, name).await? {
-                latest_versions.insert(env_name.clone(), version);
+            if let Some(described) = discovery::latest_version(schemas, &registry, name).await? {
+                latest_versions.insert(env_name.clone(), described.version);
+                last_modified = match (last_modified, described.created_at_epoch) {
+                    (Some(seen), Some(current)) => Some(seen.max(current)),
+                    (seen, current) => seen.or(current),
+                };
             }
             let revision = match metadata_by_environment.get(env_name) {
                 Some(cached) => *cached,
@@ -222,6 +230,7 @@ async fn assemble_entries(
             schema_name: name.clone(),
             latest_versions,
             metadata_revisions,
+            last_modified,
         });
     }
     Ok(entries)

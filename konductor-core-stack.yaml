@@ -2311,16 +2311,19 @@ Resources:
       Timeout: 60
       Environment:
         Variables:
-          SYSTEM_SCHEMA_REGISTRY: !Ref SystemSchemaRegistry
+          # Not !Ref SystemSchemaRegistry: that Ref is the registry ARN, and
+          # the bootstrap (and its IAM resources below) need the name. The
+          # name is deterministic, matching RegistryName below.
+          SYSTEM_SCHEMA_REGISTRY: !Sub "${Organization}-konductor-system-schemas"
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action: [schemas:DescribeSchema]
-              Resource: !Sub "arn:${AWS::Partition}:schemas:${AWS::Region}:${AWS::AccountId}:schema/${SystemSchemaRegistry}/*"
+              Resource: !Sub "arn:${AWS::Partition}:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-konductor-system-schemas/*"
             - Effect: Allow
               Action: [schemas:CreateSchema, schemas:UpdateSchema]
-              Resource: !Sub "arn:${AWS::Partition}:schemas:${AWS::Region}:${AWS::AccountId}:schema/${SystemSchemaRegistry}/*"
+              Resource: !Sub "arn:${AWS::Partition}:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-konductor-system-schemas/*"
 
   SystemSchemaBootstrap:
     Type: AWS::CloudFormation::CustomResource
@@ -2363,6 +2366,12 @@ Resources:
                 - dynamodb:ListStreams
               Resource: !GetAtt EventStreamsTable.StreamArn
             - Effect: Allow
+              # Bucket-level read: Lambda requires s3:ListBucket on the
+              # on-failure destination bucket when it creates the event
+              # source mapping, or the whole stack create fails.
+              Action: [s3:ListBucket]
+              Resource: !GetAtt SystemEventProjectorFailureBucket.Arn
+            - Effect: Allow
               Action: [s3:PutObject]
               Resource: !Sub "${SystemEventProjectorFailureBucket.Arn}/*"
 
@@ -2389,7 +2398,11 @@ Resources:
   SystemEventProjectorFailureBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${Organization}-konductor-system-event-failures-${AWS::AccountId}-${AWS::Region}"
+      # No ${Organization} prefix: the configuration contract allows 43-char
+      # orgs, and any org-prefixed pattern with account + region appended
+      # would exceed S3's 63-character name limit. Account + region keep the
+      # name globally unique without the org.
+      BucketName: !Sub "konductor-system-event-failures-${AWS::AccountId}-${AWS::Region}"
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -2744,6 +2757,9 @@ Resources:
 
   PromoteSchemaWorkflow:
     Type: AWS::Serverless::StateMachine
+    # The role's permissions live in a separate policy; without this ordering
+    # the state machine can be created first and Step Functions rejects it.
+    DependsOn: PromoteSchemaWorkflowPolicy
     Properties:
       Type: STANDARD
       Name: !Sub "konductor-promote-schema"
@@ -2791,6 +2807,7 @@ Resources:
 
   RepinSchemaEnvWorkflow:
     Type: AWS::Serverless::StateMachine
+    DependsOn: RepinSchemaEnvWorkflowPolicy
     Properties:
       Type: STANDARD
       Name: !Sub "konductor-repin-schema-env"
@@ -3861,6 +3878,9 @@ Resources:
 
   ApprovalWorkflow:
     Type: AWS::Serverless::StateMachine
+    DependsOn:
+      - ApprovalWorkflowPolicy
+      - ApprovalWorkflowNotificationPolicy
     Properties:
       Type: STANDARD
       Name: !Sub "konductor-domain-approval"
@@ -3966,6 +3986,7 @@ Resources:
               - ssm:PutParameter
               - ssm:GetParameter
               - ssm:AddTagsToResource
+              - ssm:DeleteParameter
             Resource:
               - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/namespace/*"
           - Effect: Allow
@@ -3997,6 +4018,7 @@ Resources:
 
   ProvisionEnvWorkflow:
     Type: AWS::Serverless::StateMachine
+    DependsOn: ProvisioningWorkflowPolicy
     Properties:
       Type: STANDARD
       Name: !Sub "konductor-provision-env"
@@ -4011,6 +4033,7 @@ Resources:
 
   DeprovisionEnvWorkflow:
     Type: AWS::Serverless::StateMachine
+    DependsOn: ProvisioningWorkflowPolicy
     Properties:
       Type: STANDARD
       Name: !Sub "konductor-deprovision-env"
@@ -4099,6 +4122,7 @@ Resources:
       SourceArn: !GetAtt DomainOwnerEmailChangeRule.Arn
   ProvisionDomainWorkflow:
     Type: AWS::Serverless::StateMachine
+    DependsOn: ProvisioningWorkflowPolicy
     Properties:
       Type: STANDARD
       Name: !Sub "konductor-provision-domain"
@@ -4222,6 +4246,7 @@ Resources:
 
   RetagDomainWorkflow:
     Type: AWS::Serverless::StateMachine
+    DependsOn: RetagWorkflowPolicy
     Properties:
       Type: STANDARD
       Name: !Sub "konductor-retag-domain"
@@ -4311,6 +4336,7 @@ Resources:
 
   ActivateSubscriptionWorkflow:
     Type: AWS::Serverless::StateMachine
+    DependsOn: SubscriptionWorkflowPolicy
     Properties:
       Type: STANDARD
       Name: !Sub "konductor-activate-subscription"
@@ -4325,6 +4351,7 @@ Resources:
 
   RemoveSubscriptionWorkflow:
     Type: AWS::Serverless::StateMachine
+    DependsOn: SubscriptionWorkflowPolicy
     Properties:
       Type: STANDARD
       Name: !Sub "konductor-remove-subscription"

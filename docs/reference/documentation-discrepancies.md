@@ -93,9 +93,17 @@ is presented as usable, while the SRP section says raw-password authentication
 is disabled. The “direct login, no redirect” section describes token return but
 shows a code redirect and exchange.
 
-Review the Cognito client configuration and supported login flows. User setup
-also states a 12-character minimum but includes a shorter temporary-password
-example. These examples were moved unchanged, not tested against a live pool.
+Live confirmation on 2026-10-22 (fresh ap-southeast-2 install): the user-pool
+client enables only `ALLOW_USER_SRP_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH`, so
+Option B's `ADMIN_USER_PASSWORD_AUTH` call is rejected by the client, and
+Option C's `redirect_uri=http://localhost` fails unless the operator's
+`oauth_callback_urls` includes it (the committed example lists only
+`http://localhost:3000/callback`). With no browser, the only working token
+path for the smoke test is an SRP client (for example `pycognito`) or the
+hosted-UI form. User setup also states a 12-character minimum but includes a
+shorter temporary-password example. Review the guide against the deployed
+client configuration; either enable `ADMIN_USER_PASSWORD_AUTH` for operator
+CLI use or replace Option B with a documented SRP helper.
 
 ## D07
 
@@ -306,3 +314,154 @@ whether to split the files by role (most separate cleanly; the
 publish-events admission handler needs boundary design), keep the guideline,
 or change the limit, and align AGENTS.md with the reviewer thresholds.
 
+## D23
+
+**Uninstall inventory drifts from the deployed core stack.** A full teardown
+and reinstall on 2026-10-22 (ap-southeast-2, org `acme`) found the
+[uninstall procedure](../operations/uninstall.md) out of step with the
+deployed template in four ways:
+
+- The only `DeletionPolicy: Retain` resource in the deployed core stack is
+  the Cognito user pool (`${Organization}-konductor-users`). The uninstall
+  procedure never mentions it. The pool orphans on stack delete, a reinstall
+  creates a *new* pool (Cognito pool names are not unique, so nothing
+  collides — the old pool is simply stranded with its users), and no
+  adoption path exists for reattaching an existing pool to a new stack.
+  Operators who want identity continuity across a reinstall have none.
+- The procedure says the `konductor-domains` table is "retained by
+  `DeletionPolicy`" and must be deleted manually. The deployed template
+  declares `DeletionPolicy: Delete` on all seven DynamoDB tables; the table
+  went with the stack, and the manual step is stale.
+- The procedure omits emptying the web console bucket
+  (`{org}-konductor-web-{account}-{region}`). CloudFormation cannot delete a
+  non-empty S3 bucket, so a stack delete with the published build in place
+  hangs indefinitely. `make deploy-web` publishes that build, and nothing in
+  the teardown path removes it.
+- The procedure omits the optional `konductor-guardrails` stack (three
+  organization SCPs) from its removal sequence, even though the
+  [installation path](../operations/installation.md#phase-3-onboard-a-domain-account)
+  links to its deployment.
+
+Review the uninstall inventory against the deployed template and either
+correct the procedure or change the template's retention policies; also
+review whether Cognito pool adoption (an optional existing-pool setting in
+the platform configuration) is wanted as a supported reinstall path.
+
+## D24
+
+**Domain deprovision cannot remove schemas or subscription rules.** During
+the same teardown, `make teardown-domain` failed for every domain that had
+used its registry or subscriptions. The `deprovision-env` workflow:
+
+- cannot delete a schema registry that still holds schemas (EventBridge
+  Schema Registry returns 409 "registry you tried to delete is not empty"),
+  and
+- cannot delete a platform event bus that still carries materialized
+  subscription rules (EventBridge returns 400 "EventBus can't be deleted
+  since it has rules").
+
+The script reports these as "resources left behind", leaves the domain
+record in place, and re-runs are idempotent, so recovery is possible — but it
+required deleting six schemas and four rules (targets first, then rules) by
+hand across dev/staging before the three domains would tear down. Domains
+whose registries were empty (prod) tore down cleanly. Review whether
+deprovision-env should enumerate and delete registry schemas and bus rules
+before the registry/bus steps (making `make teardown-domain` self-sufficient
+for domains that used their schemas or subscriptions), or whether the
+script should instruct the manual purge. Either resolution also needs an
+update to the [uninstall procedure](../operations/uninstall.md), whose only
+domain step assumes `make teardown-domain` suffices.
+
+## D25
+
+**Fixed-name resources cannot hold the contract's largest organizations.**
+The [configuration contract](configuration.md) allows `organization` up to
+43 characters, and `make validate-config` accepts any syntactically valid
+value, but several `${Organization}`-prefixed resource names in the core
+template exceed their service limits long before 43 characters. A clean
+core-stack create on 2026-10-22 (ap-southeast-2) rolled back on the
+system-event projector failure bucket, whose name rendered to 64 against
+S3's 63-character limit; that bucket was renamed without the prefix in the
+same fix. The remaining patterns, against their service name limits:
+
+- `KonductorWebBucket` (`${Organization}-konductor-web-{account}-{region}`):
+  in ap-southeast-2 the fixed portion is 42 characters, so the name breaks
+  for organizations over 21 characters (in us-east-1, over 27).
+- The system-events archive (`{org}-konductor-system-events-archive`):
+  against a 64-character EventBridge archive-name limit, breaks for
+  organizations over 26 characters.
+- The system schemas registry (`${Organization}-konductor-system-schemas`):
+  against a 64-character registry-name limit, breaks for organizations over
+  39 characters.
+- The Cognito hosted-UI domain (`${Organization}-konductor-{account}`):
+  against a 63-character domain limit, breaks for organizations over 40
+  characters.
+
+The preflight does not check name-fit consequences, so a large-organization
+install passes `make validate-config` and fails mid-create with a full
+rollback. Review whether to shrink the contract's organization bound, make
+the preflight reject organizations whose names do not fit, or shorten the
+patterns; renaming any already-deployed resource is destructive and out of
+scope here.
+
+## D26
+
+**Retained resources break create-retry after a rollback.** Two core-stack
+resources carry `DeletionPolicy: Retain` — the Cognito user pool, and the
+system-events schemas registry (retained, per the template comment, because
+CloudFormation cannot delete a registry that holds schemas). Retention also
+applies when a failed `CREATE` rolls back: the resources survive the
+rollback, and re-running `make deploy-core` does not start clean.
+
+On 2026-10-22, a first create failed late (see [D25](#d25)) and its
+rollback retained the schemas registry; the retry then failed on the
+registry with 409 "already exists", and each failed attempt also left an
+orphaned user pool behind (Cognito pool names are not unique, so the retry
+creates a *new* pool with the same name while the old one strands).
+Recovery required deleting the retained registry and both orphan pools by
+hand before the third attempt. Review whether the registry should adopt an
+existing instance instead of failing (CloudFormation resource import, or a
+bootstrap that manages it outside the stack), whether the installation
+troubleshooting page should document rollback-retry cleanup, and whether a
+failed-create cleanup should purge retained resources automatically.
+
+**Update, 2026-10-22: rollback also orphans Lambda log groups, and
+CloudFormation's early validation turns them into hard create failures.**
+After the third failed create (bootstrap IAM bug, fixed test-first), the
+fourth `deploy-core` never got past changeset creation:
+`AWS::EarlyValidation::ResourceExistenceCheck` failed it on a name conflict
+with `/aws/lambda/konductor-system-schema-bootstrap`, a log group the
+template itself creates with `DeletionPolicy: Delete`. The rollback had
+already removed the stack-owned group, but the custom resource's own
+rollback/delete invocation re-triggered logging after that deletion, and
+CloudWatch recreated the group outside the stack. The new pre-deployment
+validation (November 2025 CloudFormation feature, on by default) then
+blocked every subsequent create changeset — the changeset fails in seconds
+with only the generic hook name; the per-resource detail requires the
+`describe-events` API call with the change-set ARN, which neither SAM CLI
+nor the current troubleshooting docs surface. Deleting the orphan log group
+restored a clean create. Review whether teardown/troubleshooting should
+sweep `/aws/lambda/konductor-*` log groups after any rollback (the uninstall
+sequence does not), and whether `deploy-core` should preflight fixed-name
+conflicts so the early-validation failure names the resource at the point
+of deploy rather than after a 15-minute build.
+
+
+## D27
+
+**The domain registration field table omits `owningTeam`, which is
+required for OAuth callers.** `docs/guides/domains.md` documents the
+register request fields as `domainName`, `ownerAccountId`,
+`environmentAccounts`, `ownerEmail`, `secondaryOwnerEmails`,
+`description`, and `tags` — with no mention of `owningTeam`. The
+handler (`domain-management/functions/domain-registrations/src/register.rs`,
+`authorize_registration`) denies every OAuth registration that does not
+name an `owningTeam` matching one of the caller's Cognito team groups:
+the request is accepted by the API, fails inside the command handler with
+a `RegisterDomainFailed` outcome, and no domain record appears. On
+2026-10-22, seeding three team-owned domains exactly as the guide's field
+table prescribes produced three silent authorization denials; the
+registrations only succeeded once `owningTeam` was added. The guide
+should either add the field to the table (required for OAuth callers,
+optional for IAM callers, where omitting it means approval creates no
+owner binding) or split the OAuth and IAM request examples.

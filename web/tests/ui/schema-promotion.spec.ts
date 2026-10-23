@@ -78,13 +78,121 @@ test('domain page badges follow the configured order and link to the producer sc
   await expect(badges.nth(1)).toHaveText('staging v3', { exact: true })
   await expect(badges.nth(2)).toHaveText('prod v3', { exact: true })
 
-  // No inline authoring for existing schemas; registration only when empty.
+  // Registration is offered from the panel regardless of list state; per-schema
+  // version management lives on each producer schema page.
   await expect(page.getByRole('button', { name: 'New version' })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: 'Register schema' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Register schema' })).toBeVisible()
 
   await row.getByRole('link', { name: 'acme-orders@OrderNotification' }).click()
   await expect(page).toHaveURL(/\/domains\/orders\/schemas\/acme-orders/)
   await expect(card(page, 'Promotion pipeline')).toBeVisible()
+})
+
+test('registering another schema from the panel opens the wide authoring modal', async ({ page }) => {
+  await installApi(page)
+  await page.goto('/domains/orders')
+
+  await page.getByRole('button', { name: 'Register schema' }).click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByRole('heading', { name: 'Register schema' })).toBeVisible()
+  await expect(dialog.getByLabel('Event name')).toBeVisible()
+  await expect(dialog.getByText('Target environment: dev')).toBeVisible()
+
+  // The authoring modal is the wide variant (max-w-2xl, not the max-w-lg default).
+  await expect(dialog).toHaveClass(/nx-dialog--lg/)
+
+  await dialog.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dialog).toHaveCount(0)
+})
+
+/** One producer schema per name, modified on consecutive October days:
+ * Alpha on the 24th … each later name one day later. */
+function schemasFixture(names: string[]) {
+  return names.map((name, index) => ({
+    schemaName: `acme-orders@${name}`,
+    producerDomain: 'orders',
+    source: 'acme-orders',
+    detailType: name,
+    latestVersions: { dev: 1 },
+    metadataRevisions: {},
+    lastModifiedAt: `2026-10-${String(24 + index).padStart(2, '0')}T09:00:00+00:00`,
+  }))
+}
+
+function fulfillJson(route: import('@playwright/test').Route, body: unknown) {
+  return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+}
+
+test('the domain panel caps at the five most recently modified schemas and links to the full view', async ({ page }) => {
+  await installApi(page)
+  await page.route('**/api/dev/schemas**', route =>
+    fulfillJson(route, { items: schemasFixture(['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf']) }))
+  await page.goto('/domains/orders')
+
+  const panel = card(page, 'Schemas')
+  const rows = panel.getByRole('listitem')
+  await expect(rows).toHaveCount(5)
+  // Newest modification first: Golf (10-30) down to Charlie (10-26).
+  await expect(panel.getByRole('link', { name: 'acme-orders@Golf' })).toBeVisible()
+  await expect(panel.getByRole('link', { name: 'acme-orders@Charlie' })).toBeVisible()
+  await expect(panel.getByRole('link', { name: 'acme-orders@Bravo' })).toHaveCount(0)
+  await expect(panel.getByRole('link', { name: 'acme-orders@Alpha' })).toHaveCount(0)
+  await expect(rows.first().getByText('Modified 2026-10-30', { exact: true })).toBeVisible()
+
+  const viewAll = panel.getByRole('link', { name: 'View all schemas' })
+  await expect(viewAll).toBeVisible()
+  await expect(viewAll).toHaveAttribute('href', '/domains/orders/schemas')
+})
+
+test('the domain panel shows every schema when five or fewer exist', async ({ page }) => {
+  await installApi(page)
+  await page.route('**/api/dev/schemas**', route =>
+    fulfillJson(route, { items: schemasFixture(['Alpha', 'Bravo', 'Charlie']) }))
+  await page.goto('/domains/orders')
+
+  const panel = card(page, 'Schemas')
+  await expect(panel.getByRole('listitem')).toHaveCount(3)
+  await expect(panel.getByRole('link', { name: 'View all schemas' })).toHaveCount(0)
+})
+
+test('the domain panel ignores an explicit null continuation token', async ({ page }) => {
+  await installApi(page)
+  // The deployed catalog returns `"nextToken": null` on its last page; the
+  // panel must not treat that as "more pages exist".
+  await page.route('**/api/dev/schemas**', route =>
+    fulfillJson(route, { items: schemasFixture(['Alpha', 'Bravo']), nextToken: null }))
+  await page.goto('/domains/orders')
+
+  const panel = card(page, 'Schemas')
+  await expect(panel.getByRole('listitem')).toHaveCount(2)
+  await expect(panel.getByRole('link', { name: 'View all schemas' })).toHaveCount(0)
+})
+
+test('the dedicated schemas page lists every schema across pages', async ({ page }) => {
+  await installApi(page)
+  const all = schemasFixture(['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf'])
+  await page.route('**/api/dev/schemas**', (route) => {
+    const token = new URL(route.request().url()).searchParams.get('nextToken')
+    return token
+      ? fulfillJson(route, { items: all.slice(3) })
+      : fulfillJson(route, { items: all.slice(0, 3), nextToken: 'page-2' })
+  })
+  await page.goto('/domains/orders/schemas')
+
+  await expect(page.getByRole('heading', { name: 'Schemas', exact: true })).toBeVisible()
+  await expect(page.getByRole('listitem')).toHaveCount(3)
+  await expect(page.getByRole('link', { name: 'acme-orders@Delta' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: 'Load more' }).click()
+  await expect(page.getByRole('listitem')).toHaveCount(7)
+  await expect(page.getByRole('link', { name: 'acme-orders@Golf' })).toBeVisible()
+  await expect(page.getByRole('listitem').last().getByText('Modified 2026-10-30', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Load more' })).toHaveCount(0)
+
+  await page.getByRole('link', { name: 'acme-orders@Golf' }).click()
+  await expect(page).toHaveURL(/\/domains\/orders\/schemas\/acme-orders%40Golf/)
 })
 
 test('version history lists the environments each version has reached', async ({ page }) => {

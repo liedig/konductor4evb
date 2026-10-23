@@ -16,17 +16,17 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const form = reactive({
   domainName: '',
   owningTeam: '',
-  ownerAccountId: '',
   ownerEmail: '',
   secondaryOwnerEmails: [''],
   description: '',
   costCenter: '',
 })
-// One override field per platform-configured environment; empty means the
-// owner account hosts that environment.
-const accountOverrides = reactive<Record<string, string>>({})
+// One required account field per platform-configured environment; the
+// user pins every environment explicitly instead of a default owner
+// account plus sparse overrides.
+const environmentAccounts = reactive<Record<string, string>>({})
 for (const environment of config.environments) {
-  accountOverrides[environment] = ''
+  environmentAccounts[environment] = ''
 }
 const fieldErrors = reactive<Record<string, string>>({})
 const busy = ref(false)
@@ -48,7 +48,6 @@ function validate(): boolean {
     ? ''
     : 'Lowercase letters, digits, and hyphens; must start and end with a letter or digit (max 64 chars).'
   fieldErrors.owningTeam = form.owningTeam ? '' : 'Choose the team that will own the domain.'
-  fieldErrors.ownerAccountId = ACCOUNT_PATTERN.test(form.ownerAccountId) ? '' : 'A 12-digit AWS account ID.'
   fieldErrors.ownerEmail = EMAIL_PATTERN.test(form.ownerEmail) ? '' : 'A valid email address.'
   const secondaries = form.secondaryOwnerEmails.map(e => e.trim()).filter(Boolean)
   fieldErrors.secondaryOwnerEmails = secondaries.length === 0
@@ -56,19 +55,27 @@ function validate(): boolean {
     : secondaries.every(e => EMAIL_PATTERN.test(e)) ? '' : 'Every secondary owner email must be valid.'
   fieldErrors.costCenter = validateCostCenter()
   for (const environment of config.environments) {
-    const value = (accountOverrides[environment] ?? '').trim()
-    fieldErrors[`override-${environment}`] = value === '' || ACCOUNT_PATTERN.test(value)
+    const value = (environmentAccounts[environment] ?? '').trim()
+    fieldErrors[`account-${environment}`] = ACCOUNT_PATTERN.test(value)
       ? ''
-      : 'A 12-digit AWS account ID, or leave empty to use the owner account.'
+      : 'A 12-digit AWS account ID.'
   }
   return Object.values(fieldErrors).every(e => e === '')
 }
 
-function overridePayload(): Record<string, string> | undefined {
-  const entries = config.environments
-    .map(environment => [environment, (accountOverrides[environment] ?? '').trim()] as const)
-    .filter(([, account]) => account !== '')
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined
+// The register API still requires a single owner account (the domain
+// record's `by-owner` index and the trust-stack advisory key on it); the
+// form derives it from the authoring environment's account, so teams
+// never see or choose it.
+function ownerAccountPayload(): string {
+  const authoring = config.environments[0]
+  return authoring ? environmentAccounts[authoring]!.trim() : ''
+}
+
+function environmentAccountsPayload(): Record<string, string> {
+  return Object.fromEntries(config.environments.map(environment =>
+    [environment, environmentAccounts[environment]!.trim()],
+  ))
 }
 
 const MAX_COST_CENTER = 256
@@ -88,12 +95,12 @@ async function submit() {
     accepted.value = await domainsApi.register({
       domainName: form.domainName,
       owningTeam: form.owningTeam,
-      ownerAccountId: form.ownerAccountId,
+      ownerAccountId: ownerAccountPayload(),
       ownerEmail: form.ownerEmail,
       secondaryOwnerEmails: form.secondaryOwnerEmails.map(e => e.trim()).filter(Boolean),
       description: form.description || undefined,
       costCenter: form.costCenter.trim() || undefined,
-      environmentAccounts: overridePayload(),
+      environmentAccounts: environmentAccountsPayload(),
     })
     toast.success('Registration request accepted')
   } catch (error) {
@@ -130,7 +137,10 @@ async function submit() {
     </NxCard>
 
     <NxCard v-else>
-      <form class="flex flex-col gap-4" @submit.prevent="submit">
+      <!-- novalidate: every field's contract is checked by the app's inline
+           errors below (native bubbles would bypass them for required
+           fields). -->
+      <form class="flex flex-col gap-4" novalidate @submit.prevent="submit">
         <NxInput
           v-model="form.domainName"
           label="Domain name"
@@ -146,13 +156,6 @@ async function submit() {
           placeholder="Choose one of your teams"
           hint="Approval creates an owner binding for this team."
           :error="fieldErrors.owningTeam"
-          required
-        />
-        <NxInput
-          v-model="form.ownerAccountId"
-          label="Owner AWS account ID"
-          placeholder="111122223333"
-          :error="fieldErrors.ownerAccountId"
           required
         />
         <NxInput
@@ -199,19 +202,20 @@ async function submit() {
           v-if="config.environments.length > 0"
           class="flex flex-col gap-3 rounded-lg border border-border p-4"
         >
-          <legend class="px-1 text-sm font-medium text-muted">Per-environment accounts (optional)</legend>
+          <legend class="px-1 text-sm font-medium text-muted">Per-environment accounts</legend>
           <p class="text-xs text-faint">
-            Provisioning places every environment in the owner account unless you pin one here.
-            Overrides are fixed once the domain is registered, and each account needs the
-            trust-stack deployed before approval.
+            Provisioning places each environment in the account you name here. Accounts are
+            fixed once the domain is registered, and each account needs the trust-stack
+            deployed before approval.
           </p>
           <NxInput
             v-for="environment in config.environments"
             :key="environment"
-            v-model="accountOverrides[environment]"
+            v-model="environmentAccounts[environment]"
             :label="`${environment} account ID`"
-            placeholder="Default: owner account"
-            :error="fieldErrors[`override-${environment}`]"
+            placeholder="111122223333"
+            :error="fieldErrors[`account-${environment}`]"
+            required
           />
         </fieldset>
         <div class="mt-2 flex justify-end gap-2">

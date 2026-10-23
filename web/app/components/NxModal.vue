@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'reka-ui'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   open: boolean
   title: string
-}>()
+  size?: 'md' | 'lg'
+}>(), {
+  size: 'md',
+})
 
 const emit = defineEmits<{ close: [] }>()
 
@@ -22,6 +25,7 @@ const { restoreFocus, focusContent } = useDialogFocus(() => props.open)
            close twice per click. -->
       <DialogContent
         class="nx-dialog"
+        :class="size === 'lg' && 'nx-dialog--lg'"
         aria-modal="true"
         :aria-describedby="undefined"
         @open-auto-focus="focusContent"

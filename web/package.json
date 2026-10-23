@@ -5,7 +5,7 @@
   "packageManager": "pnpm@11.20.0",
   "scripts": {
     "dev": "nuxi dev --port 3000",
-    "build": "nuxi generate && node scripts/externalize-inline-scripts.mjs",
+    "build": "nuxi generate && node scripts/fix-spa-output.mjs",
     "lint": "eslint .",
     "test:ui": "playwright test",
     "typecheck": "nuxi typecheck",

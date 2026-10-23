@@ -156,7 +156,7 @@ async function runPreview() {
 </script>
 
 <template>
-  <NxModal :open="open" :title="title" @close="emit('close')">
+  <NxModal :open="open" :title="title" size="lg" @close="emit('close')">
     <div class="flex flex-col gap-4">
       <p class="text-sm text-muted">
         Target environment: <span class="font-mono text-xs">{{ targetEnvironment }}</span>

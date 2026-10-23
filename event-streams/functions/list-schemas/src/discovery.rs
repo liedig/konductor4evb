@@ -36,12 +36,19 @@ pub async fn active_domain(
 }
 
 /// The latest version of a schema in one registry — DescribeSchema without a
-/// version returns the latest.
+/// version returns the latest, including when that version was created.
+pub struct DescribedLatest {
+    pub version: i64,
+    /// Epoch seconds of the latest version's creation, when the registry
+    /// reports one.
+    pub created_at_epoch: Option<i64>,
+}
+
 pub async fn latest_version(
     schemas: &aws_sdk_schemas::Client,
     registry: &str,
     schema_name: &str,
-) -> Result<Option<i64>> {
+) -> Result<Option<DescribedLatest>> {
     match schemas
         .describe_schema()
         .registry_name(registry)
@@ -51,7 +58,11 @@ pub async fn latest_version(
     {
         Ok(output) => Ok(output
             .schema_version
-            .and_then(|version| version.parse().ok())),
+            .and_then(|version| version.parse().ok())
+            .map(|version| DescribedLatest {
+                version,
+                created_at_epoch: output.version_created_date.map(|date| date.secs()),
+            })),
         Err(e) => {
             let service_err = e.into_service_error();
             if service_err.is_not_found_exception() {

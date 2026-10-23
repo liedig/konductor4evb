@@ -92,23 +92,38 @@ fn arn_parts(topic_arn: &str) -> anyhow::Result<(&str, &str)> {
     }
 }
 
-/// Subscribe-only policy: the topic owner keeps full access; the deduplicated
-/// registered accounts may subscribe SQS queues or Lambda functions whose
-/// endpoints live in those same accounts, or email endpoints. Email addresses
-/// are not ARNs, so sns:Endpoint cannot constrain them — a registered account
-/// may subscribe any address (accepted trade-off; payloads are low-sensitivity
-/// version facts). HTTPS/SMS and every other protocol stay denied.
+/// Subscribe-only policy: the topic owner keeps its management actions
+/// (listed explicitly — SNS rejects wildcard actions on topic policies);
+/// the deduplicated registered accounts may subscribe SQS queues or Lambda
+/// functions whose endpoints live in those same accounts, or email
+/// endpoints. Email addresses are not ARNs, so sns:Endpoint cannot
+/// constrain them — a registered account may subscribe any address
+/// (accepted trade-off; payloads are low-sensitivity version facts).
+/// HTTPS/SMS and every other protocol stay denied. Publishing stays
+/// IAM-governed for the platform's own functions; sns:Unsubscribe is
+/// subscription-scoped and rejected by SNS here, so the topic manager
+/// unsubscribes through its IAM grant.
 pub fn subscribe_policy(topic_arn: &str, accounts: &BTreeSet<String>) -> anyhow::Result<Value> {
     let (partition, owner) = arn_parts(topic_arn)?;
     let principals: Vec<String> = accounts
         .iter()
         .map(|account| format!("arn:{partition}:iam::{account}:root"))
         .collect();
+    let owner_actions = [
+        "sns:Subscribe",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:ListSubscriptionsByTopic",
+        "sns:DeleteTopic",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListTagsForResource",
+    ];
     let mut statements = vec![json!({
         "Sid": "AllowTopicOwner",
         "Effect": "Allow",
         "Principal": { "AWS": format!("arn:{partition}:iam::{owner}:root") },
-        "Action": "sns:*",
+        "Action": owner_actions,
         "Resource": topic_arn,
     })];
     if !accounts.is_empty() {
@@ -367,6 +382,47 @@ mod tests {
                 "policy must not mention {denied}"
             );
         }
+    }
+
+    #[test]
+    fn owner_statement_names_explicit_topic_scoped_actions() {
+        let accounts: BTreeSet<String> = ["111122223333".to_string()].into_iter().collect();
+        let policy = subscribe_policy(ARN, &accounts).unwrap();
+        let rendered = policy.to_string();
+
+        // SNS validates topic policies on SetTopicAttributes and rejects
+        // wildcard and non-topic-scoped actions ("Invalid parameter: Policy
+        // statement action out of service scope"), so the owner grant must
+        // name its actions. sns:Unsubscribe is subscription-scoped and stays
+        // out: the topic manager unsubscribes through its IAM grant.
+        assert!(
+            !rendered.contains("sns:*"),
+            "wildcard actions are rejected when the policy is applied"
+        );
+        let owner = &policy["Statement"][0];
+        assert_eq!(owner["Sid"], "AllowTopicOwner");
+        let actions: Vec<&str> = owner["Action"]
+            .as_array()
+            .expect("owner grant lists explicit actions")
+            .iter()
+            .map(|action| action.as_str().expect("action string"))
+            .collect();
+        for action in [
+            "sns:Subscribe",
+            "sns:GetTopicAttributes",
+            "sns:SetTopicAttributes",
+            "sns:ListSubscriptionsByTopic",
+            "sns:DeleteTopic",
+            "sns:TagResource",
+            "sns:UntagResource",
+            "sns:ListTagsForResource",
+        ] {
+            assert!(actions.contains(&action), "owner grant must keep {action}");
+        }
+        assert!(
+            !actions.contains(&"sns:Unsubscribe"),
+            "sns:Unsubscribe is subscription-scoped; SNS rejects it on a topic policy"
+        );
     }
 
     #[test]

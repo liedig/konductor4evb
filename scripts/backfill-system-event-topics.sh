@@ -96,6 +96,7 @@ for item in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
   invoke_out=$(mktemp)
   if ! invoke_result=$(aws lambda invoke \
       --function-name "${TOPIC_MANAGER}" \
+      --cli-binary-format raw-in-base64-out \
       --payload "${payload}" \
       --region "${AWS_REGION}" \
       "${invoke_out}" 2>&1); then

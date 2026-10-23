@@ -127,6 +127,10 @@ Write user interface (UI) tests with role or label locators (`getByRole`, `getBy
 
 Toast text appears twice in the document object model (DOM): the visible toast and an `aria-hidden` announcement copy from Reka. Assert toast messages with `{ exact: true }`.
 
+## Web unit tests (node:test)
+
+Pure web logic that does not need a browser runs under Node's built-in runner (`pnpm test:unit` from `web/`, files in `tests/unit/`). This is where the post-build SPA fix (`scripts/fix-spa-output.mjs`) is verified: the suite asserts Nuxt's `#entry` import map is removed (browsers ignore `src` on import maps and the strict CSP blocks the inline form), the `__NUXT__` shim is still externalized, unexpected map shapes fail the build, and `#entry` specifiers in chunks are rewritten to relative imports. The Playwright suite boots `nuxi dev` and cannot see these build-output defects; the unit suite plus the build's own loud failures are what guard the deployed page.
+
 For manual review, `make web-dev` keeps its AWS-backed configuration and API proxy, then opens `/design-system` in the default browser when Nuxt starts. It uses Nuxt's actual port (normally 3000). Plain `pnpm dev` does not automatically open a browser. Gallery demos make no service writes, but other pages connect to the live backend.
 
 The browser-opener helper has separate dependency-free tests: run `node --test tests/dev/open-gallery.test.mjs` from `web/`. These stub the browser launch and verify platform commands, the actual port, opt-in behavior, and graceful failure without opening a real browser.

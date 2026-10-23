@@ -8,9 +8,9 @@ How event schemas are discovered and managed: read-only discovery across each do
 
 ### Requirement: Schema discovery
 
-The control plane SHALL provide read-only schema discovery as an entitlement-filtered consumer catalog. `GET /schemas?consumerDomain={consumerDomain}` SHALL list exactly the schemas covered by the consumer domain's current entitlements, expanded across environments from the per-environment registries (source of truth), deduplicating overlapping pattern coverage, and reporting the latest version per environment. Producer-domain and environment filters MAY narrow the expansion, and pagination SHALL use an opaque continuation token carrying cursors only, never authorization state. `GET /schemas/{schemaName}?consumerDomain={consumerDomain}&domain={producerDomain}` SHALL return schema detail including per-environment latest versions and the latest content under the same coverage check. Both routes SHALL require the caller to hold a `subscriber` binding on the queried consumer domain. `platform-admin` and `platform-auditor` callers MAY omit `consumerDomain` and receive the platform-wide catalog unfiltered by entitlements. No separate schema or catalog table SHALL be introduced.
+The control plane SHALL provide read-only schema discovery as an entitlement-filtered consumer catalog. `GET /schemas?consumerDomain={consumerDomain}` SHALL list exactly the schemas covered by the consumer domain's current entitlements, expanded across environments from the per-environment registries (source of truth), deduplicating overlapping pattern coverage, and reporting the latest version per environment. Each listed item SHALL also report `lastModifiedAt` — the newest version-creation time reported by any of the schema's environment registries — and SHALL omit the field when no registry reports a date. Producer-domain and environment filters MAY narrow the expansion, and pagination SHALL use an opaque continuation token carrying cursors only, never authorization state. `GET /schemas/{schemaName}?consumerDomain={consumerDomain}&domain={producerDomain}` SHALL return schema detail including per-environment latest versions and the latest content under the same coverage check. Both routes SHALL require the caller to hold a `subscriber` binding on the queried consumer domain. `platform-admin` and `platform-auditor` callers SHALL bypass the entitlement filter on every catalog request — with or without a `consumerDomain` parameter — and receive the platform-wide catalog unfiltered by entitlements; the `consumerDomain` parameter SHALL continue to scope the consumer view for non-platform callers. No separate schema or catalog table SHALL be introduced.
 
-A caller holding a `publisher` binding on a producer domain SHALL be able to view that domain's own catalog without any consumer entitlement: `GET /schemas?domain={producerDomain}` (no `consumerDomain`) SHALL return the producer domain's schemas with the latest version per environment, and `GET /schemas/{schemaName}?domain={producerDomain}` SHALL return detail, under the same registry-backed expansion. The producer scope SHALL NOT expose other domains' schemas and SHALL NOT require or consult entitlements.
+A caller holding a `publisher` binding on a producer domain SHALL be able to view that domain's own catalog without any consumer entitlement: `GET /schemas?domain={producerDomain}` (no `consumerDomain`) SHALL return the producer domain's schemas with the latest version per environment and the same `lastModifiedAt` reporting, and `GET /schemas/{schemaName}?domain={producerDomain}` SHALL return detail, under the same registry-backed expansion. The producer scope SHALL NOT expose other domains' schemas and SHALL NOT require or consult entitlements.
 
 #### Scenario: Catalog expands current entitlements
 
@@ -71,6 +71,12 @@ A caller holding a `publisher` binding on a producer domain SHALL be able to vie
 - **WHEN** a caller pages through the catalog with a continuation token
 - **THEN** entries SHALL be ordered by producer domain and schema name
 - **AND THEN** no schema SHALL appear twice within the page sequence
+
+#### Scenario: Items report the latest modification across environments
+
+- **WHEN** a catalog item's latest version was created in one environment and later re-created in another environment
+- **THEN** the item's `lastModifiedAt` SHALL be the newest of those version-creation times
+- **AND THEN** an item whose registries report no creation date SHALL omit `lastModifiedAt`
 
 #### Scenario: Revoked coverage never appears in later pages
 
@@ -278,7 +284,7 @@ Publisher authorization SHALL permit only schema creation and version appending 
 - **THEN** the IAM surface SHALL authorize the same schema operations and enforce the same domain constraints as the OAuth surface
 ### Requirement: Schema discovery is read-only
 
-The schema-management capability SHALL provide schema creation, append-only version registration, and promotion only through the publisher-authorized operations defined by `add-publisher-apis` and `promote-schema-versions`. It SHALL NOT provide publisher operations for schema replacement, retirement, version deletion, schema deletion, registry lifecycle, or registry policy administration. Discovery SHALL be filtered by the caller-visible consumer domain's current entitlements; the interim baseline in which any authenticated platform caller could discover any active domain's schemas SHALL NOT remain available.
+The schema-management capability SHALL provide schema creation, append-only version registration, and promotion only through the publisher-authorized operations defined by `add-publisher-apis` and `promote-schema-versions`. It SHALL NOT provide publisher operations for schema replacement, retirement, version deletion, schema deletion, registry lifecycle, or registry policy administration. Discovery SHALL be filtered by the caller-visible consumer domain's current entitlements for non-platform callers; the interim baseline in which any authenticated caller could discover any active domain's schemas SHALL NOT remain available.
 
 #### Scenario: Only append-only write operations exposed
 

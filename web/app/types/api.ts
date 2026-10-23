@@ -140,6 +140,8 @@ export interface SchemaSummary {
   latestVersions?: Record<string, number>
   /** Active metadata revision per environment, where the pointer was readable. */
   metadataRevisions?: Record<string, number>
+  /** Newest version-creation time across the schema's environments, RFC3339; absent when no registry reported a date. */
+  lastModifiedAt?: string
 }
 
 export interface SchemaDetail extends SchemaSummary {

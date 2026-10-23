@@ -58,7 +58,7 @@ All primitives are in `web/app/components/`. Nuxt imports them automatically, in
 | Status pill | `NxStatusPill.vue` | Maps lifecycle status strings, including `ACTIVE`, `PENDING_APPROVAL`, and the promotion phases (`VALIDATING`, `REPLAYING`, `REPINNING`, `COMPLETED`, `FAILED`, `CANCELLED`), to tones. Reuse this mapping. |
 | Card | `NxCard.vue` | Optional `title` + `#actions` header slot |
 | Table | `NxTable.vue` | `columns` + `items`; per-column `cell-<key>` slots, `#empty` slot |
-| Modal | `NxModal.vue` | Reka Dialog, controlled `open`/`close`, Escape/backdrop close, `#actions` footer slot |
+| Modal | `NxModal.vue` | Reka Dialog, controlled `open`/`close`, `size` (`md` default, `lg` wide — used by the schema authoring form), Escape/backdrop close, `#actions` footer slot |
 | Confirm | `NxConfirm.vue` | Reka AlertDialog, controlled `open`/`busy`/`confirm`/`cancel`; `danger` styling |
 | Toast | `NxToasts.vue` + `NxToastItem.vue` + `composables/useToast.ts` | `useToast().success/error/info(message)`; one provider and viewport in `app.vue` |
 | Empty state | `NxEmptyState.vue` | `title`, `body`, optional `#icon` and `#actions` |

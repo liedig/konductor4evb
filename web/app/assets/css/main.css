@@ -25,6 +25,10 @@ h1, h2, h3 {
   max-height: calc(100dvh - 2rem);
 }
 
+.nx-dialog--lg {
+  @apply max-w-2xl;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

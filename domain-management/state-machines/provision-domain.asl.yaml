@@ -472,12 +472,37 @@ States:
         topicArn: "{% 'arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:' & '${Organization}' & '-' & $states.input.detail.domainName & '-system-events' %}"
         domainName: "{% $states.input.detail.domainName %}"
     Output: "{% $states.input %}"
+    Next: DeleteNamespaceParameterDomainLevel
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: DeleteNamespaceParameterDomainLevel
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': $states.input.failure.failedStep, 'errorCode': $states.input.failure.errorCode, 'errorMessage': $states.input.failure.errorMessage, 'compensationErrors': ['System topic cleanup failed: ' & ($states.errorOutput.Cause ? $states.errorOutput.Cause : $states.errorOutput.Error)], 'succeededResults': [] } }]) %}"
+
+  # The namespace parameter is created before the topic and must not survive a
+  # failed provision: the registration collision check blocks re-registration
+  # while it exists. SSM deletes a missing parameter as a no-op, so failures
+  # from before the create step stay on this path too.
+  DeleteNamespaceParameterDomainLevel:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ssm:deleteParameter"
+    Retry:
+      - ErrorEquals:
+          - Ssm.InternalServerError
+          - Ssm.SsmException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Arguments:
+      Name: "{% '/namespace/' & $states.input.detail.domainName %}"
+    Output: "{% $states.input %}"
     Next: EmitProvisioningFailedDomainLevel
     Catch:
       - ErrorEquals:
           - States.ALL
         Next: EmitProvisioningFailedDomainLevel
-        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': $states.input.failure.failedStep, 'errorCode': $states.input.failure.errorCode, 'errorMessage': $states.input.failure.errorMessage, 'compensationErrors': ['System topic cleanup failed: ' & ($states.errorOutput.Cause ? $states.errorOutput.Cause : $states.errorOutput.Error)], 'succeededResults': [] } }]) %}"
+        Output: "{% $merge([$states.input, { 'failure': { 'failedEnvironment': null, 'failedStep': $states.input.failure.failedStep, 'errorCode': $states.input.failure.errorCode, 'errorMessage': $states.input.failure.errorMessage, 'compensationErrors': ['Namespace parameter cleanup failed: ' & ($states.errorOutput.Cause ? $states.errorOutput.Cause : $states.errorOutput.Error)], 'succeededResults': [] } }]) %}"
 
   DeleteSystemTopicAfterRollback:
     Type: Task
@@ -499,19 +524,42 @@ States:
         topicArn: "{% 'arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:' & '${Organization}' & '-' & $states.input.detail.domainName & '-system-events' %}"
         domainName: "{% $states.input.detail.domainName %}"
     Output: "{% $states.input %}"
-    Next: EmitProvisioningFailedAfterRollback
+    Next: DeleteNamespaceParameterAfterRollback
     Catch:
       - ErrorEquals:
           - States.ALL
         Next: NoteSystemTopicCleanupFailure
         Output: "{% $merge([$states.input, { 'topicCleanupError': $states.errorOutput.Cause ? $states.errorOutput.Cause : $states.errorOutput.Error }]) %}"
 
+  # Same compensation as the domain-level path: a rolled-back domain leaves
+  # nothing behind for the collision check to trip over.
+  DeleteNamespaceParameterAfterRollback:
+    Type: Task
+    Resource: "arn:aws:states:::aws-sdk:ssm:deleteParameter"
+    Retry:
+      - ErrorEquals:
+          - Ssm.InternalServerError
+          - Ssm.SsmException
+        IntervalSeconds: 1
+        MaxAttempts: 3
+        BackoffRate: 2.0
+        JitterStrategy: FULL
+    Arguments:
+      Name: "{% '/namespace/' & $states.input.detail.domainName %}"
+    Output: "{% $states.input %}"
+    Next: EmitProvisioningFailedAfterRollback
+    Catch:
+      - ErrorEquals:
+          - States.ALL
+        Next: EmitProvisioningFailedAfterRollback
+        Output: "{% $merge([$states.input, { 'rollbackResults': $append($rollbackResults, { 'compensationErrors': ['Namespace parameter cleanup failed: ' & ($states.errorOutput.Cause ? $states.errorOutput.Cause : $states.errorOutput.Error)] }) }]) %}"
+
   NoteSystemTopicCleanupFailure:
     Type: Pass
     Assign:
       rollbackResults: "{% $append($rollbackResults, { 'compensationErrors': ['System topic cleanup failed: ' & $states.input.topicCleanupError] }) %}"
     Output: "{% $states.input %}"
-    Next: EmitProvisioningFailedAfterRollback
+    Next: DeleteNamespaceParameterAfterRollback
   EmitProvisioningFailedDomainLevel:
     Type: Task
     Resource: "arn:aws:states:::events:putEvents"

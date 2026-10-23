@@ -94,6 +94,7 @@ async function logout() {
             :to="item.to"
             class="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted transition-colors hover:text-foreground"
             :class="{ 'bg-surface-raised text-foreground': isActive(item.to) }"
+            :aria-label="item.icon ? item.label : undefined"
           >
             <span v-if="item.icon" class="relative">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-4 w-4" aria-hidden="true">
@@ -107,7 +108,9 @@ async function logout() {
                 role="status"
               />
             </span>
-            {{ item.label }}
+            <!-- Icon items render no visible label; their aria-label above
+                 keeps the accessible name. -->
+            <span v-if="!item.icon">{{ item.label }}</span>
           </NuxtLink>
 
         </nav>

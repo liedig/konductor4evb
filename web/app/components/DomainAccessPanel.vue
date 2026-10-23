@@ -1,27 +1,41 @@
 <script setup lang="ts">
 import type { TableColumn } from '~/components/NxTable.vue'
-import { ApiError } from '~/composables/useApi'
-import type { DirectoryEntry, Entitlement, SchemaSummary } from '~/types/api'
+import type { Entitlement } from '~/types/api'
 
-const props = defineProps<{ domain: string }>()
+const props = withDefaults(defineProps<{ domain: string, variant?: 'summary' | 'page' }>(), { variant: 'summary' })
 
-const api = useApi()
-const domainsApi = useDomains()
-const catalog = useCatalog()
-const toast = useToast()
+const {
+  entitlements,
+  forbidden,
+  loadFailed,
+  pending,
+  load,
+  grantOpen,
+  grantBusy,
+  directoryEntries,
+  scopeOptions,
+  grantForm,
+  openGrant,
+  submitGrant,
+  revokeTarget,
+  revokeBusy,
+  confirmRevoke,
+} = useAccessGrants(() => props.domain)
 
-const entitlements = ref<Entitlement[]>([])
-const forbidden = ref(false)
-const pending = ref(true)
+const SUMMARY_LIMIT = 5
 
-const grantOpen = ref(false)
-const grantBusy = ref(false)
-const directoryEntries = ref<DirectoryEntry[]>([])
-const producerSchemas = ref<SchemaSummary[]>([])
-const grantForm = reactive({ consumerDomain: '', scopePattern: '' })
+// Most recently granted first, so a producer sees the newest access on
+// top; undated rows keep their API order behind dated ones.
+const ordered = computed(() =>
+  [...entitlements.value].sort((a, b) =>
+    (b.createdAt ?? '').localeCompare(a.createdAt ?? '')
+    || (a.consumerDomain ?? '').localeCompare(b.consumerDomain ?? '')
+    || (a.scopePattern ?? '').localeCompare(b.scopePattern ?? '')))
 
-const revokeTarget = ref<Entitlement | null>(null)
-const revokeBusy = ref(false)
+const shown = computed(() =>
+  props.variant === 'summary' ? ordered.value.slice(0, SUMMARY_LIMIT) : ordered.value)
+
+const hasMore = computed(() => props.variant === 'summary' && entitlements.value.length > SUMMARY_LIMIT)
 
 const columns: TableColumn[] = [
   { key: 'consumerDomain', label: 'Consumer domain' },
@@ -30,82 +44,18 @@ const columns: TableColumn[] = [
   { key: 'actions', label: '' },
 ]
 
-async function load() {
-  pending.value = true
-  try {
-    const response = await api.get<{ entitlements?: Entitlement[] }>('/entitlements', { producerDomain: props.domain })
-    entitlements.value = response.entitlements ?? []
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 403) {
-      forbidden.value = true
-    } else {
-      toast.error(error instanceof ApiError ? error.message : 'Failed to load access grants')
-    }
-  } finally {
-    pending.value = false
-  }
-}
-
-async function openGrant() {
-  grantForm.consumerDomain = ''
-  grantForm.scopePattern = ''
-  grantOpen.value = true
-  const [directory, schemas] = await Promise.all([
-    domainsApi.directory().catch(() => [] as DirectoryEntry[]),
-    catalog.listSchemas({ producerDomain: props.domain }).catch(() => ({ items: [] as SchemaSummary[] })),
-  ])
-  directoryEntries.value = directory.filter(d => d.domainName !== props.domain)
-  producerSchemas.value = schemas.items ?? []
-}
-
-const scopeOptions = computed(() => [
-  { value: '*', label: '* — entire domain, including future schemas' },
-  ...producerSchemas.value.map((s) => {
-    const detailType = s.schemaName?.split('@')[1] ?? s.schemaName ?? ''
-    return { value: detailType, label: `${detailType} — exact schema` }
-  }),
-])
-
-async function submitGrant() {
-  if (!grantForm.consumerDomain || !grantForm.scopePattern) return
-  grantBusy.value = true
-  try {
-    await api.post('/entitlements', {
-      consumerDomain: grantForm.consumerDomain,
-      producerDomain: props.domain,
-      scopePattern: grantForm.scopePattern,
-    })
-    toast.success(`Access granted to ${grantForm.consumerDomain}`)
-    grantOpen.value = false
-    await load()
-  } catch (error) {
-    toast.error(error instanceof ApiError ? error.message : 'Grant failed')
-  } finally {
-    grantBusy.value = false
-  }
-}
-
-async function confirmRevoke() {
-  const target = revokeTarget.value
-  if (!target?.entitlementId) return
-  revokeBusy.value = true
-  try {
-    await api.del(`/entitlements/${encodeURIComponent(target.entitlementId)}`)
-    toast.success(`Access revoked for ${target.consumerDomain}`)
-    revokeTarget.value = null
-    await load()
-  } catch (error) {
-    toast.error(error instanceof ApiError ? error.message : 'Revoke failed')
-  } finally {
-    revokeBusy.value = false
-  }
-}
-
 onMounted(load)
 </script>
 
 <template>
-  <NxCard title="Access grants">
+  <header v-if="variant === 'page'" class="mb-6">
+    <h1 class="text-2xl font-semibold">Access grants</h1>
+    <p class="mt-1 text-sm text-muted">
+      Every consumer domain granted access to <span class="font-mono text-xs">{{ domain }}</span>'s
+      schemas — the domain page shows only the five most recent. Grant and revoke work here too.
+    </p>
+  </header>
+  <NxCard :title="variant === 'summary' ? 'Access grants' : undefined">
     <template #actions>
       <NxButton v-if="!forbidden" size="sm" @click="openGrant">Grant access</NxButton>
     </template>
@@ -114,24 +64,36 @@ onMounted(load)
     <p v-else-if="forbidden" class="text-sm text-muted">
       Publisher access is required to manage this domain's grants.
     </p>
+    <p v-else-if="loadFailed" role="alert" class="text-sm text-danger">
+      Access grants could not be loaded — refresh to try again.
+    </p>
     <p v-else-if="entitlements.length === 0" class="text-sm text-muted">
       No consumer domain has access to this domain's schemas yet.
     </p>
-    <NxTable v-else :columns="columns" :items="(entitlements as unknown as Record<string, unknown>[])">
-      <template #cell-scopePattern="{ item }">
-        <span class="font-mono text-xs">{{ item.scopePattern }}</span>
-      </template>
-      <template #cell-createdAt="{ item }">
-        <span class="text-muted">{{ item.createdAt ? new Date(String(item.createdAt)).toLocaleDateString() : '—' }}</span>
-      </template>
-      <template #cell-actions="{ item }">
-        <div class="flex justify-end">
-          <NxButton variant="danger" size="sm" @click="revokeTarget = item as unknown as Entitlement">
-            Revoke
-          </NxButton>
-        </div>
-      </template>
-    </NxTable>
+    <div v-else class="flex flex-col gap-3">
+      <NxTable :columns="columns" :items="(shown as unknown as Record<string, unknown>[])">
+        <template #cell-scopePattern="{ item }">
+          <span class="font-mono text-xs">{{ item.scopePattern }}</span>
+        </template>
+        <template #cell-createdAt="{ item }">
+          <span class="text-muted">{{ item.createdAt ? new Date(String(item.createdAt)).toLocaleDateString() : '—' }}</span>
+        </template>
+        <template #cell-actions="{ item }">
+          <div class="flex justify-end">
+            <NxButton variant="danger" size="sm" @click="revokeTarget = item as unknown as Entitlement">
+              Revoke
+            </NxButton>
+          </div>
+        </template>
+      </NxTable>
+      <NuxtLink
+        v-if="hasMore"
+        :to="`/domains/${encodeURIComponent(domain)}/grants`"
+        class="self-start text-sm text-accent hover:underline"
+      >
+        View all grants
+      </NuxtLink>
+    </div>
 
     <NxModal :open="grantOpen" title="Grant access" @close="grantOpen = false">
       <div class="flex flex-col gap-4">
@@ -139,7 +101,7 @@ onMounted(load)
           v-model="grantForm.consumerDomain"
           label="Consumer domain"
           placeholder="Choose a domain"
-          :options="directoryEntries.map(d => ({ value: d.domainName ?? '', label: d.domainName ?? '' }))"
+          :options="directoryEntries.map(entry => ({ value: entry.domainName ?? '', label: entry.domainName ?? '' }))"
           required
         />
         <NxSelect

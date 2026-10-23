@@ -201,3 +201,6 @@ The consumer schema catalog SHALL expose exactly the schemas covered by the quer
 - **WHEN** a `platform-admin` or `platform-auditor` caller requests the catalog without a consumer domain
 - **THEN** the response SHALL span all discoverable schemas unfiltered by entitlements
 - **AND THEN** `platform-auditor` SHALL NOT be able to perform any mutation
+- **WHEN** a `platform-admin` or `platform-auditor` caller requests the catalog with a consumer domain
+- **THEN** the response SHALL still span all discoverable schemas, unfiltered by that consumer domain's entitlements
+- **AND THEN** the consumer domain parameter SHALL continue to scope the response for non-platform callers

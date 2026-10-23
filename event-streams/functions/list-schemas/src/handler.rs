@@ -157,10 +157,13 @@ fn parse_cursor(payload: &Value, filter_hash: &str) -> Result<Option<(String, St
     }
 }
 
-/// Consumer path: a `subscriber` binding on the queried consumer domain (or
-/// a platform role inspecting a consumer's view). Producer path: a
-/// `publisher` binding on the queried domain yields that domain's catalog.
-/// Neither parameter: the platform-wide catalog, platform roles only.
+/// Consumer path: a `subscriber` binding on the queried consumer domain.
+/// Producer path: a `publisher` binding on the queried domain yields that
+/// domain's catalog. Neither parameter: the platform-wide catalog, platform
+/// roles only. Platform roles bypass the entitlement filter even when a
+/// consumer domain is queried (subscriber-entitlements spec: catalog
+/// visibility) — the parameter scopes the consumer view for team callers
+/// only and stays in the filter hash so cursors remain bound to this view.
 async fn resolve_scope(
     ddb: &aws_sdk_dynamodb::Client,
     bindings_table: &str,
@@ -169,15 +172,15 @@ async fn resolve_scope(
     producer: Option<&str>,
 ) -> Result<Scope, Value> {
     match consumer {
+        Some(domain) if is_platform(principal) => Ok(Scope::Platform),
         Some(domain) => {
-            let allowed = is_platform(principal)
-                || has_role_binding(
-                    &BindingStore::new(ddb.clone(), bindings_table),
-                    principal,
-                    ResourceRole::Subscriber,
-                    domain,
-                )
-                .await;
+            let allowed = has_role_binding(
+                &BindingStore::new(ddb.clone(), bindings_table),
+                principal,
+                ResourceRole::Subscriber,
+                domain,
+            )
+            .await;
             if allowed {
                 Ok(Scope::Consumer(domain.clone()))
             } else {
@@ -224,14 +227,20 @@ fn catalog_item(entry: &catalog::CatalogEntry) -> Value {
         .schema_name
         .split_once('@')
         .unwrap_or((entry.schema_name.as_str(), ""));
-    json!({
+    let mut item = json!({
         "schemaName": entry.schema_name,
         "producerDomain": entry.producer_domain,
         "source": source,
         "detailType": detail_type,
         "latestVersions": entry.latest_versions,
         "metadataRevisions": entry.metadata_revisions,
-    })
+    });
+    if let Some(secs) = entry.last_modified {
+        if let Some(modified) = chrono::DateTime::from_timestamp(secs, 0) {
+            item["lastModifiedAt"] = json!(modified.to_rfc3339());
+        }
+    }
+    item
 }
 
 fn validation(message: &str) -> Value {
@@ -432,15 +441,28 @@ mod tests {
     }
 
     fn describe_rule(registry: &'static str, name: &'static str, version: i64) -> Rule {
+        describe_rule_at(registry, name, version, None)
+    }
+
+    fn describe_rule_at(
+        registry: &'static str,
+        name: &'static str,
+        version: i64,
+        created_at_epoch: Option<i64>,
+    ) -> Rule {
         mock!(aws_sdk_schemas::Client::describe_schema)
             .match_requests(move |req| {
                 req.registry_name() == Some(registry) && req.schema_name() == Some(name)
             })
             .then_output(move || {
-                DescribeSchemaOutput::builder()
+                let mut builder = DescribeSchemaOutput::builder()
                     .schema_name(name)
-                    .schema_version(version.to_string())
-                    .build()
+                    .schema_version(version.to_string());
+                if let Some(epoch) = created_at_epoch {
+                    builder =
+                        builder.version_created_date(aws_smithy_types::DateTime::from_secs(epoch));
+                }
+                builder.build()
             })
     }
 
@@ -910,6 +932,143 @@ mod tests {
             assert_eq!(resp["statusCode"], 200, "{role} reads the platform catalog");
             assert_eq!(body(&resp)["items"].as_array().unwrap().len(), 2);
         }
+    }
+
+    #[tokio::test]
+    async fn platform_roles_bypass_entitlements_when_a_consumer_domain_is_queried() {
+        set_env();
+        let scan = mock!(aws_sdk_dynamodb::Client::scan).then_output(|| {
+            let item = HashMap::from([
+                (
+                    "domainName".to_string(),
+                    konductor_common::dynamodb::s("orders"),
+                ),
+                (
+                    "status".to_string(),
+                    konductor_common::dynamodb::s("ACTIVE"),
+                ),
+                (
+                    "environments".to_string(),
+                    AttributeValue::L(vec![konductor_common::dynamodb::s("prod")]),
+                ),
+            ]);
+            aws_sdk_dynamodb::operation::scan::ScanOutput::builder()
+                .set_items(Some(vec![item]))
+                .build()
+        });
+        let registry = registry_rule(
+            "acme-prod-orders-schema-registry",
+            vec!["acme-orders@OrderNotification", "acme-orders@InternalAudit"],
+        );
+        let d1 = describe_rule(
+            "acme-prod-orders-schema-registry",
+            "acme-orders@OrderNotification",
+            3,
+        );
+        let d2 = describe_rule(
+            "acme-prod-orders-schema-registry",
+            "acme-orders@InternalAudit",
+            1,
+        );
+        // The queried consumer holds no entitlements at all: the entitlement
+        // filter would hide everything, but platform roles must still see the
+        // full catalog.
+        let empty_entitlements = entitlements_rule("billing", vec![]);
+        let domain = domain_rule("orders", vec!["prod"]);
+        let (ddb, schemas) = clients(
+            &[&scan, &domain, &empty_entitlements],
+            &[&registry, &d1, &d2],
+        );
+
+        for role in ["platform-admin", "platform-auditor"] {
+            let resp = handle(
+                &ddb,
+                &schemas,
+                request(
+                    oauth_platform_context(role),
+                    json!({"consumerDomain": "billing"}),
+                ),
+            )
+            .await
+            .unwrap();
+            assert_eq!(resp["statusCode"], 200, "{role} reads the full catalog");
+            assert_eq!(
+                body(&resp)["items"].as_array().unwrap().len(),
+                2,
+                "{role} bypasses the consumer's entitlement filter"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn catalog_items_report_the_latest_modification_across_environments() {
+        set_env();
+        let binding = publisher_binding_rule("team-orders", "orders");
+        let domain = domain_rule("orders", vec!["dev", "prod"]);
+        let dev_registry = registry_rule(
+            "acme-dev-orders-schema-registry",
+            vec!["acme-orders@OrderNotification", "acme-orders@InternalAudit"],
+        );
+        let prod_registry = registry_rule(
+            "acme-prod-orders-schema-registry",
+            vec!["acme-orders@OrderNotification"],
+        );
+        let dev_notified = describe_rule_at(
+            "acme-dev-orders-schema-registry",
+            "acme-orders@OrderNotification",
+            3,
+            Some(1_760_000_000),
+        );
+        let prod_notified = describe_rule_at(
+            "acme-prod-orders-schema-registry",
+            "acme-orders@OrderNotification",
+            2,
+            Some(1_770_000_000),
+        );
+        let dev_audit = describe_rule(
+            "acme-dev-orders-schema-registry",
+            "acme-orders@InternalAudit",
+            1,
+        );
+        let prod_audit = describe_rule(
+            "acme-prod-orders-schema-registry",
+            "acme-orders@InternalAudit",
+            1,
+        );
+        let (ddb, schemas) = clients(
+            &[&binding, &domain],
+            &[
+                &dev_registry,
+                &prod_registry,
+                &dev_notified,
+                &prod_notified,
+                &dev_audit,
+                &prod_audit,
+            ],
+        );
+
+        let resp = handle(
+            &ddb,
+            &schemas,
+            request(
+                oauth_team_context("team-orders"),
+                json!({ "domain": "orders" }),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(resp["statusCode"], 200);
+        let items = body(&resp)["items"].as_array().unwrap().clone();
+        assert_eq!(items.len(), 2);
+        // The catalog reports the schema's newest version-creation date
+        // across its environments; a schema whose describes carry no date
+        // omits the field instead of guessing.
+        let expected = chrono::DateTime::from_timestamp(1_770_000_000, 0)
+            .unwrap()
+            .to_rfc3339();
+        assert_eq!(items[1]["lastModifiedAt"], json!(expected));
+        assert!(items[0].get("lastModifiedAt").is_none());
     }
 
     fn publisher_binding_rule(group: &'static str, domain: &'static str) -> Rule {

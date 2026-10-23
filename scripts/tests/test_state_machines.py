@@ -265,8 +265,9 @@ class TestSystemTopicLifecycle(unittest.TestCase):
                 f"{source} failure must route through topic cleanup",
             )
         self.assertIn(
-            "EmitProvisioningFailedDomainLevel",
+            "DeleteNamespaceParameterDomainLevel",
             self.states["DeleteSystemTopicDomainLevel"]["refs"],
+            "topic cleanup chains into parameter cleanup before the emit",
         )
 
     def test_rollback_path_cleans_up_and_reports_compensation_errors(self):
@@ -311,6 +312,65 @@ class TestSystemTopicLifecycle(unittest.TestCase):
 
 
 
+class TestNamespaceParameterCompensation(unittest.TestCase):
+    """A failed provision must not leak the /namespace/{domain} SSM
+    parameter: the registration collision check then rejects re-registration
+    with "resource name collision" until the parameter is deleted by hand."""
+
+    def setUp(self):
+        self.text = PROVISION_DOMAIN_MACHINE.read_text()
+        self.states, _ = parse_machine(PROVISION_DOMAIN_MACHINE)
+
+    def test_domain_level_failures_cleanup_the_parameter(self):
+        self.assertIn("DeleteNamespaceParameterDomainLevel", self.states)
+        self.assertIn(
+            "DeleteNamespaceParameterDomainLevel",
+            self.states["DeleteSystemTopicDomainLevel"]["refs"],
+            "topic cleanup must chain into parameter cleanup",
+        )
+        self.assertIn(
+            "EmitProvisioningFailedDomainLevel",
+            self.states["DeleteNamespaceParameterDomainLevel"]["refs"],
+        )
+
+    def test_rollback_path_cleans_up_the_parameter(self):
+        self.assertIn("DeleteNamespaceParameterAfterRollback", self.states)
+        self.assertIn(
+            "DeleteNamespaceParameterAfterRollback",
+            self.states["DeleteSystemTopicAfterRollback"]["refs"],
+            "the rollback path must chain into parameter cleanup",
+        )
+        self.assertIn(
+            "EmitProvisioningFailedAfterRollback",
+            self.states["DeleteNamespaceParameterAfterRollback"]["refs"],
+        )
+        self.assertIn("Namespace parameter cleanup failed: ", self.text)
+
+    def test_parameter_delete_targets_the_domain_parameter(self):
+        self.assertEqual(
+            self.text.count("Resource: \"arn:aws:states:::aws-sdk:ssm:deleteParameter\""),
+            2,
+            "one delete state per failure path",
+        )
+        self.assertEqual(
+            self.text.count(
+                "Name: \"{% '/namespace/' & $states.input.detail.domainName %}\""
+            ),
+            3,
+            "create plus both compensation deletes target the same parameter",
+        )
+
+    def test_template_grants_the_workflow_parameter_delete(self):
+        template = CORE_TEMPLATE.read_text()
+        policy = re.search(
+            r"ProvisioningWorkflowPolicy:.*?(?=\n  [A-Za-z])", template, re.S
+        ).group(0)
+        self.assertIn("ssm:DeleteParameter", policy)
+        self.assertIn(
+            "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/namespace/*", policy
+        )
+
+
 class TestSystemTopicRetagAndTeardown(unittest.TestCase):
     """Retag covers the recorded domain topic, disable retains it, and only
     explicit ownership-checked teardown removes it."""
@@ -333,6 +393,36 @@ class TestSystemTopicRetagAndTeardown(unittest.TestCase):
         self.assertIn("konductor-system-topic-manager", script)
         self.assertIn('"delete"', script.replace("'", '"'))
         self.assertNotIn("aws sns delete-topic", script)
+
+    def test_teardown_invokes_the_manager_with_a_raw_payload(self):
+        script = (REPO / "scripts/teardown-domain.sh").read_text()
+        invoke = re.search(
+            r"aws lambda invoke .*?(?=\n  FN_ERROR)", script, re.S
+        ).group(0)
+        self.assertIn(
+            "--cli-binary-format raw-in-base64-out",
+            invoke,
+            "AWS CLI v2 base64-decodes payloads by default and rejects raw JSON",
+        )
+
+    def test_teardown_deletes_the_namespace_parameter(self):
+        script = (REPO / "scripts/teardown-domain.sh").read_text()
+        self.assertIn(
+            "delete-parameter",
+            script,
+            "a torn-down domain must not leave its namespace parameter behind "
+            "for the registration collision check to trip over",
+        )
+        self.assertIn('"/namespace/${DOMAIN_NAME}"', script)
+
+    def test_topic_backfill_invokes_the_manager_with_a_raw_payload(self):
+        script = (REPO / "scripts/backfill-system-event-topics.sh").read_text()
+        self.assertIn("aws lambda invoke", script)
+        self.assertIn(
+            "--cli-binary-format raw-in-base64-out",
+            script,
+            "AWS CLI v2 base64-decodes payloads by default and rejects raw JSON",
+        )
 
 if __name__ == "__main__":
     unittest.main()

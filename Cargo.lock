@@ -2458,6 +2458,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "aws-sdk-schemas",
  "aws-smithy-mocks",
+ "aws-smithy-types",
  "chrono",
  "konductor-common",
  "lambda_runtime",

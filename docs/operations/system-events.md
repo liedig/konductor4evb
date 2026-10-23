@@ -28,9 +28,12 @@ resource.
 
 When a batch exhausts its retries, Lambda delivers the full invocation payload,
 including the original stream records, to
-`s3://{org}-konductor-system-event-failures-{account}-{region}/`. Objects are
+`s3://konductor-system-event-failures-{account}-{region}/`. Objects are
 SSE-S3 encrypted, public access is blocked, and lifecycle expiry deletes them
-after 90 days, well beyond the 24-hour stream retention window.
+after 90 days, well beyond the 24-hour stream retention window. The bucket name
+carries no `{org}` prefix: the configuration contract allows 43-character
+organizations, and an org-prefixed name with account and region appended would
+exceed S3's 63-character limit.
 
 1. Fix the root cause first (for example, restore the system bus or correct a
    malformed `upgradeEvents` snapshot). Redriving before the fix repeats the
@@ -38,8 +41,8 @@ after 90 days, well beyond the 24-hour stream retention window.
 2. List failed objects and extract the original records:
 
    ```bash
-   aws s3 ls "s3://{org}-konductor-system-event-failures-{account}-{region}/" --recursive
-   aws s3 cp "s3://{org}-konductor-system-event-failures-{account}-{region}/<key>" - \
+   aws s3 ls "s3://konductor-system-event-failures-{account}-{region}/" --recursive
+   aws s3 cp "s3://konductor-system-event-failures-{account}-{region}/<key>" - \
      | jq '{ Records: .DDBStreamBatchInfo.records }' > redrive-payload.json
    ```
 

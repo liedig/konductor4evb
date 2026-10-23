@@ -116,6 +116,7 @@ if [ -n "${TOPIC_ARN}" ]; then
   INVOKE_OUT=$(mktemp)
   aws lambda invoke \
     --function-name konductor-system-topic-manager \
+    --cli-binary-format raw-in-base64-out \
     --payload "$(jq -nc --arg arn "${TOPIC_ARN}" --arg domain "${DOMAIN_NAME}" \
       '{action: "delete", topicArn: $arn, domainName: $domain}')" \
     --region "${AWS_REGION}" \
@@ -130,6 +131,15 @@ if [ -n "${TOPIC_ARN}" ]; then
   rm -f "${INVOKE_OUT}"
   echo " done"
 fi
+
+# The namespace parameter belongs to the same footprint; the registration
+# collision check blocks re-registration while it exists. Deleting a missing
+# parameter is a no-op, so domains provisioned before the parameter step
+# tear down unchanged.
+aws ssm delete-parameter \
+  --name "/namespace/${DOMAIN_NAME}" \
+  --region "${AWS_REGION}" >/dev/null
+echo "  namespace parameter: deleted"
 
 aws dynamodb delete-item \
   --table-name konductor-domains \

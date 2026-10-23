@@ -5,7 +5,9 @@
 mod support;
 
 use serde_yaml::Value;
-use support::{at, boolean, core_template, int, mapping, props, repo_yaml, resource, seq, text};
+use support::{
+    at, boolean, core_template, int, mapping, props, repo_yaml, resource, seq, text, untag,
+};
 
 fn oauth_contract() -> Value {
     repo_yaml("api/openapi-oauth.yaml")
@@ -2077,6 +2079,170 @@ fn system_event_failure_bucket_is_private_encrypted_and_expires() {
     let rules = seq(at(at(p, "LifecycleConfiguration"), "Rules"));
     assert_eq!(rules.len(), 1);
     assert_eq!(int(at(&rules[0], "ExpirationInDays")), 90);
+}
+
+#[test]
+fn system_event_failure_bucket_name_fits_s3_for_the_worst_allowed_org() {
+    let doc = core_template();
+    let bucket = resource(&doc, "SystemEventProjectorFailureBucket");
+    let pattern = text(at(props(bucket), "BucketName"));
+    let name = pattern
+        .replace("${Organization}", &"o".repeat(43))
+        .replace("${AWS::AccountId}", &"1".repeat(12))
+        .replace("${AWS::Region}", "ap-southeast-2");
+    assert!(
+        name.chars().count() <= 63,
+        "rendered bucket name is {} characters; S3 allows 63: {name}",
+        name.chars().count()
+    );
+}
+
+#[test]
+fn system_event_projector_can_list_and_write_its_failure_bucket() {
+    let doc = core_template();
+
+    // Lambda validates an S3 on-failure destination while creating the event
+    // source mapping: the execution role needs s3:ListBucket on the bucket
+    // itself, and a missing grant fails the whole stack create.
+    let mapping_resource = resource(&doc, "SystemEventProjectorEventSourceMapping");
+    let destination = at(
+        at(
+            at(props(mapping_resource), "DestinationConfig"),
+            "OnFailure",
+        ),
+        "Destination",
+    );
+    assert_eq!(text(destination), "SystemEventProjectorFailureBucket.Arn");
+
+    let function = resource(&doc, "SystemEventProjectorFunction");
+    let policies = seq(at(props(function), "Policies"));
+    let statements = seq(at(&policies[0], "Statement"));
+    let mut saw_list_bucket = false;
+    let mut saw_put_object = false;
+    for statement in statements {
+        let action = at(statement, "Action");
+        let actions: Vec<&str> = match action.as_str() {
+            Some(single) => vec![single],
+            None => seq(action)
+                .iter()
+                .map(|value| value.as_str().expect("policy action"))
+                .collect(),
+        };
+        let granted = text(at(statement, "Resource"));
+        if actions.contains(&"s3:ListBucket") && granted == "SystemEventProjectorFailureBucket.Arn"
+        {
+            saw_list_bucket = true;
+        }
+        if actions.contains(&"s3:PutObject")
+            && granted.contains("SystemEventProjectorFailureBucket.Arn")
+        {
+            saw_put_object = true;
+        }
+    }
+    assert!(
+        saw_list_bucket,
+        "the projector role must allow s3:ListBucket on the failure bucket \
+         ARN itself (no /* suffix); Lambda rejects the event source mapping \
+         otherwise"
+    );
+    assert!(
+        saw_put_object,
+        "the projector role must allow s3:PutObject on the failure bucket's \
+         objects"
+    );
+}
+
+#[test]
+fn system_schema_bootstrap_uses_the_registry_name_not_the_ref_arn() {
+    let doc = core_template();
+
+    // !Ref on AWS::EventSchemas::Registry is the registry ARN, but the
+    // bootstrap env var and its IAM resources need the deterministic name.
+    // Anywhere the template interpolates the Ref, the name must be spelled
+    // out instead.
+    fn refs_registry(v: &Value) -> bool {
+        match v {
+            Value::Tagged(t) => {
+                t.tag.to_string() == "!Ref" && untag(v).as_str() == Some("SystemSchemaRegistry")
+            }
+            Value::Mapping(m) => m.values().any(refs_registry),
+            Value::Sequence(s) => s.iter().any(refs_registry),
+            _ => false,
+        }
+    }
+    assert!(
+        !refs_registry(&doc),
+        "!Ref SystemSchemaRegistry renders as the registry ARN; the \
+         bootstrap needs the registry name"
+    );
+
+    let registry_name = text(at(
+        props(resource(&doc, "SystemSchemaRegistry")),
+        "RegistryName",
+    ));
+    let variables = at(
+        at(
+            props(resource(&doc, "SystemSchemaBootstrapFunction")),
+            "Environment",
+        ),
+        "Variables",
+    );
+    assert_eq!(text(at(variables, "SYSTEM_SCHEMA_REGISTRY")), registry_name);
+}
+
+#[test]
+fn state_machines_wait_for_their_role_policies() {
+    let doc = core_template();
+    let resources = mapping(at(&doc, "Resources"));
+
+    // A state machine's role gets its permissions from a separate
+    // AWS::IAM::Policy. CloudFormation orders on the role reference only, so
+    // without an explicit DependsOn the state machine can start creating
+    // before the policy attaches; Step Functions then rejects the create
+    // (the .sync managed-rule check) and the whole stack rolls back.
+    let mut policies_by_role: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for (id, res) in resources {
+        let id = id.as_str().expect("resource id").to_string();
+        if text(at(res, "Type")) == "AWS::IAM::Policy" {
+            for role in seq(at(props(res), "Roles")) {
+                policies_by_role
+                    .entry(text(role).to_string())
+                    .or_default()
+                    .push(id.clone());
+            }
+        }
+    }
+
+    for (id, res) in resources {
+        let id = id.as_str().expect("resource id");
+        if text(at(res, "Type")) != "AWS::Serverless::StateMachine" {
+            continue;
+        }
+        let role_ref = text(at(props(res), "Role"));
+        let role = role_ref
+            .strip_suffix(".Arn")
+            .unwrap_or(role_ref)
+            .to_string();
+        let depends_on: Vec<String> = match mapping(res).get("DependsOn") {
+            Some(single) if single.as_str().is_some() => vec![text(single).to_string()],
+            Some(list) => seq(list).iter().map(|dep| text(dep).to_string()).collect(),
+            None => Vec::new(),
+        };
+        for policy in policies_by_role
+            .get(&role)
+            .into_iter()
+            .flatten()
+            .map(|policy| policy.as_str())
+        {
+            assert!(
+                depends_on.iter().any(|dep| dep.as_str() == policy),
+                "{id} must DependOn {policy}: without the explicit ordering the \
+                 state machine can be created before the policy attaches to its \
+                 role, and Step Functions rejects the create"
+            );
+        }
+    }
 }
 
 #[test]

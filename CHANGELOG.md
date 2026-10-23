@@ -7,6 +7,126 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Fix a latent OAuth authorizer bug that denied sibling paths with a
+  confusing IAM-style 403 for up to five minutes. API Gateway caches the
+  authorizer's policy under (token, method, route template) — so the
+  policy named one literal path — and every other path on the same route
+  (browsing a second domain's detail, for example) replayed that
+  path-exact policy and failed. The policy resource now wildcards the
+  resource segment, mirroring the existing stage wildcard; authorization
+  semantics are unchanged because the route gate is method-level and every
+  handler re-checks bindings per request.
+
+- Apply the same summary treatment to the domain page's remaining audience
+  panels: Outbound subscriptions and Access grants each show at most the
+  five most recently created entries, newest first, and link to new
+  dedicated views (`/domains/{domain}/subscriptions`,
+  `/domains/{domain}/grants`) listing every entry. The grants view keeps
+  the full management surface — granting and revoking work there too.
+
+- Report each catalog schema's most recent modification time as
+  `lastModifiedAt` — the newest version-creation date across the schema's
+  environment registries, omitted when no registry reports one — and cap
+  the domain page's schemas panel at the five most recently modified
+  schemas, with a link to a new dedicated per-domain schemas view that
+  lists and pages through all of them.
+
+- Change the header's System events navigation item to its bell icon alone,
+  dropping the visible text label; the link keeps an accessible name and
+  the unread indicator for screen readers and the tests that target it by
+  role.
+
+- Change the console's domain-request form to ask for one required account
+  per configured environment instead of an owner account plus optional
+  per-environment overrides. The two concepts were easy to conflate; teams
+  now pin every environment explicitly, and the form derives the record's
+  owner account from the authoring (first) environment's account. The
+  register API is unchanged — direct API callers still send `ownerAccountId`
+  with optional sparse `environmentAccounts` overrides. Form validation now
+  gates every rule through the inline errors (native browser validation is
+  disabled), so missing and malformed fields render identically.
+
+- Fix platform roles seeing an empty schema catalog when a consumer domain
+  is selected: the catalog list applied the consumer domain's entitlement
+  filter to every caller, so a `platform-admin` browsing the console's
+  catalog with a consumer domain chosen saw only that domain's currently
+  entitled schemas (nothing, on a fresh install). Platform roles now
+  bypass the entitlement filter on every catalog request, with or without
+  a `consumerDomain` parameter, matching the entitlement spec's platform
+  bypass clause and the schema detail route's existing behavior; the
+  parameter still scopes the consumer view for non-platform callers.
+
+- Fix the web console offering no way to register a second schema: the
+  schemas panel showed "Register schema" only while the list was empty,
+  so after the first registration the affordance disappeared even though
+  the web-ui spec requires it for every caller with a publisher binding.
+  The action is now always available on a readable panel. The schema
+  authoring modal also gained the new `lg` size variant of `NxModal`
+  (`max-w-2xl` instead of `max-w-lg`) for more comfortable JSON editing.
+
+- Fix the deployed web console rendering a blank page after the Nuxt 4.6
+  upgrade: Nuxt now resolves its entry through an `#entry` import map, and
+  the post-build step that externalizes inline scripts (for the strict
+  `script-src 'self'` CSP) rewrote that import map into a `<script
+  type="importmap" src=...>` tag. Browsers ignore `src` on import maps
+  (they are inline-only per the HTML spec), and the strict CSP blocks the
+  inline form, so the entry never loaded. The post-build step now removes
+  the import map entirely and rewrites every `#entry` specifier in the
+  emitted chunks to a plain relative import of the sibling entry file;
+  the suite gained unit tests and the build fails loudly on unexpected
+  import-map shapes instead of shipping a blank page.
+
+- Fix `teardown-domain` leaking the domain's `/namespace/{name}` SSM
+  parameter and failing to delete the system-events topic: the script now
+  removes the parameter alongside the record (a leftover parameter makes
+  re-registration fail the collision check), and its topic-manager
+  invocation passes `--cli-binary-format raw-in-base64-out`, which AWS CLI
+  v2 requires for a raw JSON payload.
+
+- Fix failed domain provisions leaking the `/namespace/{domain}` SSM
+  parameter: the workflow's failure paths compensated the system-events
+  topic but never the parameter, so the registration collision check then
+  blocked re-registration of the domain ("resource name collision: SSM
+  parameter ...") until someone deleted it by hand. Both failure paths now
+  delete the parameter after the topic, and the workflow role gained
+  `ssm:DeleteParameter`.
+
+- Fix domain provisioning failing while setting the per-domain
+  system-events topic policy: SNS now rejects topic policies with wildcard
+  or non-topic-scoped actions ("Policy statement action out of service
+  scope"), so the owner grant's `sns:*` (and `sns:Unsubscribe`, which is
+  subscription-scoped) made every provision roll back at the
+  `EnsureSystemTopic` step. The owner grant now names its topic-scoped
+  management actions explicitly; publishing stays IAM-governed and
+  unsubscription goes through the topic manager's IAM grant.
+
+- Fix a create-ordering race that can fail a fresh core-stack deploy: state
+  machines referenced their role but not the `AWS::IAM::Policy` that grants
+  the role its permissions, so CloudFormation could create a state machine
+  before the policy attached. Step Functions validates the `.sync`
+  managed-rule permission at create time and rolled the whole stack back
+  when it lost the race. Every state machine now `DependsOn` its role's
+  policy resources.
+
+- Fix the system-event projector's event source mapping failing a fresh
+  core-stack create: the function's role could `PutObject` into the
+  failure bucket but not `ListBucket` the bucket itself, and Lambda
+  validates that grant while creating the mapping's S3 on-failure
+  destination, rolling the whole stack back. The role now carries the
+  bucket-level read.
+
+- Fix the system-event schema bootstrap failing a fresh core-stack create:
+  the function's `SYSTEM_SCHEMA_REGISTRY` variable and its IAM resources
+  used `!Ref` on the registry, which renders as the registry *ARN* rather
+  than its name, so the bootstrap's first `DescribeSchema` was denied and
+  the whole stack rolled back. Both now spell out the deterministic
+  registry name.
+- Fix the system-event projector failure bucket exceeding S3's 63-character
+  name limit: the bucket is now
+  `konductor-system-event-failures-{account}-{region}` with no organization
+  prefix, so every organization the configuration contract allows fits in
+  every region. Previously a core-stack create in a long-identifier region
+  (for example `ap-southeast-2`) rolled the whole stack back.
 - Reject `multipleOf` divisors above 9007199254740991 (2^53 - 1) on
   `POST /schemas` and `POST /schemas/versions` with `400 Bad Request`. The
   validator cannot decide divisibility exactly above that bound, so such
