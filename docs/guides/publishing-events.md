@@ -1,4 +1,4 @@
-# Publishing events
+# Publish events
 
 Konductor for Amazon EventBridge validates and queues events before delivery. As a producer, you obtain authorization, register a schema, and publish your data. The API stage selects the environment. Konductor derives the registry and event bus.
 
@@ -48,7 +48,7 @@ There is no environment field in any request body. Publishing works on every sta
 Every event needs a schema in the target environment's registry before it can be published there. Create version 1 on the authoring stage (later environments receive it through promotion):
 
 ```bash
-awscurl -X POST "${API_URL}/schemas" --region ${AWS_REGION} \
+awscurl -X POST "${API_URL}/schemas" --region "${AWS_REGION}" \
   -H "Content-Type: application/json" \
   -d '{
     "domain": "orders",
@@ -64,7 +64,7 @@ awscurl -X POST "${API_URL}/schemas" --region ${AWS_REGION} \
 
 Key things to know:
 
-- **Schemas are JSON Schema draft-4.** Any other `schemaType` answers `400`, and `content` that does not compile as a draft-4 document is rejected (`400`) before anything is written—so a schema you successfully registered can always be validated against at publish time.
+- **Schemas are JSON Schema draft-4.** Any other `schemaType` answers `400`. `content` that does not compile as a draft-4 document is rejected (`400`) before anything is written, so a schema you successfully registered can always be validated against at publish time.
 - **Konductor owns the schema name.** It is always `{org}-{domain}@{eventName}`, derived from the domain's registered namespace identity. You never supply a schema name, version, or registry.
 - **Konductor validates event names before writing.** Names can contain only `[A-Za-z0-9._-]`. The derived subscription rule name must fit the 64-character limit for Amazon EventBridge. Invalid names return `400` before any write.
 - **Duplicates are rejected, never replaced.** Creating an existing schema returns `409 Conflict`; the existing schema and all its versions remain unchanged.
@@ -74,7 +74,7 @@ Key things to know:
 Evolve an event by **appending** a version:
 
 ```bash
-awscurl -X POST "${API_URL}/schemas/versions" --region ${AWS_REGION} \
+awscurl -X POST "${API_URL}/schemas/versions" --region "${AWS_REGION}" \
   -H "Content-Type: application/json" \
   -d '{ "domain": "orders", "eventName": "OrderNotification", "content": "{ ... }" }'
 ```
@@ -83,36 +83,36 @@ This returns `201` with the next version number (`404` if the schema does not ex
 
 Appends are also **backward compatible only**. The new document is checked against the current latest version with a bounded proof that every previously accepted payload stays accepted. Anything that visibly restricts the contract—or that the proof cannot establish—fails with `400 Bad Request` naming the relevant paths and reasons. In practice:
 
-- **Allowed:** dropping entries from `required`, widening a `type` (for example `"integer"` to `["integer", "string"]`), growing an `enum`, loosening or removing constraints (`minimum`, `maxLength`, `pattern`, and so on), and adding an optional property whose constraint provably accepts every value the predecessor allowed for that name—any constraint when the predecessor closed the object with `additionalProperties: false`, an unconstrained `{}` when it did not.
-- **Rejected:** removing a declared property, newly requiring a property, narrowing a `type` or `enum`, raising `minimum`, lowering `maximum`, flipping `additionalProperties` from `true` to `false`, and constraining a previously unrestricted property name on an open object (for example adding `"note": {"type": "string"}` to a schema that accepted any `note` value).
-- **Also rejected, as unproven rather than demonstrably breaking:** any change to a document carrying schema-bearing `$ref`s, edits to combinators or `patternProperties`, `id`/`format` changes, numeric comparisons that cannot be made exactly, and documents whose comparison exceeds the gate's work budget. These rejections mean the bounded proof could not establish compatibility, not that a breaking payload was found.
+- **Allowed:** dropping entries from `required`, widening a `type` (for example `"integer"` to `["integer", "string"]`), growing an `enum`, and loosening or removing constraints (`minimum`, `maxLength`, `pattern`, and so on). You can also add an optional property whose constraint provably accepts every value the predecessor allowed for that name. That means any constraint when the predecessor closed the object with `additionalProperties: false`, and an unconstrained `{}` when it did not.
+- **Rejected:** removing a declared property, newly requiring a property, narrowing a `type` or `enum`, raising `minimum`, lowering `maximum`, and flipping `additionalProperties` from `true` to `false`. Constraining a previously unrestricted property name on an open object is rejected too (for example adding `"note": {"type": "string"}` to a schema that accepted any `note` value).
+- **Also rejected, as unproven rather than demonstrably breaking:** any change to a document carrying schema-bearing `$ref`s, edits to combinators or `patternProperties`, and `id`/`format` changes. The same applies to numeric comparisons that cannot be made exactly and to documents whose comparison exceeds the gate's work budget. These rejections mean the bounded proof could not establish compatibility, not that a breaking payload was found.
 
-Compatibility is judged against the current latest version only, never historical ones, and the gate is absolute—no flag or role bypasses it. If you need a genuinely breaking change (renaming a field, tightening a constraint), register it as a **new schema under a new event name** and migrate consumers explicitly; that keeps every accepted version of an event safe for consumers validated against its predecessors.
+Compatibility is judged against the current latest version only, never historical ones, and the gate is absolute—no flag or role bypasses it. If you need a genuinely breaking change (renaming a field, tightening a constraint), register it as a **new schema under a new event name** and migrate consumers explicitly. That keeps every accepted version of an event safe for consumers validated against its predecessors.
 
 ## Promoting a schema to later environments
 
 New versions land only in the authoring environment. When a version is ready for the next environment, **promote** it—promotion replays the missing versions into the target registry under the *same* version numbers, so `v3` means the same contract in every environment. Each promotion covers one hop: the target is the stage you call, the source is its configured predecessor (for `dev, staging, prod`, promoting on the `staging` stage replays from `dev`).
 
 ```bash
-awscurl -X POST "${API_URL_STAGING}/schemas/promotions" --region ${AWS_REGION} \
+awscurl -X POST "${API_URL_STAGING}/schemas/promotions" --region "${AWS_REGION}" \
   -H "Content-Type: application/json" \
   -d '{ "domain": "orders", "eventName": "OrderNotification" }'
 ```
 
-The call answers `202 Accepted` with the in-flight promotion (or `409` naming the promotion already running for that schema and environment—promotion is idempotent, so retrying the same request is safe and never double-writes). Track progress with `GET /schemas/promotions?domain=orders&eventName=OrderNotification` on the same stage; the status moves `VALIDATING → REPLAYING → REPINNING → COMPLETED`. In the console, the producer schema page (**Domains → your domain → schema name**) shows the whole pipeline: per-environment versions with behind counts, a Promote action per target environment, live promotion progress, the environments each version has reached, and every subscriber's pinned version.
+The call answers `202 Accepted` with the in-flight promotion (or `409` naming the promotion already running for that schema and environment—promotion is idempotent, so retrying the same request is safe and never double-writes). Track progress with `GET /schemas/promotions?domain=orders&eventName=OrderNotification` on the same stage; the status moves `VALIDATING → REPLAYING → REPINNING → COMPLETED`. In the console, the producer schema page (**Domains → your domain → schema name**) shows the whole pipeline. It shows per-environment versions with behind counts, a Promote action per target environment, and live promotion progress. It also shows the environments each version has reached and every subscriber's pinned version.
 
 Key things to know:
 
 - **Replay validates before writing.** Promotion first compares the version history both registries share (canonical content comparison). If the target's history diverges from the authoring environment's, the promotion stops as `FAILED` with reason `DIVERGED` and leaves the target untouched—contact the platform team to reconcile before retrying.
 - **Failures are resumable.** If a replay fails mid-way (`REPLAY_FAILED`), the versions already written stay in the target; fix the cause and promote again—already-replayed versions are skipped, and per-version retries carry the same idempotency token.
-- **Subscribers keep receiving events.** After the replay, Konductor re-pins the target environment's subscription rules to the new version through a widen, drain, narrow sequence: rules first match both the pinned and the new versions, wait out a drain window (five minutes by default), then settle on the new version. No events are dropped in between, and consumers observe this as their rule filters changing—not as a gap in delivery.
+- **Subscribers keep receiving events.** After the replay, Konductor re-pins the target environment's subscription rules to the new version through a widen, drain, narrow sequence. Rules first match both the pinned and the new versions, wait out a drain window (five minutes by default), then settle on the new version. No events are dropped in between, and consumers observe this as their rule filters changing—not as a gap in delivery.
 - **The version pin is per environment.** A consumer's rule in `staging` moves only when the promotion into `staging` completes; each environment's pins advance independently.
 - **You need the publisher binding.** Promotion requires the `schema:promote` grant on the producer domain (held by publishers); auditors can read promotion status but cannot start one.
 
 ## Step 3: publish an event
 
 ```bash
-awscurl -X POST "${API_URL}/publish" --region ${AWS_REGION} \
+awscurl -X POST "${API_URL}/publish" --region "${AWS_REGION}" \
   -H "Content-Type: application/json" \
   -d '{
     "domain": "orders",
@@ -168,7 +168,7 @@ Konductor validates your `data` against the schema's latest version **before** a
 
 | Response | Cause | Action |
 |----------|-------|--------|
-| `400` | Body failed structural validation (missing field, unknown field—including an injected top-level `metadata` key—invalid event name); on schema writes, also `content` that is not a valid draft-4 document; on version appends, also content that tightens the current latest version—offending paths are listed in `message` | Fix the request body / schema document; for a rejected append, loosen the document or register a new event name instead |
+| `400` | Body failed structural validation: a missing field, an unknown field (including an injected top-level `metadata` key), or an invalid event name. On schema writes, also `content` that is not a valid draft-4 document. On version appends, also content that tightens the current latest version; `message` lists the offending paths. | Fix the request body / schema document; for a rejected append, loosen the document or register a new event name instead |
 | `403` | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
 | `404` | Domain missing/inactive, or no schema registered for this event in this environment | Check domain status; create the schema first |
 | `400` (schema writes) | Called on a non-authoring stage (`AuthoringEnvironmentOnly`) | Create and append on the authoring stage; promote into later environments |
@@ -183,12 +183,12 @@ Konductor validates your `data` against the schema's latest version **before** a
 
 ## Inspecting composed contracts
 
-`GET /schemas/{schemaName}/contract?domain={yourDomain}&environment={env}` returns the exact composed contract the environment currently serves: the raw business document, the platform-owned metadata schema, generator descriptions, and a composed draft-4 document that validates the full `detail` object offline. Historical inspection is explicit: pass **both** `schemaVersion` and `metadataRevision` (revision `0` is the documented legacy selector for pre-stamping events)—the active metadata revision is never silently substituted for a historical business version, and an unknown pair answers `404`. A historical composition is inspection, not evidence that pair was ever emitted—provenance is each event's own recorded tuple. `POST /schemas/contract-preview` composes **unsaved** business content against the environment's active metadata so you can see the effective contract before appending a version; it registers nothing.
+`GET /schemas/{schemaName}/contract?domain={yourDomain}&environment={env}` returns the exact composed contract the environment currently serves: the raw business document, the platform-owned metadata schema, generator descriptions, and a composed draft-4 document that validates the full `detail` object offline. Historical inspection is explicit: pass **both** `schemaVersion` and `metadataRevision` (revision `0` is the documented legacy selector for pre-stamping events). The active metadata revision is never silently substituted for a historical business version, and an unknown pair answers `404`. A historical composition is inspection, not evidence that pair was ever emitted—provenance is each event's own recorded tuple. `POST /schemas/contract-preview` composes **unsaved** business content against the environment's active metadata so you can see the effective contract before appending a version; it registers nothing.
 
-In the console, the catalog schema page serves the current pair per environment: each environment badge is a link that loads that environment's contract into stacked full-width panels—**Schema content** (the raw business document) and **Schema preview** (the in-force composed document, captioned with its business version, metadata revision, and definition digest). Each panel carries a Copy action that puts the rendered document on the clipboard. Historical pairs are an API capability for clients holding an event's recorded tuple; the console does not expose historical selectors. The producer authoring form's *Preview effective contract* is distinct: it composes unsaved content, is labeled unregistered, and registers nothing.
+In the console, the catalog schema page serves the current pair per environment. Each environment badge is a link that loads that environment's contract into stacked full-width panels. The panels are **Schema content** (the raw business document) and **Schema preview** (the in-force composed document, captioned with its business version, metadata revision, and definition digest). Each panel carries a Copy action that puts the rendered document on the clipboard. Historical pairs are an API capability for clients holding an event's recorded tuple; the console does not expose historical selectors. The producer authoring form's *Preview effective contract* is distinct: it composes unsaved content, is labeled unregistered, and registers nothing.
 
 ## Deep dive
 
-For the design rationale, see [Publish validation at ingest](../architecture/publish-validation.md). It explains synchronous failures, schema caching, version stamps, and rejected alternatives.
+For the design rationale, see [Publish validation](../architecture/publish-validation.md). It explains synchronous failures, schema caching, version stamps, and rejected alternatives.
 
 For implementation details, see the architecture sections on [Event publishing](../architecture/publish-validation.md#3-the-two-halves-admission-and-delivery), [Schema management](../architecture/schemas.md#schema-management-append-only), [The canonical event envelope](../reference/event-envelope.md#the-canonical-event-envelope), and [Grant engine](../architecture/authorization.md#grant-engine).

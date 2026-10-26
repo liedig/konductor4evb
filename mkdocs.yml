@@ -42,19 +42,20 @@ extra_css:
 hooks:
   - docs-site/hooks.py
 
-# Strategy-genre pages stay in the repository but are not published.
+# Strategy-genre pages (prfaq/) and the history pages (original proposals
+# and superseded snapshots) stay in the repository but are not published.
 # The link hook rewrites inbound links to these to GitHub blob URLs.
 # "Documentation moved" forwarding pages serve GitHub browsing at old
 # paths; on the site they would only surface as sidebar stubs, so they
 # stay repo-only too. Decision records, the console convention pages
-# (Vue, TypeScript), and the side-effects rubric are working history
-# and contributor references for the repository, not published
-# documentation. Patterns follow .gitignore rules: a bare filename matches
-# at any depth, so root-level stubs are anchored with a leading slash.
+# (Vue, TypeScript), the side-effects rubric, and the documentation
+# discrepancy register are working history and contributor references for
+# the repository, not published documentation. Patterns follow .gitignore
+# rules: a bare filename matches at any depth, so root-level stubs are
+# anchored with a leading slash.
 exclude_docs: |
   prfaq/**
-  history/business-requirements-2025-12-23.md
-  history/press-release-faq-2025-12-23.md
+  history/**
   decisions/**
   development/typescript.md
   development/vue.md
@@ -69,37 +70,45 @@ exclude_docs: |
   development/publish-validation.md
   development/metadata-rollout.md
   development/architecture.md
+  reference/documentation-discrepancies.md
 
-# Ordered by reader journey, not by directory. Every published page must
-# appear here; validation.omitted_files makes a missing page fail --strict.
+# Grouped by audience, then by reader journey, not by directory. Every
+# published page must appear here; validation.omitted_files makes a missing
+# page fail --strict.
 nav:
   - Home: README.md
-  - Get started:
-      - Plan capacity: operations/service-quotas.md
-      - Configure the platform: operations/configure-platform.md
-      - Install Konductor: operations/installation.md
-      - Deploy domain-account trust: operations/trust-stack-deployment.md
-      - Set up users and access: operations/access-administration.md
-      - Troubleshoot installation: operations/installation-troubleshooting.md
-  - Domains:
+
+  - For application teams:
       - guides/README.md
-      - Prerequisites: guides/domain-prerequisites.md
-      - Authenticate: guides/authentication.md
-      - Register and manage a domain: guides/domains.md
-      - What an ACTIVE domain provides: guides/active-domain.md
-      - API clients: guides/api-clients.md
-  - Publish and subscribe:
-      - Publish events: guides/publishing-events.md
-      - Subscribe to events: guides/subscriptions.md
-      - System events: guides/system-events.md
-  - Operate:
+      - Register a domain:
+          - Prerequisites: guides/domain-prerequisites.md
+          - Authenticate API requests: guides/authentication.md
+          - Register and manage a domain: guides/domains.md
+          - What an ACTIVE domain provides: guides/active-domain.md
+      - Publish and subscribe:
+          - Publish events: guides/publishing-events.md
+          - Subscribe to events: guides/subscriptions.md
+          - Consume system events: guides/system-events.md
+      - Insomnia and Postman: guides/api-clients.md
+
+  - For platform administrators:
       - operations/README.md
-      - Domain recovery and cleanup: operations/domain-recovery.md
-      - Metadata rollout: operations/metadata-rollout.md
-      - Schema promotion: operations/schema-promotion.md
-      - System event recovery: operations/system-events.md
-      - Organization guardrails: operations/guardrails.md
-      - Uninstall: operations/uninstall.md
+      - Install and onboard:
+          - Plan capacity: operations/service-quotas.md
+          - Configure the platform: operations/configure-platform.md
+          - Install Konductor: operations/installation.md
+          - Deploy domain-account trust: operations/trust-stack-deployment.md
+          - Set up users and access: operations/access-administration.md
+          - Troubleshoot installation: operations/installation-troubleshooting.md
+      - Operate and recover:
+          - Domain recovery and cleanup: operations/domain-recovery.md
+          - Metadata rollout: operations/metadata-rollout.md
+          - Schema promotion: operations/schema-promotion.md
+          - System event recovery: operations/system-events.md
+          - Uninstall: operations/uninstall.md
+      - Separately authorized:
+          - Organization guardrails: operations/guardrails.md
+
   - Concepts:
       - architecture/README.md
       - Platform boundaries: architecture/platform-boundaries.md
@@ -118,12 +127,11 @@ nav:
       - API contracts: reference/api.md
       - Access-token claims: reference/authentication.md
       - Event envelope: reference/event-envelope.md
-      - System events: reference/system-events.md
+      - System events reference: reference/system-events.md
       - Domain statuses: reference/domain-statuses.md
       - Resources and naming: reference/resources.md
       - Lifecycle events: reference/lifecycle-events.md
       - Data model: reference/data-model.md
-      - Discrepancy register: reference/documentation-discrepancies.md
   - Contributing:
       - development/README.md
       - Repository map: development/repository.md
@@ -131,9 +139,6 @@ nav:
       - Console workflow: development/console.md
       - Design system: development/design-system.md
       - Documentation maintenance: development/documentation.md
-  - History:
-      - history/README.md
-      - Documentation baseline: history/documentation-baseline.md
 
 markdown_extensions:
   - admonition

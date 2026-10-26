@@ -3313,18 +3313,19 @@ Resources:
             Description: Reconciliation backstop — disables subscriptions whose entitlement coverage lapsed
 
   # ---- Approval Notification Functions ----
+  # The approval request function deploys even with notifications disabled:
+  # it stores the task token the decide endpoint resumes, and skips the email
+  # when either address is empty.
   SendApprovalRequestNotificationFunctionLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
-    Condition: NotificationsEnabled
     Properties:
       LogGroupName: !Sub "/aws/lambda/konductor-send-approval-request-notification"
       RetentionInDays: 30
 
   SendApprovalRequestNotificationFunction:
     Type: AWS::Serverless::Function
-    Condition: NotificationsEnabled
     DependsOn: SendApprovalRequestNotificationFunctionLogGroup
     Metadata:
       BuildMethod: rust-cargolambda
@@ -3862,7 +3863,6 @@ Resources:
 
   ApprovalWorkflowNotificationPolicy:
     Type: AWS::IAM::Policy
-    Condition: NotificationsEnabled
     Properties:
       PolicyName: ApprovalWorkflowNotificationPolicy
       Roles:
@@ -3892,10 +3892,7 @@ Resources:
         DomainsTable: !Ref DomainsTable
         KonductorEventBus: !GetAtt KonductorEventBus.Arn
         FinalizeApprovalFunction: !GetAtt FinalizeApprovalFunction.Arn
-        SendApprovalRequestNotificationFunction: !If
-          - NotificationsEnabled
-          - !GetAtt SendApprovalRequestNotificationFunction.Arn
-          - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:notifications-disabled"
+        SendApprovalRequestNotificationFunction: !GetAtt SendApprovalRequestNotificationFunction.Arn
 
   ProvisioningWorkflowRole:
     Type: AWS::IAM::Role

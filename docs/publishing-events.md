@@ -6,7 +6,7 @@ Use [publishing events](guides/publishing-events.md). This page preserves links 
 
 | Previous section | Current location |
 |---|---|
-| <a id="publishing-events"></a>Publishing events | [Open section](guides/publishing-events.md#publishing-events) |
+| <a id="publishing-events"></a>Publishing events | [Open section](guides/publishing-events.md#publish-events) |
 | <a id="overview"></a>Overview | [Open section](guides/publishing-events.md#overview) |
 | <a id="before-you-can-publish-publisher-bindings"></a>Before you can publish: publisher bindings | [Open section](guides/publishing-events.md#before-you-can-publish-publisher-bindings) |
 | <a id="step-1-choose-your-environment-the-api-stage"></a>Step 1: choose your environment (the API stage) | [Open section](guides/publishing-events.md#step-1-choose-your-environment-the-api-stage) |

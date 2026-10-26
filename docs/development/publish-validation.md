@@ -6,7 +6,7 @@ Use [publish validation](../architecture/publish-validation.md). This page prese
 
 | Previous section | Current location |
 |---|---|
-| <a id="publish-validation-at-ingest--design-deep-dive"></a>Publish validation at ingest — design deep dive | [Open section](../architecture/publish-validation.md#publish-validation-at-ingest--design-deep-dive) |
+| <a id="publish-validation-at-ingest--design-deep-dive"></a>Publish validation at ingest — design deep dive | [Open section](../architecture/publish-validation.md#publish-validation) |
 | <a id="1-the-failure-this-design-eliminates"></a>1. The failure this design eliminates | [Open section](../architecture/publish-validation.md#1-the-failure-this-design-eliminates) |
 | <a id="2-the-promise-of-202"></a>2. The promise of 202 | [Open section](../architecture/publish-validation.md#2-the-promise-of-202) |
 | <a id="3-the-two-halves-admission-and-delivery"></a>3. The two halves: admission and delivery | [Open section](../architecture/publish-validation.md#3-the-two-halves-admission-and-delivery) |

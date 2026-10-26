@@ -21,10 +21,10 @@ and the [decision record](../decisions/promote-schema-versions.md).
 ## Monitoring
 
 - **`SchemaPromotionStreamDlq` alarm** (DLQ depth > 0): stream records that
-  exhausted retries. Inspect the record's `NewImage`; the promotion id is the
-  Step Functions execution name, so a failed start can be retried by putting
-  the same record back (or by re-requesting the promotion after the head item
-  is repaired).
+  exhausted retries. Inspect the record's `NewImage`. The promotion id is the
+  Step Functions execution name, so putting the same record back retries a
+  failed start. Alternatively, repair the head item and request the promotion
+  again.
 - **Iterator age alarm** on the promotions table stream: the consumer is
   falling behind; promotions will appear stuck in `VALIDATING`.
 - **Step Functions console**: `PromoteSchemaWorkflow` executions are named
@@ -78,10 +78,10 @@ The workflow refused the promotion before any registry read: the input's
 source is not the target's immediate predecessor in the configured
 environment list. The API always derives an adjacent pair, so this reason
 means the state machine was started directly with a planted lease. Treat it
-as an integrity signal, not an operator error: inspect who called
-`StartExecution` (CloudTrail) and delete the planted promotion item if the
-`promotionId` condition could not match (the terminal update is conditional
-on it, so a fabricated id leaves no record at all).
+as an integrity signal, not an operator error. Inspect who called
+`StartExecution` (CloudTrail). If the `promotionId` condition could not
+match, delete the planted promotion item. The terminal update is conditional
+on that id, so a fabricated id leaves no record at all.
 
 ### `FAILED` with reason `REPLAY_FAILED`
 
@@ -107,11 +107,11 @@ generation-guarded).
 ### Releasing a wedged promotion lease
 
 The head item doubles as the per-target lease: while its phase is
-non-terminal, new promotions for that schema and target are refused with
-409. If a promotion is wedged in a non-terminal phase and the workflow is
-gone or beyond repair (for example, the execution was deleted with the
-state machine), cancel the lease manually, then stop the execution if one
-is still running:
+non-terminal, new promotions for that schema and target are refused with 409.
+A promotion may be wedged in a non-terminal phase while its workflow is gone
+or beyond repair (for example, the execution was deleted with the state
+machine). In that case, cancel the lease manually, then stop the execution if
+one is still running:
 
 ```bash
 aws dynamodb update-item \

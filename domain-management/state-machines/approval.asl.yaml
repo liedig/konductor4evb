@@ -49,7 +49,9 @@ States:
           - States.Timeout
         Next: RecordTimeoutRejection
       # Anything else means the approval request never reached a human
-      # (e.g. SES identity unverified) — that is not a rejection.
+      # (e.g. an SES service error or a failed token write) — that is not a
+      # rejection. Permanent SES rejections, such as an unverified identity,
+      # are acknowledged by the Lambda and never reach this Catch.
       - ErrorEquals:
           - States.ALL
         Next: UpdateStatusNotificationFailed
@@ -294,8 +296,9 @@ States:
         JitterStrategy: FULL
     End: true
 
-  # Operator-facing only: no owner email is triggered by this event — email
-  # delivery is exactly the dependency that failed.
+  # Operators receive this through the platform notifications topic and the
+  # owners get a registration-delayed email, both only when notifications are
+  # enabled.
   EmitApprovalNotificationFailedEvent:
     Type: Task
     Resource: "arn:aws:states:::events:putEvents"

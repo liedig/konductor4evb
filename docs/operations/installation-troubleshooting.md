@@ -87,16 +87,8 @@ make build    # fresh build
 
 The `sam build -c` command uses a cache (`-c` flag). If you encounter build issues, clearing the cache with `make clean` is the first step.
 
-### DynamoDB table retained after stack delete
+### Resources retained after stack delete or a failed create
 
-The `DomainsTable` has `DeletionPolicy: Retain`. When you delete the core stack, the DynamoDB table is preserved. To fully remove it:
+Two core-stack resources have `DeletionPolicy: Retain` and survive a stack delete: the Cognito user pool `{org}-konductor-users` and the system-event schema registry `{org}-konductor-system-schemas`. The DynamoDB tables are deleted with the stack.
 
-```bash
-aws dynamodb delete-table \
-  --table-name konductor-domains \
-  --region <region>
-```
-
-## Related review items
-
-[Trust-role parameters](../reference/documentation-discrepancies.md#d03) and [retained-resource inventories](../reference/documentation-discrepancies.md#d08) need separate technical review.
+A rolled-back first create keeps both as well. The retry then fails because the registry already exists, and each failed attempt strands another user pool with the same name. The rollback can also leave the `/aws/lambda/konductor-system-schema-bootstrap` log group outside the stack, which fails the next change set's early validation with a name conflict. Delete these leftovers before you retry; [step 5 of the uninstall procedure](uninstall.md#5-clean-up-retained-resources) shows the commands.

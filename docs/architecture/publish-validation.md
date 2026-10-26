@@ -1,4 +1,4 @@
-# Publish validation at ingest — design deep dive
+# Publish validation
 
 Konductor for Amazon EventBridge validates publish requests before accepting
 them for delivery. This document explains the admission checks, delivery
@@ -6,7 +6,7 @@ guarantees, and failure cases that shaped the design.
 
 Read this if you are about to modify the publish path, review a change to it,
 or explain its behavior to a producer team. For the producer-facing how-to,
-see [Publishing events](../guides/publishing-events.md). For the `validate-at-ingest`
+see [Publish events](../guides/publishing-events.md). For the `validate-at-ingest`
 decision, see the [Decision log](../decisions/README.md).
 
 ## 1. The failure this design eliminates
@@ -93,10 +93,10 @@ Separate functions preserve three properties:
 - **Least privilege.** Delivery no longer needs to read the authorization
   bindings table or the schema registry, so its AWS Identity and Access
   Management (IAM) role loses both permissions. The queue enforces the same
-  boundary: IAM grants `SendMessage` to the admission role
-  only, and a resource policy on the queue denies `sqs:SendMessage` to every
-  other principal—so even a same-account workload with broad SQS permissions
-  cannot inject a command that skips validation. The deliberate trade-off:
+  boundary: IAM grants `SendMessage` to the admission role only. A resource
+  policy on the queue denies `sqs:SendMessage` to every other principal, so
+  even a same-account workload with broad SQS permissions cannot inject a
+  command that skips validation. The deliberate trade-off:
   dead-letter queue (DLQ) redrive through the console or command line is
   also denied. Republish through `/publish` instead. The DLQ retains the
   original message body, and admission validates it again.
@@ -152,10 +152,10 @@ Use the status code to distinguish invalid requests from platform failures.
 Two distinctions determine how callers respond:
 
 **`422` versus `400`.** A `400` says "this is not a well-formed publish
-request"; a `422` says "this is a perfectly good publish request whose payload
-breaks the event contract." Keeping them separate lets monitoring distinguish
+request". A `422` says "this is a perfectly good publish request whose payload
+breaks the event contract". Keeping them separate lets monitoring distinguish
 client bugs (400—the caller's HTTP code is wrong) from contract drift (422 —
-the caller's *data* diverged from the schema), which have different owners and
+the caller's *data* diverged from the schema). These have different owners and
 different urgencies.
 
 **`503` is never a rejection.** A `503` means Konductor could not determine
@@ -166,9 +166,9 @@ acceptance and an incorrect claim that the producer supplied invalid data.
 ## 6. The schema cache and the refresh-before-reject rule
 
 Calling the Schemas API on every publish would add a network hop and a hard
-dependency to the hot path, so admission keeps an in-memory cache keyed by
-`(environment, schema)` holding `{version, content, fetchedAt}`, with a time to live (TTL) of
-at most 60 seconds.
+dependency to the hot path. Admission therefore keeps an in-memory cache keyed
+by `(environment, schema)` holding `{version, content, fetchedAt}`, with a
+time to live (TTL) of at most 60 seconds.
 
 A cache introduces an obvious hazard: what if a producer appends schema version
 4, immediately publishes a version-4-shaped payload, and the cache still holds
@@ -184,17 +184,17 @@ fresh schema too. A false rejection caused by cache staleness is therefore
 impossible; the cache only ever saves the *admission* path a registry call.
 
 What about the symmetric case—a payload that passes the stale schema but
-would fail the fresh one? Under the platform's additive-only evolution norm
-(new versions add fields and loosen constraints; they never remove), any
-payload valid under version N is valid under every later version, so stale
-*acceptance* cannot admit anything the current schema forbids. The norm is
-enforced mechanically: `POST /schemas/versions` only appends a candidate
-that provably accepts every payload the current latest version accepts
-(the append-time compatibility gate, `gate-schema-promotion`, hardened by
-`harden-schema-compatibility-checker` to fail closed on anything its
-bounded proof cannot establish), so a stale cache entry can only ever lag
-behind on loosenings—exactly the direction the force-fetch on rejection
-already covers.
+would fail the fresh one? The platform's evolution norm is additive-only: new
+versions add fields and loosen constraints; they never remove. Under that norm,
+any payload valid under version N is valid under every later version. Stale
+*acceptance* therefore cannot admit anything the current schema forbids. The
+norm is enforced mechanically: `POST /schemas/versions` only appends a
+candidate that provably accepts every payload the current latest version
+accepts. This is the append-time compatibility gate, `gate-schema-promotion`,
+hardened by `harden-schema-compatibility-checker` to fail closed on anything
+its bounded proof cannot establish. A stale cache entry can therefore only
+ever lag behind on loosenings—exactly the direction the force-fetch on
+rejection already covers.
 
 One scope limit matters: the gate's proof is *pairwise*. It compares the
 candidate against the latest version the append handler read, and that read
@@ -219,11 +219,11 @@ use it to interpret the payload. For that stamp to mean anything, it must be
 validated against.
 
 Admission sets the `SchemaVersion` SQS message attribute to the version it
-validated, and delivery copies that attribute into the envelope **verbatim** —
+validated. Delivery copies that attribute into the envelope **verbatim** —
 it never re-resolves "latest" at delivery time. The alternative (resolve at
 delivery) would break the invariant whenever a version is appended while a
-message sits in the queue: the event would carry a stamp for a version its
-payload was never checked against.
+message sits in the queue. The event would then carry a stamp for a version
+its payload was never checked against.
 
 The accepted consequence: if version 5 is appended between admission and
 delivery, the event is stamped version 4—the version it provably conforms
@@ -248,7 +248,7 @@ about the payload, not about the registry's current state.
   `publishedAt` derives from the SQS `SentTimestamp`, which is fixed when the
   message is first sent and survives every in-queue retry—so automatic
   retries always keep the original publish time. The one exception is a DLQ
-  *redrive*, which re-sends as a new message with a new `SentTimestamp`; given
+  *redrive*, which re-sends as a new message with a new `SentTimestamp`. Given
   the queue's admission-only write policy, the sanctioned re-drive path is
   re-publishing through `/publish`, which stamps a fresh ingest time by
   definition.
@@ -256,11 +256,11 @@ about the payload, not about the registry's current state.
 ## 9. Metadata in the admitted command (format 2)
 
 Platform metadata adds a generated `metadata` block to every admitted event. The
-queue message therefore became an explicitly versioned **format-2 envelope**:
-the supported publisher body, the resolved business/schema identity and target,
-the selected metadata revision and digest, the generated extension values, and
-the compiled metadata schema (or a bounded validation descriptor) the delivery
-path will need. Metadata lives in the message body, not SQS attributes—the
+queue message therefore became an explicitly versioned **format-2 envelope**.
+It carries the supported publisher body, the resolved business/schema identity
+and target, and the selected metadata revision and digest. It also carries the
+generated extension values and the compiled metadata schema (or a bounded
+validation descriptor) the delivery path will need. Metadata lives in the message body, not SQS attributes—the
 attribute surface stays bounded and the trusted-principal attributes are
 preserved unchanged.
 
@@ -277,9 +277,9 @@ authorization:
 
 Every generated field except `publishedAt` is a **frozen value** at enqueue.
 `publishedAt` is the queue-time exception: the SQS acceptance time is unknowable
-before SQS accepts, so preflight uses the fixed-width UTC-millisecond
-representation, no configurable constraint may depend on its eventual value, and
-delivery derives it from the recorded queue message and checks it against the
+before SQS accepts. Preflight therefore uses the fixed-width UTC-millisecond
+representation, and no configurable constraint may depend on its eventual value.
+Delivery derives it from the recorded queue message and checks it against the
 frozen built-in rule.
 
 Delivery reads only recorded values—the format-2 body carries everything, so
@@ -299,9 +299,9 @@ stronger than distributed enqueue can promise and is not repeated here.
 
 ## 10. Why schemas are draft-4 only, enforced at write time
 
-Validation is only as reliable as the stored schemas. If a registry could hold
-a document that does not compile—malformed JSON, a non-object, an OpenAPI 3.0
-document, a draft-2020-12 schema using draft-4-incompatible keywords—then
+Validation is only as reliable as the stored schemas. Suppose a registry could
+hold a document that does not compile—malformed JSON, a non-object, an OpenAPI
+3.0 document, a draft-2020-12 schema using draft-4-incompatible keywords. Then
 every publish against it would fail at admission with `503`, forever. The
 platform would have traded "events silently dropped" for "events rejected
 loudly for a reason nobody can fix at publish time."
@@ -343,23 +343,24 @@ The design excludes the following alternatives:
 
 ## 12. Where things live
 
-The following files implement and test the publish path.
+The following files implement and test the publish path. The links open the
+source on GitHub.
 
 | Piece | Location |
 |-------|----------|
-| Admission handler | `event-streams/functions/publish-events-admission/` |
-| Delivery consumer | `event-streams/functions/publish-events/` |
-| Validation, cache, draft-4 compile gate | `lib/konductor-common/src/schema_validation.rs` |
-| Principal envelope serialization | `lib/konductor-common/src/principal_context.rs` (`to_sqs_attributes`) |
-| Schema write gates (draft-4 400 s) | `event-streams/functions/schema-admin/` |
-| Infrastructure (queue policy, IAM, alarm) | `konductor-core-stack.yaml` |
-| API contracts (`/publish` responses) | `api/openapi-oauth.yaml`, `api/openapi-iam.yaml` |
-| Contract tests | `lib/konductor-common/tests/api_surfaces.rs` |
+| Admission handler | [`event-streams/functions/publish-events-admission/`](../../event-streams/functions/publish-events-admission/) |
+| Delivery consumer | [`event-streams/functions/publish-events/`](../../event-streams/functions/publish-events/) |
+| Validation, cache, draft-4 compile gate | [`lib/konductor-common/src/schema_validation.rs`](../../lib/konductor-common/src/schema_validation.rs) |
+| Principal envelope serialization | [`lib/konductor-common/src/principal_context.rs`](../../lib/konductor-common/src/principal_context.rs) (`to_sqs_attributes`) |
+| Schema write gates (draft-4 rejected with `400`) | [`event-streams/functions/schema-admin/`](../../event-streams/functions/schema-admin/) |
+| Infrastructure (queue policy, IAM, alarm) | [`konductor-core-stack.yaml`](../../konductor-core-stack.yaml) |
+| API contracts (`/publish` responses) | [`api/openapi-oauth.yaml`](../../api/openapi-oauth.yaml), [`api/openapi-iam.yaml`](../../api/openapi-iam.yaml) |
+| Contract tests | [`lib/konductor-common/tests/api_surfaces.rs`](../../lib/konductor-common/tests/api_surfaces.rs) |
 
 Operations: a `PublishUnavailable` metric filter on the admission log feeds the
 `konductor-publish-admission-unavailable-alarm`—any firing means ingest is
 degraded (registry outage, unusable stored schema, or queue failure) and
-publishers are seeing `503`s.
+publishers are receiving `503` responses.
 
 ## Integration map
 

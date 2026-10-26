@@ -57,13 +57,25 @@ The platform uses Amazon API Gateway, AWS Lambda, Amazon DynamoDB, AWS Step Func
 
 ### Decide on your namespace
 
-Konductor is a singleton per organization. Platform resources follow the fixed `konductor-*` pattern (for example, `konductor-bus`); the domain-account trust role follows `{org}-konductor-trust-role` (org-scoped so it's unique across organizations sharing a domain account); domain resources follow `{org}-{env}-{domain}-*` (the env comes from the `Environments` parameter, applied per-domain at provisioning time). Choose a value for:
+Konductor is a singleton per organization. Platform resources follow the fixed `konductor-*` pattern (for example, `konductor-bus`). The domain-account trust role follows `{org}-konductor-trust-role`, scoped by organization so it stays unique when organizations share a domain account. Domain resources follow `{org}-{env}-{domain}-*`, where `{env}` comes from the `Environments` parameter and is applied per domain at provisioning time. Choose a value for:
 
 | Parameter | Example | Notes |
 |---|---|---|
 | `Organization` | `acme` | Short identifier for your organization |
 
 This value is immutable once deployed, as are the environments list, namespace pattern, and AWS Organization ARN—see the lifecycle classes in the [configuration contract](../reference/configuration.md). Stack names are fixed (`konductor-core`, `konductor-notifications`, `konductor-trust`)—one deployment per AWS organization.
+
+### Credentials and Region
+
+The installation runs make targets against the platform account. A target uses the same credentials as the AWS CLI: the profile named by `AWS_PROFILE`, credential environment variables, or the default profile. If the platform account is not your default profile, export its profile before you start:
+
+```bash
+export AWS_PROFILE=<platform-account-profile>
+```
+
+To pin a profile on a single command instead, pass `PLATFORM_PROFILE=<profile>` to a target that accepts it; `make help` lists them. The other targets, including the smoke test, always use the current credentials. The trust stack deployment in Phase 3 takes the domain account's profile as `APP_PROFILE`.
+
+Pass `AWS_REGION=<region>` to each make target that calls AWS, as the commands on this page do. Without it, a target falls back to `AWS_DEFAULT_REGION`, then to the Region configured for `PLATFORM_PROFILE` or the current profile, then to `us-east-1`.
 
 ---
 
@@ -73,26 +85,22 @@ This stack creates SES email identities for approval and rejection notifications
 
 **Important:** Deploy this stack in the same AWS Region as the Konductor core stack. SES identities are Regional.
 
+The `deploy-notifications` target runs `sam deploy` with the stack settings in `samconfig-notifications.toml`, which names the stack `konductor-notifications`:
+
 ```bash
-sam deploy \
-  --config-file samconfig-notifications.toml \
-  --stack-name konductor-notifications \
-  --parameter-overrides \
-    NotificationSenderEmail=<sender@example.com> \
-    PlatformOperatorEmail=<platform-team@example.com> \
-  --region <region>
+make deploy-notifications \
+  AWS_REGION=<region> \
+  NOTIFICATION_SENDER_EMAIL=<sender@example.com> \
+  PLATFORM_OPERATOR_EMAIL=<platform-team@example.com>
 ```
 
 Example:
 
 ```bash
-sam deploy \
-  --config-file samconfig-notifications.toml \
-  --stack-name konductor-notifications \
-  --parameter-overrides \
-    NotificationSenderEmail=konductor-sender@example.com \
-    PlatformOperatorEmail=platform-team@example.com \
-  --region us-east-1
+make deploy-notifications \
+  AWS_REGION=us-east-1 \
+  NOTIFICATION_SENDER_EMAIL=konductor-sender@example.com \
+  PLATFORM_OPERATOR_EMAIL=platform-team@example.com
 ```
 
 ### Verify SES identities
@@ -147,7 +155,7 @@ Every setting, its syntax, default, and lifecycle class is defined in the [confi
 Validate before deploying:
 
 ```bash
-make validate-config
+make validate-config AWS_REGION=<region>
 ```
 
 The preflight checks the contract rules and the SES verification status of both notification addresses. Once a stack exists, it also refuses fixed-at-setup changes against the deployed stack.
@@ -155,22 +163,22 @@ The preflight checks the contract rules and the SES verification status of both 
 ### Deploy
 
 ```bash
-make deploy-core
+make deploy-core AWS_REGION=<region>
 ```
 
 This runs the same validation first, then deploys with parameter overrides rendered from `konductor-platform.toml`—deploy and validation cannot read different values.
 
 > **On `environments`**: this is an org-wide governance setting, fixed at setup. Every domain registered and approved on this Konductor deployment is provisioned across the full list. The preflight refuses a changed list against a deployed stack; adding or removing environments on a live platform is a provisioning-shaped migration deferred to a future change.
 >
-> The list also drives the API stages and the console's `/api/{environment}` routes: the first entry is the authoring environment and every later entry is a promotion target, rendered into the marked block in `konductor-core-stack.yaml` by `make build` (`scripts/validate-config.py --render-stages`). Deploys where the first entry is not `dev` rewrite the SAM-managed stage to match it. Because the stage resources keep stable logical IDs, adopting the rendered stages on an existing installation is an in-place update with no stage replacement; the phantom `Stage` stage that older deployments carry comes from SAM's generated `Deployment` resource and is inert.
+> The list also drives the API stages and the console's `/api/{environment}` routes. The first entry is the authoring environment, and every later entry is a promotion target. `make build` (`scripts/validate-config.py --render-stages`) renders the promotion-target stages into the marked block in `konductor-core-stack.yaml`. Deploys where the first entry is not `dev` rewrite the SAM-managed stage to match it. Because the stage resources keep stable logical IDs, adopting the rendered stages on an existing installation is an in-place update with no stage replacement. The phantom `Stage` stage that older deployments carry comes from SAM's generated `Deployment` resource and is inert.
 
 ### Existing installations: adopt the configuration file
 
 Installations deployed before this flow have their values in `samconfig-core.toml` parameter overrides or deploy history. Generate the file from the deployed stack instead of retyping values:
 
 ```bash
-python3 scripts/validate-config.py --init-from-stack > konductor-platform.toml
-make validate-config
+python3 scripts/validate-config.py --init-from-stack --region <region> > konductor-platform.toml
+make validate-config AWS_REGION=<region>
 ```
 
 Review the generated file—settings absent from the deployed stack's parameters fall back to the contract defaults. Once validation passes, `make deploy-core` deploys with exactly the validated values. The committed `samconfig-core.toml` no longer carries parameter overrides.
@@ -205,7 +213,7 @@ Also note the `IamApiEndpoint` and `OAuthApiEndpoint` outputs—the smoke test u
 
 ## Phase 3: onboard a domain account
 
-Follow [trust-stack deployment](trust-stack-deployment.md), including its [unresolved role-parameter discrepancy](../reference/documentation-discrepancies.md#d03). Keep the platform stack outputs from Phase 2 available.
+Follow [trust-stack deployment](trust-stack-deployment.md) for each domain account. It needs the three role ARNs from the Phase 2 outputs above, so keep them available.
 
 Organization guardrails are optional and separately authorized. They are not part of the ordinary installation path. See [guardrail deployment and verification](guardrails.md), including the recorded sandbox acceptance evidence, before considering attachment.
 
@@ -247,7 +255,7 @@ and DLQ ARNs for each.
 The smoke test does not delete the domain. To clean up afterward, run:
 
 ```bash
-make teardown-domain DOMAIN_NAME=smoke-test
+make teardown-domain AWS_REGION=<region> DOMAIN_NAME=smoke-test
 ```
 
 ### Manual smoke test

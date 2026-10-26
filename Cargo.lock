@@ -3602,6 +3602,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
  "aws-sdk-sesv2",
+ "aws-smithy-mocks",
  "konductor-common",
  "lambda_runtime",
  "serde_json",

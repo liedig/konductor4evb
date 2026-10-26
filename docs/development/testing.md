@@ -1,4 +1,4 @@
-# Testing Guide
+# Testing
 
 Use this guide to test critical behavior in Konductor for Amazon EventBridge. It covers the development cycle, Rust handler tests, browser tests, and local validation commands. For the test-first rule and the priority test flows, see [Testing Strategy in AGENTS.md](../../AGENTS.md#testing-strategy).
 
@@ -110,7 +110,7 @@ The web console has an isolated-browser suite (`pnpm test:ui` from `web/`) with 
 - **Identity**: the dev-only `konductorTestSession` sessionStorage seam (`web/app/stores/session.ts`) mirrors a Cognito ID-token payload, letting a test run as `platform-admin`, `platform-auditor`, or a team group. The seam is compiled out of production (`import.meta.env.DEV` is statically false).
 - **API**: feature-flow tests fulfill every `/dev/**` call with the in-test route mock (`web/tests/ui/api.ts`)—per-test mutable state drives conflicts, stale activations, delayed busy states, and error modes deterministically. The mock mirrors the real OpenAPI surface (`code` + `message` on errors). Component/gallery specs use the isolation fixture (`web/tests/ui/fixtures.ts`), which stubs `config.json` and blocks external traffic and same-origin API calls instead.
 - **Server**: Playwright starts `nuxi dev --host 127.0.0.1 --port 3100` itself; bind IPv4 explicitly (the default binds IPv6-only on macOS, which defeats the readiness poll).
-- **Scope**: journey flows (create → preview → save → conflict → activate → inspect), role restrictions, error/loading/empty states, narrow viewports, keyboard/dialog focus, plus rendered `Nx*` wrapper behavior on `/design-system` (labels and states, modal focus/dismissal, confirmation busy/retry, notification timing and overlapping pause conditions, enlarged text, reduced motion) and protected-route redirects to sign-in. Known accessibility gaps are recorded in the change's task notes rather than asserted as passing.
+- **Scope**: journey flows (create → preview → save → conflict → activate → inspect), role restrictions, error/loading/empty states, narrow viewports, keyboard/dialog focus, and protected-route redirects to sign-in. The suite also covers rendered `Nx*` wrapper behavior on `/design-system`: labels and states, modal focus/dismissal, confirmation busy/retry, notification timing and overlapping pause conditions, enlarged text, and reduced motion. Known accessibility gaps are recorded in the change's task notes rather than asserted as passing.
 
 ```bash
 cd web
@@ -129,7 +129,7 @@ Toast text appears twice in the document object model (DOM): the visible toast a
 
 ## Web unit tests (node:test)
 
-Pure web logic that does not need a browser runs under Node's built-in runner (`pnpm test:unit` from `web/`, files in `tests/unit/`). This is where the post-build SPA fix (`scripts/fix-spa-output.mjs`) is verified: the suite asserts Nuxt's `#entry` import map is removed (browsers ignore `src` on import maps and the strict CSP blocks the inline form), the `__NUXT__` shim is still externalized, unexpected map shapes fail the build, and `#entry` specifiers in chunks are rewritten to relative imports. The Playwright suite boots `nuxi dev` and cannot see these build-output defects; the unit suite plus the build's own loud failures are what guard the deployed page.
+Pure web logic that does not need a browser runs under Node's built-in runner (`pnpm test:unit` from `web/`, files in `tests/unit/`). This is where the post-build SPA fix (`scripts/fix-spa-output.mjs`) is verified. The suite asserts that Nuxt's `#entry` import map is removed, because browsers ignore `src` on import maps and the strict CSP blocks the inline form. It also asserts that the `__NUXT__` shim is still externalized, unexpected map shapes fail the build, and `#entry` specifiers in chunks are rewritten to relative imports. The Playwright suite boots `nuxi dev` and cannot see these build-output defects; the unit suite plus the build's own loud failures are what guard the deployed page.
 
 For manual review, `make web-dev` keeps its AWS-backed configuration and API proxy, then opens `/design-system` in the default browser when Nuxt starts. It uses Nuxt's actual port (normally 3000). Plain `pnpm dev` does not automatically open a browser. Gallery demos make no service writes, but other pages connect to the live backend.
 

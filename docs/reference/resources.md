@@ -56,7 +56,7 @@ The platform-side and app-side event buses share the same name—they live in di
 
 Konductor distinguishes **platform resources** (the singleton control plane) from **domain resources** (one set per environment per domain).
 
-**Platform resources**—fixed `konductor-*` pattern, no org or environment segment (Konductor is a singleton per AWS account):
+**Platform resources**—a fixed `konductor-*` pattern for most resources, with no org or environment segment (Konductor is a singleton per AWS account):
 
 ```text
 konductor-bus                             (konductor event bus)
@@ -66,7 +66,7 @@ konductor-function-role                   (Lambda trust-anchor role)
 konductor-provisioning-workflow-role      (Step Functions execution role)
 ```
 
-The domain-account **trust role** is the one exception: it carries the org prefix as `{org}-konductor-trust-role` (for example, `acme-konductor-trust-role`) so multiple organizations sharing a domain account don't collide.
+Some platform resources carry the org prefix instead. The domain-account **trust role** is `{org}-konductor-trust-role` (for example, `acme-konductor-trust-role`) so multiple organizations sharing a domain account don't collide. The Cognito user pool (`{org}-konductor-users`), app client (`{org}-konductor-control-plane`), and hosted-UI domain (`{org}-konductor-{account-id}`); the public system-events bus (`{org}-konductor-system-bus`), its archive, and its schema registry; and the web console bucket and CloudFront policies also use `{org}-konductor-*` names.
 
 **Domain resources**—`{org}-{env}-{domain}-*`, one set per environment in the `Environments` platform parameter:
 
@@ -78,7 +78,7 @@ acme-prod-billing-integration-dlq     (Domain account DLQ)
 acme-prod-billing-dashboard           (CloudWatch dashboard)
 ```
 
-The domain pattern is configurable via the `NamespacePattern` SAM parameter (default: `{org}-{env}-{domain}`), fixed at setup—syntax and lifecycle are defined in the [configuration contract](configuration.md). The `NamespaceResolver` in `lib/konductor-common/src/namespace.rs` handles domain-resource name generation. The platform pattern (`konductor-*`) is fixed.
+The domain pattern is configurable via the `NamespacePattern` SAM parameter (default: `{org}-{env}-{domain}`), fixed at setup—syntax and lifecycle are defined in the [configuration contract](configuration.md). The `NamespaceResolver` in [`lib/konductor-common/src/namespace.rs`](../../lib/konductor-common/src/namespace.rs) generates domain-resource names. The platform pattern (`konductor-*`) is fixed.
 
 The `konductor` name is reserved—the register-domain handler rejects it so no domain can collide with the platform namespace.
 

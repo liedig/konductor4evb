@@ -4,8 +4,6 @@
 
 Domain and subscription storage keys and access patterns. Binding and entitlement storage live with their [authorization explanation](../architecture/authorization.md).
 
-> **Review pending:** [D10](../reference/documentation-discrepancies.md#d10) records conflicting or unverified guidance retained from the previous documentation. This reorganization does not resolve it.
-
 ## Domains table
 
 A single `domains` DynamoDB table stores both domain metadata and registration state. This was a deliberate choice over separate tables—the domain entity and its registration lifecycle are the same concern.
@@ -20,7 +18,9 @@ A single `domains` DynamoDB table stores both domain metadata and registration s
 | `description` | String | Not applicable |
 | `ownerEmail` | String | Not applicable |
 | `secondaryOwnerEmails` | String Set (SS) | Not applicable |
-| `tags` | Map | Not applicable |
+| `owningTeam` | String |—(the Cognito team group named at registration; approval binds it as the domain owner; absent when an IAM registration omitted it) |
+| `costCenter` | String |—(the governed cost-allocation value; absent when the registration carried none) |
+| `tags` | Map |—(the platform-computed tag set: `konductor:managed-by`, `konductor:domain`, `konductor:namespace`, and `cost-center` when `costCenter` is set; rewritten when `costCenter` changes) |
 | `environments` | List<String> |—(stamped at registration time from the platform `Environments` parameter) |
 | `environmentAccounts` | Map<String,String> |—(sparse per-environment account overrides, stored exactly as submitted; keys are members of the stamped environment list, values are 12-digit account IDs; absent when the registration carried no overrides and on records predating the field) |
 | `resourceArns` | Map<env, PerEnvResourceArns> |—(populated after provisioning; keyed by environment) |
@@ -44,13 +44,15 @@ A single `domains` DynamoDB table stores both domain metadata and registration s
 | List domains by status | `by-status` | `status = :status` |
 | Detect new account | `by-owner` | `ownerAccountId = :acct` + filter `status = ACTIVE` |
 
-The table uses `PAY_PER_REQUEST` billing with point-in-time recovery enabled and a `Retain` deletion policy.
+The table uses `PAY_PER_REQUEST` billing with point-in-time recovery enabled. Its deletion policy is `Delete`, so deleting the core stack deletes the table and every domain record; see [Uninstall](../operations/uninstall.md).
 
 ### Domain-count ceiling
 
-The table is capped at **1,000 rows**. A singleton counter item (`domainName = "META#domain-count"`, attribute `count`) tracks the total; every row-creating registration write (new `PENDING_APPROVAL` registrations and collision-preflight `REJECTED` rows) runs as a DynamoDB transaction that creates the row and increments the counter atomically, conditioned on the counter staying below the cap. Re-registration of a rejected domain overwrites its existing row in a follow-up transaction without charging the counter.
+The table is capped at **1,000 rows**. A singleton counter item (`domainName = "META#domain-count"`, attribute `count`) tracks the total. Every row-creating registration write (a new `PENDING_APPROVAL` registration or a collision-preflight `REJECTED` row) runs as one DynamoDB transaction. The transaction creates the row and increments the counter atomically, conditioned on the counter staying below the cap. Re-registration of a rejected domain overwrites its existing row in a follow-up transaction without charging the counter.
 
-The counter item is not a domain: it carries no `ownerAccountId` or `status`, so it never enters the `by-owner`/`by-status` GSIs, and both list-domains scans exclude it by key. At the cap, registration fails deterministically with `RegisterDomainFailed` (domain-limit reason), no approval workflow starts, and the message is acknowledged without retry. Rows are never deleted, so the ceiling bounds lifetime registrations until a domain-deletion capability lands; `docs/service-quotas.md` holds the seeding/reconciliation runbook and the hourly `domain-count-reporter` Lambda feeds the 80%-of-cap alarm (`Konductor/DomainManagement` `DomainCount`).
+The counter item is not a domain: it carries no `ownerAccountId` or `status`, so it never enters the `by-owner`/`by-status` GSIs, and both list-domains scans exclude it by key. At the cap, registration fails deterministically with `RegisterDomainFailed` (domain-limit reason), no approval workflow starts, and the message is acknowledged without retry.
+
+The counter never decrements. A rejected row keeps its slot, and [domain teardown](../operations/domain-recovery.md#cleaning-up-domain-resources) deletes the domain's row without lowering the counter, so the ceiling bounds lifetime row creations until an operator reconciles the counter. The [service quotas runbook](../operations/service-quotas.md#the-1000-domain-ceiling) covers seeding and reconciliation, and the hourly `domain-count-reporter` Lambda feeds the 80%-of-cap alarm (`Konductor/DomainManagement` `DomainCount`).
 
 ### Event streams table
 
@@ -69,13 +71,13 @@ The `konductor-event-streams` table is the **source of intent** for subscription
 | `expiresAt` | Number (epoch) | TTL (removal + 90 days) |
 
 `upgradeEvents` holds the latest committed upgrade phase snapshot per
-environment (present only when system-event emission is enabled): the re-pin
-workflow's widen/narrow steps commit `STARTED`/`TERMINAL` snapshots with the
-operation id, generation-derived resource revision, deterministic idempotency
-key, version facts, and contract selectors. A conditional write guards each
-commit so a newer re-pin is never regressed, and the terminal snapshot lands
-in the same `UpdateItem` as the pin (or failure marker) it describes. The
-table's stream projector turns snapshots into the public
+environment, and is present only when system-event emission is enabled. The
+re-pin workflow's widen/narrow steps commit `STARTED`/`TERMINAL` snapshots
+with the operation id, generation-derived resource revision, deterministic
+idempotency key, version facts, and contract selectors. A conditional write
+guards each commit so a newer re-pin is never regressed, and the terminal
+snapshot lands in the same `UpdateItem` as the pin (or failure marker) it
+describes. The table's stream projector turns snapshots into the public
 [system events](system-events.md); snapshots live outside `environments` so
 materialization merges cannot erase them.
 

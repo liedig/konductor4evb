@@ -28,4 +28,4 @@ The [OpenSpec design](../../openspec/changes/archive/2026-09-08-follow-schema-pr
 preserves all seven decisions, alternatives, risks, and the migration plan.
 Producer-side promotion automation and version migration are outside this choice.
 The [consumer-guide conflict](../reference/documentation-discrepancies.md#d01)
-is still awaiting separate review.
+was resolved on 2026-10-25.

@@ -1,4 +1,4 @@
-# System events
+# Consume system events
 
 [Documentation home](../README.md)
 
@@ -8,7 +8,7 @@ This guide shows how a domain team subscribes an SQS queue or Lambda function
 and consumes events safely. The payload contract is documented in the
 [system events reference](../reference/system-events.md); operational failure
 recovery is a platform concern covered by
-[system event operations](../operations/system-events.md).
+[system event recovery](../operations/system-events.md).
 
 ## Prerequisites
 
@@ -69,7 +69,7 @@ endpoint owner's responsibility, and the platform does not redrive them.
 
 Email is a permitted protocol alongside SQS and Lambda. Because email
 addresses are not ARNs, the topic policy cannot restrict which addresses are
-subscribed — anyone with credentials in a registered account can subscribe an
+subscribed. Anyone with credentials in a registered account can subscribe an
 address, so treat mailbox membership as the access boundary for these
 low-sensitivity version notifications.
 

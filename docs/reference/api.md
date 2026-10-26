@@ -21,6 +21,7 @@ changes. Import the contract into an API client rather than copying an old table
 Handlers and tests provide implementation evidence. A disagreement between
 them requires review; it is not resolved by selecting whichever source is newest.
 
-The previous Markdown endpoint tables remain only as
-[dated review evidence](../history/documentation-baseline.md). Their authorization
-claims are tracked in [D05](documentation-discrepancies.md#d05).
+The previous Markdown endpoint tables remain in the repository only as
+[dated review evidence](../history/documentation-baseline.md). Their role
+requirements predate binding-based authorization; use
+[identity and authorization](../architecture/authorization.md) for current access rules.

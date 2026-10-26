@@ -1,11 +1,17 @@
-.PHONY: help build test check smoke smoke-subscription validate-config deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions web-dev deploy-web clean
+.PHONY: help build test check docs-serve smoke smoke-subscription validate-config deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions web-dev deploy-web clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
-AWS_REGION ?= $(shell aws configure get region 2>/dev/null || echo us-east-1)
+# Left unset, AWS commands use the caller's current credentials: an explicit
+# --profile, even "default", overrides AWS_PROFILE and credential environment variables.
+PLATFORM_PROFILE_OPTION = $(if $(PLATFORM_PROFILE),--profile $(PLATFORM_PROFILE))
+# Same order as the AWS CLI: AWS_DEFAULT_REGION before the selected profile's Region.
+AWS_REGION ?= $(or $(AWS_DEFAULT_REGION),$(shell aws configure get region $(PLATFORM_PROFILE_OPTION) 2>/dev/null),us-east-1)
 ORGANIZATION ?= acme
 DOMAIN_NAME ?= smoke-test
-PLATFORM_PROFILE ?= default
+DOCS_PORT ?= 8642
+# Recursive so the pin is read only when a docs target expands it.
+MKDOCS_MATERIAL_VERSION = $(shell sed -n 's/^mkdocs-material==//p' requirements-docs.txt)
 
 # Colour codes for help output (tput falls back to empty strings on dumb terminals)
 BOLD := $(shell tput bold 2>/dev/null)
@@ -22,6 +28,8 @@ help: ## Show this help message
 	@printf "\n  $(BOLD)$(CYAN)EventBridge Konductor$(RESET) — Makefile targets\n\n"
 	@printf "  $(BOLD)Build & Test$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(build|test|check|clean):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\n  $(BOLD)Docs$(RESET)\n"
+	@awk 'BEGIN {FS = ":.*?## "} /^(docs-serve):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Deploy$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(validate-config|deploy|deploy-core|deploy-notifications|deploy-trust):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Teardown$(RESET)\n"
@@ -41,8 +49,9 @@ help: ## Show this help message
 	@printf "    $(DIM)NOTIFICATION_SENDER_EMAIL$(RESET)    required for: deploy-notifications\n"
 	@printf "    $(DIM)PLATFORM_OPERATOR_EMAIL$(RESET)      required for: deploy-notifications\n"
 	@printf "    $(DIM)APP_PROFILE$(RESET)                  required for: deploy-trust, teardown-trust\n"
-	@printf "    $(DIM)PLATFORM_PROFILE$(RESET)             optional for: validate-config, deploy-core, deploy-trust (default: $(CYAN)$(PLATFORM_PROFILE)$(RESET))\n"
+	@printf "    $(DIM)PLATFORM_PROFILE$(RESET)             optional for: validate-config, deploy-core, deploy-notifications, deploy-trust, teardown-core, teardown-notifications (default: current AWS credentials)\n"
 	@printf "    $(DIM)ORGANIZATION$(RESET)                 optional for: deploy-trust (default: $(CYAN)$(ORGANIZATION)$(RESET))\n"
+	@printf "    $(DIM)DOCS_PORT$(RESET)                    optional for: docs-serve (host port, default: $(CYAN)$(DOCS_PORT)$(RESET))\n"
 	@printf "    $(DIM)DOMAIN_STATUS$(RESET)               optional for: list-domains (filter by status)\n"
 	@printf "    $(DIM)OWNER_ACCOUNT_ID$(RESET)            optional for: list-domains (filter by owner)\n"
 	@printf "    $(DIM)CONSUMER_DOMAIN$(RESET)             required for: list-schemas (the catalog is entitlement-scoped)\n"
@@ -115,6 +124,11 @@ check: ## cargo fmt, check, clippy (CI-equivalent local gate)
 	cargo fmt --check
 	cargo check --workspace
 	cargo clippy --workspace -- -D warnings
+
+docs-serve: ## Preview the docs site with live reload in the mkdocs-material container pinned by requirements-docs.txt
+	@test -n "$(MKDOCS_MATERIAL_VERSION)" || { echo "$(YELLOW)requirements-docs.txt has no mkdocs-material==<version> pin$(RESET)"; exit 1; }
+	@echo "$(CYAN)Serving docs at http://localhost:$(DOCS_PORT) (Ctrl-C or docker stop konductor-docs to stop)$(RESET)"
+	@docker run --rm --name konductor-docs $$([ -t 0 ] && echo -it) -p 127.0.0.1:$(DOCS_PORT):8000 -v "$(CURDIR)":/docs squidfunk/mkdocs-material:$(MKDOCS_MATERIAL_VERSION) serve --dev-addr=0.0.0.0:8000
 
 web-dev: ## Run the live-backed web console and open /design-system in your browser
 	@set -euo pipefail; \
@@ -291,12 +305,12 @@ endif
 deploy: build deploy-core ## Build then deploy the core stack
 
 validate-config: ## Validate konductor-platform.toml against the configuration contract
-	@python3 scripts/validate-config.py --region $(AWS_REGION) --profile $(PLATFORM_PROFILE)
+	@python3 scripts/validate-config.py --region $(AWS_REGION) $(PLATFORM_PROFILE_OPTION)
 
 deploy-core: build ## Deploy the Konductor core stack (validates konductor-platform.toml, builds, deploys)
 	@set -euo pipefail; \
-	OVERRIDES=$$(python3 scripts/validate-config.py --region $(AWS_REGION) --profile $(PLATFORM_PROFILE) --render); \
-	sam deploy --config-file samconfig-core.toml --parameter-overrides "$$OVERRIDES"
+	OVERRIDES=$$(python3 scripts/validate-config.py --region $(AWS_REGION) $(PLATFORM_PROFILE_OPTION) --render); \
+	sam deploy --config-file samconfig-core.toml --region $(AWS_REGION) $(PLATFORM_PROFILE_OPTION) --parameter-overrides "$$OVERRIDES"
 
 deploy-notifications: ## Deploy the notifications stack (SES identities)
 ifndef NOTIFICATION_SENDER_EMAIL
@@ -305,7 +319,7 @@ endif
 ifndef PLATFORM_OPERATOR_EMAIL
 	$(error PLATFORM_OPERATOR_EMAIL is required — verified SES recipient (platform team inbox))
 endif
-	sam deploy --config-file samconfig-notifications.toml \
+	sam deploy --config-file samconfig-notifications.toml --region $(AWS_REGION) $(PLATFORM_PROFILE_OPTION) \
 		--parameter-overrides NotificationSenderEmail=$(NOTIFICATION_SENDER_EMAIL) PlatformOperatorEmail=$(PLATFORM_OPERATOR_EMAIL)
 
 smoke-subscription: ## End-to-end subscription smoke test (requires PRODUCER_DOMAIN + CONSUMER_DOMAIN, both ACTIVE)
@@ -321,10 +335,10 @@ teardown-domain: ## Delete a domain and every resource it provisioned (default D
 	AWS_REGION=$(AWS_REGION) DOMAIN_NAME=$(DOMAIN_NAME) ./scripts/teardown-domain.sh
 
 teardown-core: ## Delete the Konductor core stack
-	aws cloudformation delete-stack --stack-name konductor-core --region $(AWS_REGION)
+	aws cloudformation delete-stack --stack-name konductor-core --region $(AWS_REGION) $(PLATFORM_PROFILE_OPTION)
 
 teardown-notifications: ## Delete the notifications stack
-	aws cloudformation delete-stack --stack-name konductor-notifications --region $(AWS_REGION)
+	aws cloudformation delete-stack --stack-name konductor-notifications --region $(AWS_REGION) $(PLATFORM_PROFILE_OPTION)
 
 deploy-trust: ## Deploy the trust stack to a domain account (requires APP_PROFILE)
 ifndef APP_PROFILE
@@ -335,20 +349,17 @@ endif
 		--stack-name konductor-core \
 		--query "Stacks[0].Outputs[?OutputKey=='KonductorFunctionRoleArn'].OutputValue" \
 		--output text \
-		--region $(AWS_REGION) \
-		--profile $(PLATFORM_PROFILE)); \
+		--region $(AWS_REGION) $(PLATFORM_PROFILE_OPTION)); \
 	PROVISIONING_ROLE_ARN=$$(aws cloudformation describe-stacks \
 		--stack-name konductor-core \
 		--query "Stacks[0].Outputs[?OutputKey=='ProvisioningWorkflowRoleArn'].OutputValue" \
 		--output text \
-		--region $(AWS_REGION) \
-		--profile $(PLATFORM_PROFILE)); \
+		--region $(AWS_REGION) $(PLATFORM_PROFILE_OPTION)); \
 	RETAG_ROLE_ARN=$$(aws cloudformation describe-stacks \
 		--stack-name konductor-core \
 		--query "Stacks[0].Outputs[?OutputKey=='RetagWorkflowRoleArn'].OutputValue" \
 		--output text \
-		--region $(AWS_REGION) \
-		--profile $(PLATFORM_PROFILE)); \
+		--region $(AWS_REGION) $(PLATFORM_PROFILE_OPTION)); \
 	echo "$(BOLD)$(CYAN)Deploying trust stack to profile: $(APP_PROFILE)$(RESET)"; \
 	echo "  KonductorRoleArn:           $${KONDUKTOR_ROLE_ARN}"; \
 	echo "  ProvisioningRoleArn:    $${PROVISIONING_ROLE_ARN}"; \

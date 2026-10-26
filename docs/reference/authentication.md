@@ -26,7 +26,7 @@ The authorizer maps controlled Amazon Cognito groups to global roles.
 |---------------|------------|------------|
 | `platform-admin` | `PlatformAdmin` | All methods on all OAuth endpoints |
 | `platform-auditor` | `PlatformAuditor` | GET-only on read endpoints; all write and approve endpoints return `403` |
-| Any other group (for example, `team-payments`) | No global role (opaque team-group) | No API access by itself; team-group identifiers are carried in the trusted-principal context for grant-engine role-binding evaluation |
+| Any other group (for example, `team-payments`) | No global role (opaque team-group) | Passes the authorizer's route gate; each handler then authorizes the request from the team's role bindings and domain ownership. A team group alone lets members register domains the team will own and read the domain directory. |
 
 ### What the authorizer does not do
 

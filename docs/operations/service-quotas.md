@@ -29,7 +29,7 @@ The counter item uses `domainName = "META#domain-count"` and the `count` attribu
 
 Two properties shape operations:
 
-- **The counter never decrements.** There is no domain-deletion capability yet, so the ceiling bounds the table's lifetime registrations, including rejected rows. To retire rows manually, delete them and decrement the counter by the same amount. See [Reconciliation](#reconciliation-counter-versus-row-count).
+- **The counter never decrements.** Neither rejection nor [domain teardown](domain-recovery.md#cleaning-up-domain-resources) lowers it, so the ceiling bounds the table's lifetime registrations, including rejected and torn-down rows. After rows are deleted, by the teardown script or by hand, reconcile the counter to recover their headroom. See [Reconciliation](#reconciliation-counter-versus-row-count).
 - **Capacity alarm.** The hourly `konductor-domain-count-reporter` function publishes the counter as the `DomainCount` metric (namespace `Konductor/DomainManagement`); `konductor-domain-count-capacity-alarm` fires at **800** (80%). When it fires, reconcile the counter, clean up stale rows, and confirm quota headroom before the next onboarding wave.
 
 With a ceiling of 1,000 domains and E environments, the model requires at most **1,000 × E registries** and **1,000 × E + 2 event buses**. At the default E = 3, these totals are 3,000 and 3,002. Size requests for the domains you plan to onboard. See the [Pre-onboarding checklist](#pre-onboarding-checklist).
@@ -63,7 +63,7 @@ aws dynamodb put-item --table-name "$DOMAINS_TABLE" \
 
 ### Reconciliation: counter versus row count
 
-Because rows are never deleted, the counter must always equal the row count. Investigate drift (rows created out-of-band, manual edits, a partially seeded counter) with:
+Without deletions, the counter equals the row count. Each torn-down or manually deleted row leaves the counter one higher than the row count, and rows created out-of-band, manual edits, or a partially seeded counter can skew it either way. Compare the two with:
 
 ```bash
 # Row count: the paginated scan from step 1 above
@@ -106,7 +106,7 @@ The platform account contains the following resources. A dead-letter queue (DLQ)
 | Zero-events alarm | S × E | `activate-subscription` |
 | Singletons (konductor-bus, 2 DynamoDB tables, API, 13 Lambdas, 7 state machines, 6 queues) | fixed | core stack |
 
-Each domain account hosts the app event bus and integration DLQ for every environment resolving into it — by default all E environments of its domain, or a subset when the registration pins environments to other accounts via `environmentAccounts` — plus 1 trust role. Per-account headroom therefore counts **environments resolving into the account**, not domains: an account hosting several domains' `prod` environments carries one bus and one DLQ per hosted environment. None of these approach any default quota while an account hosts a single domain's environments (the intended model).
+Each domain account hosts one trust role, plus the app event bus and integration DLQ for every environment that resolves into it. By default, all E environments of its domain resolve there. If a registration pins some of them to other accounts with `environmentAccounts`, only the rest resolve there. Per-account headroom therefore counts **environments resolving into the account**, not domains: an account hosting several domains' `prod` environments carries one bus and one DLQ per hosted environment. None of these approach any default quota while an account hosts a single domain's environments (the intended model).
 
 ---
 
@@ -180,10 +180,10 @@ p50/p95/p99. The closed-form model itself is unit-tested in the
 
 **Activation cold-start burst.** After an activation advances the pointer's
 generation, the first publish of each schema refreshes its registry entry
-once—the burst is one `DescribeSchema` per schema in the registry (40 at
-the modeled catalog size), bounded by schema count and never multiplied by
-event rate. Confirm the schemas API quota in your Region before activating a
-large catalog; the harness's `registry-describe-burst` probe measures the
+once. The burst is one `DescribeSchema` per schema in the registry (40 at the
+modeled catalog size), so the schema count bounds it and event rate never
+multiplies it. Confirm the schemas API quota in your Region before activating
+a large catalog; the harness's `registry-describe-burst` probe measures the
 real burst over the environment's actual schema list.
 
 ## Control-plane throttling during provisioning

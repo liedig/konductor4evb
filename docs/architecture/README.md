@@ -110,7 +110,6 @@ Read the [relevant decisions](../decisions/README.md) before changing a boundary
 The [side-effects reference](../development/side-effects/README.md) records
 durability classifications and failure walks, including deferred migrations.
 
-The [discrepancy register](../reference/documentation-discrepancies.md) tracks
-conflicts retained during reorganization. In particular, subscription activation,
-approval recovery, and trust-role recipes need separate review. Organization
-guardrails remain [separately authorized and enforcement-unverified](../operations/guardrails.md).
+Organization guardrails are optional and
+[separately authorized](../operations/guardrails.md); each installation verifies
+enforcement in a sandbox before attaching them to production accounts.

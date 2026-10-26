@@ -6,7 +6,7 @@ Use [trust stack deployment](operations/trust-stack-deployment.md). This page pr
 
 | Previous section | Current location |
 |---|---|
-| <a id="trust-stack-deployment-guide"></a>Trust Stack Deployment Guide | [Open section](operations/trust-stack-deployment.md#trust-stack-deployment-guide) |
+| <a id="trust-stack-deployment-guide"></a>Trust Stack Deployment Guide | [Open section](operations/trust-stack-deployment.md#deploy-domain-account-trust) |
 | <a id="prerequisites"></a>Prerequisites | [Open section](operations/trust-stack-deployment.md#prerequisites) |
 | <a id="deploy"></a>Deploy | [Open section](operations/trust-stack-deployment.md#deploy) |
 | <a id="makefile-recommended"></a>Makefile (recommended) | [Open section](operations/trust-stack-deployment.md#makefile-recommended) |

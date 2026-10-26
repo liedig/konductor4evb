@@ -18,4 +18,3 @@ an exact contract.
 | [Resources and naming](resources.md) | Every resource Konductor provisions and its name pattern | Finding a bus, queue, or dashboard, or reviewing IAM scope |
 | [Lifecycle events](lifecycle-events.md) | The control-plane outcome events on `konductor-bus` | Automating on registration, provisioning, or update outcomes |
 | [Data model](data-model.md) | Storage keys and access patterns for domains and subscriptions | Operating the tables directly, or changing the implementation |
-| [Discrepancy register](documentation-discrepancies.md) | Documentation claims that conflict or remain unverified | Before relying on a page that shows a review warning |

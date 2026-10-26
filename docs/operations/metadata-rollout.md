@@ -51,10 +51,10 @@ until the responsible operator authorizes them.
       existing environment pointer seeded at **legacy revision 0**. Bootstrap
       is retry-safe—redeploying must not overwrite existing pointers.
 - [ ] The dual-format delivery consumer is deployed **before** any admission
-      change and verified against historical fixtures: original
-      `publishedAt`/`idempotencyKey` semantics intact on legacy messages,
-      format-2 messages validate frozen fields from their carried descriptors,
-      and neither path performs configuration reads at delivery.
+      change and verified against historical fixtures. Legacy messages keep
+      their original `publishedAt`/`idempotencyKey` semantics, format-2
+      messages validate frozen fields from their carried descriptors, and
+      neither path reads configuration at delivery.
 - [ ] Baseline tests pass: admission, delivery, metadata handlers, the stream
       consumer, and the API parity suite (`make check`, focused `cargo test`).
 
@@ -84,11 +84,12 @@ until the responsible operator authorizes them.
       preview → save (including a stale-head 409 recovery) → readiness →
       activate legacy-0 → baseline-1 in one sandbox environment → inspect the
       historical and current contract pairs.
-- [ ] Exercise the race and failure drills: activation races (expected-current
-      conflicts), configuration outage after enqueue (delivery must not need
-      configuration), paused delivery across activation, partial `PutEvents`
-      failure, replay, and a second publisher retry with the same idempotency
-      key (new universally unique identifier (UUID), same deduplication key).
+- [ ] Exercise the race and failure drills. Cover activation races
+      (expected-current conflicts) and a configuration outage after enqueue
+      (delivery must not need configuration). Also cover paused delivery
+      across activation, partial `PutEvents` failure, replay, and a second
+      publisher retry with the same idempotency key (new universally unique
+      identifier (UUID), same deduplication key).
 - [ ] Verify events admitted before activation carry no metadata stamp and
       still deliver; events admitted after carry the stamped revision.
 
@@ -98,8 +99,8 @@ until the responsible operator authorizes them.
 
 - [ ] Every **owning team and consuming team** touching the environment's
       events acknowledges in writing (ticket or recorded approval) that a
-      metadata revision bump is a **new contract**: consumers that validate
-      the exact metadata block can reject events carrying new fields even
+      metadata revision bump is a **new contract**. Consumers that validate
+      the exact metadata block can reject events carrying new fields, even
       when business data is unchanged.
 - [ ] The acknowledgment explicitly covers the generated fields the target
       revision adds (names, generators, constraints)—from the revision
@@ -130,9 +131,9 @@ until the responsible operator authorizes them.
       and durable failed-record capture are in place; permanent audit records
       support recovery beyond the 24-hour stream window—follow the runbook
       before shards block.
-- [ ] If admission 503 s persist (configuration unreadable): the environment
-      fails closed by design; restoring the configuration table restores
-      admission. No legacy fallback revision is ever served.
+- [ ] If admission `503` responses persist (configuration unreadable): the
+      environment fails closed by design; restoring the configuration table
+      restores admission. No legacy fallback revision is ever served.
 
 ## Sign-off
 

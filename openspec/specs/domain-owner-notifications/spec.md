@@ -46,14 +46,14 @@ When a domain registration is rejected, the control plane SHALL send an email no
 
 ### Requirement: SES configuration
 
-Email notifications SHALL use Amazon SES with parameterised sender and recipient addresses. SES email identity verification SHALL be managed by a separate `notifications-stack.yaml` CloudFormation template, not by the Konductor core stack. The core template SHALL accept `ApprovalFromEmail` and `ApprovalToEmail` as optional parameters with empty-string defaults. When both parameters are non-empty, the core template SHALL deploy the notification Lambda functions, their log groups, and the rejection EventBridge rule. When either parameter is empty, the core template SHALL omit all notification resources. The notifications stack SHALL deploy in the same AWS region as the Konductor core stack because SES identities are regional.
+Email notifications SHALL use Amazon SES with parameterised sender and recipient addresses. SES email identity verification SHALL be managed by a separate `notifications-stack.yaml` CloudFormation template, not by the Konductor core stack. The core template SHALL accept `ApprovalFromEmail` and `ApprovalToEmail` as optional parameters with empty-string defaults. When both parameters are non-empty, the core template SHALL deploy the notification Lambda functions, their log groups, and the rejection EventBridge rule. When either parameter is empty, the core template SHALL omit every notification resource except the approval request notification Lambda function and its log group, which SHALL deploy regardless because the function persists the approval task token; with either parameter empty, that function SHALL persist the task token and send no email. The notifications stack SHALL deploy in the same AWS region as the Konductor core stack because SES identities are regional.
 
 #### Scenario: SES parameters defined in core template
 
 - **WHEN** the Konductor core stack is deployed
 - **THEN** the SAM template SHALL accept optional `ApprovalFromEmail` and `ApprovalToEmail` parameters with empty-string defaults
 - **AND THEN** when both parameters are non-empty, they SHALL be passed as environment variables to the notification Lambda functions
-- **AND THEN** when either parameter is empty, the notification Lambda functions and their EventBridge rules SHALL NOT be deployed
+- **AND THEN** when either parameter is empty, the notification Lambda functions other than the approval request function, and their EventBridge rules, SHALL NOT be deployed
 
 #### Scenario: Notifications stack provisions SES identities
 
@@ -71,8 +71,9 @@ Email notifications SHALL use Amazon SES with parameterised sender and recipient
 #### Scenario: Core stack deploys without SES
 
 - **WHEN** the Konductor core stack is deployed with `ApprovalFromEmail` and `ApprovalToEmail` left as empty strings
-- **THEN** the core stack SHALL deploy successfully without any notification Lambda functions or EventBridge rules
+- **THEN** the core stack SHALL deploy successfully without any notification EventBridge rules or Lambda functions other than the approval request function
 - **AND THEN** the approval workflow SHALL still execute and wait on a task token for a manual decision
+- **AND THEN** the approval request function SHALL persist the task token to the domain record without sending an email
 - **AND THEN** operators SHALL be able to approve or reject registrations via the `POST /domains/registrations/decide` API endpoint
 
 #### Scenario: Notifications stack deployed in a different region than core

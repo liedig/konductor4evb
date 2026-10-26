@@ -19,9 +19,9 @@ Use [authentication](../guides/authentication.md). This page preserves links fro
 | <a id="what-the-authorizer-does-not-do"></a>What the authorizer does not do | [Open section](../reference/authentication.md#what-the-authorizer-does-not-do) |
 | <a id="obtaining-an-access-token"></a>Obtaining an access token | [Open section](../guides/authentication.md#obtaining-an-access-token) |
 | <a id="option-a-hosted-ui-browser"></a>Option A: hosted UI (browser) | [Open section](../guides/authentication.md#option-a-hosted-ui-browser) |
-| <a id="option-b-cli-admin-auth-flow"></a>Option B: CLI (admin auth flow) | [Open section](../guides/authentication.md#option-b-cli-admin-auth-flow) |
-| <a id="option-c-hosted-ui-direct-login-no-redirect"></a>Option C: hosted UI (direct login, no redirect) | [Open section](../guides/authentication.md#option-c-hosted-ui-direct-login-no-redirect) |
-| <a id="option-d-custom-login-srp-no-hosted-ui"></a>Option D: custom login (SRP, no hosted UI) | [Open section](../guides/authentication.md#option-d-custom-login-srp-no-hosted-ui) |
+| <a id="option-b-cli-admin-auth-flow"></a>Option B: CLI (admin auth flow) | [Open section](../guides/authentication.md#option-b-srp-from-a-script-no-browser) |
+| <a id="option-c-hosted-ui-direct-login-no-redirect"></a>Option C: hosted UI (direct login, no redirect) | [Open section](../guides/authentication.md#option-a-hosted-ui-browser) |
+| <a id="option-d-custom-login-srp-no-hosted-ui"></a>Option D: custom login (SRP, no hosted UI) | [Open section](../guides/authentication.md#option-c-srp-in-your-own-application) |
 | <a id="calling-the-api"></a>Calling the API | [Open section](../guides/authentication.md#calling-the-api) |
 | <a id="available-oauth-endpoints"></a>Available OAuth endpoints | [Open section](../reference/api.md) |
 | <a id="using-curl"></a>Using curl | [Open section](../guides/authentication.md#using-curl) |

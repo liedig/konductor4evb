@@ -5,7 +5,8 @@
 #
 # Drives the same konductor-deprovision-env workflow the provisioning saga's own
 # rollback path uses, once per environment on the domain record, then deletes
-# the domain's DynamoDB record. Safe to re-run: deprovision-env is idempotent
+# the domain's DynamoDB record. A domain still PENDING_APPROVAL has its approval
+# workflow stopped first. Safe to re-run: deprovision-env is idempotent
 # ("already gone" is a no-op), and a missing domain record is treated as
 # already torn down.
 #
@@ -24,6 +25,53 @@ ITEM=$(aws dynamodb get-item \
 if [ -z "${ITEM}" ]; then
   echo "Domain '${DOMAIN_NAME}' not found — nothing to tear down."
   exit 0
+fi
+
+# A pending domain's approval workflow is still waiting for a decision. Left
+# running, its rejection or 7-day timeout writes the record back as REJECTED,
+# or rejects a domain later re-registered under the same name. Stop it and
+# confirm it ended before anything is deleted. ExecutionDoesNotExist means the
+# registration's workflow never started, so there is nothing to stop.
+if [ "$(echo "${ITEM}" | jq -r '.status.S // empty')" = "PENDING_APPROVAL" ]; then
+  REQUEST_ID=$(echo "${ITEM}" | jq -r '.requestId.S // empty')
+  if [ -z "${REQUEST_ID}" ]; then
+    echo "  approval workflow: FAILED (no requestId on record) — domain record NOT deleted; stop the domain's konductor-domain-approval execution, then delete the record by hand" >&2
+    exit 1
+  fi
+  APPROVAL_STATE_MACHINE_ARN=$(aws cloudformation describe-stack-resource \
+    --stack-name konductor-core \
+    --logical-resource-id ApprovalWorkflow \
+    --query StackResourceDetail.PhysicalResourceId \
+    --output text \
+    --region "${AWS_REGION}")
+  APPROVAL_EXECUTION_ARN="${APPROVAL_STATE_MACHINE_ARN/:stateMachine:/:execution:}:approval-${REQUEST_ID}"
+  echo -n "  approval workflow: stopping..."
+  if STOP_ERROR=$(aws stepfunctions stop-execution \
+    --execution-arn "${APPROVAL_EXECUTION_ARN}" \
+    --region "${AWS_REGION}" 2>&1 >/dev/null); then
+    APPROVAL_STATUS="RUNNING"
+    for _ in $(seq 1 15); do
+      APPROVAL_STATUS=$(aws stepfunctions describe-execution \
+        --execution-arn "${APPROVAL_EXECUTION_ARN}" \
+        --region "${AWS_REGION}" \
+        --query status --output text)
+      if [ "${APPROVAL_STATUS}" != "RUNNING" ]; then
+        break
+      fi
+      sleep 2
+    done
+    if [ "${APPROVAL_STATUS}" = "RUNNING" ]; then
+      echo " FAILED (still RUNNING) — domain record NOT deleted; see ${APPROVAL_EXECUTION_ARN}" >&2
+      exit 1
+    fi
+    echo " done (${APPROVAL_STATUS})"
+  elif [[ "${STOP_ERROR}" == *ExecutionDoesNotExist* ]]; then
+    echo " no execution to stop"
+  else
+    echo " FAILED — domain record NOT deleted; see ${APPROVAL_EXECUTION_ARN}" >&2
+    echo "${STOP_ERROR}" >&2
+    exit 1
+  fi
 fi
 
 OWNER_ACCOUNT=$(echo "${ITEM}" | jq -r '.ownerAccountId.S')
@@ -133,13 +181,22 @@ if [ -n "${TOPIC_ARN}" ]; then
 fi
 
 # The namespace parameter belongs to the same footprint; the registration
-# collision check blocks re-registration while it exists. Deleting a missing
-# parameter is a no-op, so domains provisioned before the parameter step
-# tear down unchanged.
-aws ssm delete-parameter \
+# collision check blocks re-registration while it exists. SSM rejects deleting
+# a missing parameter, and one is missing for never-provisioned domains,
+# domains provisioned before the parameter step, and re-runs after a partial
+# teardown, so ParameterNotFound counts as deleted. Any other error keeps the
+# record so a re-run can finish.
+if SSM_ERROR=$(aws ssm delete-parameter \
   --name "/namespace/${DOMAIN_NAME}" \
-  --region "${AWS_REGION}" >/dev/null
-echo "  namespace parameter: deleted"
+  --region "${AWS_REGION}" 2>&1 >/dev/null); then
+  echo "  namespace parameter: deleted"
+elif [[ "${SSM_ERROR}" == *ParameterNotFound* ]]; then
+  echo "  namespace parameter: already absent"
+else
+  echo "  namespace parameter: FAILED — domain record NOT deleted" >&2
+  echo "${SSM_ERROR}" >&2
+  exit 1
+fi
 
 aws dynamodb delete-item \
   --table-name konductor-domains \

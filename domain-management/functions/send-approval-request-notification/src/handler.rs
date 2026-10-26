@@ -12,25 +12,53 @@ pub async fn handle(
     ses: &aws_sdk_sesv2::Client,
     event: LambdaEvent<Value>,
 ) -> Result<(), Error> {
-    let table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
-    let to_email =
-        env::var("PLATFORM_OPERATOR_EMAIL").context("PLATFORM_OPERATOR_EMAIL not set")?;
-    let from_email =
-        env::var("NOTIFICATION_SENDER_EMAIL").context("NOTIFICATION_SENDER_EMAIL not set")?;
-    let console_url = env::var("WEB_CONSOLE_URL").context("WEB_CONSOLE_URL not set")?;
+    let settings = Settings::from_env()?;
+    process(ddb, ses, &settings, &event.payload).await
+}
 
-    let fields = extract_event_fields(&event.payload)?;
-    let is_new_account = check_is_new_account(ddb, &table, &fields.owner_account_id).await?;
+struct Settings {
+    table: String,
+    operator_email: String,
+    sender_email: String,
+    console_url: String,
+}
 
-    ddb.update_item()
-        .table_name(&table)
-        .key("domainName", s(&fields.domain_name))
-        .update_expression("SET taskToken = :token")
-        .condition_expression("attribute_exists(domainName)")
-        .expression_attribute_values(":token", s(&fields.task_token))
-        .send()
-        .await
-        .context("failed to persist taskToken to domain record")?;
+impl Settings {
+    fn from_env() -> Result<Self, Error> {
+        Ok(Self {
+            table: env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?,
+            operator_email: env::var("PLATFORM_OPERATOR_EMAIL")
+                .context("PLATFORM_OPERATOR_EMAIL not set")?,
+            sender_email: env::var("NOTIFICATION_SENDER_EMAIL")
+                .context("NOTIFICATION_SENDER_EMAIL not set")?,
+            console_url: env::var("WEB_CONSOLE_URL").context("WEB_CONSOLE_URL not set")?,
+        })
+    }
+
+    fn notifications_enabled(&self) -> bool {
+        !self.sender_email.is_empty() && !self.operator_email.is_empty()
+    }
+}
+
+async fn process(
+    ddb: &aws_sdk_dynamodb::Client,
+    ses: &aws_sdk_sesv2::Client,
+    settings: &Settings,
+    payload: &Value,
+) -> Result<(), Error> {
+    let fields = extract_event_fields(payload)?;
+    if !settings.notifications_enabled() {
+        persist_task_token(ddb, &settings.table, &fields).await?;
+        tracing::info!(
+            domain_name = fields.domain_name.as_str(),
+            "notifications disabled, task token recorded without an approval email"
+        );
+        return Ok(());
+    }
+
+    let is_new_account =
+        check_is_new_account(ddb, &settings.table, &fields.owner_account_id).await?;
+    persist_task_token(ddb, &settings.table, &fields).await?;
 
     let effective_accounts = konductor_common::environment_accounts::effective_accounts(
         fields.environment_accounts.as_ref(),
@@ -45,10 +73,17 @@ pub async fn handle(
         is_new_account,
         &fields.environments,
         &effective_accounts,
-        &console_url,
+        &settings.console_url,
     );
 
-    send_approval_email(ses, &from_email, &to_email, &fields.domain_name, html_body).await
+    send_approval_email(
+        ses,
+        &settings.sender_email,
+        &settings.operator_email,
+        &fields.domain_name,
+        html_body,
+    )
+    .await
 }
 
 struct EventFields {
@@ -102,6 +137,23 @@ fn extract_event_fields(payload: &Value) -> Result<EventFields, Error> {
         environments,
         environment_accounts,
     })
+}
+
+async fn persist_task_token(
+    ddb: &aws_sdk_dynamodb::Client,
+    table: &str,
+    fields: &EventFields,
+) -> Result<(), Error> {
+    ddb.update_item()
+        .table_name(table)
+        .key("domainName", s(&fields.domain_name))
+        .update_expression("SET taskToken = :token")
+        .condition_expression("attribute_exists(domainName)")
+        .expression_attribute_values(":token", s(&fields.task_token))
+        .send()
+        .await
+        .context("failed to persist taskToken to domain record")?;
+    Ok(())
 }
 
 async fn check_is_new_account(
@@ -258,8 +310,104 @@ Ensure the trust-stack has been deployed to this account before approving.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_dynamodb::operation::query::QueryOutput;
+    use aws_sdk_dynamodb::operation::update_item::UpdateItemOutput;
+    use aws_sdk_sesv2::operation::send_email::SendEmailOutput;
+    use aws_smithy_mocks::{mock, mock_client, Rule, RuleMode};
+    use serde_json::json;
 
     const CONSOLE_URL: &str = "https://console.example.com";
+    const TASK_TOKEN: &str = "AQABAAAA...task-token";
+
+    fn settings(sender_email: &str, operator_email: &str) -> Settings {
+        Settings {
+            table: "domains".to_string(),
+            operator_email: operator_email.to_string(),
+            sender_email: sender_email.to_string(),
+            console_url: CONSOLE_URL.to_string(),
+        }
+    }
+
+    fn approval_request() -> Value {
+        json!({
+            "taskToken": TASK_TOKEN,
+            "domainName": "billing",
+            "ownerAccountId": "111122223333",
+            "ownerEmail": "owner@example.com",
+            "environments": ["dev", "staging", "prod"],
+        })
+    }
+
+    fn task_token_write() -> Rule {
+        mock!(aws_sdk_dynamodb::Client::update_item)
+            .match_requests(|req| {
+                req.table_name() == Some("domains")
+                    && req
+                        .expression_attribute_values()
+                        .and_then(|values| values.get(":token"))
+                        == Some(&s(TASK_TOKEN))
+            })
+            .then_output(|| UpdateItemOutput::builder().build())
+    }
+
+    fn active_domains_query() -> Rule {
+        mock!(aws_sdk_dynamodb::Client::query)
+            .then_output(|| QueryOutput::builder().count(0).build())
+    }
+
+    #[tokio::test]
+    async fn disabled_notifications_record_the_task_token_without_email() {
+        let write = task_token_write();
+        let query = active_domains_query();
+        let email = mock!(aws_sdk_sesv2::Client::send_email)
+            .then_output(|| SendEmailOutput::builder().build());
+        let ddb = mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, [&write, &query]);
+        let ses = mock_client!(aws_sdk_sesv2, RuleMode::MatchAny, [&email]);
+
+        process(&ddb, &ses, &settings("", ""), &approval_request())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            write.num_calls(),
+            1,
+            "the decide endpoint resumes the workflow from the stored token"
+        );
+        assert_eq!(email.num_calls(), 0, "no sender or recipient is configured");
+        assert_eq!(
+            query.num_calls(),
+            0,
+            "new-account detection only feeds the email"
+        );
+    }
+
+    #[tokio::test]
+    async fn enabled_notifications_record_the_task_token_and_email_the_operator() {
+        let write = task_token_write();
+        let query = active_domains_query();
+        let email = mock!(aws_sdk_sesv2::Client::send_email)
+            .match_requests(|req| {
+                req.from_email_address() == Some("sender@example.com")
+                    && req
+                        .destination()
+                        .is_some_and(|d| d.to_addresses() == ["operator@example.com"])
+            })
+            .then_output(|| SendEmailOutput::builder().build());
+        let ddb = mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, [&write, &query]);
+        let ses = mock_client!(aws_sdk_sesv2, RuleMode::MatchAny, [&email]);
+
+        process(
+            &ddb,
+            &ses,
+            &settings("sender@example.com", "operator@example.com"),
+            &approval_request(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(write.num_calls(), 1);
+        assert_eq!(email.num_calls(), 1);
+    }
 
     fn envs() -> Vec<String> {
         vec!["dev".into(), "staging".into(), "prod".into()]

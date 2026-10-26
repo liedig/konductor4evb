@@ -1,4 +1,4 @@
-# System event operations
+# System event recovery
 
 [Documentation home](../README.md)
 
@@ -56,19 +56,20 @@ exceed S3's 63-character limit.
 4. Confirm `redrive-result.json` reports no `batchItemFailures`, then delete
    the recovered object from the bucket.
 
-Identity is preserved through redrive: the projected events carry the same
-deterministic `idempotencyKey` (`system-event/v1/…`) as the original attempt,
-so a redrive that partially succeeded before failing is safe, and consumers
-that deduplicate on the idempotency key see no semantic duplicate.
+Redrive preserves identity. The projected events carry the same deterministic
+`idempotencyKey` (`system-event/v1/…`) as the original attempt. A redrive that
+partially succeeded before failing is therefore safe, and consumers that
+deduplicate on the idempotency key see no semantic duplicate.
 
 ## What the archive is not
 
 The 90-day EventBridge archive is an audit trail. There is **no archive replay
 procedure** and no automatic historical catch-up in this release. Do not
-reconstruct missed deliveries from the archive: use the S3 failure bucket for
-targeted recovery, and treat events lost beyond both the stream window and the
-failure-bucket retention as a notification gap to reconcile from the source of
-truth (the event-streams table's current pins and `upgradeEvents` snapshots).
+reconstruct missed deliveries from the archive. Use the S3 failure bucket for
+targeted recovery. Events lost beyond both the stream window and the
+failure-bucket retention are a notification gap: reconcile it from the source
+of truth (the event-streams table's current pins and `upgradeEvents`
+snapshots).
 
 ## Distinct failure paths
 
@@ -93,6 +94,7 @@ registry (drift, unexpected version history, or an incompatible definition).
 Do not edit the registry out of band to unblock the deploy; reconcile the
 checked-in schemas and manifest, then redeploy. A no-op deploy where the
 registry already matches succeeds silently.
+
 ## Rollout and rollback
 
 System events roll out dark and are enabled deliberately:

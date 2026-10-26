@@ -31,6 +31,6 @@
 
 ## Current relevance
 
-Implementation is merged, but live enforcement is not established. The [account-selector discrepancy](../reference/documentation-discrepancies.md#d09) and the separately authorized sandbox acceptance remain open.
+Implementation is merged. The [account-selector discrepancy](../reference/documentation-discrepancies.md#d09) was resolved on 2026-09-29, when the authorized sandbox acceptance run recorded enforcement. Each installation still verifies enforcement in a sandbox before production attachment; see the [guardrail runbook](../operations/guardrails.md#verification--local-fixtures-first-then-authorized-sandbox).
 
 [Decision index](README.md)

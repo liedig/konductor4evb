@@ -38,7 +38,7 @@ Use [installation](operations/installation.md). This page preserves links from o
 | <a id="trust-role-assumerole-denied"></a>Trust role AssumeRole denied | [Open section](operations/installation-troubleshooting.md#trust-role-assumerole-denied) |
 | <a id="zig-016-ar-regression-breaks-sam-build"></a>zig 0.16+ ar regression breaks SAM build | [Open section](operations/installation-troubleshooting.md#zig-016-ar-regression-breaks-sam-build) |
 | <a id="sam-build-cache-is-stale"></a>SAM build cache is stale | [Open section](operations/installation-troubleshooting.md#sam-build-cache-is-stale) |
-| <a id="dynamodb-table-retained-after-stack-delete"></a>DynamoDB table retained after stack delete | [Open section](operations/installation-troubleshooting.md#dynamodb-table-retained-after-stack-delete) |
+| <a id="dynamodb-table-retained-after-stack-delete"></a>DynamoDB table retained after stack delete | [Open section](operations/installation-troubleshooting.md#resources-retained-after-stack-delete-or-a-failed-create) |
 | <a id="uninstall"></a>Uninstall | [Open section](operations/uninstall.md) |
 | <a id="1-delete-all-domains"></a>1. Delete all domains | [Open section](operations/uninstall.md#1-delete-all-domains) |
 | <a id="2-delete-the-core-stack"></a>2. Delete the core stack | [Open section](operations/uninstall.md#2-delete-the-core-stack) |

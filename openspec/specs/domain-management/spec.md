@@ -514,7 +514,7 @@ Before persisting a registration, the command handler SHALL check for colliding 
 
 ### Requirement: Domain resource tagging
 
-Every domain SHALL carry a standard tag set, applied by the platform: `konductor:managed-by` (`konductor`), `konductor:domain` (the domain name), `konductor:environment` (per environment on per-environment resources), and `konductor:namespace` (the `{org}-{domain}` namespace identity). A registration MAY additionally supply a single governed custom tag, `costCenter`, for cost allocation; the API SHALL reject any other custom tag keys. The domain record SHALL store the effective tag set (standard set plus `cost-center` when supplied), and describe and list responses SHALL render it. `cost-center` SHALL be settable at registration and SHALL be mutable afterwards via the update command with change-only semantics: an update MAY set a `costCenter` where none exists and MAY replace an existing value with another valid value, but SHALL NOT clear an existing value (the API schema makes clearing inexpressible by requiring a non-empty value).
+Every domain SHALL carry a standard tag set, applied by the platform: `konductor:managed-by` (`konductor`), `konductor:domain` (the domain name), `konductor:environment` (per environment on per-environment resources), and `konductor:namespace` (the `{org}-{domain}` namespace identity). A registration MAY additionally supply a single governed custom tag, `costCenter`, for cost allocation; the API SHALL reject any other custom tag keys. The domain record SHALL store the effective tag set (standard set plus `cost-center` when supplied), and describe and list responses SHALL render it. `cost-center` SHALL be settable at registration and SHALL be mutable afterwards via the update command with change-only semantics: an update MAY set a `costCenter` where none exists and MAY replace an existing value with another valid value, but SHALL NOT clear an existing value (the API schema makes clearing inexpressible by requiring a non-empty value). A registration whose `costCenter` fails the governed-tag validation SHALL fail before any record is written.
 
 #### Scenario: Registration with a cost center
 
@@ -543,6 +543,12 @@ Every domain SHALL carry a standard tag set, applied by the platform: `konductor
 - **WHEN** an owner submits a domain update with `costCenter` set to an empty string
 - **THEN** the API SHALL return `400 ValidationException`
 - **AND THEN** the stored value SHALL remain unchanged
+
+#### Scenario: Invalid cost center at registration is rejected
+
+- **WHEN** a registration carries a `costCenter` that fails the governed-tag validation (empty, over 256 characters, or containing control characters)
+- **THEN** the command SHALL fail validation and emit `RegisterDomainFailed` with the validation reason
+- **AND THEN** no domain record SHALL be persisted, the domain count SHALL NOT be charged, and no workflow SHALL be started
 
 ### Requirement: Domain count is capped
 

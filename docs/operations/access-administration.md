@@ -1,10 +1,8 @@
-# Manage users and access
+# Set up users and access
 
 [Documentation home](../README.md)
 
 For platform administrators setting up interactive users, team bindings, and entitlements. Users obtain tokens through the [authentication guide](../guides/authentication.md).
-
-> **Review pending:** [D05](../reference/documentation-discrepancies.md#d05), [D06](../reference/documentation-discrepancies.md#d06) records conflicting or unverified guidance retained from the previous documentation. This reorganization does not resolve it.
 
 ## What Konductor provisions
 
@@ -14,7 +12,7 @@ When you deploy the core stack (`make deploy-core`), AWS Serverless Application 
 |----------|---------|
 | **User pool** (`{org}-konductor-users`) | Stores user accounts. Email is the username attribute. Administrators create accounts; self-registration is unavailable. Passwords require at least 12 characters, mixed case, and numbers. |
 | **User pool domain** (`{org}-konductor-{account-id}`) | Hosted user interface (UI) domain for the OAuth authorization-code flow. |
-| **App client** (`{org}-konductor-control-plane`) | Public OAuth client using the authorization-code flow with `openid`, `email`, and `profile` scopes. It has no client secret. Access token validity is configurable (default 60 minutes). |
+| **App client** (`{org}-konductor-control-plane`) | Public client with no client secret. It supports the hosted-UI authorization-code flow (`openid`, `email`, and `profile` scopes) and Secure Remote Password (SRP) sign-in. Flows that pass the password through the client, such as `ADMIN_USER_PASSWORD_AUTH`, are disabled. Access and ID tokens last 60 minutes by default (`access_token_validity_minutes`); refresh tokens last 30 days. |
 | **Group: `platform-admin`** | Maps to the `PlatformAdmin` global role. Can access all API methods including POST (writes) and the approval endpoint. |
 | **Group: `platform-auditor`** | Maps to the `PlatformAuditor` global role. Can only access GET (read) endpoints. Cannot mutate or approve. |
 
@@ -80,14 +78,23 @@ aws cognito-idp admin-add-user-to-group \
   --username alice@example.com \
   --group-name platform-admin
 
-# For a read-only auditor:
+# For a team member who registers and owns domains (create the team group once):
+aws cognito-idp create-group \
+  --user-pool-id <POOL_ID> \
+  --group-name team-payments
 aws cognito-idp admin-add-user-to-group \
   --user-pool-id <POOL_ID> \
   --username bob@example.com \
+  --group-name team-payments
+
+# For a read-only auditor:
+aws cognito-idp admin-add-user-to-group \
+  --user-pool-id <POOL_ID> \
+  --username carol@example.com \
   --group-name platform-auditor
 ```
 
-A user can belong to both groups. If `platform-admin` is present, the admin role takes precedence and the user has full access.
+A user can belong to both platform groups. If `platform-admin` is present, the admin role takes precedence and the user has full access. Membership in `platform-auditor` limits a user to reads, even when the user also belongs to a team group.
 
 ### 3. (Optional) set a permanent password without email
 
@@ -109,7 +116,7 @@ Group membership is managed only in Amazon Cognito—by an authorized operator t
 - Entitlements carry schema coverage only—no role or principal fields.
 - No deployed function holds a Cognito group-mutation permission.
 
-An invariant test (`lib/konductor-common/tests/platform_role_isolation.rs`) pins these properties and fails if an API-reachable path to group membership is introduced.
+An [invariant test](../../lib/konductor-common/tests/platform_role_isolation.rs) pins these properties and fails if an API-reachable path to group membership is introduced.
 
 Two consequences follow. First, no caller can self-escalate through the API: becoming a platform administrator requires Cognito access in the platform account, never a Konductor permission. Second, the platform cannot lock itself out—because `platform-admin` resolves from the controlled Cognito group and never from the grant table, binding misconfiguration or revocation cannot remove the ability to administer bindings (the break-glass property).
 
@@ -154,7 +161,7 @@ ENTITLEMENTS='[
 make seed-entitlements
 ```
 
-Migration order matters: seed the `subscriber` **bindings first** (`make seed-bindings`), then the entitlements, then let the revocation worker and hourly sweep re-evaluate any existing subscriptions—subscriptions whose coverage lapsed are disabled, never deleted, and nothing re-enables them automatically. The scope grammar: `*` covers the producer's whole domain including future schemas, an exact event name covers all its versions including future ones, and a trailing `*` covers a name family.
+Migration order matters. Seed the `subscriber` **bindings first** (`make seed-bindings`), then the entitlements. Then let the revocation worker and hourly sweep re-evaluate any existing subscriptions. Subscriptions whose coverage lapsed are disabled, never deleted, and nothing re-enables them automatically. The scope grammar: `*` covers the producer's whole domain including future schemas, an exact event name covers all its versions including future ones, and a trailing `*` covers a name family.
 
 ## Related topics
 

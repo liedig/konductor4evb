@@ -1,4 +1,4 @@
-# Operations
+# Platform administrator guides
 
 [Documentation home](../README.md)
 
@@ -13,14 +13,14 @@ not authorization to deploy, change access, activate a revision, or delete data.
 4. [Deploy domain-account trust](trust-stack-deployment.md).
 5. [Set up users, bindings, and entitlements](access-administration.md).
 6. Run the [installation smoke test](installation.md#phase-4--smoke-test).
+7. [Troubleshoot installation](installation-troubleshooting.md) if a phase fails.
 
 ## Operate and recover
 
-- [Installation troubleshooting](installation-troubleshooting.md)
 - [Domain recovery and cleanup](domain-recovery.md)
 - [Metadata rollout and consumer sign-off](metadata-rollout.md)
 - [Schema promotion operations](schema-promotion.md)
-- [System event operations](system-events.md)
+- [System event recovery](system-events.md)
 - [Uninstall](uninstall.md)
 
 ## Separately authorized protection

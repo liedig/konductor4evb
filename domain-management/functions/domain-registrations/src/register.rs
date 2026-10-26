@@ -102,20 +102,15 @@ async fn resolve_write_outcome(
     }
 }
 
-/// Validation that runs before the record exists: the governed custom tag is
-/// legal and no platform-owned resource names are taken. Returns the rejection
-/// justification when the request must not proceed.
+/// Validation that runs before the record exists: no platform-owned resource
+/// names are taken. Returns the rejection justification when the request must
+/// not proceed.
 async fn run_preflight(
     clients: &crate::handler::Clients,
     org: &str,
     request: &RegisterDomainRequest,
     environments: &[String],
 ) -> Result<Option<String>> {
-    if let Some(cc) = &request.cost_center {
-        if let Err(reason) = konductor_common::tags::validate_cost_center(cc) {
-            return Ok(Some(reason));
-        }
-    }
     let collisions = find_collisions(
         &clients.eb,
         &clients.ssm,
@@ -280,9 +275,46 @@ fn invalid_overrides_reason(
         .err()
 }
 
-/// The deterministic request rejections — authorization, domain-name
-/// syntax, and the environmentAccounts contract — emit RegisterDomainFailed
-/// and ack the message. Returns true when the request was rejected.
+/// The rejection reason when the governed costCenter tag value is invalid;
+/// None when valid or absent.
+fn invalid_cost_center_reason(request: &RegisterDomainRequest) -> Option<String> {
+    let cost_center = request.cost_center.as_deref()?;
+    konductor_common::tags::validate_cost_center(cost_center).err()
+}
+
+/// The first deterministic rejection reason — authorization, domain-name
+/// syntax, the environmentAccounts contract, or the governed costCenter
+/// tag — checked before anything is written; None when the request may
+/// proceed.
+fn invalid_request_reason(
+    request: &RegisterDomainRequest,
+    principal: &TrustedPrincipal,
+    environments: &[String],
+) -> Option<String> {
+    if let Err(reason) = authorize_registration(principal, request) {
+        tracing::warn!(action = "domains:Register", domain = %request.domain_name, "registration authorization denied");
+        return Some(reason);
+    }
+
+    if let Err(e) = validate_domain_name(&request.domain_name) {
+        return Some(e.to_string());
+    }
+
+    if let Some(reason) = invalid_overrides_reason(request, environments) {
+        tracing::warn!(domain = %request.domain_name, %reason, "registration rejected: invalid environmentAccounts");
+        return Some(reason);
+    }
+
+    if let Some(reason) = invalid_cost_center_reason(request) {
+        tracing::warn!(domain = %request.domain_name, %reason, "registration rejected: invalid costCenter");
+        return Some(reason);
+    }
+
+    None
+}
+
+/// A deterministic rejection emits RegisterDomainFailed and acks the
+/// message. Returns true when the request was rejected.
 async fn reject_invalid_request(
     eb: &aws_sdk_eventbridge::Client,
     cp_bus: &str,
@@ -290,24 +322,11 @@ async fn reject_invalid_request(
     principal: &TrustedPrincipal,
     environments: &[String],
 ) -> Result<bool> {
-    if let Some(reason) = authorize_registration(principal, request).err() {
-        tracing::warn!(action = "domains:Register", domain = %request.domain_name, "registration authorization denied");
-        emit_failed(eb, cp_bus, request, &reason).await?;
-        return Ok(true);
-    }
-
-    if let Err(e) = validate_domain_name(&request.domain_name) {
-        emit_failed(eb, cp_bus, request, &e.to_string()).await?;
-        return Ok(true);
-    }
-
-    if let Some(reason) = invalid_overrides_reason(request, environments) {
-        tracing::warn!(domain = %request.domain_name, %reason, "registration rejected: invalid environmentAccounts");
-        emit_failed(eb, cp_bus, request, &reason).await?;
-        return Ok(true);
-    }
-
-    Ok(false)
+    let Some(reason) = invalid_request_reason(request, principal, environments) else {
+        return Ok(false);
+    };
+    emit_failed(eb, cp_bus, request, &reason).await?;
+    Ok(true)
 }
 
 fn base_domain_item(
@@ -2154,6 +2173,50 @@ mod tests {
                 failed_rule.num_calls(),
                 1,
                 "reason names the offending value"
+            );
+        }
+
+        #[tokio::test]
+        async fn invalid_cost_center_fails_before_any_write_or_workflow() {
+            set_env();
+
+            let tx_rule = tx_ok_rule();
+            let ddb = mock_client!(aws_sdk_dynamodb, [&tx_rule]);
+            let failed_rule = mock!(aws_sdk_eventbridge::Client::put_events)
+                .match_requests(|req| {
+                    req.entries().iter().any(|e| {
+                        e.detail_type() == Some("RegisterDomainFailed")
+                            && e.detail().is_some_and(|d| d.contains("costCenter"))
+                    })
+                })
+                .then_output(|| PutEventsOutput::builder().build());
+            let no_bus = no_bus_rule();
+            let eb = mock_client!(
+                aws_sdk_eventbridge,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_bus, &failed_rule]
+            );
+            let sfn = mock_client!(aws_sdk_sfn, &[]);
+            let no_param = no_param_rule();
+            let ssm = mock_client!(
+                aws_sdk_ssm,
+                aws_smithy_mocks::RuleMode::MatchAny,
+                [&no_param]
+            );
+
+            let request = RegisterDomainRequest {
+                cost_center: Some("bad\nvalue".to_string()),
+                ..valid_request()
+            };
+            let clients = crate::handler::Clients { ddb, eb, sfn, ssm };
+            let result = handle(&clients, &request, &iam_principal(), "msg-1").await;
+
+            assert!(result.is_ok(), "deterministic rejection acks the message");
+            assert_eq!(failed_rule.num_calls(), 1, "reason names costCenter");
+            assert_eq!(
+                tx_rule.num_calls(),
+                0,
+                "no system-rejected record and no ceiling slot"
             );
         }
 

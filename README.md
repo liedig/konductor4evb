@@ -20,47 +20,61 @@ Consuming an event from another AWS account means coordinating event buses, rule
 
 **Simple verbs, real durability.** Publishing is one `POST /publish` call. The event is durably queued before anything downstream can lose it, and retries preserve its idempotency key and original publish timestamp.
 
-**Schema-first contracts.** Consumers subscribe to a schema contract, not a bus. Publishers manage schemas through the API — append-only and versioned per environment. Konductor pins the latest version and materializes the delivery rules.
+**Schema-first contracts.** Consumers subscribe to a schema contract, not a bus. Publishers author schemas through the API in the first environment — append-only, with every new version checked for compatibility — and promote them to later environments. Konductor validates every publish against the latest version, pins subscriptions to it, and materializes the delivery rules.
 
 **Built-in ownership and observability.** Every domain has a primary owner and required secondary owners. Approval workflows, lifecycle events, CloudWatch dashboards, and per-subscription alarms come standard.
 
 ## How It Works
 
 ```text
-┌────────────────────────────── CONTROL PLANE ─────────────────────────────────────────┐
-│  OAuth + IAM surfaces · grant engine (bindings + entitlements) · audit on every      │
-│  mutation · revocation worker + hourly sweep · operator alarms                       │
-└──────────────────┬──────────────────────────────────────────────┬────────────────────┘
-                   │ authorizes every command                     │ disables uncovered
-                   ▼                                              ▼ streams on revocation
-┌─────────── DOMAIN MANAGEMENT ──────────┐   ┌──────────── EVENT STREAMS ──────────────┐
-│  register → approve → provision        │   │  schemas: create and append versions,  │
-│  every environment atomically — buses, │   │  append-only in each environment       │
-│  registries, DLQs, and monitoring in   │──▶│                                          │
-│  the platform and domain accounts      │   │  publish: one call — authorized,       │
-│                                        │   │  latest version pinned, envelope       │
-│  teardown replays the same saga        │   │  stamped, durably queued               │
-│  machinery                             │   │                                          │
-│                                        │   │  subscribe: catalog shows only what    │
-│  lifecycle events and owner            │   │  entitlements cover; per-env rules     │
-│  notifications on every transition     │   │  deliver cross-account; pause/resume   │
-│                                        │   │  per environment                       │
-└────────────────────────────────────────┘   └──────────────────────────────────────────┘
+┌── CONTROL PLANE ─────────────────────────────────────────────────────────────────────┐
+│  OAuth + IAM APIs and web console · grant engine (bindings + entitlements) ·         │
+│  audit on every mutation · platform metadata revisions · revocation worker +         │
+│  hourly sweep · operator alarms                                                      │
+└─────────────────────────────┬─────────────────────────────────────────┬──────────────┘
+                              │ authorizes every command                │ disables streams
+                              ▼                                         ▼ that lose coverage
+┌── DOMAIN MANAGEMENT ────────┴──────────┐   ┌── EVENT STREAMS ─────────┴──────────────┐
+│  register → approve → provision every  │   │  schemas: authored in the first env,    │
+│  environment atomically, each in its   │   │  appends compatibility-gated, then      │
+│  pinned account: buses, registries,    │──▶│  promoted env → env with the same       │
+│  DLQs, and monitoring in the platform  │   │  version numbers                        │
+│  and domain accounts                   │   │                                         │
+│                                        │   │  publish: one call, authorized and      │
+│  approval in the console or API; email │   │  validated against the latest schema    │
+│  only notifies the approvers           │   │  before the 202, then durably queued    │
+│                                        │   │                                         │
+│  lifecycle events and owner            │   │  subscribe: catalog shows only what     │
+│  notifications on every transition     │   │  entitlements cover; per-env rules      │
+│                                        │   │  deliver cross-account; re-pinned on    │
+│  teardown reuses the deprovision       │   │  promotion; pause/resume per env        │
+│  workflow (make teardown-domain)       │   │                                         │
+└────────────────────────────────────────┘   └──────────────────────────┬──────────────┘
+                                                                        │ upgrade notices
+                                                                        ▼
+                                             ┌── SYSTEM EVENTS ─────────┴──────────────┐
+                                             │  subscription upgrades publish to the   │
+                                             │  system-event bus and route to each     │
+                                             │  domain's own SNS topic (SQS, Lambda,   │
+                                             │  or email); opt-in per installation     │
+                                             └─────────────────────────────────────────┘
 ```
 
-Konductor runs in a dedicated platform account. Domain resources are provisioned into domain accounts via cross-account IAM roles. All control-plane state lives in the platform account; domain accounts only contain the resources their domains need.
+Konductor runs in a dedicated platform account. Domain resources are provisioned into domain accounts through the cross-account trust role, and a registration can pin each environment to its own account. All control-plane state lives in the platform account; domain accounts contain only the resources their domains need.
 
-Both API surfaces serve **environment-named stages** (`dev`, `staging`, `prod`): the stage in the URL selects the target environment, so callers never name an environment, registry, or bus in a request.
+Both API surfaces serve **one stage per configured environment** (default `dev`, `staging`, `prod`; see [stage rendering](docs/reference/configuration.md#stage-rendering)): the stage in the URL selects the target environment, so callers never name an environment, registry, or bus in a request. Schema writes are accepted only on the first environment's stage; later environments receive versions through promotion.
 
 ## Core Capabilities
 
-- **Domain lifecycle.** Register a domain via API, get human approval via email or API, and Konductor provisions all resources across every configured environment with all-or-nothing saga rollback. See the [domain guide](docs/guides/domains.md).
+- **Domain lifecycle.** Register a domain through the console or API. A platform administrator approves it in the console or through the API (an email notifies the approver), and Konductor provisions all resources across every configured environment with all-or-nothing saga rollback. See the [domain guide](docs/guides/domains.md).
 
-- **Event publishing.** `POST /publish` with a domain, event name, and business data — Konductor authorizes the publisher, resolves the latest schema version, stamps the canonical envelope, and delivers to the domain's event bus. Store-and-forward through SQS: once accepted (`202`), the event survives downstream failures and is retried with its idempotency key intact. See the [publishing guide](docs/guides/publishing-events.md).
+- **Event publishing.** `POST /publish` with a domain, event name, and business data — Konductor authorizes the publisher, validates the payload against the latest schema version (`422` with the violations when it does not conform), stamps the canonical envelope, and delivers to the domain's event bus. Store-and-forward through SQS: once accepted (`202`), the event survives downstream failures and is retried with its idempotency key intact. See the [publishing guide](docs/guides/publishing-events.md) and [publish validation](docs/architecture/publish-validation.md).
 
-- **Schema management.** Publishers create schemas and append versions with `POST /schemas` and `POST /schemas/versions` — append-only, in platform-managed registries, targeting the environment selected by the API stage. See the [publishing guide](docs/guides/publishing-events.md).
+- **Schema management.** Publishers create schemas and append versions with `POST /schemas` and `POST /schemas/versions` on the first environment's stage — append-only, JSON Schema draft-4, and compatibility-checked, in platform-managed registries. `POST /schemas/promotions` replays those versions into the next environment under the same version numbers. See the [publishing guide](docs/guides/publishing-events.md) and [schema promotion](docs/operations/schema-promotion.md).
 
-- **Schema-first subscriptions.** Consumers subscribe to a schema contract, not a bus. Konductor pins the latest version per environment, materializes EventBridge rules, and wires cross-account delivery with DLQs and zero-events alarms. Per-environment enable/disable maps to native rule state. See the [subscription guide](docs/guides/subscriptions.md).
+- **Schema-first subscriptions.** Consumers subscribe to a schema contract, not a bus. Konductor pins the latest version per environment, materializes EventBridge rules, and wires cross-account delivery with DLQs and zero-events alarms. When a newer version is appended or promoted, Konductor re-pins the rules (widen, drain, narrow) so delivery stays continuous. Per-environment enable/disable maps to native rule state. See the [subscription guide](docs/guides/subscriptions.md).
+
+- **System events.** Committed subscription upgrades are published as versioned public contracts (source `konductor.system`) and routed to each domain's own SNS topic, which teams subscribe to from SQS, Lambda, or email. Emission is opt-in per installation (`SystemEventEmissionEnabled`, off by default). See the [system events guide](docs/guides/system-events.md).
 
 - **Multi-environment reliability.** Every domain is provisioned across the platform-configured environment list (default: dev, staging, prod). Provisioning is all-or-nothing; deprovisioning is idempotent. See [Domain lifecycle](docs/architecture/domain-lifecycle.md).
 
@@ -94,10 +108,8 @@ Konductor ships a role-gated web console (`web/`, Nuxt + Tailwind, statically ho
 
 ## Current Scope
 
-- **No domain deletion API.** Domain teardown is handled by `make teardown-domain`, which drives the same deprovisioning workflow used by the provisioning saga's rollback path. A `DELETE /domains` flow is planned.
+- **No domain deletion API.** Domain teardown is handled by `make teardown-domain`, which drives the same deprovisioning workflow used by the provisioning saga's rollback path. A domain whose registry still holds schemas, or whose platform or application bus still carries rules, needs those removed by hand first (see [domain recovery](docs/operations/domain-recovery.md#schemas-and-event-bus-rules-block-deprovisioning)). A `DELETE /domains` flow is planned.
 - **Schema discovery follows entitlement coverage.** The consumer catalog (`GET /schemas?consumerDomain=…`) shows exactly what a domain's entitlements cover — publishing and schema writes are gated by per-domain role bindings, and subscribing additionally requires a covering entitlement. Platform roles get the platform-wide view.
-- **No schema promotion between environments.** Publishers append versions per environment stage; promotion workflows are a future capability.
-- **Business payloads are not validated against schema content.** The platform validates the envelope it generates, not your data — a deliberate design choice.
 
 ## Technology
 

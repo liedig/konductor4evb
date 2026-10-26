@@ -36,6 +36,13 @@ conflict and scope the review. Add unresolved documentation claims to the
 to both claims and the evidence needed to close them. Do not silently turn
 historical intent into a current guarantee.
 
+The register is a contributor reference that stays out of the published site.
+Customer-facing pages (guides, operations, architecture, and reference) do not
+link to it or carry review banners. Correct the page against the
+implementation, or, while a conflict stays open, state the limit on the page in
+plain terms (for example, "not yet verified in a live deployment"). Close a
+register entry with a dated resolution that cites the evidence.
+
 ## Record decisions without recreating a log
 
 Create or update a decision record for a meaningful choice about behavior,
@@ -65,6 +72,22 @@ Add a concise entry under `Unreleased` in the [changelog](../../CHANGELOG.md) fo
 notable user, operator, contributor, or security changes. Link to the explanation
 or decision instead of copying it. Do not invent release versions, dates,
 deployment completion, or acceptance evidence.
+
+## Show commands in procedures
+
+Installation and removal procedures show the make target for each deploy,
+teardown, or step that chains several commands. Targets resolve stack outputs
+where a step needs them. They also use one Region and one set of credentials
+for every AWS call, which a copied sequence of commands cannot guarantee.
+`scripts/tests/test_platform_make_targets.py` checks the platform deploy and
+teardown targets. When a new procedure needs a chain of commands, add a target
+and document the target.
+
+Show the AWS CLI directly for single read-only checks, such as
+`describe-stacks` or SES verification status, and for steps that no target
+covers. Organization guardrails keep a direct `aws cloudformation deploy`:
+they are a separately authorized step outside `make deploy-*` (see
+[guardrail deployment](../operations/guardrails.md)).
 
 ## Move pages safely
 
@@ -96,16 +119,18 @@ Rules that keep the gate green:
 - Heading anchors follow GitHub slug rules in both renderings (an em dash
   becomes a double hyphen). Do not "fix" anchors to another generator's
   style; the site is configured to match GitHub.
-- The strategy documents (`docs/prfaq/` and the business-requirements and
-  press-release-FAQ snapshots in `docs/history/`) stay out of the site via
-  `exclude_docs` in `mkdocs.yml`. Declare exclusions only there.
+- The strategy documents (`docs/prfaq/`) and the history pages
+  (`docs/history/`: original proposals, superseded snapshots, and the
+  documentation baseline) stay out of the site via `exclude_docs` in
+  `mkdocs.yml`. Declare exclusions only there.
   Patterns follow `.gitignore` rules: a bare filename matches at every
   depth, so anchor root-level entries with a leading `/`.
 - The site navigation is declared explicitly in `mkdocs.yml` (`nav:`) and
-  ordered by reader journey: setup for platform administrators, then the
-  domain-team path, then operations, concepts, reference, and contributor
-  pages. Add every new published page to `nav:` in the same change; the
-  strict build fails on a published page missing from it. Orientation
+  grouped by audience: application-team guides first, then platform
+  administrator guides (install and onboard, then operate and recover), then
+  concepts, reference, and contributor pages. Add every new published page to
+  `nav:` in the same change; the strict build fails on a published page
+  missing from it. Orientation
   pages (the home introduction, platform configuration, domain
   prerequisites, and the ACTIVE-domain page) link to primary pages rather
   than copying their procedures or tables.
@@ -116,6 +141,10 @@ Rules that keep the gate green:
   conventions, and the side-effects rubric under `docs/development/` —
   are excluded from the site for the same reason: they serve repository
   contributors and stay reachable through GitHub.
+- The [discrepancy register](../reference/documentation-discrepancies.md) is
+  excluded too. Customer-facing pages describe current behavior without review
+  banners or links into it; contributor pages may link to it, and the build
+  rewrites those links to GitHub.
 - The "Documentation moved" forwarding pages kept at old paths for
   in-repository browsing are also excluded: on the site they would only
   surface as sidebar stubs. Link to current locations in published pages.
@@ -127,5 +156,11 @@ Rules that keep the gate green:
 - Mermaid fenced blocks render as diagrams on the site (the theme loads the
   diagram library client-side); keep diagrams as plain fenced blocks in the
   source so GitHub renders them too.
-- Preview locally with `mkdocs serve` from a virtualenv built on
-  `requirements-docs.txt`.
+- Preview locally with `make docs-serve`. It runs the `squidfunk/mkdocs-material`
+  image at the version pinned in `requirements-docs.txt` and serves the site
+  with live reload at `http://localhost:8642`, listening on loopback only
+  (`DOCS_PORT` changes the host port). Live reload watches `docs/` and
+  `mkdocs.yml`; restart after changing `docs-site/hooks.py`. Stop it with
+  Ctrl-C or `docker stop konductor-docs`. Without Docker, run `mkdocs serve`
+  from a virtualenv built on `requirements-docs.txt`.
+  `python3 docs-site/test_docs_serve.py` checks the target's container command.

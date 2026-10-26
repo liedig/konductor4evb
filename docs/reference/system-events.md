@@ -1,4 +1,4 @@
-# System events
+# System events reference
 
 [Documentation home](../README.md)
 

@@ -1739,6 +1739,33 @@ fn approval_workflow_finalizes_through_lambda_transaction() {
 }
 
 #[test]
+fn approval_workflow_stores_task_tokens_when_notifications_are_disabled() {
+    let doc = core_template();
+    for logical_id in [
+        "SendApprovalRequestNotificationFunctionLogGroup",
+        "SendApprovalRequestNotificationFunction",
+        "ApprovalWorkflowNotificationPolicy",
+    ] {
+        assert!(
+            mapping(resource(&doc, logical_id))
+                .get("Condition")
+                .is_none(),
+            "{logical_id} must deploy without SES: the request function stores the \
+             task token that the decide endpoint resumes"
+        );
+    }
+    let substitutions = at(
+        props(resource(&doc, "ApprovalWorkflow")),
+        "DefinitionSubstitutions",
+    );
+    assert_eq!(
+        text(at(substitutions, "SendApprovalRequestNotificationFunction")),
+        "SendApprovalRequestNotificationFunction.Arn",
+        "a placeholder ARN fails every registration into APPROVAL_NOTIFICATION_FAILED"
+    );
+}
+
+#[test]
 fn user_pool_client_supports_srp_login() {
     let doc = core_template();
     let client = resource(&doc, "KonductorUserPoolClient");

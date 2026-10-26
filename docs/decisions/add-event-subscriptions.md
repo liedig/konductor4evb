@@ -23,6 +23,6 @@
 
 ## Current relevance
 
-The all-or-nothing subscription saga was superseded by [promotion-following subscriptions](follow-schema-promotion.md). The old guide has not yet been reconciled; see [D01](../reference/documentation-discrepancies.md#d01).
+The all-or-nothing subscription saga was superseded by [promotion-following subscriptions](follow-schema-promotion.md). The consumer guide was reconciled with that behavior on 2026-10-25; see [D01](../reference/documentation-discrepancies.md#d01).
 
 [Decision index](README.md)

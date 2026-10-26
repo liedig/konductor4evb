@@ -7,6 +7,134 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Fix `make teardown-domain` for domains still in `PENDING_APPROVAL`. The
+  script deleted the record while the domain's approval workflow kept
+  waiting for a decision, so the workflow's later rejection or 7-day
+  timeout wrote the record back as `REJECTED`, or rejected a domain
+  re-registered under the same name. The script now stops the approval
+  workflow and confirms that it ended before it deletes anything, and
+  keeps the record when it cannot. See
+  [cleaning up domain resources](docs/operations/domain-recovery.md#cleaning-up-domain-resources)
+  and [D10](docs/reference/documentation-discrepancies.md#d10).
+- Describe subscription removal's zero-events alarm deletion as best
+  effort. A failed alarm deletion is not retried and the subscription
+  still becomes `REMOVED`, so domain cleanup now checks every environment
+  for a leftover alarm. The alarm treats missing data as breaching and
+  would otherwise stay in the `ALARM` state. See
+  [cleaning up domain resources](docs/operations/domain-recovery.md#cleaning-up-domain-resources)
+  and [D30](docs/reference/documentation-discrepancies.md#d30).
+- Correct three procedures and a troubleshooting row. Domain teardown now
+  starts by removing the domain's subscriptions in both directions. The
+  teardown does not remove subscriptions, so a consumer's inbound
+  subscriptions were left `ACTIVE`, with their rules on the producers'
+  buses. Domain recovery also removes the rules on each environment's
+  application bus before a teardown re-run: Konductor creates none there,
+  but a team's own integration rules block deleting that bus, as
+  subscription rules block the platform bus. The uninstall guide empties
+  the system-event failure bucket as well as the web console bucket before
+  it deletes the core stack, and waits for the guardrail stack deletion to
+  finish before it deletes the trust stacks. The subscription guide and
+  architecture page limit re-enabling a `FAILED` environment to `ACTIVE`
+  subscriptions; a subscription that failed as a whole is retried with a
+  new `POST /subscriptions`. The authentication guide now gives the symptom
+  of a missing owner binding as `404` on describe or a domain missing from
+  the list, not `403`. See
+  [cleaning up domain resources](docs/operations/domain-recovery.md#cleaning-up-domain-resources).
+- Refuse a domain registration whose `costCenter` fails the governed-tag
+  rule (empty, over 256 characters, or containing control characters)
+  before anything is written. The handler checked the value inside the
+  resource-name collision preflight, so an invalid value was recorded as a
+  `REJECTED` domain with `decidedBy: system` and used one of the
+  deployment's 1,000 domain slots. It now emits `RegisterDomainFailed` with
+  no record, no counter charge, and no workflow, as the update command
+  does. Rows recorded this way before the fix stay `REJECTED` and keep
+  their slot. See
+  [registration admission](docs/architecture/domain-lifecycle.md#registration-admission)
+  and [D28](docs/reference/documentation-discrepancies.md#d28).
+- Document the three registration outcomes in the domain guide, domain
+  lifecycle, and domain statuses pages: refused, which changes no record
+  (`GET` keeps returning `404` unless an earlier record holds the name),
+  recorded as `REJECTED` by the resource-name collision check
+  (`decidedBy: system`), or accepted for approval. The guide also
+  shows how to follow the outcome on each API surface: until approval
+  creates the owner binding, OAuth team callers get `404` from
+  `GET /domains/{domainName}` and see pending or rejected registrations
+  in `GET /domains`. The domain statuses page replaces its outdated text
+  diagram with a pointer to the state diagram. See
+  [what happens next](docs/guides/domains.md#what-happens-next).
+- Organize the documentation site by audience: application-team guides
+  first, then platform administrator guides, then concepts, reference, and
+  contributor pages. The home page follows the same order, six page titles
+  now match their navigation labels (for example, "Deploy domain-account
+  trust", "System event recovery", and "Publish events"), and forwarding
+  pages point to the renamed headings. The history pages (`docs/history/`)
+  are no longer published; links to them open on GitHub. See
+  [documentation maintenance](docs/development/documentation.md#publish-to-the-documentation-site).
+- Correct procedures found in a second documentation review. The
+  authentication guide's token-decode command now converts the unpadded
+  base64url payload before decoding (the previous `base64 -d` pipeline
+  could fail silently), domain recovery finds stuck domains with
+  `make list-domains`, the guardrail procedure links its sandbox procedure
+  and enforcement matrix, and API examples quote `"${AWS_REGION}"`
+  consistently. See
+  [decoding and inspecting a token](docs/guides/authentication.md#decoding-and-inspecting-a-token).
+- Fix domain registration on installs without notifications. With either
+  notification address empty, the approval workflow invoked a placeholder
+  function, so every registration failed into `APPROVAL_NOTIFICATION_FAILED`
+  instead of waiting for a decision. The approval request function now
+  deploys regardless and, with notifications disabled, stores the task token
+  without sending email, so registrations wait in the console's pending
+  approvals inbox. See
+  [domain recovery](docs/operations/domain-recovery.md#approval_notification_failed).
+- Fix `make teardown-domain` for domains without a `/namespace/{domainName}`
+  parameter, such as never-provisioned domains and re-runs after a partial
+  teardown. SSM rejects deleting a missing parameter, so the script stopped
+  before deleting the domain record. It now treats `ParameterNotFound` as
+  already deleted and still keeps the record on any other SSM error. See
+  [cleaning up domain resources](docs/operations/domain-recovery.md#cleaning-up-domain-resources).
+- Stop publishing the documentation discrepancy register and its "Review
+  pending" banners. The register stays in the repository as a contributor
+  reference, and the pages that carried banners now describe shipped
+  behavior: `owningTeam` at registration, authenticated approval and its
+  7-day timeout, the hosted-UI and SRP sign-in flows, Insomnia's built-in
+  OAuth setup, per-environment subscription activation, the three
+  trust-stack role ARNs, OAuth-only entitlement administration, which API
+  routes are queued, retained resources at uninstall, and the domain counter
+  at teardown. Resolutions are dated in the
+  [register](docs/reference/documentation-discrepancies.md). See
+  [documentation maintenance](docs/development/documentation.md#before-changing-behavior).
+- Standardise the installation and uninstall guides on make targets. The
+  notifications stack deploys with `make deploy-notifications`, and removal
+  runs `make list-domains`, `make teardown-core`, `make teardown-trust`,
+  and `make teardown-notifications`; the AWS CLI stays for read-only checks
+  and manual cleanup. See
+  [documentation maintenance](docs/development/documentation.md#show-commands-in-procedures).
+- Fix the platform deploy targets so `sam deploy` reaches the account and
+  Region the preflight checked: `deploy-core` and `deploy-notifications`
+  now pass `--region`, and the platform deploy and teardown targets pass
+  `--profile` whenever `PLATFORM_PROFILE` is set. `PLATFORM_PROFILE` no
+  longer defaults to the `default` profile. Unset, the targets use your
+  current AWS credentials (`AWS_PROFILE`, credential environment variables,
+  or the default profile), because an explicit `--profile default` would
+  override `AWS_PROFILE` and the credential environment variables. Without
+  `AWS_REGION`, the targets now resolve the Region in the AWS CLI's order:
+  `AWS_DEFAULT_REGION`, then the Region configured for `PLATFORM_PROFILE`
+  or the current profile, then `us-east-1`. The previous default ignored
+  `AWS_DEFAULT_REGION` and the platform profile's Region. See
+  [credentials and Region](docs/operations/installation.md#credentials-and-region).
+- Add `make docs-serve` to preview the documentation site with live reload
+  in the `squidfunk/mkdocs-material` container pinned by
+  `requirements-docs.txt` (loopback only; `DOCS_PORT` sets the host port).
+  See [documentation maintenance](docs/development/documentation.md#publish-to-the-documentation-site).
+- Refresh the README overview. The How It Works diagram now shows
+  first-environment schema authoring and promotion, validation at publish
+  admission, re-pinning on promotion, console-or-API approval,
+  per-environment domain accounts, and opt-in system events. Current Scope
+  drops two claims that shipped work had made false (no schema promotion;
+  business payloads not validated), and the README part of
+  [D08](docs/reference/documentation-discrepancies.md#d08) is marked
+  resolved.
+  [Proposal](openspec/changes/refresh-readme-overview/proposal.md).
 - Fix a latent OAuth authorizer bug that denied sibling paths with a
   confusing IAM-style 403 for up to five minutes. API Gateway caches the
   authorizer's policy under (token, method, route template) — so the

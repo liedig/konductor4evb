@@ -4,13 +4,6 @@
 
 This is an optional organization-admin operation. It is separate from installing Konductor and from granting cross-account trust.
 
-> **D09 resolved:** the account-selector defect recorded as
-> [D09](../reference/documentation-discrepancies.md#d09) was fixed
-> (account-agnostic selectors with a raw-template regression test) and
-> verified by the authorized
-> [sandbox acceptance run](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance-evidence.md)
-> on 2026-09-29.
-
 ## Authorization boundary
 
 > **Warning: Separate authorization required.** This phase changes AWS
@@ -56,8 +49,8 @@ of `make deploy-*`.
    administrator).
 
    Exemption is not a grant. The SCPs exempt the recovery role's exact ARN
-   from the deny ceiling, but the role's own identity policy must still
-   allow the maintenance **and recreation** set on the trust role, or the
+   from the deny ceiling. The role's own identity policy must still allow
+   the maintenance **and recreation** set on the trust role, or the
    exemption cannot be exercised. Minimum grant set on
    `arn:aws:iam::<account>:role/{org}-konductor-trust-role*`:
    `iam:GetRole`, `iam:CreateRole`, `iam:DeleteRole`, `iam:UpdateRole`,
@@ -90,8 +83,8 @@ aws cloudformation deploy \
    tests. These prove the SCP statements match the enforcement matrix —
    they do **not** prove live enforcement.
 2. **Authorized sandbox verification**: attach the SCPs to an isolated
-   sandbox account/OU first and run the full acceptance procedure in
-   `openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance.md`
+   sandbox account/OU first and run the full
+   [authorized sandbox procedure](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance.md)
    (positive team operations, denied administrator operations, Konductor
    provisioning/compensation, recovery path). Retain the recorded
    evidence: policy versions, targets, principals, observed AWS outcomes.
@@ -120,10 +113,11 @@ protection gap while detached.
 - The version-rollback deny (`DenyPolicyVersionRollback`, covering
   `{org}-konductor-*` customer managed policies) takes effect only when the
   platform account is a **member** account. The statement binds
-  `AWS::AccountId` at deploy time and SCPs are never evaluated in the
-  management account, so in a co-located deployment (platform account is
-  the management account) it is inert; in a split deployment it binds the
-  stack deployer's account rather than the platform account. Either way,
+  `AWS::AccountId` at deploy time, and SCPs are never evaluated in the
+  management account. In a co-located deployment, where the platform
+  account is the management account, the statement is inert. In a split
+  deployment, it binds the stack deployer's account rather than the
+  platform account. Either way,
   the real protection for those managed policies is the IAM grant surface
   of the account that owns them.
 - **Service-linked roles** are exempt from SCP evaluation for actions they
@@ -148,7 +142,7 @@ protection gap while detached.
 - **IAM grants** (identity-based policies, the trust stack, team roles) say what a principal *can* do. Without a grant, the action is denied regardless of SCPs.
 - **SCP ceilings** say what *any* principal in the covered account may do at most. An SCP `Deny` beats every identity-based `Allow`, including `AdministratorAccess` on the member account.
 
-The guardrail SCPs protect exactly four surfaces on `{org}-*` resources: EventBridge bus lifecycle/policy/tagging, SQS queue lifecycle/configuration/purge/tagging, IAM manipulation of the exact trust-role and recovery-role ARNs (no wildcards), and `organizations:LeaveOrganization`. Team-owned operations—integration rule/target management on the app bus, DLQ message receive/delete/visibility—are deliberately **not** denied; team IAM continues to gate them. The full action-by-action contract lives in the change's `enforcement-matrix.md`.
+The guardrail SCPs protect exactly four surfaces on `{org}-*` resources: EventBridge bus lifecycle/policy/tagging, SQS queue lifecycle/configuration/purge/tagging, IAM manipulation of the exact trust-role and recovery-role ARNs (no wildcards), and `organizations:LeaveOrganization`. Team-owned operations—integration rule/target management on the app bus, DLQ message receive/delete/visibility—are deliberately **not** denied; team IAM continues to gate them. The full action-by-action contract is the [enforcement matrix](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/enforcement-matrix.md).
 
 ## Design and acceptance evidence
 
@@ -158,6 +152,7 @@ The guardrail SCPs protect exactly four surfaces on `{org}-*` resources: EventBr
 - [Sandbox acceptance evidence](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/sandbox-acceptance-evidence.md)
 - [Acceptance tasks](../../openspec/changes/archive/2026-09-29-protect-domain-managed-resources/tasks.md) (complete)
 
-The account-selector discrepancy (D09) is resolved and a sandbox pass is
-recorded in the acceptance evidence (2026-09-29; `KonductorProtectedResources`
-content hash `738f33ca…9663`).
+The bus and queue statements match `{org}-*` resources in any account and
+Region, so they apply in every attached account. A sandbox pass is recorded in
+the acceptance evidence (2026-09-29; `KonductorProtectedResources` content hash
+`738f33ca…9663`).

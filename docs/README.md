@@ -19,15 +19,23 @@ Work moves through three stages:
 
 1. A platform administrator installs and configures Konductor, deploys the
    trust role into domain accounts, and sets up users.
-2. A domain team registers a domain. A platform administrator approves it, and
-   Konductor provisions its resources in every configured environment. The
-   domain becomes `ACTIVE`.
+2. An application team registers a domain. A platform administrator approves
+   it, and Konductor provisions its resources in every configured environment.
+   The domain becomes `ACTIVE`.
 3. Producers publish events to their domain through the API. Consumers
    subscribe to a producer's schema, and Konductor delivers matching events to
    the consumer's own event bus.
 
 The [architecture overview](architecture/README.md) explains the boundaries
 behind these stages.
+
+## Application teams: register and use a domain
+
+1. [Check the domain prerequisites](guides/domain-prerequisites.md) with your platform administrator.
+2. [Authenticate API requests](guides/authentication.md).
+3. [Register your domain](guides/domains.md) and follow its approval.
+4. [Learn what an ACTIVE domain provides](guides/active-domain.md).
+5. [Publish events](guides/publishing-events.md), or [subscribe to another domain's events](guides/subscriptions.md).
 
 ## Platform administrators: set up Konductor
 
@@ -39,30 +47,18 @@ Follow these pages in order for a new installation:
 4. [Deploy domain-account trust](operations/trust-stack-deployment.md) into every account that hosts domain resources.
 5. [Set up users and access](operations/access-administration.md): Cognito users, team groups, bindings, and entitlements.
 
-After setup, the [operations index](operations/README.md) covers approvals,
-recovery, metadata rollout, and removal.
-
-## Domain teams: register and use a domain
-
-1. [Check the domain prerequisites](guides/domain-prerequisites.md) with your platform administrator.
-2. [Authenticate API requests](guides/authentication.md).
-3. [Register your domain](guides/domains.md) and follow its approval.
-4. [Learn what an ACTIVE domain provides](guides/active-domain.md).
-5. [Publish events](guides/publishing-events.md), or [subscribe to another domain's events](guides/subscriptions.md).
+After setup, decide registrations in the console's **Pending approvals** inbox;
+see the [approval process](guides/domains.md#approval-process). The
+[platform administrator guides](operations/README.md) cover recovery, metadata
+rollout, schema promotion, system event recovery, and removal.
 
 ## Look something up
 
 - [Concepts](architecture/README.md) explain how the platform works and why.
 - [Reference](reference/README.md) pages define settings, API contracts, statuses, names, and events.
 - The [contributor guide](development/README.md) covers changing the repository.
-- The [changelog](../CHANGELOG.md) lists what changed in each release.
+- The [changelog](../CHANGELOG.md) summarizes notable changes, newest first; it is not a release history.
 
-## Known documentation conflicts
-
-The reorganization preserves technical content rather than choosing between
-conflicting claims. Read the [discrepancy register](reference/documentation-discrepancies.md)
-before relying on affected procedures or guarantees. Warnings on the relevant
-pages link to individual review items.
-
-Old paths remain as forwarding pages for bookmarks and archived changes. Use
-the new topic pages for new links and edits. See [documentation maintenance](development/documentation.md).
+In the repository, old paths remain as forwarding pages for bookmarks and
+archived changes; the site does not publish them. Use the new topic pages for
+new links and edits. See [documentation maintenance](development/documentation.md).

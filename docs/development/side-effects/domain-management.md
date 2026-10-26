@@ -58,7 +58,7 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 - **Committed writes:** conditional `UpdateItem` (`PROVISIONING_FAILED` → `APPROVED`, removes `errorDetail`).
 - **Side effects:** `DomainProvisioningRetryRequested` (carries item fields + `retriedBy`, `retriedAt`), which triggers the provisioning saga. Enable/disable transitions emit nothing.
 - **Rubric:** (1) no—`retriedBy` is handler-local and never persisted; a stream consumer loses actor attribution (migration must add it to the item); (2) yes—the event hangs on a committed transition; (3) yes; (4) yes—provisioning takes minutes; (5) as above; (6) **no**—this is a synchronous API path with no inbound envelope at all.
-- **Failure walk:** commit → emission fails → the caller's natural retry 409 s (status no longer `PROVISIONING_FAILED`) and the event never goes out: the domain sits in `APPROVED` with no provisioning execution, permanently wedged without manual intervention. **Uncovered today—the worst gap in the audit.**
+- **Failure walk:** commit → emission fails → the caller's natural retry fails with `409` (status no longer `PROVISIONING_FAILED`) and the event never goes out: the domain sits in `APPROVED` with no provisioning execution, permanently wedged without manual intervention. **Uncovered today—the worst gap in the audit.**
 - **Decision:** MIGRATE.
 - **Rationale:** the only handler with an uncovered partial state *and* no durable envelope; the rubric's question 6 fails outright. Migration closes the wedge by construction.
 - **Follow-up:** `stream-domain-lifecycle-events`.
@@ -88,9 +88,9 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 ## `send-approval-request-notification`
 
 - **Committed writes:** conditional `UpdateItem` persisting the Step Functions `taskToken` onto the domain record.
-- **Side effects:** SES email to the platform operator, sent after the write; body derives from the workflow payload plus an `is_new_account` GSI query.
+- **Side effects:** SES email to the platform operator, sent after the write; body derives from the workflow payload plus an `is_new_account` GSI query. With notifications disabled (either address empty), the handler skips the query and the email; the token write is the whole invocation.
 - **Rubric:** (1) no—the email content comes from the workflow payload, not the item, and streaming the bearer task token to a consumer would widen its exposure for no gain; (2) no—the token write is plumbing, not a business transition; (4) yes; (6) the invoking state machine is the durable envelope (task retry + Catch routing).
-- **Failure walk:** crash between write and send → SFN retry re-writes the same token (idempotent) and re-sends; crash after send → duplicate operator email (tolerated). **Noted risk, orthogonal to streams:** on a *permanent* SES failure the handler deliberately returns success, so the workflow waits the full 7-day timeout for a decision that can never arrive, and only then routes to `APPROVAL_NOTIFICATION_FAILED`. Consider a shorter "token persisted but no decision" alarm.
+- **Failure walk:** crash between write and send → SFN retry re-writes the same token (idempotent) and re-sends; crash after send → duplicate operator email (tolerated). **Noted risk, orthogonal to streams:** on a *permanent* SES failure the handler deliberately returns success, so the registration stays `PENDING_APPROVAL` with its token stored and nobody is told. It still appears in the console's pending approvals inbox; if nobody decides within 7 days, the timeout rejects it (`decidedBy: system:timeout`) rather than routing to `APPROVAL_NOTIFICATION_FAILED`. Consider a shorter "token persisted but no decision" alarm.
 - **Decision:** STAY. **Rationale:** the state machine orchestrates this step and owns its recovery; the write exists only to serve the workflow's callback contract.
 
 ## Outcome/notification email handlers (send-approval-outcome, send-rejection-outcome, send-registration-failed, send-provisioning-failed, send-provisioning-succeeded, send-registration-delayed)

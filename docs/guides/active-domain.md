@@ -13,7 +13,7 @@ for what each status means and what you can do.
 Describe your domain and check `status`:
 
 ```bash
-awscurl -X GET "${API_URL}/domains/billing" --region "${REGION}"
+awscurl -X GET "${API_URL}/domains/billing" --region "${AWS_REGION}"
 ```
 
 An `ACTIVE` response carries `resourceArns`, keyed by environment, and
