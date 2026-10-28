@@ -7,6 +7,15 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Add `konductor-sdk`, a pre-alpha Python SDK (Python 3.11+) for the
+  application APIs: synchronous `publish`, `subscribe`, `unsubscribe`, and
+  `describe_subscription` against the OAuth API with a Cognito access token
+  (fixed, or refreshed from a refresh token by
+  `CognitoRefreshTokenProvider`), typed results and errors, and no implicit
+  retries. It does not sign IAM (SigV4) requests. It is installed from
+  the repository (not published to an index); see the
+  [Python SDK guide](docs/guides/python-sdk.md) and the
+  [SDK generation guide](docs/development/sdks.md).
 - Prepare the repository for outside contributors. The issue chooser
   offers bug report, feature request, documentation, and question forms,
   with blank issues turned off and links to private vulnerability
