@@ -79,7 +79,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 aws-smithy-mocks = "0.3"
 uuid = { version = "1", features = ["v4", "v5"] }
 urlencoding = "2"
-jsonschema = { version = "0.59", default-features = false }
+jsonschema = { version = "0.60", default-features = false }
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"
