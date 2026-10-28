@@ -103,6 +103,26 @@ cargo test --workspace -- --nocapture
 make check
 ```
 
+## Python SDK tests
+
+The SDK suite (`sdks/python/tests/`) is fully mocked: no network, no AWS
+credentials, no JVM. Wire-level expectations come from shared JSON fixtures
+under `sdks/conformance/`. Distribution tests build the wheel and sdist and
+install them into throwaway virtual environments.
+
+```bash
+# SDK behavior, conformance, example, and distribution tests
+make sdk-test
+
+# Contract extraction and generation-conformance tests are included;
+# drift, lint, format, and type checks are separate
+make sdk-check
+```
+
+`make sdk-check` also runs the non-mutating regeneration drift check
+(`make sdk-generate-check`). Both targets match what the CI `Python SDK` job
+runs across the supported Python matrix.
+
 ## Browser UI tests (Playwright)
 
 The web console has an isolated-browser suite (`pnpm test:ui` from `web/`) with no dependency on a deployed stack:
