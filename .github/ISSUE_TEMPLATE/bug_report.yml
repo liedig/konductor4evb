@@ -1,7 +1,14 @@
-name: Bug Report
-description: Report a bug
+name: Bug report
+description: Report something in Konductor that doesn't work as documented
 labels: ["type:bug", "status:needs-triage"]
 body:
+  - type: markdown
+    attributes:
+      value: >
+        **This issue is public.** Before submitting, remove account IDs, tokens,
+        email addresses, and other secrets from the description and logs.
+        Report security vulnerabilities privately through the link in the issue
+        chooser, not here.
   - type: textarea
     id: description
     attributes:
@@ -31,36 +38,50 @@ body:
     validations:
       required: true
   - type: dropdown
-    id: area
+    id: component
     attributes:
-      label: Area
+      label: Component
       description: >
-        Which part of the system is affected? Selecting a value here records it
-        in the issue body for triage — GitHub Issue Forms does not auto-apply
-        area labels, so a maintainer will add the matching area:* label during triage.
+        Which part of Konductor does this concern? Issue forms can't apply labels
+        from a dropdown, so a maintainer applies the matching area label and a
+        priority during triage.
       options:
-        - area:domain-mgmt
-        - area:event-streams
-        - area:notifications
-        - area:trust
-        - area:infra
-        - area:ci
-        - area:deps
-        - area:docs
+        - Domain management (area:domain-mgmt)
+        - Schema management (area:schema-mgmt)
+        - Event streams (area:event-streams)
+        - Control plane (area:control-plane)
+        - Notifications (area:notifications)
+        - Cross-account trust (area:trust)
+        - Web console (area:web)
+        - Python SDK (area:sdk)
+        - Infrastructure and deployment (area:infra)
+        - CI (area:ci)
+        - Dependencies (area:deps)
+        - Documentation (area:docs)
     validations:
       required: true
-  - type: dropdown
-    id: priority
+  - type: input
+    id: version
     attributes:
-      label: Priority
+      label: Commit or version
       description: >
-        How urgent is this? Selecting a value here records it in the issue body
-        for triage — GitHub Issue Forms does not auto-apply priority labels,
-        so a maintainer will add the matching P0-P3 label during triage.
-      options:
-        - P0
-        - P1
-        - P2
-        - P3
+        Konductor has no releases, so give the commit you deployed
+        (`git rev-parse --short HEAD`), or the SDK version if the bug is in the SDK.
     validations:
       required: true
+  - type: input
+    id: region
+    attributes:
+      label: AWS Region
+      description: The Region you deployed to, if it matters.
+      placeholder: ap-southeast-2
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log output or error messages, with secrets removed.
+      render: shell
+    validations:
+      required: false

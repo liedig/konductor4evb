@@ -1,6 +1,6 @@
-# Konductor issue labeling system
-# Synced by .github/workflows/sync-labels.yml
-# Schema: https://github.com/crazy-max/ghaction-github-labeler
+# Konductor issue and pull request labels: the single source of truth for each
+# label's name, color, and description. There is no sync workflow. Apply the file
+# with a `gh label create --force` loop and delete labels it doesn't define.
 
 # ── Priority ──────────────────────────────────────────────────────────────
 - name: "P0"
@@ -53,9 +53,17 @@
   color: "bfd4f2"
   description: "Domain registration, approval, lifecycle management"
 
+- name: "area:schema-mgmt"
+  color: "c2e0c6"
+  description: "Schema registration, versions, compatibility, and promotion"
+
 - name: "area:event-streams"
   color: "bfdadc"
-  description: "Schema registries, subscriptions, event publishing"
+  description: "Event subscriptions and event publishing"
+
+- name: "area:control-plane"
+  color: "fef2c0"
+  description: "Platform metadata, entitlements, and control-plane stream consumers"
 
 - name: "area:notifications"
   color: "d4c5f9"
@@ -64,6 +72,14 @@
 - name: "area:trust"
   color: "e99695"
   description: "Cross-account trust model, IAM roles"
+
+- name: "area:web"
+  color: "f9d0c4"
+  description: "Web console under web/"
+
+- name: "area:sdk"
+  color: "d4e5f9"
+  description: "Python SDK and generated API clients"
 
 - name: "area:infra"
   color: "c7def8"
@@ -81,7 +97,7 @@
   color: "0075ca"
   description: "Documentation, README, AGENTS.md, OpenSpec specs"
 
-# ── Status (workflow-managed) ─────────────────────────────────────────────
+# ── Status ────────────────────────────────────────────────────────────────
 - name: "status:blocked"
   color: "5319e7"
   description: "Blocked on external dependency or decision"
@@ -94,7 +110,11 @@
   color: "fbca04"
   description: "Awaiting priority and area assignment"
 
-# ── Keep useful defaults ──────────────────────────────────────────────────
+# ── Other ─────────────────────────────────────────────────────────────────
+- name: "question"
+  color: "d876e3"
+  description: "Usage question or request for help"
+
 - name: "good first issue"
   color: "7057ff"
   description: "Good for newcomers"

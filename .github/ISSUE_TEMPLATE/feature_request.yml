@@ -1,12 +1,12 @@
-name: Feature Request
-description: Suggest a feature
+name: Feature request
+description: Suggest a new capability or an improvement
 labels: ["type:feature", "status:needs-triage"]
 body:
   - type: textarea
     id: description
     attributes:
       label: Description
-      description: What feature would you like?
+      description: What would you like Konductor to do?
     validations:
       required: true
   - type: textarea
@@ -17,37 +17,32 @@ body:
     validations:
       required: true
   - type: dropdown
-    id: area
+    id: component
     attributes:
-      label: Area
+      label: Component
       description: >
-        Which part of the system would this feature affect? Selecting a value
-        here records it in the issue body for triage — GitHub Issue Forms does
-        not auto-apply area labels, so a maintainer will add the matching
-        area:* label during triage.
+        Which part of Konductor does this concern? Issue forms can't apply labels
+        from a dropdown, so a maintainer applies the matching area label and a
+        priority during triage.
       options:
-        - area:domain-mgmt
-        - area:event-streams
-        - area:notifications
-        - area:trust
-        - area:infra
-        - area:ci
-        - area:deps
-        - area:docs
+        - Domain management (area:domain-mgmt)
+        - Schema management (area:schema-mgmt)
+        - Event streams (area:event-streams)
+        - Control plane (area:control-plane)
+        - Notifications (area:notifications)
+        - Cross-account trust (area:trust)
+        - Web console (area:web)
+        - Python SDK (area:sdk)
+        - Infrastructure and deployment (area:infra)
+        - CI (area:ci)
+        - Dependencies (area:deps)
+        - Documentation (area:docs)
     validations:
       required: true
-  - type: dropdown
-    id: priority
+  - type: textarea
+    id: alternatives
     attributes:
-      label: Priority
-      description: >
-        How urgent is this? Selecting a value here records it in the issue body
-        for triage — GitHub Issue Forms does not auto-apply priority labels,
-        so a maintainer will add the matching P0-P3 label during triage.
-      options:
-        - P0
-        - P1
-        - P2
-        - P3
+      label: Alternatives considered
+      description: Other approaches or workarounds you've tried or considered.
     validations:
-      required: true
+      required: false

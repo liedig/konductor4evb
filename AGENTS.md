@@ -102,10 +102,11 @@ Issues and PRs use a three-axis labeling system (defined in `.github/labels.yml`
 
 - **Priority**: `P0` (critical), `P1` (high), `P2` (medium), `P3` (low)
 - **Type**: `type:bug`, `type:feature`, `type:refactor`, `type:chore`, `type:test`, `type:docs`, `type:security`
-- **Area**: `area:domain-mgmt`, `area:event-streams`, `area:notifications`, `area:trust`, `area:infra`, `area:ci`, `area:deps`, `area:docs`
+- **Area**: `area:domain-mgmt`, `area:schema-mgmt`, `area:event-streams`, `area:control-plane`, `area:notifications`, `area:trust`, `area:web`, `area:sdk`, `area:infra`, `area:ci`, `area:deps`, `area:docs`
 - **Status**: `status:needs-triage`, `status:in-progress`, `status:blocked`
+- **Other**: `question`, `good first issue`, `help wanted`
 
-New issues auto-receive `type:bug` or `type:feature` and `status:needs-triage` (these are in the issue template's static `labels` list). The area and priority dropdowns in the issue form record the submitter's suggestion in the issue body, but GitHub Issue Forms does not auto-apply those as labels. During triage, a maintainer reads the dropdown selections and applies the matching `area:*` and `P0`-`P3` labels, then removes `status:needs-triage`.
+The four issue forms (bug report, feature request, documentation, question) auto-apply their type label (`type:bug`, `type:feature`, `type:docs`, or `question`) and `status:needs-triage`. Reporters pick a component from a dropdown, and no form asks for a priority. GitHub Issue Forms can't turn a dropdown choice into a label, so during triage a maintainer applies the matching `area:*` label and a `P0`-`P3` priority, then removes `status:needs-triage`. Dependabot applies `type:chore` with `area:deps` (`area:ci` for GitHub Actions). `scripts/tests/test_repository_config.py` checks that every automatically applied label is defined.
 
 <!-- rtk-instructions v2 -->
 # RTK (Rust Token Killer) - Token-Optimized Commands

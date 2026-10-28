@@ -6,7 +6,7 @@
 
 <!-- Apply at minimum one type: and one area: label. Add P0-P3 if urgency is clear. -->
 - type: `type:bug` / `type:feature` / `type:refactor` / `type:chore` / `type:test` / `type:docs` / `type:security`
-- area: `area:domain-mgmt` / `area:event-streams` / `area:notifications` / `area:trust` / `area:infra` / `area:ci` / `area:deps` / `area:docs`
+- area: `area:domain-mgmt` / `area:schema-mgmt` / `area:event-streams` / `area:control-plane` / `area:notifications` / `area:trust` / `area:web` / `area:sdk` / `area:infra` / `area:ci` / `area:deps` / `area:docs`
 - priority (optional): `P0` / `P1` / `P2` / `P3`
 
 ## Test Plan

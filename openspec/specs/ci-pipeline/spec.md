@@ -128,3 +128,59 @@ The Makefile `check` target SHALL include `cargo fmt --check` so that running `m
 - **WHEN** a developer runs `make check` locally
 - **THEN** it SHALL execute `cargo fmt --check`, `cargo check --workspace`, and `cargo clippy --workspace -- -D warnings` in that order
 - **AND THEN** the result SHALL match what the CI check job would produce
+
+### Requirement: Versioned branch rulesets
+
+The protection rules for `main` SHALL be defined as GitHub repository ruleset files under `.github/rulesets/`, so they are reviewed like code and can be applied unchanged to a new copy of the repository. The rulesets active on GitHub SHALL match those files.
+
+#### Scenario: Ruleset change is reviewed
+
+- **WHEN** a maintainer changes how `main` is protected
+- **THEN** the change SHALL be made to a file under `.github/rulesets/` through a pull request
+- **AND THEN** the updated file SHALL be applied to the repository after merge
+
+#### Scenario: Rulesets applied when the repository goes public
+
+- **WHEN** the repository's GitHub settings are applied, such as when it is made public
+- **THEN** the rulesets under `.github/rulesets/` SHALL be applied before outside contributions are accepted
+
+### Requirement: Pull request review gate on main
+
+Changes to `main` SHALL arrive through pull requests approved by a code owner, with every review conversation resolved. The repository administrator MAY bypass this gate when merging a pull request, and only then, so a sole maintainer can merge their own pull requests.
+
+#### Scenario: Outside pull request needs code-owner approval
+
+- **WHEN** a contributor who is not a code owner opens a pull request targeting `main`
+- **THEN** it SHALL NOT be mergeable until a code owner approves it and all review conversations are resolved
+- **AND THEN** an approval SHALL be dismissed when new commits are pushed
+
+#### Scenario: Administrator merges their own pull request
+
+- **WHEN** the repository administrator merges their own pull request into `main`
+- **THEN** the review gate MAY be bypassed for that merge
+
+#### Scenario: Direct push is rejected
+
+- **WHEN** anyone, including the repository administrator, pushes a commit directly to `main`
+- **THEN** GitHub SHALL reject the push
+
+### Requirement: Integrity gate on main
+
+Every change merged into `main` SHALL pass the required CI checks, and `main` SHALL keep a linear history that cannot be force-pushed or deleted. No one, including the repository administrator, SHALL be able to bypass this gate.
+
+#### Scenario: Merge waits for required checks
+
+- **WHEN** a pull request targeting `main` has a required check that has not passed
+- **THEN** it SHALL NOT be mergeable by anyone, including the repository administrator
+
+#### Scenario: Required checks are the CI jobs
+
+- **WHEN** the integrity gate evaluates a pull request
+- **THEN** the required checks SHALL be exactly the jobs of the CI workflow on `main`
+- **AND THEN** checks that may not report on every pull request, such as path-filtered workflows or reviews limited to same-repository branches, SHALL NOT be required
+
+#### Scenario: History stays linear and protected
+
+- **WHEN** a pull request is merged into `main`
+- **THEN** it SHALL be merged as a single squashed commit
+- **AND THEN** force pushes to `main` and deletion of `main` SHALL be rejected

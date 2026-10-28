@@ -1,0 +1,41 @@
+name: Question
+description: Ask how to use or operate Konductor
+labels: ["question", "status:needs-triage"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      description: Describe the outcome you want, not only the step you're stuck on.
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Commands, configuration, or documentation pages you've already used, with secrets removed.
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: >
+        Which part of Konductor does this concern? Issue forms can't apply labels
+        from a dropdown, so a maintainer applies the matching area label and a
+        priority during triage.
+      options:
+        - Domain management (area:domain-mgmt)
+        - Schema management (area:schema-mgmt)
+        - Event streams (area:event-streams)
+        - Control plane (area:control-plane)
+        - Notifications (area:notifications)
+        - Cross-account trust (area:trust)
+        - Web console (area:web)
+        - Python SDK (area:sdk)
+        - Infrastructure and deployment (area:infra)
+        - CI (area:ci)
+        - Dependencies (area:deps)
+        - Documentation (area:docs)
+    validations:
+      required: false

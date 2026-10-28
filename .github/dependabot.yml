@@ -9,7 +9,7 @@ updates:
     commit-message:
       prefix: chore
       include: scope
-    labels: ["type:deps", "area:deps"]
+    labels: ["type:chore", "area:deps"]
     groups:
       aws-sdk:
         patterns: ["aws-config", "aws-sdk-*", "aws-smithy-*"]
@@ -25,7 +25,7 @@ updates:
     commit-message:
       prefix: chore
       include: scope
-    labels: ["type:deps", "area:deps"]
+    labels: ["type:chore", "area:deps"]
     cooldown:
       default-days: 7
     # vue-tsc (nuxi typecheck) resolves typescript/lib/tsc, which TypeScript 7
@@ -50,7 +50,7 @@ updates:
     commit-message:
       prefix: chore
       include: scope
-    labels: ["type:deps", "area:deps"]
+    labels: ["type:chore", "area:deps"]
 
   # Workflows pin actions by SHA; this is what keeps those pins current.
   - package-ecosystem: github-actions
@@ -61,4 +61,4 @@ updates:
     commit-message:
       prefix: chore
       include: scope
-    labels: ["type:deps", "area:ci"]
+    labels: ["type:chore", "area:ci"]

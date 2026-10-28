@@ -7,7 +7,7 @@ context: |
   - Errors: thiserror typed errors in konductor-common, anyhow with .context() at Lambda edges
   - AWS SDK for Rust: DynamoDB, EventBridge, SES, SNS, Step Functions, SQS, SSM, STS, Schemas, Lambda, CloudWatch
   - jsonwebtoken + reqwest for the Cognito JWT/JWKS OAuth authorizer; uuid, chrono, sha2
-  - Testing: aws-smithy-mocks (mock!/mock_client! rules), per-binary integration-style tests; Python suites for scripts and state-machine fixtures under scripts/tests (`uv run --with pytest pytest scripts/tests`)
+  - Testing: aws-smithy-mocks (mock!/mock_client! rules), per-binary integration-style tests; Python suites for scripts and state-machine fixtures under scripts/tests (`uv run --with pytest --with pyyaml pytest scripts/tests`)
   - Lint gates: cargo fmt, clippy -D warnings (workspace lints: cognitive_complexity, too_many_lines, type_complexity)
   - Architecture: Step Functions ASL state machines, DynamoDB single-table design, EventBridge buses/rules, SQS queues, SES email, Cognito, CloudWatch log metric filters + alarms, API Gateway defined by OpenAPI specs in api/
 

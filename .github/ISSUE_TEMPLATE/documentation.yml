@@ -1,0 +1,42 @@
+name: Documentation
+description: Report incorrect, missing, or unclear documentation
+labels: ["type:docs", "status:needs-triage"]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: The documentation site URL or the repository path of the page.
+      placeholder: https://liedig.github.io/konductor4evb/...
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's wrong or missing
+      description: Quote the passage if it helps, and say what you expected to find.
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: >
+        Which part of Konductor does this concern? Issue forms can't apply labels
+        from a dropdown, so a maintainer applies the matching area label and a
+        priority during triage.
+      options:
+        - Domain management (area:domain-mgmt)
+        - Schema management (area:schema-mgmt)
+        - Event streams (area:event-streams)
+        - Control plane (area:control-plane)
+        - Notifications (area:notifications)
+        - Cross-account trust (area:trust)
+        - Web console (area:web)
+        - Python SDK (area:sdk)
+        - Infrastructure and deployment (area:infra)
+        - CI (area:ci)
+        - Dependencies (area:deps)
+        - Documentation (area:docs)
+    validations:
+      required: false

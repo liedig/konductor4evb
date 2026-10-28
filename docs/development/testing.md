@@ -44,7 +44,7 @@ Run only the new test so the failure is easy to read:
 | ----- | ------- |
 | Rust | `cargo test -p <crate> <test_name>` |
 | Web console (from `web/`) | `pnpm exec playwright test tests/ui/<spec>.spec.ts -g "<test title>"` |
-| Scripts | `uv run --with pytest pytest scripts/tests/<file>.py -k <test_name>` |
+| Scripts | `uv run --with pytest --with pyyaml pytest scripts/tests/<file>.py -k <test_name>` |
 
 The failure must come from the missing behavior: an assertion failure, or in Rust a compile error naming only the function, field, or variant the test introduces. A typo, an unrelated compile error, or a fixture that fails during setup is not RED; fix it and run again.
 

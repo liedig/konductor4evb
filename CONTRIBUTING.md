@@ -32,3 +32,15 @@ By signing off, you certify that you wrote the contribution or otherwise have th
 - [ ] New behavior was built test-first (red/green/refactor), and bug fixes include a reproducing test; see [Testing Strategy](AGENTS.md#testing-strategy)
 - [ ] Commit messages follow Conventional Commits with `Signed-off-by`
 - [ ] Docs updated if applicable, following the [documentation maintenance rules](docs/development/documentation.md)
+
+## Issues and triage
+
+- Open issues through one of the four forms: bug report, feature request, documentation, or question. Blank issues are turned off. If nothing else fits, use the question form.
+- Issues are public. Remove account IDs, tokens, email addresses, and other secrets before you submit.
+- Report security vulnerabilities privately, as described in [SECURITY.md](SECURITY.md), never in an issue.
+- Each form applies its type label (`type:bug`, `type:feature`, `type:docs`, or `question`) and `status:needs-triage`. Forms can't turn a dropdown choice into a label, so during triage a maintainer applies the `area:*` label for the component you chose and a priority from `P0` (critical) to `P3` (low), then removes `status:needs-triage`. Labels are defined in [`.github/labels.yml`](.github/labels.yml).
+- Maintainers who need a free-form issue create it with `gh issue create`, which doesn't go through the form chooser.
+
+## Review and merging
+
+Pull requests to `main` need a code owner's approval, with every review conversation resolved, and the jobs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) must pass. Each pull request is merged as one squashed commit that uses the pull request title as its subject, so give the pull request a Conventional Commits title. The rules are defined as rulesets in [`.github/rulesets/`](.github/rulesets/).

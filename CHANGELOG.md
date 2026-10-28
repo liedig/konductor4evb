@@ -7,6 +7,19 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Prepare the repository for outside contributors. The issue chooser
+  offers bug report, feature request, documentation, and question forms,
+  with blank issues turned off and links to private vulnerability
+  reporting and the documentation site. No form asks for a priority, and
+  the bug form warns reporters to remove secrets. New area labels cover
+  schema management, the control plane, the web console, and the SDK, and
+  Dependabot now applies labels that exist. `main` is protected by two
+  rulesets kept in `.github/rulesets/`: code-owner review with squash-only
+  merges, and required CI checks with linear history and no force pushes.
+  `scripts/tests/test_repository_config.py` checks these files against
+  each other, so the scripts test command now adds `--with pyyaml`. See
+  [the decision](docs/decisions/branch-rulesets-and-issue-forms.md) and
+  [contributing](CONTRIBUTING.md#issues-and-triage).
 - Fix `make teardown-domain` for domains still in `PENDING_APPROVAL`. The
   script deleted the record while the domain's approval workflow kept
   waiting for a decision, so the workflow's later rejection or 7-day
