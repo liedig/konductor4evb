@@ -3,7 +3,7 @@
 [Decision index](README.md)
 
 - Status: accepted for this documentation reorganization.
-- Baseline: `40bfdd5`, the user-reviewed editorial pass.
+- Baseline: `c7e2bd6`, the user-reviewed editorial pass.
 - Scope: documentation, navigation, and agent workflow instructions only.
 
 ## Context

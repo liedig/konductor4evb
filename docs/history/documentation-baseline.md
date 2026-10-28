@@ -2,7 +2,7 @@
 
 [Documentation home](../README.md)
 
-These excerpts come from commit `40bfdd5`, before the documentation reorganization. They are preserved as review evidence, not current instructions; the current topic pages supersede them.
+These excerpts come from commit `c7e2bd6`, before the documentation reorganization. They are preserved as review evidence, not current instructions; the current topic pages supersede them.
 
 ## Original problem statement
 

@@ -23,7 +23,7 @@
 
 - [x] 4.1 Create `.github/workflows/docs.yml`: PR trigger (paths `docs/**`, `mkdocs.yml`, `docs-site/**`, `requirements-docs.txt`) running checkout → pip install → `mkdocs build --strict` with no Pages permissions; verify it goes green on this change's own PR
 - [x] 4.2 Add the `main`-push job to the same workflow: strict build plus `configure-pages`/`upload-pages-artifact`/`deploy-pages` with `permissions: pages: write, id-token: write`, `environment: github-pages`, and a `github-pages` concurrency group; verify by inspection of the workflow run on merge (deploy expected to fail gracefully or remain unavailable until Pages is enabled — record the observed behavior)
-  - Observed on merge (`b5b3d7c`, run [36803692779](https://github.com/sliedig/konductor4evb/actions/runs/36803692779), 2026-10-01): checkout, install, hook tests, and `mkdocs build --strict` passed on `main`; `configure-pages` failed with "Resource not accessible by integration" because Pages is not enabled, so the run is red and the deploy job was skipped. Nothing was published. Expected to clear at task 5.2.
+  - Observed on merge (`e65cb3d`, run [36803692779](https://github.com/sliedig/konductor4evb/actions/runs/36803692779), 2026-10-01): checkout, install, hook tests, and `mkdocs build --strict` passed on `main`; `configure-pages` failed with "Resource not accessible by integration" because Pages is not enabled, so the run is red and the deploy job was skipped. Nothing was published. Expected to clear at task 5.2.
 
 ## 5. Launch (owner-only steps, after org transfer and public flip)
 

@@ -13,6 +13,6 @@ The repo ran half a git-flow: conventions (short-lived feature branches, CONTRIB
 
 ## Evidence
 
-Migrated from the decision log at commit `40bfdd5`. No matching OpenSpec change directory was present during the reorganization.
+Migrated from the decision log at commit `c7e2bd6`. No matching OpenSpec change directory was present during the reorganization.
 
 [Decision index](README.md)

@@ -2,7 +2,7 @@
 
 [Decision index](README.md)
 
-- Recorded from merge: 2026-09-18, `cd5b4b8` (PR #39).
+- Recorded from merge: 2026-09-18, `7cbc202` (PR #39).
 - Status: implemented dependency-scope change.
 - Evidence: [workspace manifest](../../Cargo.toml) and member development dependencies,
   including [konductor-common](../../lib/konductor-common/Cargo.toml).

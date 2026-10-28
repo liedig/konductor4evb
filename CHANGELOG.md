@@ -384,18 +384,18 @@ See the [organization decision](docs/decisions/documentation-organization.md).
 ## 2026-09-23
 
 - Apply the documentation style and clarity pass, without intended technical
-  changes (`40bfdd5`).
+  changes (`c7e2bd6`).
 
 ## 2026-09-18
 
 - Harden the append-time schema compatibility gate to fail closed when its
-  bounded proof cannot establish compatibility (PR #37, `a7ac2e1`).
+  bounded proof cannot establish compatibility (PR #37, `b4aeb37`).
   [Decision and pairwise concurrency limit](docs/decisions/harden-schema-compatibility-checker.md).
 - Move AWS SDK `test-util` features from normal workspace dependencies to
-  explicit member development dependencies (PR #39, `cd5b4b8`).
+  explicit member development dependencies (PR #39, `7cbc202`).
   [Rationale and measurement limits](docs/decisions/sdk-test-util-scoping.md).
 - Add a separately authorized organization SCP package and ownership-aware
-  resource links in the console (PR #40, `7ef04b3`).
+  resource links in the console (PR #40, `97d7a8f`).
   [Decision](docs/decisions/protect-domain-managed-resources.md).
   The account-selector issue ([D09](docs/reference/documentation-discrepancies.md#d09))
   and live sandbox acceptance remain unresolved; this entry does not claim

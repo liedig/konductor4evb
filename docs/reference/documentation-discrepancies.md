@@ -3,7 +3,7 @@
 [Documentation home](../README.md)
 
 These items were identified while reorganizing the documentation from commit
-`40bfdd5` and in later reviews. An item stays **open for separate technical
+`c7e2bd6` and in later reviews. An item stays **open for separate technical
 review** until its entry records a dated resolution. The reorganization itself
 did not change application behavior, repair templates, or establish live
 deployment guarantees.
