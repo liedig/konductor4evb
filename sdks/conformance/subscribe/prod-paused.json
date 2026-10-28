@@ -1,0 +1,23 @@
+{
+  "description": "An explicit per-environment false value is preserved; unprovided environments stay omitted.",
+  "operation": "subscribe",
+  "arguments": {
+    "consumerDomain": "checkout",
+    "producerDomain": "orders",
+    "schemaName": "acme-orders@OrderNotification",
+    "environments": {"prod": {"enabled": false}}
+  },
+  "expectedMethod": "POST",
+  "expectedPath": "/prod/subscriptions",
+  "expectedRequestBody": {
+    "consumerDomain": "checkout",
+    "producerDomain": "orders",
+    "schemaName": "acme-orders@OrderNotification",
+    "environments": {"prod": {"enabled": false}}
+  },
+  "serviceResponse": {
+    "status": 202,
+    "body": {"requestId": "req-sub-2"}
+  },
+  "expectedReceipt": {"requestId": "req-sub-2", "message": null}
+}

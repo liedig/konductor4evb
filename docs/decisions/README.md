@@ -51,6 +51,10 @@ before treating an older claim as a current requirement.
 - [Organization guardrails and ownership-aware console links](protect-domain-managed-resources.md)
 - [Single installation entry point](installation-guide.md)
 
+## SDKs
+
+- [Python SDK from a checked OpenAPI projection](add-python-sdk.md)
+
 ## Contributors and the console
 
 - [Initial test foundation](unit-test-foundation.md)

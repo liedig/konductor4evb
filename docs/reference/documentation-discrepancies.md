@@ -748,3 +748,52 @@ alarm deletion as best effort, and the
 checks every environment for a leftover alarm after the domain's
 subscriptions show `REMOVED`. Whether the workflow should retry the deletion
 or report a failed one stays open.
+
+## D31
+
+**Subscription response schemas omit fields and statuses the service already
+returns.** Planning the Python SDK (the `add-python-sdk` change) compared the
+maintained contracts against the detail handler and found descriptive gaps in
+both OpenAPI files — [`api/openapi-iam.yaml`](../../api/openapi-iam.yaml) and
+[`api/openapi-oauth.yaml`](../../api/openapi-oauth.yaml) — in
+`SubscriptionSummary`, `SubscriptionDetail`, and `EnvStreamState`:
+
+- `EnvStreamState` omits `ruleName` and `errorDetail`, and its `status`
+  enum (`PENDING`, `ACTIVE`, `FAILED`, `REMOVED`) omits
+  `AWAITING_PROMOTION`. The
+  [stream model](../../lib/konductor-common/src/streams.rs) always serializes
+  `ruleName`, serializes `errorDetail` when set, and carries
+  `AwaitingPromotion` as `"AWAITING_PROMOTION"`; `pinnedVersion` and
+  `ruleArn` are omitted while unset.
+- `SubscriptionSummary` omits the top-level `errorDetail`. The
+  [detail handler](../../event-streams/functions/describe-subscription/src/handler.rs)
+  always emits the key, with `null` when no failure is recorded.
+- `SubscriptionDetail.removedAt` is described as a non-null
+  `string`/`date-time`, but the handler emits `null` before removal.
+
+These are contract-description defects, not requests for new server behavior:
+the [subscription read operations](../../openspec/specs/event-subscriptions/spec.md#requirement-subscription-read-operations)
+requirement already mandates recorded `errorDetail` in list items and detail,
+[presence-scoped per-environment materialization](../../openspec/specs/event-subscriptions/spec.md#requirement-presence-scoped-per-environment-materialization)
+mandates `AWAITING_PROMOTION`, and
+[subscription lifecycle status and events](../../openspec/specs/event-subscriptions/spec.md#requirement-subscription-lifecycle-status-and-events)
+lists `AWAITING_PROMOTION` among the per-environment statuses. Existing
+evidence: `awaiting_promotion_env_round_trips_without_materialization` and
+`failed_env_carries_error_detail` (streams.rs),
+`failed_stream_exposes_its_error_detail` and
+`consumer_side_binding_sees_the_detail` (describe-subscription). Handler
+behavior, request schemas, and route integrations stay unchanged; the
+resolution corrects only the affected response schema descriptions.
+
+**Documentation resolved 2026-10-26** (`add-python-sdk`): both contracts now
+describe `EnvStreamState.ruleName` and per-environment `errorDetail`, list
+`AWAITING_PROMOTION` in the environment status enum, describe the top-level
+`errorDetail` as nullable, and mark `SubscriptionDetail.removedAt` nullable.
+Evidence: the Python contract tests in
+[`sdks/codegen/tests/test_subscription_detail_contract.py`](../../sdks/codegen/tests/test_subscription_detail_contract.py)
+validate the observed detail responses under
+[`sdks/conformance/subscription-detail/`](../../sdks/conformance/subscription-detail)
+(partial activation with an awaiting environment, recorded failure details,
+nullable top-level fields, and omitted environment fields) against both
+surfaces and assert the surfaces agree. The Rust evidence cited above is
+unchanged: no handler, request schema, or route integration changed.

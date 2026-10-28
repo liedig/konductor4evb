@@ -18,6 +18,7 @@ Skip this section if your team already owns an `ACTIVE` domain.
 
 - [Publish events and author schemas](publishing-events.md).
 - [Subscribe to events](subscriptions.md).
+- [Call the APIs from Python](python-sdk.md) with the SDK.
 
 For graphical API clients, see [Insomnia and Postman setup](api-clients.md).
 For exact routes and request schemas, use the [API contracts](../reference/api.md).

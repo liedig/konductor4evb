@@ -1705,6 +1705,10 @@ components:
         status:
           type: string
           enum: [PENDING, ACTIVE, FAILED, REMOVED]
+        errorDetail:
+          type: string
+          nullable: true
+          description: Recorded failure cause for the subscription as a whole; null when no failure is recorded.
         environments:
           type: object
           description: Per-environment pinned version and state.
@@ -1729,6 +1733,7 @@ components:
             removedAt:
               type: string
               format: date-time
+              nullable: true
 
     EnvStreamState:
       type: object
@@ -1736,15 +1741,21 @@ components:
         pinnedVersion:
           type: integer
           description: Schema version pinned at subscribe time for this environment.
+        ruleName:
+          type: string
+          description: EventBridge rule realizing the subscription in this environment.
         ruleArn:
           type: string
+        errorDetail:
+          type: string
+          description: Failure cause recorded for this environment; omitted when none is recorded.
         enabled:
           type: boolean
           description: Desired state.
         status:
           type: string
           description: Materialized state.
-          enum: [PENDING, ACTIVE, FAILED, REMOVED]
+          enum: [PENDING, ACTIVE, AWAITING_PROMOTION, FAILED, REMOVED]
 
     ListSubscriptionsResponse:
       type: object

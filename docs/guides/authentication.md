@@ -100,7 +100,7 @@ The response carries a new `access_token` and `id_token`; keep using the same re
 
 ## Calling the API
 
-Send the access token in the `Authorization` header. Use the [OpenAPI contracts](../reference/api.md) for route definitions and [access-token claims](../reference/authentication.md) for identity requirements.
+Send the access token in the `Authorization` header. Use the [OpenAPI contracts](../reference/api.md) for route definitions and [access-token claims](../reference/authentication.md) for identity requirements. Python callers can use the [Python SDK](python-sdk.md#authentication), which sends the token for you and can refresh it from a refresh token.
 
 ### Using curl
 
@@ -202,4 +202,4 @@ IAM_API_URL="https://<IAM_API_ID>.execute-api.<REGION>.amazonaws.com/dev"  # Iam
 awscurl --service execute-api --region <REGION> "$IAM_API_URL/domains"
 ```
 
-In automation code, sign requests with your AWS SDK's SigV4 signer. The IAM surface uses `AWS_IAM` authorization and identifies callers by their AWS account ID. Platform administration, including the approval (decide) endpoint and the pending-registrations inbox, is not available on the IAM surface, and its register request does not accept `owningTeam` (see [domain fields](domains.md#fields)).
+In automation code, sign requests with your AWS SDK's SigV4 signer. The [Python SDK](python-sdk.md) does not use the IAM surface; it calls the OAuth API with an access token. The IAM surface uses `AWS_IAM` authorization and identifies callers by their AWS account ID. Platform administration, including the approval (decide) endpoint and the pending-registrations inbox, is not available on the IAM surface, and its register request does not accept `owningTeam` (see [domain fields](domains.md#fields)).

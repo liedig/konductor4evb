@@ -1,0 +1,21 @@
+{
+  "description": "Required selectors only; environments is omitted entirely.",
+  "operation": "subscribe",
+  "arguments": {
+    "consumerDomain": "checkout",
+    "producerDomain": "orders",
+    "schemaName": "acme-orders@OrderNotification"
+  },
+  "expectedMethod": "POST",
+  "expectedPath": "/prod/subscriptions",
+  "expectedRequestBody": {
+    "consumerDomain": "checkout",
+    "producerDomain": "orders",
+    "schemaName": "acme-orders@OrderNotification"
+  },
+  "serviceResponse": {
+    "status": 202,
+    "body": {"requestId": "req-sub-1", "message": "Request accepted"}
+  },
+  "expectedReceipt": {"requestId": "req-sub-1", "message": "Request accepted"}
+}

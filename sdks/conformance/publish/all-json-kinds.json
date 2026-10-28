@@ -1,0 +1,36 @@
+{
+  "description": "Publish body preserves every JSON value kind exactly, including nested Unicode, a large integer beyond float precision, booleans, and null.",
+  "arguments": {
+    "domain": "orders",
+    "eventName": "OrderNotification",
+    "data": {
+      "object": {"nested": {"deep": [1, {"x": "y"}]}},
+      "array": [1, "two", false, null, [3]],
+      "string": "héllo ☃ こんにちは",
+      "integer": 9007199254740993,
+      "float": 99.5,
+      "truthy": true,
+      "falsy": false,
+      "nothing": null
+    }
+  },
+  "expectedRequestBody": {
+    "domain": "orders",
+    "eventName": "OrderNotification",
+    "data": {
+      "object": {"nested": {"deep": [1, {"x": "y"}]}},
+      "array": [1, "two", false, null, [3]],
+      "string": "héllo ☃ こんにちは",
+      "integer": 9007199254740993,
+      "float": 99.5,
+      "truthy": true,
+      "falsy": false,
+      "nothing": null
+    }
+  },
+  "serviceResponse": {
+    "status": 202,
+    "body": {"requestId": "req-9f8e7d6c", "message": "Request accepted"}
+  },
+  "expectedReceipt": {"requestId": "req-9f8e7d6c", "message": "Request accepted"}
+}

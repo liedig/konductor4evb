@@ -89,6 +89,7 @@ nav:
           - Publish events: guides/publishing-events.md
           - Subscribe to events: guides/subscriptions.md
           - Consume system events: guides/system-events.md
+      - Python SDK: guides/python-sdk.md
       - Insomnia and Postman: guides/api-clients.md
 
   - For platform administrators:
@@ -139,6 +140,7 @@ nav:
       - Console workflow: development/console.md
       - Design system: development/design-system.md
       - Documentation maintenance: development/documentation.md
+      - SDK generation: development/sdks.md
 
 markdown_extensions:
   - admonition

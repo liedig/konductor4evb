@@ -25,6 +25,7 @@ Use this sequence when changing or reviewing the repository:
 | Vue application structure | [Vue conventions](vue.md) |
 | TypeScript and tooling | [TypeScript conventions](typescript.md) |
 | Documentation changes | [Maintenance rules](documentation.md) |
+| SDK contract projection | [SDK generation](sdks.md) |
 
 Use the [contribution guide](../../CONTRIBUTING.md) for pull requests and sign-off.
 Operational rollout procedures belong in [operations](../operations/README.md).

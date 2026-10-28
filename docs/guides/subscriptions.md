@@ -2,7 +2,7 @@
 
 [Documentation home](../README.md)
 
-For consumer teams connecting ACTIVE domains. Have [API credentials](authentication.md), a subscriber binding, and entitlement coverage before starting.
+For consumer teams connecting ACTIVE domains. Have [API credentials](authentication.md), a subscriber binding, and entitlement coverage before starting. Python callers can use the [Python SDK](python-sdk.md#subscription-lifecycle) to subscribe, inspect one subscription, and unsubscribe; schema discovery, subscription listing, and pause/resume still require raw API calls.
 
 ## Event subscriptions
 

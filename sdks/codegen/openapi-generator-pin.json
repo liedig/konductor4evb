@@ -1,0 +1,9 @@
+{
+  "version": "7.26.0",
+  "url": "https://repo1.maven.org/maven2/org/openapitools/openapi-generator-cli/7.26.0/openapi-generator-cli-7.26.0.jar",
+  "sha256": "1760050094997b9cc790cc1350be095f15da8c08a996b184d3eadc4ccda5e35e",
+  "sha1": "b96b148fcf482808037f68fbad99cb4d7e65d40b",
+  "generator": "python",
+  "library": "urllib3",
+  "notes": "sha1 is the checksum Maven Central publishes beside the artifact; sha256 was computed at pin time and verified against the same download. Synchronous python/urllib3 client configuration per the add-python-sdk design."
+}

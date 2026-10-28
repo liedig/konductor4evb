@@ -1,0 +1,20 @@
+{
+  "description": "A supplied idempotency key is forwarded unchanged.",
+  "arguments": {
+    "domain": "orders",
+    "eventName": "OrderNotification",
+    "data": {"orderId": 123},
+    "idempotencyKey": "caller-key-7"
+  },
+  "expectedRequestBody": {
+    "domain": "orders",
+    "eventName": "OrderNotification",
+    "data": {"orderId": 123},
+    "idempotencyKey": "caller-key-7"
+  },
+  "serviceResponse": {
+    "status": 202,
+    "body": {"requestId": "req-idem", "message": "Request accepted"}
+  },
+  "expectedReceipt": {"requestId": "req-idem", "message": "Request accepted"}
+}

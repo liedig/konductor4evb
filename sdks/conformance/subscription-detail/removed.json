@@ -1,0 +1,21 @@
+{
+  "subscriptionId": "checkout.orders.OrderNotification",
+  "consumerDomain": "checkout",
+  "producerDomain": "orders",
+  "source": "acme-orders",
+  "detailType": "OrderNotification",
+  "schemaName": "acme-orders@OrderNotification",
+  "status": "REMOVED",
+  "errorDetail": null,
+  "environments": {
+    "dev": {
+      "pinnedVersion": 3,
+      "ruleName": "checkout-OrderNotification",
+      "enabled": true,
+      "status": "REMOVED"
+    }
+  },
+  "createdAt": "2026-10-20T01:15:00Z",
+  "updatedAt": "2026-10-25T23:59:01Z",
+  "removedAt": "2026-10-25T23:59:01Z"
+}

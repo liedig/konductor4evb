@@ -1,0 +1,18 @@
+{
+  "description": "Explicit null data is sent as JSON null, not omitted; admission owns schema conformance.",
+  "arguments": {
+    "domain": "orders",
+    "eventName": "OrderNotification",
+    "data": null
+  },
+  "expectedRequestBody": {
+    "domain": "orders",
+    "eventName": "OrderNotification",
+    "data": null
+  },
+  "serviceResponse": {
+    "status": 202,
+    "body": {"requestId": "req-null-data"}
+  },
+  "expectedReceipt": {"requestId": "req-null-data", "message": null}
+}

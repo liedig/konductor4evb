@@ -115,6 +115,36 @@ jobs:
       - name: Build
         run: make build-ci
 
+  sdk:
+    name: Python SDK
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@83679a892e2d95755f2dac6acb0bfd1e9ac5d548 # v6.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # All SDK checks are offline: tests are fully mocked, generation uses
+      # the committed projection, and no AWS credentials or publishing
+      # tokens exist in this job.
+      - name: Check
+        run: make sdk-check
+
+      - name: Test
+        run: make sdk-test
+
+      - name: Build distributions
+        run: make sdk-build
+
   web:
     name: Web
     runs-on: ubuntu-latest
