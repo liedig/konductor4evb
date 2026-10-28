@@ -1,3 +1,14 @@
+# Security pins for vulnerable transitive packages (Dependabot alerts); drop each
+# once the dependency tree resolves a fixed version on its own. node-forge and
+# deepmerge have no fixed release and are not listed here.
+overrides:
+  shell-quote: 1.12.0
+  brace-expansion@2: 2.1.7
+  brace-expansion@5: 5.0.12
+  source-map-js: 1.2.2
+  vite@8: 8.3.5
+  serialize-javascript: 7.1.4
+  postcss-selector-parser: 7.1.6
 onlyBuiltDependencies:
   - esbuild
   - unrs-resolver
