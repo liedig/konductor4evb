@@ -18,7 +18,7 @@ See proposal.md — Why. The relevant current state:
 
 **Non-Goals:**
 
-- Semantic implication checking (accept v(N+1) iff its valid-instance set is a true superset of vN's). The syntactic rules are a conservative approximation; the semantic engine is a future refinement tracked as [issue #30](https://github.com/sliedig/konductor4evb/issues/30).
+- Semantic implication checking (accept v(N+1) iff its valid-instance set is a true superset of vN's). The syntactic rules are a conservative approximation; the semantic engine is a future refinement tracked as [issue #4](https://github.com/liedig/konductor4evb/issues/4).
 - Gating `POST /schemas` (version 1 has no predecessor) or comparing against historical versions (admission validates against latest, so latest is the only predecessor that matters).
 - An override mechanism. The gate is absolute by product decision: breaking evolution is expressed as a new schema under a new event name, which is also the subscription-facing contract name, so consumers opt into a break explicitly.
 

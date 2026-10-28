@@ -40,4 +40,4 @@ No impact now: this capture adds planning artifacts only.
 
 ## Tracking
 
-- GitHub issue: https://github.com/liedig/konductor4evb/issues/44
+- GitHub issue: https://github.com/liedig/konductor4evb/issues/5
