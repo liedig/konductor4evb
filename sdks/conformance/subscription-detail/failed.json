@@ -1,0 +1,21 @@
+{
+  "subscriptionId": "checkout.orders.OrderNotification",
+  "consumerDomain": "checkout",
+  "producerDomain": "orders",
+  "source": "acme-orders",
+  "detailType": "OrderNotification",
+  "schemaName": "acme-orders@OrderNotification",
+  "status": "FAILED",
+  "errorDetail": "schema acme-orders@OrderNotification not found in any environment of 'orders'",
+  "environments": {
+    "staging": {
+      "ruleName": "checkout-OrderNotification",
+      "enabled": true,
+      "status": "FAILED",
+      "errorDetail": "PutRule throttled"
+    }
+  },
+  "createdAt": "2026-10-20T01:15:00Z",
+  "updatedAt": "2026-10-20T01:16:40Z",
+  "removedAt": null
+}
