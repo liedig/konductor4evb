@@ -1,4 +1,4 @@
-.PHONY: help build test check docs-serve smoke smoke-subscription validate-config deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions web-dev deploy-web clean
+.PHONY: help build test check sdk-generate sdk-generate-check sdk-build sdk-check sdk-test docs-serve smoke smoke-subscription validate-config deploy deploy-core deploy-notifications deploy-trust teardown-core teardown-notifications teardown-trust teardown-domain list-domains list-schemas list-subscriptions web-dev deploy-web clean
 
 export AWS_LC_SYS_NO_JITTER_ENTROPY := 1
 
@@ -28,6 +28,8 @@ help: ## Show this help message
 	@printf "\n  $(BOLD)$(CYAN)EventBridge Konductor$(RESET) — Makefile targets\n\n"
 	@printf "  $(BOLD)Build & Test$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(build|test|check|clean):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\n  $(BOLD)SDK$(RESET)\n"
+	@awk 'BEGIN {FS = ":.*?## "} /^(sdk-.+):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Docs$(RESET)\n"
 	@awk 'BEGIN {FS = ":.*?## "} /^(docs-serve):.*## / {printf "    $(GREEN)%-22s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\n  $(BOLD)Deploy$(RESET)\n"
@@ -124,6 +126,24 @@ check: ## cargo fmt, check, clippy (CI-equivalent local gate)
 	cargo fmt --check
 	cargo check --workspace
 	cargo clippy --workspace -- -D warnings
+
+sdk-generate: ## Regenerate the Python SDK client from the checked API projection
+	uv run --project "$(CURDIR)/sdks/python" python "$(CURDIR)/sdks/codegen/generate.py"
+
+sdk-generate-check: ## Fail if the committed projection or generated client is stale or nondeterministic (non-mutating)
+	uv run --locked --project "$(CURDIR)/sdks/python" python "$(CURDIR)/sdks/codegen/generate.py" --check
+
+sdk-build: ## Build the Python SDK wheel and sdist into sdks/python/dist/
+	uv build --project "$(CURDIR)/sdks/python" --out-dir "$(CURDIR)/sdks/python/dist"
+
+sdk-check: sdk-generate-check ## Run Python SDK drift, lint, format, and type checks
+	cd "$(CURDIR)/sdks/python" && uv run --locked ruff check src tests examples
+	cd "$(CURDIR)/sdks/python" && uv run --locked ruff format --check src tests examples
+	cd "$(CURDIR)/sdks/python" && uv run --locked mypy
+
+sdk-test: ## Run the Python SDK and codegen test suites (mocked; no AWS, no network)
+	cd "$(CURDIR)/sdks/python" && uv run --locked pytest tests -q
+	uv run --locked --project "$(CURDIR)/sdks/python" pytest "$(CURDIR)/sdks/codegen/tests" -q
 
 docs-serve: ## Preview the docs site with live reload in the mkdocs-material container pinned by requirements-docs.txt
 	@test -n "$(MKDOCS_MATERIAL_VERSION)" || { echo "$(YELLOW)requirements-docs.txt has no mkdocs-material==<version> pin$(RESET)"; exit 1; }
