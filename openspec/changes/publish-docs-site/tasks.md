@@ -28,8 +28,9 @@
 ## 5. Launch (owner-only steps, after org transfer and public flip)
 
 - [x] 5.1 Update `site_url`, `repo_url`, and the `extra:` blob base in `mkdocs.yml` for the `liedig` org location; verify the strict build still passes and rewritten links point at the new org
-- [ ] 5.2 Enable GitHub Pages (source: GitHub Actions) on the transferred public repository; merge a trivial docs change and verify the deployed site loads at the Pages URL, search works, and an escaping link lands on the correct GitHub blob view
-- [ ] 5.3 Record the launch in the change (evidence note appended to this file or the PR): deployed URL, first successful deploy run id, and the Pages settings used
+- [x] 5.2 Enable GitHub Pages (source: GitHub Actions) on the transferred public repository; merge a trivial docs change and verify the deployed site loads at the Pages URL, search works, and an escaping link lands on the correct GitHub blob view
+- [x] 5.3 Record the launch in the change (evidence note appended to this file or the PR): deployed URL, first successful deploy run id, and the Pages settings used
+  - Launched 2026-10-29: Pages enabled with `build_type: workflow` (source: GitHub Actions); trivial docs change merged as `1667c38` (PR #7); first successful deploy is Docs run 40729132247 (Build strict + Deploy to Pages both green). Verified `https://liedig.github.io/konductor4evb/` loads, `search/search_index.json` is served (200, ~416 KB), and escaping links land on `github.com/liedig/konductor4evb/blob/main/...` blob views.
 
 ## 6. Preview corrections (local site review)
 
