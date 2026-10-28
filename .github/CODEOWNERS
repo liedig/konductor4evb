@@ -1,5 +1,0 @@
-# CODEOWNERS: the main-review ruleset (.github/rulesets/main-review.json)
-# requires a code owner's approval on every pull request to main. The
-# main-integrity ruleset in the same directory covers CI checks and history.
-
-*                          @sliedig

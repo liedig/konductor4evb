@@ -1,3 +1,0 @@
-# Documentation site build (MkDocs + Material theme).
-# Pinned so local and CI builds match; Dependabot (pip ecosystem) keeps it current.
-mkdocs-material==9.8.0

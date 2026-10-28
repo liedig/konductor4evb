@@ -1,8 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Report a security vulnerability
-    url: https://github.com/liedig/konductor4evb/security/advisories/new
-    about: Report vulnerabilities privately here. Do not report them in public issues.
-  - name: Documentation
-    url: https://liedig.github.io/konductor4evb/
-    about: Guides, operations runbooks, architecture, and API reference.
