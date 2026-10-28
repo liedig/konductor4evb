@@ -8,6 +8,7 @@ it then invents, a required check that never reports). These tests catch that
 locally.
 """
 
+import itertools
 import json
 import re
 import unittest
@@ -259,8 +260,19 @@ def workflow_triggers(workflow):
     return workflow.get("on", workflow.get(True))
 
 
-def workflow_job_names(workflow):
-    return {job.get("name", job_id) for job_id, job in workflow["jobs"].items()}
+def job_check_names(job_id, job):
+    name = job.get("name", job_id)
+    matrix = job.get("strategy", {}).get("matrix")
+    if not matrix:
+        return {name}
+    if not isinstance(matrix, dict) or "${{" in name or {"include", "exclude"} & matrix.keys():
+        raise ValueError(f"{job_id}: only static names over a plain list matrix are supported")
+    # GitHub appends the combination's values to a matrix job's static name.
+    return {f"{name} ({', '.join(map(str, values))})" for values in itertools.product(*matrix.values())}
+
+
+def workflow_check_names(workflow):
+    return set().union(*(job_check_names(job_id, job) for job_id, job in workflow["jobs"].items()))
 
 
 def is_path_filtered(workflow):
@@ -271,6 +283,31 @@ def is_path_filtered(workflow):
         isinstance(trigger, dict) and ({"paths", "paths-ignore"} & trigger.keys())
         for trigger in triggers.values()
     )
+
+
+class WorkflowCheckNamesTest(unittest.TestCase):
+    def test_plain_jobs_report_their_name_or_id(self):
+        workflow = {"jobs": {"check": {"name": "Check"}, "lint": {}}}
+
+        self.assertEqual(workflow_check_names(workflow), {"Check", "lint"})
+
+    def test_matrix_jobs_report_one_check_per_combination(self):
+        workflow = {"jobs": {"sdk": {"name": "Python SDK", "strategy": {"matrix": {"python-version": ["3.11", "3.14"]}}}}}
+
+        self.assertEqual(workflow_check_names(workflow), {"Python SDK (3.11)", "Python SDK (3.14)"})
+
+    def test_multi_axis_matrix_names_list_values_in_key_order(self):
+        workflow = {"jobs": {"t": {"name": "T", "strategy": {"matrix": {"os": ["a", "b"], "py": ["1"]}}}}}
+
+        self.assertEqual(workflow_check_names(workflow), {"T (a, 1)", "T (b, 1)"})
+
+    def test_unsupported_matrix_shapes_fail_loudly(self):
+        for job in (
+            {"name": "T (${{ matrix.py }})", "strategy": {"matrix": {"py": ["1"]}}},
+            {"name": "T", "strategy": {"matrix": {"py": ["1"], "include": [{"py": "2"}]}}},
+        ):
+            with self.subTest(job=job), self.assertRaises(ValueError):
+                workflow_check_names({"jobs": {"t": job}})
 
 
 class MainReviewRulesetTest(unittest.TestCase):
@@ -324,7 +361,7 @@ class MainIntegrityRulesetTest(unittest.TestCase):
         ci = load_workflow("ci.yml")
 
         self.assertFalse(is_path_filtered(ci))
-        self.assertEqual(sorted(check["context"] for check in self.checks), sorted(workflow_job_names(ci)))
+        self.assertEqual(sorted(check["context"] for check in self.checks), sorted(workflow_check_names(ci)))
 
     def test_required_checks_come_from_github_actions(self):
         for check in self.checks:
@@ -332,11 +369,11 @@ class MainIntegrityRulesetTest(unittest.TestCase):
                 self.assertEqual(check["integration_id"], GITHUB_ACTIONS_APP_ID)
 
     def test_checks_that_may_not_report_are_not_required(self):
-        may_not_report = set(workflow_job_names(load_workflow("droid-review.yml")))
+        may_not_report = set(workflow_check_names(load_workflow("droid-review.yml")))
         for path in (GITHUB_DIR / "workflows").glob("*.yml"):
             workflow = load_yaml(path)
             if is_path_filtered(workflow):
-                may_not_report |= workflow_job_names(workflow)
+                may_not_report |= workflow_check_names(workflow)
 
         self.assertFalse({check["context"] for check in self.checks} & may_not_report)
 
