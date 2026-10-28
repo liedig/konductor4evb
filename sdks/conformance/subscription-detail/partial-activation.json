@@ -1,0 +1,27 @@
+{
+  "subscriptionId": "checkout.orders.OrderNotification",
+  "consumerDomain": "checkout",
+  "producerDomain": "orders",
+  "source": "acme-orders",
+  "detailType": "OrderNotification",
+  "schemaName": "acme-orders@OrderNotification",
+  "status": "ACTIVE",
+  "errorDetail": null,
+  "environments": {
+    "dev": {
+      "pinnedVersion": 3,
+      "ruleName": "checkout-OrderNotification",
+      "ruleArn": "arn:aws:events:ap-southeast-2:111122223333:rule/acme-dev-orders-event-bus/checkout-OrderNotification",
+      "enabled": true,
+      "status": "ACTIVE"
+    },
+    "prod": {
+      "ruleName": "checkout-OrderNotification",
+      "enabled": true,
+      "status": "AWAITING_PROMOTION"
+    }
+  },
+  "createdAt": "2026-10-20T01:15:00Z",
+  "updatedAt": "2026-10-20T01:15:12Z",
+  "removedAt": null
+}
