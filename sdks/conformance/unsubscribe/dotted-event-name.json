@@ -1,0 +1,15 @@
+{
+  "description": "Unsubscribe addresses the complete dotted subscription identifier in the path and sends no body.",
+  "operation": "unsubscribe",
+  "arguments": {
+    "subscriptionId": "checkout.orders.order.placed.v2"
+  },
+  "expectedMethod": "DELETE",
+  "expectedPath": "/prod/subscriptions/checkout.orders.order.placed.v2",
+  "expectedRequestBody": null,
+  "serviceResponse": {
+    "status": 202,
+    "body": {"requestId": "req-unsub-1", "message": "Request accepted"}
+  },
+  "expectedReceipt": {"requestId": "req-unsub-1", "message": "Request accepted"}
+}
