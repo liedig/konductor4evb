@@ -1,0 +1,343 @@
+components:
+  schemas:
+    CommandAccepted:
+      properties:
+        message:
+          example: Domain registration request accepted
+          type: string
+        requestId:
+          type: string
+      type: object
+    EnvDesiredState:
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+      required:
+      - enabled
+      type: object
+    EnvStreamState:
+      properties:
+        enabled:
+          description: Desired state.
+          type: boolean
+        errorDetail:
+          description: Failure cause recorded for this environment; omitted when none
+            is recorded.
+          type: string
+        pinnedVersion:
+          description: Schema version pinned at subscribe time for this environment.
+          type: integer
+        ruleArn:
+          type: string
+        ruleName:
+          description: EventBridge rule realizing the subscription in this environment.
+          type: string
+        status:
+          description: Materialized state.
+          type: string
+      type: object
+    ErrorResponse:
+      properties:
+        code:
+          type: string
+        fieldList:
+          items:
+            properties:
+              message:
+                type: string
+              name:
+                type: string
+            type: object
+          type: array
+        message:
+          type: string
+        reason:
+          enum:
+          - unknownOperation
+          - cannotParse
+          - fieldValidationFailed
+          - other
+          type: string
+        requestId:
+          type: string
+      required:
+      - code
+      - message
+      type: object
+    PublishRequest:
+      additionalProperties: false
+      example:
+        data:
+          amount: 99.5
+          orderId: 123
+        domain: orders
+        eventName: OrderNotification
+      properties:
+        data:
+          description: Business event payload; validated against the domain's latest
+            registered schema at admission.
+        domain:
+          description: Target domain name; the environment comes from the API stage.
+          minLength: 1
+          type: string
+        eventName:
+          description: Event name (detail-type); must match a schema registered for
+            the domain.
+          minLength: 1
+          type: string
+        idempotencyKey:
+          description: Optional caller idempotency key; defaults to the API Gateway
+            request ID.
+          maxLength: 128
+          minLength: 1
+          type: string
+      required:
+      - domain
+      - eventName
+      - data
+      type: object
+    SubscribeRequest:
+      additionalProperties: false
+      example:
+        consumerDomain: checkout
+        environments:
+          prod:
+            enabled: false
+        producerDomain: orders
+        schemaName: acme-orders@OrderNotification
+      properties:
+        consumerDomain:
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$
+          type: string
+        environments:
+          additionalProperties:
+            $ref: '#/components/schemas/EnvDesiredState'
+          description: 'Optional initial per-environment desired state. Omitted environments
+            default to enabled.
+
+            '
+          type: object
+        producerDomain:
+          maxLength: 64
+          pattern: ^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$
+          type: string
+        schemaName:
+          description: 'Format: {source}@{detail-type}'
+          maxLength: 128
+          pattern: ^[^@]+@.+$
+          type: string
+      required:
+      - consumerDomain
+      - producerDomain
+      - schemaName
+      type: object
+    SubscriptionDetail:
+      allOf:
+      - $ref: '#/components/schemas/SubscriptionSummary'
+      - properties:
+          detailType:
+            type: string
+          removedAt:
+            format: date-time
+            nullable: true
+            type: string
+          source:
+            type: string
+          updatedAt:
+            format: date-time
+            type: string
+        type: object
+    SubscriptionSummary:
+      properties:
+        consumerDomain:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        environments:
+          additionalProperties:
+            $ref: '#/components/schemas/EnvStreamState'
+          description: Per-environment pinned version and state.
+          type: object
+        errorDetail:
+          description: Recorded failure cause for the subscription as a whole; null
+            when no failure is recorded.
+          nullable: true
+          type: string
+        producerDomain:
+          type: string
+        schemaName:
+          type: string
+        status:
+          type: string
+        subscriptionId:
+          example: checkout.orders.OrderNotification
+          type: string
+      type: object
+info:
+  title: EventBridge Konductor API
+  version: 1.0.0
+openapi: 3.0.1
+paths:
+  /publish:
+    post:
+      description: 'Flat publish: the caller provides the domain, event name, and
+        business data; Konductor authorizes the publisher, resolves the latest schema
+        version in the stage-selected environment''s registry, and validates the payload
+        against it — synchronously, before anything is queued. A 202 means the validated
+        command is durably queued for delivery to the domain''s event bus; the response
+        carries the queue message ID. Authorization (403), unknown domain or schema
+        (404), and payload conformance failures (422) are reported synchronously.
+
+        '
+      operationId: PublishEvent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublishRequest'
+        required: true
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+          description: Event validated and durably queued for delivery
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Validation error
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Access denied
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Domain not active or no registered schema for the event name
+        '422':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Payload violates the latest published schema
+        '503':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Admission temporarily unavailable (registry or queue failure)
+      summary: Publish an event to a domain (validated at admission)
+  /subscriptions:
+    post:
+      description: 'Schema-first subscription: binds the consumer to the latest version
+        of the schema in every environment, pinned at subscribe time. No version parameter
+        is accepted — the schema is the contract.
+
+        '
+      operationId: Subscribe
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubscribeRequest'
+        required: true
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+          description: Command accepted
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Validation error
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Access denied
+      summary: Subscribe a consumer domain to a producer domain's event schema
+  /subscriptions/{subscriptionId}:
+    delete:
+      description: 'Removes the platform-side rules in every environment and marks
+        the stream record REMOVED (retained 90 days for audit). Integration rules
+        on the consumer''s own bus are the application team''s responsibility.
+
+        '
+      operationId: Unsubscribe
+      parameters:
+      - in: path
+        name: subscriptionId
+        required: true
+        schema:
+          type: string
+      responses:
+        '202':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandAccepted'
+          description: Command accepted
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Validation error
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Access denied
+      summary: Remove a subscription (event stream)
+    get:
+      operationId: DescribeSubscription
+      parameters:
+      - description: 'Format: {consumerDomain}.{producerDomain}.{detailType}'
+        in: path
+        name: subscriptionId
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionDetail'
+          description: Subscription detail
+        '403':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Caller is bound to neither the consumer nor the producer side,
+            and holds no platform role
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Subscription not found
+        '500':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Internal server error
+      summary: Get full detail of a subscription
