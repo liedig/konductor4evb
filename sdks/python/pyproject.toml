@@ -1,0 +1,76 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "konductor-sdk"
+version = "0.1.0"
+description = "Python client for the Konductor for Amazon EventBridge application APIs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Konductor contributors" }]
+keywords = ["eventbridge", "aws", "events", "konductor"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "urllib3>=2.2,<3",
+    "python-dateutil>=2.9,<3",
+    "pydantic>=2.11,<3",
+    "typing-extensions>=4.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/liedig/konductor4evb"
+Documentation = "https://github.com/liedig/konductor4evb/blob/main/docs/guides/python-sdk.md"
+Repository = "https://github.com/liedig/konductor4evb"
+Issues = "https://github.com/liedig/konductor4evb/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "jsonschema>=4.23",
+    "pyyaml>=6.0.2",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "build>=1.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/konductor"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/konductor", "README.md", "LICENSE", "NOTICE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = ["src/konductor/_generated"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["konductor"]
+mypy_path = "src"
+exclude = ["_generated"]
+
+
+[[tool.mypy.overrides]]
+module = "konductor._generated.*"
+ignore_errors = true
+follow_imports = "skip"
