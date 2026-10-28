@@ -147,5 +147,9 @@ konductor-platform.toml
 # Python (scripts/)
 __pycache__/
 
+# Python SDK virtual environments and build artifacts
+.venv/
+sdks/python/dist/
+
 # MkDocs site build output
 site/
