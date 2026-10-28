@@ -1,5 +1,7 @@
 # Konductor documentation
 
+Read the rendered site at <https://liedig.github.io/konductor4evb/>.
+
 Konductor for Amazon EventBridge manages event domains and cross-account routing.
 Platform teams govern the infrastructure. Application teams publish events and
 subscribe to contracts without managing the platform's delivery resources.
