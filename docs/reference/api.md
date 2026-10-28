@@ -14,6 +14,8 @@ and authorization boundaries are explained in [identity and authorization](../ar
 Do not add another endpoint table to a guide or the architecture overview.
 Update the applicable OpenAPI file and capability requirement when a route
 changes. Import the contract into an API client rather than copying an old table.
+Language SDKs project a four-operation subset of these contracts; see
+[SDK generation](../development/sdks.md) for ownership and normalization rules.
 
 ## Requirements and evidence
 
