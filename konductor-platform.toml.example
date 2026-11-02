@@ -48,3 +48,19 @@ system_event_emission_enabled = false
 # only for http://localhost[:port] during local development. Updateable.
 oauth_callback_urls = ["http://localhost:3000/callback"]
 oauth_logout_urls = ["http://localhost:3000/logout"]
+
+# --- Publish-path capacity (all updateable) ---
+# Dedicated POST /publish throttle per stage of both APIs; every other route
+# keeps 50 rps / burst 100. Validation warns when a raised value no longer
+# fits the account API Gateway throttle quota (docs/operations/service-quotas.md).
+# publish_throttle_rate_limit = 2000   # >= 1 requests per second per stage
+# publish_throttle_burst_limit = 1000  # >= 0
+# Reserved concurrency for publish admission. 0 (default) = uncapped: admission
+# draws from the account's shared Lambda pool.
+# publish_admission_concurrency_cap = 0  # >= 0
+# Maximum concurrent publish delivery invocations (2-1000, the AWS range for
+# SQS event source mapping scaling).
+# publish_delivery_max_concurrency = 50
+# Seconds a confirmed-ACTIVE domain stays cached on the publish path;
+# disabling a domain takes effect within this window. 0 = read on every request.
+# domain_liveness_cache_seconds = 300  # 0-900

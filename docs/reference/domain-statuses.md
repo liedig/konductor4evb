@@ -35,7 +35,7 @@ stateDiagram-v2
 | `PROVISIONING` | Infrastructure creation in progress |
 | `ACTIVE` | All resources created, domain is operational |
 | `PROVISIONING_FAILED` | Infrastructure creation failed, compensating transactions completed; a platform administrator can retry provisioning |
-| `INACTIVE` | Disabled by a platform administrator. Resources, subscriptions, and entitlements stay in place, but the publish, schema, and subscription APIs reject the domain until it is enabled again. |
+| `INACTIVE` | Disabled by a platform administrator. Resources, subscriptions, and entitlements stay in place, but the publish, schema, and subscription APIs reject the domain until it is enabled again. The publish path may reuse a cached `ACTIVE` confirmation for up to `domain_liveness_cache_seconds` (default 300), so a disable takes full effect within that window; enabling again takes effect on the next request. |
 
 Only platform administrators decide registrations and change a domain's state. Enable, disable, and provisioning retries all go through `POST /domains/{domainName}/state`.
 
@@ -52,7 +52,7 @@ The [state diagram](#domain-lifecycle) shows how a domain moves between statuses
 | `PROVISIONING` | Infrastructure creation in progress across all environments | Wait. Typically completes within 1-2 minutes. Poll `GET /domains/{domainName}` to check. |
 | `ACTIVE` | All resources created, domain is operational | Start using your event buses. See [Provisioned Resources](resources.md#provisioned-resources). |
 | `PROVISIONING_FAILED` | Resource creation failed, rollback completed | Contact your platform team. They can inspect the Step Functions execution history and retry provisioning. When notifications are enabled, you also receive a provisioning-issue email. |
-| `INACTIVE` | Disabled by the platform team | Contact your platform team. Publish, schema, and subscription requests for the domain are rejected until they enable it again. |
+| `INACTIVE` | Disabled by the platform team | Contact your platform team. Publish, schema, and subscription requests for the domain are rejected until they enable it again. Publishes already admitted, or admitted within the liveness cache window (up to `domain_liveness_cache_seconds`, default 300 seconds, after the disable), are dropped at delivery rather than delivered. |
 
 ### Environment snapshot
 

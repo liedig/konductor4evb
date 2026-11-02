@@ -22,6 +22,11 @@ by redeploying with new values.
 | OAuth callback URLs | `OAuthCallbackUrls` | Comma-delimited URLs; HTTPS except `http://localhost[:port]` | `http://localhost:3000/callback` | Updateable |
 | OAuth logout URLs | `OAuthLogoutUrls` | Comma-delimited URLs; HTTPS except `http://localhost[:port]` | `http://localhost:3000/logout` | Updateable |
 | System-event emission | `SystemEventEmissionEnabled` | Boolean | `false` | Updateable |
+| Publish throttle rate | `PublishThrottleRateLimit` | Integer ≥ 1 (requests per second, per stage) | `2000` | Updateable |
+| Publish throttle burst | `PublishThrottleBurstLimit` | Integer ≥ 0 (per stage) | `1000` | Updateable |
+| Publish admission concurrency cap | `PublishAdmissionConcurrencyCap` | Integer ≥ 0; `0` means uncapped | `0` | Updateable |
+| Publish delivery max concurrency | `PublishDeliveryMaxConcurrency` | Integer 2–1000 | `50` | Updateable |
+| Domain liveness cache window | `DomainLivenessCacheSeconds` | Integer 0–900; `0` means a read on every request | `300` | Updateable |
 
 ## Why these bounds
 
@@ -42,6 +47,28 @@ by redeploying with new values.
   deploy with `false`, stand up the system-events infrastructure, then flip to
   `true`. While `false`, re-pin lifecycles behave exactly as before and write
   no upgrade snapshots.
+- **Publish throttle.** `POST /publish` gets a method-level throttle on every
+  environment stage of both APIs; every other route keeps the stage-wide
+  50 rps / 100 burst. The throttle is a ceiling against the account's shared,
+  per-Region API Gateway throttle, not a reservation: `make validate-config`
+  warns when one stage at its publish limit plus every stage's control-plane
+  limit would exceed the account quota (see
+  [service quotas](../operations/service-quotas.md#the-publish-throttle-budget)).
+- **Admission concurrency cap.** `0` (the default) means admission draws from
+  the account's shared Lambda pool — a reserved concurrency of 0 would throttle
+  every invocation, so 0 can never be a useful cap. A positive value isolates
+  admission from, and bounds its impact on, the shared pool; size it against
+  the Schemas API quota, because each cold instance fetches its schemas from
+  the registry.
+- **Delivery max concurrency.** Enforced through the SQS event source
+  mapping's `ScalingConfig`, so saturated delivery leaves messages queued
+  instead of raising their receive counts toward the DLQ. 2–1000 is the AWS
+  range for the mapping. Size it against the Region's `PutEvents` quota.
+- **Domain liveness cache window.** Admission and delivery may reuse a
+  confirmed-`ACTIVE` result for this many seconds, per warm instance. A
+  disable takes effect within the window; `INACTIVE` and missing domains are
+  never cached, and `0` disables reuse (a read on every request). Capped at
+  900 so a disable always takes effect promptly.
 - **Fixed versus updateable.** The fixed four are baked into resource names,
   trust-role names in every domain account, RAM share scope, API stage names,
   and Lambda environment. Changing them on a live installation would rename,

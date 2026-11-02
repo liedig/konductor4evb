@@ -222,15 +222,20 @@ impl EventEnvelope {
                 "idempotency key must not be empty".to_string(),
             ));
         }
-        let entry_bytes = serde_json::to_vec(&self.entry_json()).map_err(|e| {
+        let detail = serde_json::to_string(&self.detail).map_err(|e| {
             validation_error("detail", format!("envelope is not serializable: {e}"))
         })?;
-        if entry_bytes.len() > PUT_EVENTS_ENTRY_MAX_BYTES {
+        let entry_bytes = put_events_entry_bytes(
+            &self.source,
+            &self.detail_type,
+            &self.event_bus_name,
+            &detail,
+        );
+        if entry_bytes > PUT_EVENTS_ENTRY_MAX_BYTES {
             return Err(validation_error(
                 "detail",
                 format!(
-                    "entry is {} bytes; EventBridge allows at most {PUT_EVENTS_ENTRY_MAX_BYTES}",
-                    entry_bytes.len()
+                    "entry is {entry_bytes} bytes; EventBridge allows at most {PUT_EVENTS_ENTRY_MAX_BYTES}"
                 ),
             ));
         }
@@ -247,6 +252,60 @@ impl EventEnvelope {
             "Detail": serde_json::to_string(&self.detail).unwrap_or_default(),
         })
     }
+}
+
+/// Maximum entries EventBridge accepts in one `PutEvents` request.
+pub const PUT_EVENTS_MAX_ENTRIES_PER_REQUEST: usize = 10;
+
+/// The size of a `PutEvents` entry as the publish path measures it: the
+/// serialized entry envelope (source, detail-type, bus, and detail) in
+/// bytes. This covers every field EventBridge's documented accounting counts
+/// (source, detail-type, detail, and resources, of which the publish path
+/// uses none) plus the JSON envelope overhead and the bus name, so it is
+/// always at least as strict as the service-side check. Admission's
+/// per-entry validation and delivery's request chunking both use this
+/// measure, so the two never disagree about an entry's size.
+pub fn put_events_entry_bytes(
+    source: &str,
+    detail_type: &str,
+    event_bus_name: &str,
+    detail: &str,
+) -> usize {
+    let value = json!({
+        "Source": source,
+        "DetailType": detail_type,
+        "EventBusName": event_bus_name,
+        "Detail": detail,
+    });
+    serde_json::to_vec(&value)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+}
+
+/// Splits prepared entries — `(size in bytes, entry)` pairs — into
+/// `PutEvents` requests of at most [`PUT_EVENTS_MAX_ENTRIES_PER_REQUEST`]
+/// entries and at most [`PUT_EVENTS_ENTRY_MAX_BYTES`] in total, keeping
+/// entry order. An entry that fills the budget on its own forms its own
+/// request.
+pub fn chunk_put_events_entries<T>(entries: Vec<(usize, T)>) -> Vec<Vec<T>> {
+    let mut requests: Vec<Vec<T>> = Vec::new();
+    let mut current: Vec<T> = Vec::new();
+    let mut current_bytes = 0usize;
+    for (size, entry) in entries {
+        if !current.is_empty()
+            && (current.len() >= PUT_EVENTS_MAX_ENTRIES_PER_REQUEST
+                || current_bytes + size > PUT_EVENTS_ENTRY_MAX_BYTES)
+        {
+            requests.push(std::mem::take(&mut current));
+            current_bytes = 0;
+        }
+        current.push(entry);
+        current_bytes += size;
+    }
+    if !current.is_empty() {
+        requests.push(current);
+    }
+    requests
 }
 
 /// ISO 8601 with exactly millisecond precision and a `Z` suffix, matching the
@@ -671,5 +730,123 @@ mod tests {
             values,
             json!({"orderId": 123}),
         )
+    }
+
+    fn detail_string(envelope: &EventEnvelope) -> String {
+        serde_json::to_string(&envelope.detail).unwrap()
+    }
+
+    #[test]
+    fn entry_size_matches_the_per_entry_check_measure() {
+        for envelope in [sample_envelope(), composed_envelope().unwrap()] {
+            let measured = serde_json::to_vec(&envelope.entry_json()).unwrap().len();
+            let size = put_events_entry_bytes(
+                &envelope.source,
+                &envelope.detail_type,
+                &envelope.event_bus_name,
+                &detail_string(&envelope),
+            );
+            assert_eq!(
+                size, measured,
+                "admission's per-entry check and delivery's chunking must count the same bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn entry_size_covers_every_field_eventbridge_accounts_for() {
+        let base = put_events_entry_bytes("s", "t", "b", "d");
+        assert_eq!(
+            put_events_entry_bytes("sss", "t", "b", "d") - base,
+            2,
+            "source bytes count"
+        );
+        assert_eq!(
+            put_events_entry_bytes("s", "ttt", "b", "d") - base,
+            2,
+            "detail-type bytes count"
+        );
+        assert_eq!(
+            put_events_entry_bytes("s", "t", "bbb", "d") - base,
+            2,
+            "bus bytes count"
+        );
+        assert_eq!(
+            put_events_entry_bytes("s", "t", "b", "ddd") - base,
+            2,
+            "detail bytes count"
+        );
+    }
+
+    #[test]
+    fn an_entry_at_the_size_limit_passes_and_one_byte_over_fails() {
+        let build = |blob_len: usize| {
+            EventEnvelope::new(
+                "acme-orders".to_string(),
+                "OrderNotification".to_string(),
+                "acme-prod-orders-event-bus".to_string(),
+                1,
+                "key-123".to_string(),
+                Utc::now(),
+                json!({ "blob": "x".repeat(blob_len) }),
+            )
+        };
+        let mut lo = 0usize;
+        let mut hi = PUT_EVENTS_ENTRY_MAX_BYTES;
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2;
+            if build(mid).is_ok() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let envelope = build(lo).unwrap();
+        let size = put_events_entry_bytes(
+            &envelope.source,
+            &envelope.detail_type,
+            &envelope.event_bus_name,
+            &detail_string(&envelope),
+        );
+        assert_eq!(
+            size, PUT_EVENTS_ENTRY_MAX_BYTES,
+            "the boundary entry fills the budget exactly"
+        );
+        assert!(
+            build(lo + 1).is_err(),
+            "one byte over the budget is rejected"
+        );
+    }
+
+    #[test]
+    fn chunking_splits_at_ten_entries_keeping_order() {
+        let entries: Vec<(usize, usize)> = (0..11).map(|i| (100, i)).collect();
+        let chunks = chunk_put_events_entries(entries);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], (0..10).collect::<Vec<_>>());
+        assert_eq!(chunks[1], vec![10]);
+    }
+
+    #[test]
+    fn chunking_splits_at_the_size_limit_keeping_order() {
+        let entries: Vec<(usize, usize)> = vec![(100_000, 0), (100_000, 1), (100_000, 2)];
+        let chunks = chunk_put_events_entries(entries);
+        assert_eq!(chunks, vec![vec![0, 1], vec![2]]);
+    }
+
+    #[test]
+    fn chunking_keeps_an_exact_fit_together() {
+        let exact = PUT_EVENTS_ENTRY_MAX_BYTES - 100_000;
+        let entries: Vec<(usize, usize)> = vec![(100_000, 0), (exact, 1)];
+        let chunks = chunk_put_events_entries(entries);
+        assert_eq!(chunks, vec![vec![0, 1]]);
+    }
+
+    #[test]
+    fn a_single_entry_at_the_size_limit_gets_its_own_request() {
+        let entries: Vec<(usize, usize)> =
+            vec![(100, 0), (PUT_EVENTS_ENTRY_MAX_BYTES, 1), (100, 2)];
+        let chunks = chunk_put_events_entries(entries);
+        assert_eq!(chunks, vec![vec![0], vec![1], vec![2]]);
     }
 }

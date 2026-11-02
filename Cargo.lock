@@ -3020,6 +3020,7 @@ dependencies = [
  "aws-config",
  "aws-sdk-dynamodb",
  "aws-sdk-eventbridge",
+ "aws-sdk-sqs",
  "aws-smithy-mocks",
  "chrono",
  "konductor-common",

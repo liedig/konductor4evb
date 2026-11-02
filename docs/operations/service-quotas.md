@@ -199,6 +199,58 @@ These are TPS limits, not counts. `provision-domain` fans out over environments 
 
 If a provisioning still fails after retry exhaustion (sustained throttling, for example, a large batch onboarding), re-approve the domain—provisioning is idempotent after rollback—and consider raising `L-0720E68F` to 10/s for the onboarding window. Note the schemas caveat: a `Schemas.TooManyRequestsException` caused by the **registry count limit** (not rate) will be retried for ~1 minute before failing; the error message distinguishes the two.
 
+## The publish throttle budget
+
+Every API and stage in the platform account shares one API Gateway account
+throttle **per Region**: 10,000 requests per second with a burst of 5,000 by
+default (some newer Regions default to 2,500 / 1,250), adjustable as quota
+`apigateway` / `L-8A5B8E43`. AWS derives the account burst from the rate and
+does not expose it as a separate quota; both published default pairs have a
+2:1 ratio, so the budget below estimates the burst as half the rate.
+
+Konductor sets its own ceilings inside that budget. `POST /publish` has a
+dedicated method-level throttle on every environment stage of both APIs
+(`publish_throttle_rate_limit` R, `publish_throttle_burst_limit` B; defaults
+2,000 rps / 1,000 burst), and every other route keeps the stage-wide
+50 rps / 100 burst. With S stages (two APIs times the environment count),
+`make validate-config` checks the budget at deploy time:
+
+- **Warning (validation still passes):** one stage at its full publish rate
+  plus every stage's control-plane limit exceeds the account quota —
+  `R + 50 × S > Q` for the rate, or `B + 100 × S > Q / 2` for the estimated
+  burst. This is the case where one runaway stage can starve every other
+  route in the account, including the domain-state endpoint an operator needs
+  to stop a runaway publisher.
+- **Note (always printed):** the all-stages total, `(R + 50) × S` rps and
+  `(B + 100) × S` burst, against `Q` and `Q / 2`. With the defaults and three
+  environments the note reads 12,300 rps and 6,600 burst against 10,000 and
+  5,000. Other APIs in the account are not counted — subtract their expected
+  traffic when sizing the publish throttle.
+
+The check reads the applied quota with
+`aws service-quotas get-service-quota --service-code apigateway --quota-code L-8A5B8E43`,
+falls back to `get-aws-default-service-quota`, and then to the documented
+10,000 rps default, saying which it used. Reading the quota needs
+`servicequotas:GetServiceQuota` and `servicequotas:GetAWSDefaultServiceQuota`.
+Request an increase in the Service Quotas console (or with
+`request-service-quota-increase`) for quota code `L-8A5B8E43` in the
+deployment Region before raising the publish throttle beyond the budget.
+
+The publish path's remaining limits, in the order traffic meets them:
+
+| Limit | Setting or quota | Default | Sizing guidance |
+|---|---|---|---|
+| Publish throttle per stage | `publish_throttle_rate_limit` / `publish_throttle_burst_limit` | 2,000 rps / 1,000 burst | Twice the observed 1,000 msg/s benchmark; raise after raising `L-8A5B8E43` |
+| Account API Gateway throttle | `apigateway` / `L-8A5B8E43` | 10,000 rps / 5,000 burst per Region | Shared by every API in the account; the budget check above guards it |
+| Admission Lambda concurrency | `publish_admission_concurrency_cap` | 0 (uncapped) | Uncapped admission draws from the account pool; each cold instance fetches its schemas from the registry, so size a cap against the Schemas API rate if a sharp scale-out risks fail-closed `503`s |
+| Delivery concurrency | `publish_delivery_max_concurrency` | 50 (range 2–1000) | Enforced by the event source mapping so a saturated consumer builds a queue backlog instead of an invocation storm; size against the Region's `PutEvents` quota |
+| EventBridge `PutEvents` | `events` / `L-9B653E91` | per Region (see [Data-plane throughput](#data-plane-throughput-traffic-not-counts)) | When admission outruns this quota, admitted events queue and drain at the EventBridge rate (`202` still means owned); the `konductor-publish-queue-age-alarm` (oldest message over 300 s) signals a sustained deficit |
+
+Two alarms watch the queue itself: `konductor-publish-dlq-depth-alarm` (any
+message in the publish DLQ) and `konductor-publish-queue-age-alarm`. The
+`PublishQueueWait` and `PublishEnqueueToDelivery` metrics (namespace
+`Konductor/EventStreams`) break publish latency into queue wait and
+end-to-end enqueue-to-delivery time.
 ## Other platform-account limits (fine by default, listed for completeness)
 
 The following limits usually require no adjustment for initial deployments.
@@ -207,7 +259,7 @@ The following limits usually require no adjustment for initial deployments.
 |---|---|---|---|
 | Lambda | Account concurrent executions | 1,000 (new accounts sometimes start lower—verify) | 13 functions share the pool; SQS-triggered handlers scale with command volume |
 | Step Functions | Open standard executions | 1,000,000 | One execution per registration/approval/provisioning/subscription operation |
-| API Gateway | Account throttle | 10,000 RPS | Template self-throttles the stage to 50 rps / 100 burst |
+| API Gateway | Account throttle | 10,000 RPS per Region, requestable (`apigateway` / `L-8A5B8E43`) | Shared by every API and stage in the account. `/publish` has a dedicated method throttle (2,000 rps / 1,000 burst per stage by default); other routes self-throttle to 50 rps / 100 burst — see [The publish throttle budget](#the-publish-throttle-budget) |
 | DynamoDB | Tables | 2,500 | 2 tables, on-demand |
 | IAM | Roles | 1,000 | ~8 platform roles, fixed |
 | CloudFormation | Resources per stack | 500 | Core stack ≈ 70 |

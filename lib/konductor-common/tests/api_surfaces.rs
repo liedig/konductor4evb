@@ -363,11 +363,12 @@ fn publish_consumer_has_least_privilege_permissions() {
         [
             "dynamodb:GetItem",
             "events:PutEvents",
+            "sqs:ChangeMessageVisibility",
             "sqs:DeleteMessage",
             "sqs:GetQueueAttributes",
             "sqs:ReceiveMessage",
         ],
-        "publish consumer: domain-state read, org-scoped PutEvents, queue access"
+        "publish consumer: domain-state read, org-scoped PutEvents, queue access plus per-message visibility backoff on throttled redeliveries"
     );
 }
 
@@ -390,9 +391,10 @@ fn publish_admission_has_least_privilege_permissions() {
         [
             "dynamodb:GetItem",
             "schemas:DescribeSchema",
+            "sqs:GetQueueAttributes",
             "sqs:SendMessage",
         ],
-        "admission: domain-state read, schema read, publish-queue write"
+        "admission: domain-state read, schema read, publish-queue write, queue read for the cold-start pre-warm"
     );
 }
 
