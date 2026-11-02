@@ -61,6 +61,17 @@ These change by editing the file and redeploying the core stack:
 - **Console redirect URLs.** `oauth_callback_urls` and `oauth_logout_urls`
   must list the addresses where the console is served. The defaults cover
   local development on `http://localhost:3000`.
+- **Publish-path tuning.** Five settings size the publish path against AWS
+  quotas: `publish_throttle_rate_limit` and `publish_throttle_burst_limit`
+  (the dedicated `POST /publish` throttle per stage; every other route keeps
+  50 rps / 100 burst), `publish_admission_concurrency_cap` (0, the default,
+  leaves admission uncapped), `publish_delivery_max_concurrency` (the
+  delivery consumer's concurrency bound, default 50), and
+  `domain_liveness_cache_seconds` (how long a confirmed-`ACTIVE` domain stays
+  cached on the publish path, default 300; 0 reads every request). Defaults,
+  bounds, and sizing guidance: the
+  [configuration contract](../reference/configuration.md) and
+  [service quotas](service-quotas.md#the-publish-throttle-budget).
 
 ## Validate and deploy
 
@@ -71,7 +82,13 @@ make deploy-core
 
 Validation checks the contract rules and the SES verification status of the
 notification addresses. Once a stack exists, it also refuses changes to the
-fixed-at-setup settings. The [installation guide](installation.md#phase-2--deploy-the-konductor-core-stack)
+fixed-at-setup settings. It also prints a publish throttle budget note
+(always) and a warning (never fatal) comparing the configured publish
+throttle against the account's API Gateway throttle quota — reading the
+applied quota needs `servicequotas:GetServiceQuota` and
+`servicequotas:GetAWSDefaultServiceQuota`; without them the check falls back
+to the documented 10,000 rps default and says so. See
+[the publish throttle budget](service-quotas.md#the-publish-throttle-budget). The [installation guide](installation.md#phase-2--deploy-the-konductor-core-stack)
 covers the full deployment phase.
 
 ## Existing installations

@@ -797,3 +797,39 @@ validate the observed detail responses under
 nullable top-level fields, and omitted environment fields) against both
 surfaces and assert the surfaces agree. The Rust evidence cited above is
 unchanged: no handler, request schema, or route integration changed.
+
+## D32
+
+**The API Gateway account-throttle row understated the quota's scope and
+adjustability.** The [quota runbook](../operations/service-quotas.md) listed
+"Account throttle | 10,000 RPS" with the note "Template self-throttles the
+stage to 50 rps / 100 burst". That read as a fixed per-platform ceiling,
+while the quota is per account **per Region**, shared by every API and stage
+in the account (not just Konductor's), and requestable as `apigateway` /
+`L-8A5B8E43`. The 50/100 figure also stopped being the whole story when
+`tune-publish-path` gave `POST /publish` a dedicated method-level throttle.
+
+**Documentation resolved 2026-11-02** (`tune-publish-path`): the runbook's
+[publish throttle budget](../operations/service-quotas.md#the-publish-throttle-budget)
+section now states the quota's scope, code, and default pairs (10,000/5,000
+and 2,500/1,250), the budget math `make validate-config` applies, and how to
+request an increase; the summary row links to it.
+
+## D33
+
+**The activation cold-start burst in the quota runbook undercounts
+per-instance refreshes.** The
+[service quotas runbook](../operations/service-quotas.md) states that after
+an activation advances the pointer's generation, "the first publish of each
+schema refreshes its registry entry once", bounding the burst at one
+`DescribeSchema` per schema in the registry (40 at the modeled catalog size)
+so that "the schema count bounds it and event rate never multiplies it." The
+refresh cache is per warm Lambda instance: `SchemaCache` is an in-memory,
+generation-keyed map inside each admission/consumer execution environment
+([`lib/konductor-common/src/schema_validation.rs`](../../lib/konductor-common/src/schema_validation.rs)),
+so every warm instance re-reads each schema on its first publish after an
+activation. The real burst is schemas multiplied by the number of warm
+instances at activation time, and event rate multiplies it indirectly by
+driving instance scale-out. The correct bound and the per-instance semantics
+need a technical review and a runbook correction; reported here rather than
+resolved silently.

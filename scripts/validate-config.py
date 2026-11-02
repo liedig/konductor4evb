@@ -45,6 +45,11 @@ DEFAULTS = {
     "system_event_emission_enabled": False,
     "oauth_callback_urls": ["http://localhost:3000/callback"],
     "oauth_logout_urls": ["http://localhost:3000/logout"],
+    "publish_throttle_rate_limit": 2000,
+    "publish_throttle_burst_limit": 1000,
+    "publish_admission_concurrency_cap": 0,
+    "publish_delivery_max_concurrency": 50,
+    "domain_liveness_cache_seconds": 300,
 }
 
 # snake_case config key -> (template parameter name, lifecycle class)
@@ -59,11 +64,29 @@ SETTINGS = {
     "system_event_emission_enabled": ("SystemEventEmissionEnabled", "updateable"),
     "oauth_callback_urls": ("OAuthCallbackUrls", "updateable"),
     "oauth_logout_urls": ("OAuthLogoutUrls", "updateable"),
+    "publish_throttle_rate_limit": ("PublishThrottleRateLimit", "updateable"),
+    "publish_throttle_burst_limit": ("PublishThrottleBurstLimit", "updateable"),
+    "publish_admission_concurrency_cap": ("PublishAdmissionConcurrencyCap", "updateable"),
+    "publish_delivery_max_concurrency": ("PublishDeliveryMaxConcurrency", "updateable"),
+    "domain_liveness_cache_seconds": ("DomainLivenessCacheSeconds", "updateable"),
+}
+
+INT_SETTINGS = {
+    "access_token_validity_minutes",
+    "publish_throttle_rate_limit",
+    "publish_throttle_burst_limit",
+    "publish_admission_concurrency_cap",
+    "publish_delivery_max_concurrency",
+    "domain_liveness_cache_seconds",
 }
 
 
 def err(msg):
     print(f"ERROR: {msg}", file=sys.stderr)
+
+
+def warn(msg):
+    print(f"WARNING: {msg}", file=sys.stderr)
 
 
 def note(msg):
@@ -94,7 +117,7 @@ def load_config(path):
     for key, value in cfg.items():
         expected = list if key in ("environments", "oauth_callback_urls", "oauth_logout_urls") else (
             bool if key == "system_event_emission_enabled"
-            else int if key == "access_token_validity_minutes" else str
+            else int if key in INT_SETTINGS else str
         )
         if expected is bool:
             if not isinstance(value, bool):
@@ -215,6 +238,30 @@ def validate_prerequisites(cfg):
     return errors
 
 
+# Publish-path capacity bounds mirror the template parameter bounds; a cap of
+# 0 means uncapped admission and a liveness window of 0 means a read per
+# request (docs/reference/configuration.md).
+PUBLISH_PATH_BOUNDS = {
+    "publish_throttle_rate_limit": (1, None),
+    "publish_throttle_burst_limit": (0, None),
+    "publish_admission_concurrency_cap": (0, None),
+    "publish_delivery_max_concurrency": (2, 1000),
+    "domain_liveness_cache_seconds": (0, 900),
+}
+
+
+def validate_publish_path(cfg):
+    errors = []
+    for key, (low, high) in PUBLISH_PATH_BOUNDS.items():
+        value = cfg.get(key)
+        if not isinstance(value, int) or isinstance(value, bool):
+            continue  # load_config already reported the type error
+        if value < low or (high is not None and value > high):
+            allowed = f"{low}-{high}" if high is not None else f"{low} or more"
+            errors.append(f"{key} is {value} — the contract allows {allowed}.")
+    return errors
+
+
 def ses_verification_status(email, region, profile, ses_fixture):
     if ses_fixture is not None:
         return ses_fixture.get(email, "NOT_FOUND")
@@ -331,6 +378,94 @@ def drift_guard(cfg, stack_name, region, profile, stack_fixture, skip_aws):
     return errors
 
 
+# ---- Throttle budget -----------------------------------------------------
+# Every environment stage of both APIs shares the account's API Gateway
+# throttle per Region. AWS exposes only the rate quota and derives the burst
+# from it; both published default pairs (10,000/5,000 and 2,500/1,250) have a
+# 2:1 ratio, so the burst estimate is half the rate quota.
+
+APIGW_THROTTLE_QUOTA_CODE = "L-8A5B8E43"
+APIGW_THROTTLE_QUOTA_DEFAULT = 10000
+CONTROL_PLANE_RATE = 50
+CONTROL_PLANE_BURST = 100
+
+
+def service_quota_value(subcommand, region, profile):
+    cmd = [
+        "aws", "service-quotas", subcommand,
+        "--service-code", "apigateway",
+        "--quota-code", APIGW_THROTTLE_QUOTA_CODE,
+        "--region", region,
+        "--output", "json",
+    ]
+    if profile:
+        cmd += ["--profile", profile]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return int(json.loads(result.stdout)["Quota"]["Value"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def account_throttle_quota(region, profile, quota_fixture, skip_aws):
+    """(rate quota rps, note explaining a fallback or None)."""
+    if quota_fixture is not None:
+        return quota_fixture, None
+    if skip_aws:
+        return APIGW_THROTTLE_QUOTA_DEFAULT, (
+            "API Gateway throttle quota not checked (--skip-aws-checks) — "
+            f"comparing against the documented default of {APIGW_THROTTLE_QUOTA_DEFAULT:,} rps"
+        )
+    applied = service_quota_value("get-service-quota", region, profile)
+    if applied is not None:
+        return applied, None
+    default = service_quota_value("get-aws-default-service-quota", region, profile)
+    if default is not None:
+        return default, None
+    return APIGW_THROTTLE_QUOTA_DEFAULT, (
+        f"could not read the account API Gateway throttle quota ({APIGW_THROTTLE_QUOTA_CODE}) — "
+        f"comparing against the documented default of {APIGW_THROTTLE_QUOTA_DEFAULT:,} rps"
+    )
+
+
+def throttle_budget(cfg, quota):
+    """Warn (never fail) when one stage at its publish limit plus every
+    stage's control-plane limit exceeds the account throttle; always note the
+    all-stages totals."""
+    stages = 2 * len(cfg["environments"])
+    rate = cfg["publish_throttle_rate_limit"]
+    burst = cfg["publish_throttle_burst_limit"]
+    burst_quota = quota // 2
+    one_stage_rate = rate + CONTROL_PLANE_RATE * stages
+    one_stage_burst = burst + CONTROL_PLANE_BURST * stages
+    if one_stage_rate > quota:
+        warn(
+            f"one stage at its publish throttle can exceed the account API Gateway rate quota: "
+            f"publish_throttle_rate_limit ({rate:,}) + {CONTROL_PLANE_RATE} rps x {stages} stages "
+            f"= {one_stage_rate:,} rps > account quota of {quota:,} rps. Lower the publish throttle "
+            "or request a quota increase."
+        )
+    if one_stage_burst > burst_quota:
+        warn(
+            f"one stage at its publish throttle can exceed the account API Gateway burst: "
+            f"publish_throttle_burst_limit ({burst:,}) + {CONTROL_PLANE_BURST} x {stages} stages "
+            f"= {one_stage_burst:,} burst > estimated account burst of {burst_quota:,}. "
+            "Lower the publish throttle or request a quota increase."
+        )
+    note(
+        f"throttle budget: all {stages} stages at their limits total "
+        f"{(rate + CONTROL_PLANE_RATE) * stages:,} rps and {(burst + CONTROL_PLANE_BURST) * stages:,} burst "
+        f"against an account quota of {quota:,} rps and an estimated burst of {burst_quota:,} "
+        "(the burst is an estimate — AWS derives the account burst from the rate; other APIs in "
+        "the account are not counted)"
+    )
+
+
 # ---- Stage rendering -------------------------------------------------------
 # The core template keeps a literal SAM-managed stage (the authoring
 # environment, marked "# konductor:authoring-stage") and a rendered block of
@@ -412,6 +547,10 @@ def render_stages_block(envs):
                 '          HttpMethod: "*"',
                 "          ThrottlingBurstLimit: 100",
                 "          ThrottlingRateLimit: 50",
+                '        - ResourcePath: "/~1publish"',
+                "          HttpMethod: POST",
+                "          ThrottlingBurstLimit: { Ref: PublishThrottleBurstLimit }",
+                "          ThrottlingRateLimit: { Ref: PublishThrottleRateLimit }",
             ]
     return "\n".join(lines) + "\n"
 
@@ -525,6 +664,8 @@ def main():
                         help="read deployed parameters from a recorded describe-stacks JSON file")
     parser.add_argument("--ses-fixture", default=None,
                         help="read SES statuses from a JSON object mapping email to VerificationStatus")
+    parser.add_argument("--quota-fixture", default=None, type=int,
+                        help="use this account API Gateway throttle quota (rps) for the budget check")
     parser.add_argument("--skip-aws-checks", action="store_true",
                         help="skip SES and drift-guard checks (offline validation only; not for deploy)")
     parser.add_argument("--init-from-stack", action="store_true",
@@ -581,6 +722,7 @@ def main():
     errors = []
     errors += validate_contract(cfg)
     errors += validate_prerequisites(cfg)
+    errors += validate_publish_path(cfg)
     errors += check_ses(cfg, region, args.profile, ses_fixture, args.skip_aws_checks)
     errors += drift_guard(cfg, args.stack_name, region, args.profile,
                           args.stack_fixture, args.skip_aws_checks)
@@ -590,6 +732,13 @@ def main():
             err(message)
         print(f"configuration invalid: {len(errors)} problem(s) in {args.config}", file=sys.stderr)
         sys.exit(1)
+
+    quota, quota_note = account_throttle_quota(
+        region, args.profile, args.quota_fixture, args.skip_aws_checks
+    )
+    if quota_note:
+        note(quota_note)
+    throttle_budget(cfg, quota)
 
     print(f"configuration valid: {args.config}", file=sys.stderr)
     if args.render:

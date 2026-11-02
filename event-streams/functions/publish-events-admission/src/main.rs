@@ -43,7 +43,9 @@ async fn main() -> Result<(), Error> {
     let validators = konductor_common::schema_validation::ValidatorCache::new(
         konductor_common::schema_validation::DEFAULT_VALIDATOR_CACHE_CAPACITY,
     );
+    handler::prewarm(&clients).await;
     let uuid_source = konductor_common::metadata::generation::PlatformUuidSource;
+    let liveness = konductor_common::domain_liveness::DomainLivenessCache::from_env();
 
     let clients_ref = &clients;
     let authorizer_ref = &authorizer;
@@ -51,12 +53,14 @@ async fn main() -> Result<(), Error> {
     let validators_ref = &validators;
     let metadata_ref = &metadata;
     let uuid_ref = &uuid_source;
+    let liveness_ref = &liveness;
     lambda_runtime::run(service_fn(move |event| async move {
         handler::handle(
             clients_ref,
             authorizer_ref,
             cache_ref,
             validators_ref,
+            liveness_ref,
             metadata_ref,
             uuid_ref,
             event,

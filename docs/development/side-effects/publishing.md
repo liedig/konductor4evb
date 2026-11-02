@@ -12,6 +12,14 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 - **Failure walk:** crash after a successful PutEvents → redelivery publishes a duplicate; consumers dedupe on the carried `idempotencyKey`. Accepted at-least-once semantics.
 - **Decision:** ENVELOPE-DRIVEN. **Rationale:** already the target shape.
 
+> **Update (2026-11-02, `tune-publish-path`):** the record above still holds under batched delivery. The commits are now up to one `PutEvents` request per bus group per batch, plus a `ChangeMessageVisibilityBatch` on messages that stay uncommitted; there is still no DynamoDB write. Rubric: (2) yes—every `PutEvents` entry hangs on its inbound SQS command, and the visibility change only reschedules a command that did not commit; (3) yes—entries carry the admission-fixed `idempotencyKey`; (4) yes—delivery is asynchronous; (5) not applicable—no stream; (6) yes—the SQS command is the durable envelope.
+>
+> **Throttle recovery.** Throttled entries are retried inside the invocation (full-jitter backoff, skipped under a 5-second deadline margin), then re-shown after an exponential visibility backoff, and the queue's `maxReceiveCount` is 25. All of this reschedules uncommitted commands; none of it introduces a second commit path.
+>
+> **Failure walk, widened.** A crash after a partially accepted batch now redelivers up to 10 messages instead of 1, so the duplicate window covers the batch; consumers dedupe on `idempotencyKey` as before. Delivery also reuses a confirmed-ACTIVE domain result within the liveness window, so a disable can lag up to that window on this path.
+>
+> **Decision: ENVELOPE-DRIVEN, unchanged.** EventBridge accepts an event as soon as `PutEvents` returns, and the SQS command is already the durability boundary. A stream consumer would add latency with no correctness gain—there is nothing to project.
+
 ## `publish-events-admission`
 
 - **Committed writes:** none to DynamoDB—the SQS `SendMessage` to the publish queue is the only commit, and it is the durability boundary the 202 response reports.
@@ -19,6 +27,8 @@ Dated records from the [side-effects audit](README.md). These are rationale and 
 - **Rubric:** (4) no—synchronous request/response path, exempt by the rubric's own terms (the response must reflect the outcome of validation); (6) yes for the downstream consumer—the enqueued command is the durable envelope.
 - **Failure walk:** crash before SendMessage → the caller saw no 202 and owns the event; retry is safe (idempotency key derives from the caller's key or the API Gateway request ID). Ambiguous SendMessage failure (timeout after the write) → 503 to the caller, possible queued duplicate on retry; same at-least-once semantics as the consumer's duplicate window.
 - **Decision:** STAY. **Rationale:** single atomic service call after read-only gates; nothing to stream.
+
+> **Update (2026-11-02, `tune-publish-path`):** the liveness cache and the init pre-warm are read-only (a cached ACTIVE confirmation, a `GetItem` on a sentinel key, and a `GetQueueAttributes` on the publish queue) and change no side-effect property. The single `SendMessage` commit and the failure walk above are unchanged; a cached confirmation never bypasses authorization. **Decision: STAY, unchanged.**
 
 ## `schema-admin`
 

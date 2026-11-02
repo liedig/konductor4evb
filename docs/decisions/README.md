@@ -43,6 +43,7 @@ before treating an older claim as a current requirement.
 - [Refuse inexact multipleOf divisors at authoring](refuse-inexact-multiple-of-divisors.md)
 - [Public system events for subscription upgrades](domain-system-events.md)
 - [Independent platform metadata contracts](add-platform-metadata-composition.md)
+- [Publish-path performance tuning: throttle, batching, recovery, liveness cache](tune-publish-path.md)
 
 ## Trust and operations
 

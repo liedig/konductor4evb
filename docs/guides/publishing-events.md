@@ -170,12 +170,13 @@ Konductor validates your `data` against the schema's latest version **before** a
 |----------|-------|--------|
 | `400` | Body failed structural validation: a missing field, an unknown field (including an injected top-level `metadata` key), or an invalid event name. On schema writes, also `content` that is not a valid draft-4 document. On version appends, also content that tightens the current latest version; `message` lists the offending paths. | Fix the request body / schema document; for a rejected append, loosen the document or register a new event name instead |
 | `403` | No `publisher` binding for this principal on this domain | Ask your platform team for a binding |
-| `404` | Domain missing/inactive, or no schema registered for this event in this environment | Check domain status; create the schema first |
+| `404` | Domain missing/inactive, or no schema registered for this event in this environment | Check domain status; create the schema first. A liveness-cached `ACTIVE` confirmation can briefly admit publishes to a freshly disabled domain: within the cache window (default 300 seconds) admission and delivery may still trust an earlier confirmation, so a disable takes up to the window to propagate on both halves |
 | `400` (schema writes) | Called on a non-authoring stage (`AuthoringEnvironmentOnly`) | Create and append on the authoring stage; promote into later environments |
 | `409` (create schema) | Schema already exists in this environment | Append a version instead |
 | `422` (publish) | `data` violates the schema's latest version—violations are listed in `message` | Fix the payload and retry; if you just appended a schema version, a plain retry picks it up |
+| `429` | The request exceeded the dedicated `POST /publish` throttle for the stage (2,000 rps with a burst of 1,000 by default; platform operators tune it with `publish_throttle_rate_limit` and `publish_throttle_burst_limit`). Only `/publish` has the raised limits; every other route on the stage keeps 50 rps with a burst of 100. Nothing was queued | Retry with backoff. If you sustain this rate, ask your platform team to raise the publish throttle; `make validate-config` warns operators at deploy time when the configured throttle no longer fits the account's shared API Gateway quota |
 | `503` (publish) | The platform could not evaluate the publish (schema registry or queue trouble, or metadata configuration missing/unreadable) | Retry with backoff; alert your platform team if it persists |
-| `202` then nothing arrives | Rare: the domain was disabled between admission and delivery, or EventBridge delivery is failing | The platform's publish DLQ holds exhausted messages—contact your platform team |
+| `202` then nothing arrives | Rare: the domain was disabled between admission and delivery (delivery re-checks liveness, subject to the same cache window), or EventBridge delivery is failing | The platform's publish DLQ holds exhausted messages—contact your platform team |
 
 ## Discovering schemas
 

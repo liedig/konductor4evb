@@ -1,4 +1,6 @@
 pub mod api;
+pub mod backoff;
+pub mod domain_liveness;
 pub mod domain_scope;
 pub mod dynamodb;
 pub mod entitlement;
