@@ -52,7 +52,7 @@ The [state diagram](#domain-lifecycle) shows how a domain moves between statuses
 | `PROVISIONING` | Infrastructure creation in progress across all environments | Wait. Typically completes within 1-2 minutes. Poll `GET /domains/{domainName}` to check. |
 | `ACTIVE` | All resources created, domain is operational | Start using your event buses. See [Provisioned Resources](resources.md#provisioned-resources). |
 | `PROVISIONING_FAILED` | Resource creation failed, rollback completed | Contact your platform team. They can inspect the Step Functions execution history and retry provisioning. When notifications are enabled, you also receive a provisioning-issue email. |
-| `INACTIVE` | Disabled by the platform team | Contact your platform team. Publish, schema, and subscription requests for the domain are rejected until they enable it again. Publishes already admitted, or admitted within the liveness cache window (up to `domain_liveness_cache_seconds`, default 300 seconds, after the disable), are dropped at delivery rather than delivered. |
+| `INACTIVE` | Disabled by the platform team | Contact your platform team. Publish, schema, and subscription requests for the domain are rejected until they enable it again. Publishes already admitted, and those admitted within the liveness cache window (up to `domain_liveness_cache_seconds`, default 300 seconds, after the disable), can still be delivered while a warm instance trusts its cached `ACTIVE` confirmation. Once delivery observes the domain is no longer `ACTIVE`, it reports those queued messages for retry instead of discarding them: they dead-letter after the queue's receive budget unless the domain is enabled again first, in which case a later retry delivers them. |
 
 ### Environment snapshot
 

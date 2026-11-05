@@ -212,20 +212,34 @@ Konductor sets its own ceilings inside that budget. `POST /publish` has a
 dedicated method-level throttle on every environment stage of both APIs
 (`publish_throttle_rate_limit` R, `publish_throttle_burst_limit` B; defaults
 2,000 rps / 1,000 burst), and every other route keeps the stage-wide
-50 rps / 100 burst. With S stages (two APIs times the environment count),
-`make validate-config` checks the budget at deploy time:
+50 rps / 100 burst. API Gateway applies that stage-wide throttle
+independently to **every method**, not as one shared bucket per stage, so a
+stage's control-plane ceiling is its method count times 50 rps. With the
+current contracts that is 53 buckets per environment (35 control-plane
+methods on the OAuth surface, 18 on the IAM surface; the validator reads
+these counts and its tests keep them in sync with the contracts). With E
+environments (S = 2 × E stages), `make validate-config` checks the budget at
+deploy time:
 
 - **Warning (validation still passes):** one stage at its full publish rate
-  plus every stage's control-plane limit exceeds the account quota —
-  `R + 50 × S > Q` for the rate, or `B + 100 × S > Q / 2` for the estimated
-  burst. This is the case where one runaway stage can starve every other
-  route in the account, including the domain-state endpoint an operator needs
-  to stop a runaway publisher.
-- **Note (always printed):** the all-stages total, `(R + 50) × S` rps and
-  `(B + 100) × S` burst, against `Q` and `Q / 2`. With the defaults and three
-  environments the note reads 12,300 rps and 6,600 burst against 10,000 and
-  5,000. Other APIs in the account are not counted — subtract their expected
-  traffic when sizing the publish throttle.
+  plus every stage's control-plane ceiling exceeds the account quota —
+  `R + 53 × 50 × E > Q` (with the default three environments, the
+  control-plane ceiling is 7,950 rps, so the default publish rate of 2,000
+  just fits the 10,000 rps quota at 9,950) — or the publish burst alone
+  exceeds the estimated account burst, `B > Q / 2`. The burst check isolates
+  the publish setting because the control-plane burst ceiling
+  (53 × 100 per environment) already exceeds the estimate for even one
+  environment; counting it would fire the warning on every deployment. This
+  is the case where one runaway stage can starve every other route in the
+  account, including the domain-state endpoint an operator needs to stop a
+  runaway publisher.
+- **Note (always printed):** the all-stages total — every stage's publish
+  limit plus every stage's control-plane ceiling —
+  `S × R + 53 × 50 × E` rps and `S × B + 53 × 100 × E` burst, against `Q`
+  and `Q / 2`. With the defaults and three environments the note reads
+  19,950 rps and 21,900 burst against 10,000 and 5,000. Other APIs in the
+  account are not counted — subtract their expected traffic when sizing the
+  publish throttle.
 
 The check reads the applied quota with
 `aws service-quotas get-service-quota --service-code apigateway --quota-code L-8A5B8E43`,
@@ -246,11 +260,19 @@ The publish path's remaining limits, in the order traffic meets them:
 | Delivery concurrency | `publish_delivery_max_concurrency` | 50 (range 2–1000) | Enforced by the event source mapping so a saturated consumer builds a queue backlog instead of an invocation storm; size against the Region's `PutEvents` quota |
 | EventBridge `PutEvents` | `events` / `L-9B653E91` | per Region (see [Data-plane throughput](#data-plane-throughput-traffic-not-counts)) | When admission outruns this quota, admitted events queue and drain at the EventBridge rate (`202` still means owned); the `konductor-publish-queue-age-alarm` (oldest message over 300 s) signals a sustained deficit |
 
-Two alarms watch the queue itself: `konductor-publish-dlq-depth-alarm` (any
-message in the publish DLQ) and `konductor-publish-queue-age-alarm`. The
+Three alarms watch the queue and the delivery path:
+`konductor-publish-dlq-depth-alarm` (any message in the publish DLQ),
+`konductor-publish-queue-age-alarm` (the oldest queued message over 300 s),
+and `konductor-publish-delivery-retry-alarm` (delivery reporting messages
+for retry continuously for ten minutes — sustained EventBridge throttling,
+an inactive domain, or poison messages). SQS stops counting repeatedly
+received, undeleted messages in `ApproximateAgeOfOldestMessage` after three
+receives, so a small batch stuck in retry loops can outlive the age alarm
+without tripping it; the retry alarm counts the `PublishDeliveryRetry` log
+metric over that extended window until the DLQ alarm takes over. The
 `PublishQueueWait` and `PublishEnqueueToDelivery` metrics (namespace
 `Konductor/EventStreams`) break publish latency into queue wait and
-end-to-end enqueue-to-delivery time.
+end-to-end enqueue-to-delivery time, each captured per `PutEvents` request.
 ## Other platform-account limits (fine by default, listed for completeness)
 
 The following limits usually require no adjustment for initial deployments.

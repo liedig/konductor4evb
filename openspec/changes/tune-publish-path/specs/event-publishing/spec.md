@@ -95,6 +95,12 @@ When EventBridge throttles delivery, the consumer SHALL retry the throttled entr
 - **THEN** their messages SHALL be reported for retry
 - **AND THEN** each SHALL become visible again after a jittered backoff that grows with its receive count and does not exceed 60 seconds
 
+#### Scenario: An out-of-time invocation keeps its response
+
+- **WHEN** throttled entries remain and the invocation has no time left for the visibility change
+- **THEN** their messages SHALL keep the queue's standard visibility timeout
+- **AND THEN** the invocation SHALL still return its response, acknowledging every accepted entry and reporting the throttled messages for retry
+
 #### Scenario: Sustained throttling does not dead-letter valid events
 
 - **WHEN** EventBridge throttles delivery continuously for 10 minutes
@@ -143,12 +149,17 @@ Admission and delivery SHALL each reuse a confirmation that a domain is `ACTIVE`
 
 ### Requirement: Publish latency observability
 
-The platform SHALL publish metrics for admission latency, the time an admitted event waits in the publish queue, and the time from queue acceptance to EventBridge acceptance. It SHALL alarm when the publish DLQ holds messages and when the oldest queued publish message exceeds an age threshold. These metrics SHALL NOT carry payload data, principals, or tokens.
+The platform SHALL publish metrics for admission latency, the time an admitted event waits in the publish queue, and the time from queue acceptance to EventBridge acceptance. It SHALL alarm when the publish DLQ holds messages, when the oldest queued publish message exceeds an age threshold, and when delivery keeps reporting publish messages for retry. These metrics SHALL NOT carry payload data, principals, or tokens.
 
 #### Scenario: Latency metrics are emitted
 
 - **WHEN** an event is admitted and later accepted by EventBridge
 - **THEN** the platform SHALL record its admission latency, its queue wait, and its queue-to-EventBridge latency as metrics
+
+#### Scenario: Latency metrics measure each event's own request
+
+- **WHEN** concurrent `PutEvents` requests deliver a batch and one request completes far later than another
+- **THEN** the queue-to-EventBridge latency recorded for an event SHALL be measured by the request that accepted it, not by the slowest request of the batch
 
 #### Scenario: Dead-lettered publish raises an alarm
 
@@ -159,3 +170,8 @@ The platform SHALL publish metrics for admission latency, the time an admitted e
 
 - **WHEN** the oldest message in the publish queue exceeds the age threshold
 - **THEN** the publish queue age alarm SHALL enter the alarm state
+
+#### Scenario: Sustained delivery retries raise an alarm
+
+- **WHEN** delivery reports publish messages for retry continuously for ten minutes — for example sustained EventBridge throttling, an inactive domain, or poison messages — while the queue age metric cannot see repeatedly received messages on a standard queue
+- **THEN** the publish delivery retry alarm SHALL enter the alarm state

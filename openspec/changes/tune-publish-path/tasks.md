@@ -47,19 +47,21 @@
   - two records for the same domain in one batch make one domain `GetItem`,
   - a second invocation on the same warm cache within the window makes none,
   - an `INACTIVE` result is not reused, so the next batch reads again,
-  - with a zero window, every batch reads once per domain.
+  - with a zero window, every batch reads once per domain,
+  - the liveness read is strongly consistent, so a fresh confirmation cannot trail a disable.
 
   Then pass a `DomainLivenessCache` from `main.rs` into `handle`. Verify with `cargo test -p publish-events`.
 - [x] 3.3 Throttle recovery. Write the failing tests first, using a deterministic jitter source:
   - an entry-level `ThrottlingException` accepted on the in-invocation retry is acknowledged, with no visibility change,
-  - entries still throttled get one `ChangeMessageVisibilityBatch` on `PUBLISH_QUEUE_URL`, with each timeout derived from the record's `ApproximateReceiveCount`, and are reported in `batchItemFailures`,
+  - entries still throttled get one `ChangeMessageVisibilityBatch` on `PUBLISH_QUEUE_URL`, with each timeout derived from the record's `ApproximateReceiveCount`, and are reported in `batchItemFailures`; each visibility call is bounded by the invocation's remaining time,
   - a request-level `ThrottlingException` takes the same path,
   - a non-throttle entry error is reported without a visibility change,
   - a failed visibility call still reports the message,
-  - no in-invocation retry starts when the remaining invocation time is under the 5 s margin.
+  - no in-invocation retry starts when the remaining invocation time is under the 5 s margin,
+  - an invocation with no time left skips the visibility change and still returns its response with the throttled message reported for retry.
 
   Then add `aws-sdk-sqs` to the crate, give `Clients` an SQS client, and implement the retry and backoff. Verify with `cargo test -p publish-events`.
-- [x] 3.4 Latency fields. Write the failing tests first: the queue wait (invocation start minus `SentTimestamp`) and the enqueue-to-delivery time (EventBridge acceptance minus `SentTimestamp`) computed for a fixed `SentTimestamp` and clock. Then emit both as `queue_wait_ms` and `enqueue_to_delivery_ms` on the per-message `PublishDelivered` log line, with no data, principal, or token fields. Verify with `cargo test -p publish-events`, and check by reading the code that the field names match the metric filters in 5.1.
+- [x] 3.4 Latency fields. Write the failing tests first: the queue wait (invocation start minus `SentTimestamp`) and the enqueue-to-delivery time (EventBridge acceptance minus `SentTimestamp`) computed for a fixed `SentTimestamp` and clock. Then emit both as `queue_wait_ms` and `enqueue_to_delivery_ms` on the per-message `PublishDelivered` log line, with no data, principal, or token fields. The acceptance time is captured inside each `PutEvents` task, so a slow request never inflates another request's metric. Verify with `cargo test -p publish-events`, and check by reading the code that the field names match the metric filters in 5.1.
 - [x] 3.5 Update the delivery documentation:
   - **`docs/architecture/publish-validation.md` §8:** batched `PutEvents` per bus, the liveness recheck reused within the window, throttle recovery with visibility backoff, and the larger receive budget.
   - **`docs/development/side-effects/publishing.md`:** a dated `publish-events` record for `tune-publish-path`, with the six rubric answers from design.md, the failure walk widened to a 10-message duplicate window, and the decision ENVELOPE-DRIVEN.
@@ -74,7 +76,8 @@
   - an `INACTIVE` result is not reused, so a publish after re-enable reads again and gets `202`,
   - with a zero window, every publish reads,
   - a cached `ACTIVE` confirmation with no publisher binding still returns `403`,
-  - a domain-store failure with no reusable confirmation returns `503` and sends no message.
+  - a domain-store failure with no reusable confirmation returns `503` and sends no message,
+  - the liveness read is strongly consistent, so a fresh confirmation cannot trail a disable.
 
   Then thread a `DomainLivenessCache` through `handle` and `admit`, built in `main.rs`, ahead of the existing `require_active_domain`. Verify with `cargo test -p publish-events-admission`.
 - [x] 4.2 Init pre-warm. Write the failing tests first for a `prewarm` function:
@@ -102,8 +105,8 @@
   - `PublishQueue` has `maxReceiveCount` 25 and `VisibilityTimeout` 30,
   - delivery has `sqs:ChangeMessageVisibility` on `PublishQueue` only, and admission has `sqs:GetQueueAttributes`,
   - both functions carry `DOMAIN_LIVENESS_CACHE_SECONDS`, and delivery carries `PUBLISH_QUEUE_URL`,
-  - the metric filters `PublishAdmissionLatency` (`AdmissionAccepted`, `$.fields.latency_ms`), `PublishQueueWait`, and `PublishEnqueueToDelivery` exist,
-  - the alarms `PublishDlqDepthAlarm` and `PublishQueueAgeAlarm` (300 s) exist.
+  - the metric filters `PublishAdmissionLatency` (`AdmissionAccepted`, `$.fields.latency_ms`), `PublishQueueWait`, `PublishEnqueueToDelivery`, and `PublishDeliveryRetry` (count of messages reported for retry) exist,
+  - the alarms `PublishDlqDepthAlarm`, `PublishQueueAgeAlarm` (300 s), and `PublishDeliveryRetryAlarm` (sustained retries over two 300 s periods) exist.
 
   Then edit `konductor-core-stack.yaml`, replacing the fixed-cap comment with the reason for the conditional cap. Verify with `uv run --with pytest --with pyyaml pytest scripts/tests/test_publish_path_template.py` and `sam validate --config-file samconfig-core.toml --lint`.
 - [x] 5.2 Rendered stages. Write the failing renderer tests first in `scripts/tests/test_validate_config.py`, and run them:
@@ -118,12 +121,12 @@
 
   Then extend `SETTINGS`, type checking, and bounds in `scripts/validate-config.py`, and add commented defaults to `konductor-platform.toml.example`. Verify with `uv run --with pytest --with pyyaml pytest scripts/tests/test_validate_config.py`.
 - [x] 5.4 Throttle budget warning. Write the failing tests first in `scripts/tests/test_validate_config.py`, and run them:
-  - with the default throttle, three environments, and a 10,000 quota fixture, there is no warning, and the note reports 12,300 rps and a 6,600 burst against 10,000 and 5,000,
-  - with a 2,500 quota fixture, a burst warning names the publish throttle settings, the stage count, 1,600, and 1,250,
-  - a publish rate of 9,800 with a 10,000 quota gives a rate warning,
+  - with the default throttle, three environments, and a 10,000 quota fixture, there is no warning, and the note reports 19,950 rps and a 21,900 burst (every stage's publish limit plus every stage's per-method control-plane ceiling) against 10,000 and 5,000,
+  - with a 2,500 quota fixture, a rate warning names the publish throttle settings, the environment count, and 9,950 against 2,500,
+  - a publish burst above half the quota gives a burst warning naming the burst setting alone (the control-plane burst ceiling already exceeds the estimate, so it is not counted there),
   - warnings leave the exit code at 0, and `--render` output is unchanged,
   - an applied quota is preferred over the AWS default quota,
-  - a failed lookup, and `--skip-aws-checks`, both fall back to 10,000 with a note saying so.
+  - a failed lookup, `--skip-aws-checks`, and an applied-quota read failure that falls back to the AWS default, each fall back with a note saying so.
 
   Then add the `warn()` helper, the `throttle_budget` check (`get-service-quota` for `L-8A5B8E43`, then `get-aws-default-service-quota`, then 10,000), and the `--quota-fixture` flag to `scripts/validate-config.py`. Verify with `uv run --with pytest --with pyyaml pytest scripts/tests/test_validate_config.py`.
 - [x] 5.5 Update the configuration and quota documentation:

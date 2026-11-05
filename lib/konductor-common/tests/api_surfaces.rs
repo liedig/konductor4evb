@@ -2039,7 +2039,7 @@ fn system_event_email_rules_are_conditioned_and_scoped() {
             &["SchemaPromotionFailed"],
         ),
     ];
-    for (logical_id, bus, source, detail_types) in cases {
+    for (logical_id, _bus, source, detail_types) in cases {
         let rule = resource(&doc, logical_id);
         assert_eq!(
             mapping(rule).get("Condition").map(text),

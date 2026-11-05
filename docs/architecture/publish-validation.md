@@ -122,10 +122,11 @@ Admission checks each request in the following order:
    result for at most the liveness window (`domain_liveness_cache_seconds`,
    default 300 seconds, 0 reads every request); the cache never bypasses
    authorization, never stores an `INACTIVE` or missing result, and a store
-   error is never cached. A domain-store outage still returns `503`, while
-   an `INACTIVE` domain returns `404`. The consequence: disabling a domain
-   takes effect within the window, while re-enabling takes effect on the
-   next publish.
+   error is never cached. The underlying read is strongly consistent, so a
+   fresh confirmation cannot trail a disable that has just happened. A
+   domain-store outage still returns `503`, while an `INACTIVE` domain
+   returns `404`. The consequence: disabling a domain takes effect within
+   the window, while re-enabling takes effect on the next publish.
 4. **Schema resolution (`404`).** The latest version of `{org}-{domain}@{eventName}`
    is resolved from the stage-selected environment's registry. The schema is
    the contract the payload is about to be checked against; without it there is
@@ -154,7 +155,7 @@ Use the status code to distinguish invalid requests from platform failures.
 |--------|---------|---------------------------|
 | `400` | The request body is malformed, or the generated entry would exceed the EventBridge size limit | Fix the request shape or reduce the payload size |
 | `403` | No publisher binding for this principal on this domain | Ask the platform team for a binding |
-| `404` | Domain missing/inactive, or no schema for this event in this environment | Check domain status; register the schema first. A cached ACTIVE confirmation can admit publishes for up to the liveness window after a disable; those events are then dropped at delivery, which re-checks under the same window |
+| `404` | Domain missing/inactive, or no schema for this event in this environment | Check domain status; register the schema first. A cached ACTIVE confirmation can admit publishes for up to the liveness window after a disable; delivery re-checks under the same window, so those events can still arrive. Once delivery observes the domain is no longer ACTIVE it reports the queued messages for retry — they dead-letter after the receive budget, or deliver after a re-enable — rather than being discarded |
 | `422` | The payload violates the schema's latest version | Fix the payload (violations are listed in `message`) |
 | `503` | The platform could not *evaluate* the request (registry unreachable, stored schema unusable, queue write failed) | Retry with backoff—this is never a rejection |
 
@@ -271,7 +272,10 @@ about the payload, not about the registry's current state.
   `d = min(60, 2^(n-1))` for receive count `n`—via
   `ChangeMessageVisibilityBatch`, instead of waiting out the full 30-second
   visibility timeout. If the visibility call itself fails, the message falls
-  back to the standard timeout; nothing is lost. The publish queue's
+  back to the standard timeout; nothing is lost. The call is also bounded by
+  the invocation's remaining time and skipped when none remains, so it can
+  never cost the invocation its response or the acknowledgements of already
+  accepted entries. The publish queue's
   redrive budget is 25 receives, so even minimum-backoff redrives keep a
   message alive for over 10 minutes of sustained throttling before the DLQ.
 - **Retry semantics for other failures, unchanged.** Non-throttle

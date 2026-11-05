@@ -225,6 +225,17 @@ class PublishPathTemplateTest(unittest.TestCase):
                 self.assertEqual(transformation["MetricNamespace"], "Konductor/EventStreams")
                 self.assertEqual(transformation["MetricValue"], value)
 
+    def test_retry_metric_filter_counts_scheduled_retries(self):
+        filters = self.metric_filters()
+        props = filters.get("PublishDeliveryRetryFilter")
+        self.assertIsNotNone(props, "no metric filter counts scheduled publish delivery retries")
+        self.assertEqual(props["LogGroupName"], {"Ref": "PublishEventsLogGroup"})
+        self.assertEqual(props["FilterPattern"], '{ $.fields.metric = "PublishDeliveryRetry" }')
+        transformation = props["MetricTransformations"][0]
+        self.assertEqual(transformation["MetricNamespace"], "Konductor/EventStreams")
+        self.assertEqual(transformation["MetricName"], "PublishDeliveryRetry")
+        self.assertEqual(transformation["MetricValue"], "1")
+
     def test_publish_dlq_depth_alarm(self):
         props = self.resources["PublishDlqDepthAlarm"]["Properties"]
         self.assertEqual(props["Namespace"], "AWS/SQS")
@@ -235,6 +246,18 @@ class PublishPathTemplateTest(unittest.TestCase):
         )
         self.assertEqual(props["Threshold"], 1)
         self.assertEqual(props["ComparisonOperator"], "GreaterThanOrEqualToThreshold")
+
+    def test_publish_delivery_retry_alarm(self):
+        props = self.resources["PublishDeliveryRetryAlarm"]["Properties"]
+        self.assertEqual(props["Namespace"], "Konductor/EventStreams")
+        self.assertEqual(props["MetricName"], "PublishDeliveryRetry")
+        self.assertNotIn("Dimensions", props)
+        self.assertEqual(props["Statistic"], "Sum")
+        self.assertEqual(props["Period"], 300)
+        self.assertEqual(props["EvaluationPeriods"], 2)
+        self.assertEqual(props["Threshold"], 1)
+        self.assertEqual(props["ComparisonOperator"], "GreaterThanOrEqualToThreshold")
+        self.assertEqual(props["TreatMissingData"], "notBreaching")
 
     def test_publish_queue_age_alarm(self):
         props = self.resources["PublishQueueAgeAlarm"]["Properties"]

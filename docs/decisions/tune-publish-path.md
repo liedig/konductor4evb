@@ -45,21 +45,33 @@ Five levers, all operator-tunable through the
    the configured limits against the account API Gateway throttle quota
    (`L-8A5B8E43`, read through Service Quotas with the documented 10,000 rps
    fallback). It warns — never fails — when one stage at its publish limit
-   plus every stage's control-plane limit exceeds the account rate or the
-   estimated half-rate burst, and always notes the all-stages total.
-   *Rejected alternative:* failing validation; an operator may set a high
-   value on purpose after raising the quota.
+   plus every stage's control-plane ceiling exceeds the account rate. API
+   Gateway applies the stage-wide `/*` throttle independently to every
+   method, so the control-plane ceiling is the method count (53 per
+   environment across the two API contracts, kept in sync by tests) times
+   50 rps, not one shared 50-rps bucket per stage. The burst warning isolates
+   the publish setting (`B > Q/2`), because the control-plane burst ceiling
+   already exceeds the estimated account burst for even one environment and
+   counting it would fire on every deployment. The check always notes the
+   all-stages total, and it discloses which quota source it used — the
+   applied quota, the AWS default, or the documented 10,000 rps fallback.
+   *Rejected alternatives:* failing validation (an operator may set a high
+   value on purpose after raising the quota), and a burst warning that
+   counts the control-plane ceiling (always fires; a warning that always
+   fires gets ignored).
 3. **Domain liveness cache.** Admission and delivery share an ACTIVE-only
    cache (`domain_liveness_cache_seconds`, default 300, range 0–900, 0
    disables) held per warm Lambda instance. Only ACTIVE confirmations are
    cached; INACTIVE and missing domains are always re-read, so re-enabling a
-   domain works on the next publish. Store errors propagate and are never
-   cached. A cached confirmation never bypasses authorization, which runs
-   first. Admission also pre-warms its DynamoDB and SQS connections during
-   Lambda init with best-effort calls (2-second total timeout). *Rejected
-   alternatives:* a distributed cache or stream-driven invalidation
-   (execution environments are not addressable), caching negative results
-   (re-enable must take effect immediately).
+   domain works on the next publish. The reads are strongly consistent, so a
+   fresh confirmation cannot trail a disable that has just happened and the
+   bounded-disable contract holds from the read itself. Store errors
+   propagate and are never cached. A cached confirmation never bypasses
+   authorization, which runs first. Admission also pre-warms its DynamoDB
+   and SQS connections during Lambda init with best-effort calls (2-second
+   total timeout). *Rejected alternatives:* a distributed cache or
+   stream-driven invalidation (execution environments are not addressable),
+   caching negative results (re-enable must take effect immediately).
 4. **Batched delivery with per-entry failure mapping.** Delivery groups a
    batch by target bus into `PutEvents` requests of at most 10 entries and
    256 KB, sends them concurrently, and maps each failed entry back to its
@@ -77,7 +89,11 @@ Five levers, all operator-tunable through the
    Messages still throttled get `ChangeMessageVisibilityBatch` with backoff
    `d/2 + jitter(0, d/2)` where `d = min(60, 2^(n-1))` for receive count
    `n`, so retries spread out instead of waiting the full 30-second
-   visibility timeout. The publish queue's `maxReceiveCount` rises from 3 to
+   visibility timeout. Each visibility call is bounded by the invocation's
+   remaining time and skipped when none remains, so the best-effort change
+   can never cost the batch its response or the acknowledgements of already
+   accepted entries; the standard timeout is the fallback. The publish
+   queue's `maxReceiveCount` rises from 3 to
    25, so even minimum-backoff redrives keep a message alive for over 600
    seconds of sustained throttling before the DLQ. *Rejected alternatives:*
    the visibility timeout alone with a larger receive budget (slow recovery,
@@ -86,10 +102,15 @@ Five levers, all operator-tunable through the
    `publishedAt`).
 
 Latency observability comes with the change: the `PublishDelivered` log gains
-`queue_wait_ms` and `enqueue_to_delivery_ms`, surfaced as the
-`PublishQueueWait` and `PublishEnqueueToDelivery` metrics, and new alarms
-fire on publish DLQ depth and on the oldest queued message exceeding
-300 seconds.
+`queue_wait_ms` and `enqueue_to_delivery_ms` — each captured inside its own
+`PutEvents` task, so a slow request cannot inflate a fast one's latency —
+surfaced as the `PublishQueueWait` and `PublishEnqueueToDelivery` metrics,
+and new alarms fire on publish DLQ depth, on the oldest queued message
+exceeding 300 seconds, and on delivery reporting messages for retry
+continuously for ten minutes (the `PublishDeliveryRetry` metric; SQS stops
+counting repeatedly received messages in the age metric after three
+receives, so the retry alarm covers the window between the age alarm's
+blind spot and the DLQ).
 
 ## Trade-offs
 
@@ -108,7 +129,8 @@ fire on publish DLQ depth and on the oldest queued message exceeding
   path.
 - **Non-throttle failures wait longer.** With `maxReceiveCount` 25, a
   malformed message takes about 12.5 minutes instead of about 90 seconds to
-  reach the DLQ; the queue-age and DLQ alarms make this visible.
+  reach the DLQ; the queue-age, delivery-retry, and DLQ alarms make this
+  visible.
 
 ## Evidence
 

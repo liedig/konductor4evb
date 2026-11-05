@@ -245,17 +245,35 @@ impl EventEnvelope {
     /// The PutEvents entry shape: top-level envelope fields plus the
     /// serialized detail, mirroring the wire format for size validation.
     pub fn entry_json(&self) -> Value {
-        json!({
-            "Source": self.source,
-            "DetailType": self.detail_type,
-            "EventBusName": self.event_bus_name,
-            "Detail": serde_json::to_string(&self.detail).unwrap_or_default(),
-        })
+        put_events_entry_value(
+            &self.source,
+            &self.detail_type,
+            &self.event_bus_name,
+            &serde_json::to_string(&self.detail).unwrap_or_default(),
+        )
     }
 }
 
 /// Maximum entries EventBridge accepts in one `PutEvents` request.
 pub const PUT_EVENTS_MAX_ENTRIES_PER_REQUEST: usize = 10;
+
+/// The `PutEvents` entry shape: source, detail-type, bus, and the serialized
+/// detail. One definition serves both the wire format ([`EventEnvelope::entry_json`])
+/// and the size measurement ([`put_events_entry_bytes`]), so the two can
+/// never disagree about what an entry carries.
+fn put_events_entry_value(
+    source: &str,
+    detail_type: &str,
+    event_bus_name: &str,
+    detail: &str,
+) -> Value {
+    json!({
+        "Source": source,
+        "DetailType": detail_type,
+        "EventBusName": event_bus_name,
+        "Detail": detail,
+    })
+}
 
 /// The size of a `PutEvents` entry as the publish path measures it: the
 /// serialized entry envelope (source, detail-type, bus, and detail) in
@@ -271,15 +289,14 @@ pub fn put_events_entry_bytes(
     event_bus_name: &str,
     detail: &str,
 ) -> usize {
-    let value = json!({
-        "Source": source,
-        "DetailType": detail_type,
-        "EventBusName": event_bus_name,
-        "Detail": detail,
-    });
-    serde_json::to_vec(&value)
-        .map(|bytes| bytes.len())
-        .unwrap_or(usize::MAX)
+    serde_json::to_vec(&put_events_entry_value(
+        source,
+        detail_type,
+        event_bus_name,
+        detail,
+    ))
+    .map(|bytes| bytes.len())
+    .unwrap_or(usize::MAX)
 }
 
 /// Splits prepared entries — `(size in bytes, entry)` pairs — into
