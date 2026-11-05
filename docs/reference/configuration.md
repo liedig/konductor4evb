@@ -50,9 +50,11 @@ by redeploying with new values.
 - **Publish throttle.** `POST /publish` gets a method-level throttle on every
   environment stage of both APIs; every other route keeps the stage-wide
   50 rps / 100 burst. The throttle is a ceiling against the account's shared,
-  per-Region API Gateway throttle, not a reservation: `make validate-config`
-  warns when one stage at its publish limit plus every stage's control-plane
-  limit would exceed the account quota (see
+  per-Region API Gateway throttle, not a reservation: API Gateway applies the
+  stage-wide limit to each method independently, so the control-plane budget
+  is the method count times the limit. `make validate-config` warns when one
+  stage at its publish limit plus every stage's control-plane ceiling would
+  exceed the account quota (see
   [service quotas](../operations/service-quotas.md#the-publish-throttle-budget)).
 - **Admission concurrency cap.** `0` (the default) means admission draws from
   the account's shared Lambda pool — a reserved concurrency of 0 would throttle

@@ -918,7 +918,8 @@ pub async fn prewarm(clients: &Clients) {
 /// Re-checks domain liveness, reusing a fresh `ACTIVE` confirmation from the
 /// cache. `INACTIVE` and missing domains are never cached, so a re-enabled
 /// domain admits on its next publish. A store failure propagates as
-/// `DynamoDb` (503) and is never cached.
+/// `DynamoDb` (503) and is never cached. The read is strongly consistent, so
+/// a fresh confirmation cannot trail a disable.
 async fn require_active_domain(
     clients: &Clients,
     liveness: &DomainLivenessCache,
@@ -933,6 +934,7 @@ async fn require_active_domain(
                 .get_item()
                 .table_name(&table)
                 .key("domainName", s(domain_name))
+                .consistent_read(true)
                 .send()
                 .await
                 .map_err(|e| ControlPlaneError::DynamoDb(e.into_service_error().to_string()))?;
@@ -2567,6 +2569,51 @@ mod tests {
             domain.num_calls(),
             2,
             "a zero window reads on every publish"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_liveness_read_is_strongly_consistent() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let consistent_reads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = consistent_reads.clone();
+        let domain = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                recorded.lock().unwrap().push(req.consistent_read());
+                req.table_name() == Some("domains-test")
+            })
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("domainName", s("orders"))
+                    .item("status", s("ACTIVE"))
+                    .build()
+            });
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[domain],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            &[send_message_rule("key-1", "oauth", "3")],
+        );
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &DomainLivenessCache::new(std::time::Duration::ZERO),
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status(&resp), 202);
+        assert_eq!(
+            *consistent_reads.lock().unwrap(),
+            vec![Some(true)],
+            "a liveness read seeds the cache, so it must not trail a disable"
         );
     }
 

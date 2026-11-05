@@ -157,7 +157,12 @@ async fn prepare_all(
         match prepare(clients, validators, liveness, record).await {
             Ok(entry) => prepared.push(entry),
             Err(error) => {
-                tracing::error!(error = %error, message_id, "publish processing failed; reporting for retry");
+                tracing::error!(
+                    metric = "PublishDeliveryRetry",
+                    error = %error,
+                    message_id,
+                    "publish processing failed; reporting for retry"
+                );
                 failed.push(message_id);
             }
         }
@@ -189,13 +194,19 @@ fn record_outcomes(
             }
             send::DeliveryOutcome::Throttled { message_id } => {
                 tracing::warn!(
+                    metric = "PublishDeliveryRetry",
                     message_id,
                     "delivery throttled; message rescheduled with backoff"
                 );
                 failed.push(message_id);
             }
             send::DeliveryOutcome::Failed { message_id, error } => {
-                tracing::error!(message_id, error = %error, "delivery failed; reporting for retry");
+                tracing::error!(
+                    metric = "PublishDeliveryRetry",
+                    message_id,
+                    error = %error,
+                    "delivery failed; reporting for retry"
+                );
                 failed.push(message_id);
             }
         }
@@ -272,7 +283,7 @@ async fn prepare(
         message_id: message.message_id,
         receipt_handle: message.receipt_handle,
         receive_count: message.receive_count,
-        sent_timestamp_ms: message.sent_timestamp_ms,
+        sent_timestamp_ms: message.published_at.timestamp_millis(),
         envelope,
         detail_json,
         size_bytes,
@@ -319,7 +330,8 @@ fn validate_composed_metadata(
 /// Re-checks domain liveness, reusing a fresh `ACTIVE` confirmation from the
 /// cache. `INACTIVE` and missing domains are never cached, so a re-enabled
 /// domain delivers on its next message. A store failure propagates and the
-/// message is reported for retry.
+/// message is reported for retry. The read is strongly consistent, so a
+/// fresh confirmation cannot trail a disable.
 async fn require_active_domain(
     clients: &Clients,
     liveness: &DomainLivenessCache,
@@ -333,6 +345,7 @@ async fn require_active_domain(
                 .get_item()
                 .table_name(table)
                 .key("domainName", s(domain_name))
+                .consistent_read(true)
                 .send()
                 .await
                 .context("failed to get domain record")?;
@@ -1625,6 +1638,43 @@ mod tests {
 
         assert_eq!(ddb.num_calls(), 2, "a zero window reads on every batch");
     }
+
+    #[tokio::test]
+    async fn the_liveness_read_is_strongly_consistent() {
+        set_env();
+        let consistent_reads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = consistent_reads.clone();
+        let ddb = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                recorded.lock().unwrap().push(req.consistent_read());
+                req.table_name() == Some("domains-test")
+            })
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("status", s("ACTIVE"))
+                    .build()
+            });
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let clients = clients(vec![ddb], vec![put]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(vec![legacy_record("msg-c", "key-c", "orders", json!({}))]),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+        assert_eq!(
+            *consistent_reads.lock().unwrap(),
+            vec![Some(true)],
+            "a liveness read seeds the cache, so it must not trail a disable"
+        );
+    }
     struct ZeroJitter;
 
     impl JitterSource for ZeroJitter {
@@ -1653,6 +1703,14 @@ mod tests {
 
     fn deadline_in_30s() -> u64 {
         (chrono::Utc::now().timestamp_millis() + 30_000) as u64
+    }
+
+    fn deadline_in_3s() -> u64 {
+        (chrono::Utc::now().timestamp_millis() + 3_000) as u64
+    }
+
+    fn past_deadline() -> u64 {
+        (chrono::Utc::now().timestamp_millis() - 1_000) as u64
     }
 
     fn throttled_entry_output(
@@ -1897,6 +1955,82 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn each_request_records_its_own_acceptance_time() {
+        set_env();
+        let slow_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries()[0].event_bus_name() == Some("acme-prod-slow-bus"))
+            .then_output(|| {
+                std::thread::sleep(Duration::from_millis(300));
+                put_events_success_output(1)
+            });
+        let fast_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries()[0].event_bus_name() == Some("acme-prod-fast-bus"))
+            .then_output(|| put_events_success_output(1));
+        let clients = Clients {
+            ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, &[]),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                RuleMode::MatchAny,
+                &[slow_put, fast_put]
+            ),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+
+        let outcomes = send::deliver(
+            &clients,
+            &ZeroJitter,
+            vec![
+                prepared_entry_for("msg-slow", "acme-prod-slow-bus", 1_785_407_400_100),
+                prepared_entry_for("msg-fast", "acme-prod-fast-bus", 1_785_407_400_200),
+            ],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        let mut accepted: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        for outcome in outcomes {
+            if let send::DeliveryOutcome::Delivered {
+                sent_timestamp_ms,
+                accepted_ms,
+                ..
+            } = outcome
+            {
+                accepted.insert(sent_timestamp_ms, accepted_ms);
+            }
+        }
+        let fast = accepted[&1_785_407_400_200];
+        let slow = accepted[&1_785_407_400_100];
+        assert!(
+            fast + 150 <= slow,
+            "the fast request's acceptance ({fast}) must not inherit the slow request's completion time ({slow})"
+        );
+    }
+
+    fn prepared_entry_for(message_id: &str, event_bus_name: &str, sent_ms: i64) -> PreparedEntry {
+        let envelope = EventEnvelope::new(
+            "acme-orders".to_string(),
+            "OrderNotification".to_string(),
+            event_bus_name.to_string(),
+            4,
+            format!("key-{message_id}"),
+            chrono::DateTime::parse_from_rfc3339("2026-07-30T10:30:00.123Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            json!({}),
+        )
+        .unwrap();
+        PreparedEntry {
+            message_id: message_id.to_string(),
+            receipt_handle: None,
+            receive_count: 1,
+            sent_timestamp_ms: sent_ms,
+            envelope,
+            detail_json: "{}".to_string(),
+            size_bytes: 100,
+        }
+    }
+
     #[tokio::test]
     async fn no_retry_starts_when_the_invocation_is_out_of_time() {
         set_env();
@@ -1915,7 +2049,7 @@ mod tests {
             &validators(),
             &no_liveness_cache(),
             &ZeroJitter,
-            sqs_event(vec![throttle_record("msg-t", 2)]),
+            sqs_event_with_deadline(vec![throttle_record("msg-t", 2)], deadline_in_3s()),
         )
         .await
         .unwrap();
@@ -1929,7 +2063,38 @@ mod tests {
         assert_eq!(
             visibility.num_calls(),
             1,
-            "the message still gets its backoff"
+            "the message still gets its backoff while time remains"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_out_of_time_invocation_skips_the_visibility_change_and_still_reports() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| throttled_entry_output(1));
+        let visibility = mock!(aws_sdk_sqs::Client::change_message_visibility_batch)
+            .then_output(|| visibility_output());
+        let clients = clients_with_sqs(
+            vec![any_domain_rule("ACTIVE")],
+            vec![put.clone()],
+            vec![visibility.clone()],
+        );
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(vec![throttle_record("msg-t", 2)], past_deadline()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-t"]);
+        assert_eq!(
+            visibility.num_calls(),
+            0,
+            "with no invocation time left there is no budget for a visibility change; the standard timeout applies"
         );
     }
 }

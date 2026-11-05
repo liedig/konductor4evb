@@ -734,6 +734,25 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
 
+  # SQS excludes repeatedly received, undeleted messages from
+  # ApproximateAgeOfOldestMessage after three receives, so a small batch
+  # stuck in EventBridge throttling can outlive the age alarm above without
+  # tripping it. This alarm counts the retry log lines delivery itself emits,
+  # covering the whole extended retry window up to the DLQ alarm.
+  PublishDeliveryRetryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-publish-delivery-retry-alarm"
+      AlarmDescription: Publish delivery kept reporting messages for retry for ten minutes — sustained EventBridge throttling, an inactive domain, or poison messages; the queue-age metric cannot see repeatedly received messages on standard queues
+      Namespace: Konductor/EventStreams
+      MetricName: PublishDeliveryRetry
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
   # ---- Entitlement revocation observability ----
   # Revocation is intent-synchronous, enforcement-eventual: these alarms
   # bound the convergence path (stream consumer → queue → worker) and the
@@ -2175,6 +2194,20 @@ Resources:
         - MetricName: PublishEnqueueToDelivery
           MetricNamespace: Konductor/EventStreams
           MetricValue: "$.fields.enqueue_to_delivery_ms"
+
+  # Counts every message delivery reports for retry (throttled, failed, or
+  # rejected before send) so the retry alarm above can see the extended
+  # retry window the queue-age metric cannot. No dimensions: cardinality
+  # stays flat; no payload, principal, or token data.
+  PublishDeliveryRetryFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref PublishEventsLogGroup
+      FilterPattern: '{ $.fields.metric = "PublishDeliveryRetry" }'
+      MetricTransformations:
+        - MetricName: PublishDeliveryRetry
+          MetricNamespace: Konductor/EventStreams
+          MetricValue: "1"
 
   # ---- Publisher Schema Administration (append-only) ----
   SchemaAdminLogGroup:

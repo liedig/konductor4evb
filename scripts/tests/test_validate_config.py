@@ -245,24 +245,32 @@ class ThrottleBudgetTest(unittest.TestCase):
     def test_defaults_fit_the_default_quota_without_warning(self):
         output = self.run_budget(self.cfg(), 10000)
         self.assertNotIn("WARNING", output)
-        for expected in ("12,300", "6,600", "10,000", "5,000"):
+        for expected in ("19,950", "21,900", "10,000", "5,000"):
             self.assertIn(expected, output)
 
-    def test_lower_quota_triggers_burst_warning(self):
+    def test_lower_quota_triggers_rate_warning(self):
         output = self.run_budget(self.cfg(), 2500)
         self.assertIn("WARNING", output)
-        self.assertIn("publish_throttle_burst_limit", output)
-        self.assertIn("6", output)  # stage count: 2 APIs x 3 environments
-        self.assertIn("1,600", output)
-        self.assertIn("1,250", output)
-        self.assertNotIn("publish_throttle_rate_limit (2,000)", output)
+        self.assertIn("publish_throttle_rate_limit", output)
+        self.assertIn("x 3 environments", output)  # the per-method control-plane ceiling
+        self.assertIn("9,950", output)
+        self.assertIn("2,500", output)
+        self.assertNotIn("publish_throttle_burst_limit", output)
 
     def test_raised_publish_rate_triggers_rate_warning(self):
-        output = self.run_budget(self.cfg(publish_throttle_rate_limit=9800), 10000)
+        output = self.run_budget(self.cfg(publish_throttle_rate_limit=9600), 10000)
         self.assertIn("WARNING", output)
         self.assertIn("publish_throttle_rate_limit", output)
-        self.assertIn("10,100", output)
+        self.assertIn("17,550", output)
         self.assertIn("10,000", output)
+
+    def test_publish_burst_alone_triggers_burst_warning(self):
+        output = self.run_budget(self.cfg(publish_throttle_burst_limit=6000), 10000)
+        self.assertIn("WARNING", output)
+        self.assertIn("publish_throttle_burst_limit", output)
+        self.assertIn("6,000", output)
+        self.assertIn("5,000", output)
+        self.assertNotIn("publish_throttle_rate_limit", output)
 
     def test_warning_preserves_exit_code_and_render_output(self):
         import subprocess
@@ -329,6 +337,57 @@ class ThrottleBudgetTest(unittest.TestCase):
         quota, quota_note = vc.account_throttle_quota("us-east-1", None, 2500, False)
         self.assertEqual(quota, 2500)
         self.assertIsNone(quota_note)
+
+    def test_the_aws_default_quota_fallback_is_disclosed(self):
+        from unittest import mock
+
+        def fake_run(cmd, **kwargs):
+            result = mock.Mock()
+            if "get-service-quota" in cmd:
+                result.returncode = 1
+                result.stdout = ""
+                result.stderr = "AccessDenied"
+            else:
+                result.returncode = 0
+                result.stdout = json.dumps({"Quota": {"Value": 2500.0}})
+            return result
+
+        with mock.patch.object(vc.subprocess, "run", side_effect=fake_run):
+            quota, quota_note = vc.account_throttle_quota("us-east-1", None, None, False)
+        self.assertEqual(quota, 2500)
+        self.assertIsNotNone(quota_note)
+        self.assertIn("AWS default", quota_note)
+
+
+class ControlPlaneMethodCountTest(unittest.TestCase):
+    """The budget counts API Gateway method buckets, and the wildcard stage
+    throttle applies to every method independently. The counts must track the
+    OpenAPI contracts, which define each stage's methods."""
+
+    def test_method_bucket_constants_match_the_openapi_contracts(self):
+        import yaml
+
+        methods = ("get", "post", "put", "patch", "delete", "head", "options")
+        contracts = (
+            ("api/openapi-oauth.yaml", vc.OAUTH_CONTROL_PLANE_METHODS),
+            ("api/openapi-iam.yaml", vc.IAM_CONTROL_PLANE_METHODS),
+        )
+        repo_root = MODULE.resolve().parent.parent
+        for name, constant in contracts:
+            with self.subTest(contract=name):
+                doc = yaml.safe_load((repo_root / name).read_text())
+                operations = [
+                    method
+                    for path, item in doc["paths"].items()
+                    for method in item
+                    if method in methods and not (path == "/publish" and method == "post")
+                ]
+                self.assertEqual(
+                    len(operations),
+                    constant,
+                    f"{name} control-plane operation count drifted; update the "
+                    "OAUTH_CONTROL_PLANE_METHODS / IAM_CONTROL_PLANE_METHODS constants",
+                )
 
 if __name__ == "__main__":
     unittest.main()

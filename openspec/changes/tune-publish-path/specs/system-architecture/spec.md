@@ -53,25 +53,38 @@ The platform SHALL provide a supported pre-deployment validation step that check
 
 ### Requirement: Publish throttle budget warning
 
-Pre-deployment validation SHALL compare the configured API Gateway limits with the account's API Gateway throttle quota in the deployment Region. It SHALL warn, without failing, when one stage's publish limit plus every stage's control-plane limit exceeds the account rate or burst. It SHALL also report the total of every stage's limits against the quota as a note. The account burst SHALL be taken as half the rate quota, because AWS derives it from the rate.
+Pre-deployment validation SHALL compare the configured API Gateway limits with the account's API Gateway throttle quota in the deployment Region, counting the stage-wide control-plane throttle per method bucket. It SHALL warn, without failing, when one stage's publish rate plus every stage's control-plane ceiling exceeds the account rate, or when the publish burst alone exceeds the estimated account burst. It SHALL also report the total of every stage's limits against the quota as a note.
+
+#### Scenario: Control-plane capacity is counted per method bucket
+
+- **WHEN** validation computes every stage's control-plane ceiling
+- **THEN** it SHALL multiply the per-method stage-wide limit by the number of methods the API contracts define, because API Gateway applies the stage throttle to every method independently
+- **AND THEN** the burst warning SHALL cover the publish setting alone, because the control-plane burst ceiling exceeds the estimated account burst for any environment count and a warning that always fires gets ignored
 
 #### Scenario: Default configuration fits the default account quota
 
 - **WHEN** validation runs with the default publish throttle, the default three environments, and an account throttle quota of 10,000 requests per second
 - **THEN** validation SHALL NOT warn about the throttle budget
-- **AND THEN** it SHALL report that all stages at their limits total 12,300 requests per second with a burst of 6,600, against an account quota of 10,000 with a burst of 5,000
+- **AND THEN** it SHALL report that all stages at their limits total 19,950 requests per second with a burst of 21,900, against an account quota of 10,000 with an estimated burst of 5,000
 
 #### Scenario: One stage can exceed a lower account quota
 
 - **WHEN** validation runs with the default publish throttle and three environments, and the account throttle quota is 2,500 requests per second
-- **THEN** validation SHALL warn that one stage's publish burst plus every stage's control-plane burst (1,600) exceeds the account burst of 1,250
+- **THEN** validation SHALL warn that one stage's publish rate plus every stage's control-plane ceiling (7,950 requests per second) exceeds the account rate quota of 2,500
+- **AND THEN** the warning SHALL name the publish throttle settings, and validation SHALL NOT fail
+
+#### Scenario: The publish burst alone exceeds the estimated account burst
+
+- **WHEN** validation runs with a publish burst above half the account rate quota
+- **THEN** validation SHALL warn that the publish burst setting alone can exceed the estimated account burst
+- **AND** the account burst SHALL be estimated as half the account rate quota, because AWS derives the burst from the rate quota
 - **AND THEN** the warning SHALL name the publish throttle settings, and validation SHALL NOT fail
 
 #### Scenario: Quota cannot be read
 
-- **WHEN** the account throttle quota cannot be read
-- **THEN** validation SHALL compare against the documented default of 10,000 requests per second with a burst of 5,000
-- **AND THEN** it SHALL report that it used the default
+- **WHEN** the account's applied throttle quota cannot be read but the AWS default quota is readable
+- **THEN** validation SHALL compare against the AWS default quota and SHALL report that it fell back to it
+- **AND THEN** when neither can be read, it SHALL compare against the documented default of 10,000 requests per second and report that it used the default
 
 #### Scenario: Warnings do not block deployment
 

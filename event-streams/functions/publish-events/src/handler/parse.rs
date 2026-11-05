@@ -1,7 +1,7 @@
 //! Queue message parsing: a raw SQS record becomes a [`ParsedMessage`]
 //! carrying the SQS routing fields delivery needs (message id, receipt
-//! handle, receive count, sent timestamp) alongside the admission-stamped
-//! command.
+//! handle, receive count, queue acceptance time) alongside the
+//! admission-stamped command.
 //!
 //! Dual-format queue: messages without a `format` field are the legacy
 //! wrapper (identity in SQS attributes, three-field metadata output);
@@ -32,12 +32,13 @@ pub(crate) enum ParsedRecord {
     Versioned { command: Box<VersionedAdmission> },
 }
 
-/// A queue message with its SQS routing fields and parsed command.
+/// A queue message with its SQS routing fields and parsed command. The queue
+/// acceptance instant travels as `published_at`; the millisecond timestamp
+/// derives from it wherever delivery needs one.
 pub(crate) struct ParsedMessage {
     pub(crate) message_id: String,
     pub(crate) receipt_handle: Option<String>,
     pub(crate) receive_count: u32,
-    pub(crate) sent_timestamp_ms: i64,
     pub(crate) published_at: DateTime<Utc>,
     pub(crate) record: ParsedRecord,
 }
@@ -91,7 +92,6 @@ pub(crate) fn parse_message(record: &Value) -> Result<ParsedMessage> {
         message_id,
         receipt_handle,
         receive_count,
-        sent_timestamp_ms: published_at.timestamp_millis(),
         published_at,
         record: parsed,
     })

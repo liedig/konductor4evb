@@ -1,10 +1,14 @@
 //! Batched `PutEvents` delivery with throttled-delivery recovery: prepared
 //! entries bound for the same bus share one request, requests for different
 //! buses go out concurrently, and each failed entry maps back to its SQS
-//! message by index. Throttled entries are retried inside the invocation
-//! with jittered backoff; entries still throttled are rescheduled with a
-//! short per-message visibility backoff that grows with the receive count,
-//! then reported for retry.
+//! message by index. Each request records its own EventBridge acceptance
+//! time, so a slow request never inflates another's latency metrics.
+//! Throttled entries are retried inside the invocation with jittered backoff;
+//! entries still throttled are rescheduled with a short per-message
+//! visibility backoff that grows with the receive count, then reported for
+//! retry. The visibility change is time-bounded by the invocation's
+//! remaining time and skipped when none remains, so it can never cost the
+//! invocation its response or the acknowledgements of accepted entries.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -33,10 +37,13 @@ pub(crate) enum EntrySendResult {
     Failed(String),
 }
 
-/// A prepared entry paired with its delivery result.
+/// A prepared entry paired with its delivery result. `accepted_ms` is the
+/// EventBridge acceptance time captured inside the request's own task, so a
+/// concurrently slow request cannot inflate this entry's latency metrics.
 pub(crate) struct ChunkOutcome {
     entry: PreparedEntry,
     result: EntrySendResult,
+    accepted_ms: i64,
 }
 
 /// The delivery result of one queue message.
@@ -74,12 +81,11 @@ pub(crate) async fn deliver(
         for (message_id, error) in lost {
             outcomes.push(DeliveryOutcome::Failed { message_id, error });
         }
-        let accepted_ms = chrono::Utc::now().timestamp_millis();
         for outcome in chunk_outcomes {
             match outcome.result {
                 EntrySendResult::Accepted => outcomes.push(DeliveryOutcome::Delivered {
                     sent_timestamp_ms: outcome.entry.sent_timestamp_ms,
-                    accepted_ms,
+                    accepted_ms: outcome.accepted_ms,
                 }),
                 EntrySendResult::Throttled => throttled.push(outcome.entry),
                 EntrySendResult::Failed(error) => outcomes.push(DeliveryOutcome::Failed {
@@ -92,7 +98,7 @@ pub(crate) async fn deliver(
             return outcomes;
         }
         if retries >= MAX_IN_INVOCATION_RETRIES || remaining() < RETRY_TIME_MARGIN {
-            shorten_visibility(clients, jitter, &throttled).await;
+            shorten_visibility(clients, jitter, &throttled, remaining).await;
             outcomes.extend(
                 throttled
                     .into_iter()
@@ -179,7 +185,9 @@ async fn send_chunk(
                 .build()
         })
         .collect();
-    match eb.put_events().set_entries(Some(entries)).send().await {
+    let response = eb.put_events().set_entries(Some(entries)).send().await;
+    let accepted_ms = chrono::Utc::now().timestamp_millis();
+    match response {
         Ok(output) => {
             let results = output.entries();
             chunk
@@ -204,7 +212,11 @@ async fn send_chunk(
                             "PutEvents returned no result entry".to_string(),
                         ),
                     };
-                    ChunkOutcome { entry, result }
+                    ChunkOutcome {
+                        entry,
+                        result,
+                        accepted_ms,
+                    }
                 })
                 .collect()
         }
@@ -224,6 +236,7 @@ async fn send_chunk(
                     } else {
                         EntrySendResult::Failed(message.clone())
                     },
+                    accepted_ms,
                 })
                 .collect()
         }
@@ -262,14 +275,18 @@ fn visibility_entry(
 }
 
 /// Reschedules still-throttled messages with a short per-message visibility
-/// backoff instead of the queue's full visibility timeout. The messages are
-/// still reported for retry; the event source mapping leaves the visibility
-/// of failed messages alone, so the shorter timeout holds. Any failure here
-/// only falls back to the standard timing — no message is lost.
+/// backoff instead of the queue's full visibility timeout. Each batch call
+/// is time-bounded by the invocation's remaining time and skipped when none
+/// remains, so the best-effort change can never cost the invocation its
+/// response or the acknowledgements of already accepted entries. The
+/// messages are still reported for retry; the event source mapping leaves
+/// the visibility of failed messages alone, so a shorter timeout holds. Any
+/// failure here only falls back to the standard timing — no message is lost.
 async fn shorten_visibility(
     clients: &Clients,
     jitter: &dyn JitterSource,
     throttled: &[PreparedEntry],
+    remaining: &dyn Fn() -> Duration,
 ) {
     let Ok(queue_url) = std::env::var("PUBLISH_QUEUE_URL") else {
         tracing::warn!(
@@ -285,7 +302,37 @@ async fn shorten_visibility(
         if entries.is_empty() {
             continue;
         }
-        send_visibility_batch(clients, &queue_url, entries).await;
+        if !send_within_remaining_time(clients, &queue_url, entries, remaining).await {
+            return;
+        }
+    }
+}
+
+/// Sends one batch of visibility changes inside the invocation's remaining
+/// time. `false` means the invocation has no time left — not for this batch
+/// nor any later one — so the caller stops and the standard visibility
+/// timeout applies.
+async fn send_within_remaining_time(
+    clients: &Clients,
+    queue_url: &str,
+    entries: Vec<aws_sdk_sqs::types::ChangeMessageVisibilityBatchRequestEntry>,
+    remaining: &dyn Fn() -> Duration,
+) -> bool {
+    let budget = remaining();
+    if budget.is_zero() {
+        tracing::warn!(
+            "no invocation time left for a visibility change; the standard visibility timeout applies"
+        );
+        return false;
+    }
+    match tokio::time::timeout(budget, send_visibility_batch(clients, queue_url, entries)).await {
+        Ok(()) => true,
+        Err(_elapsed) => {
+            tracing::warn!(
+                "the invocation ran out of time during the visibility change; the standard visibility timeout applies"
+            );
+            false
+        }
     }
 }
 

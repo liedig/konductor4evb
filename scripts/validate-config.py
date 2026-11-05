@@ -71,14 +71,19 @@ SETTINGS = {
     "domain_liveness_cache_seconds": ("DomainLivenessCacheSeconds", "updateable"),
 }
 
-INT_SETTINGS = {
-    "access_token_validity_minutes",
-    "publish_throttle_rate_limit",
-    "publish_throttle_burst_limit",
-    "publish_admission_concurrency_cap",
-    "publish_delivery_max_concurrency",
-    "domain_liveness_cache_seconds",
-}
+
+def expected_type(key):
+    """A setting's value type, taken from its documented default so the two
+    cannot drift: list settings stay lists, a bool default means a bool, an
+    int default an int, and everything else a string."""
+    if key in ("environments", "oauth_callback_urls", "oauth_logout_urls"):
+        return list
+    default = DEFAULTS.get(key)
+    if isinstance(default, bool):
+        return bool
+    if isinstance(default, int):
+        return int
+    return str
 
 
 def err(msg):
@@ -115,10 +120,7 @@ def load_config(path):
             errors.append(f"{path}: '{key}' is required — it has no default.")
 
     for key, value in cfg.items():
-        expected = list if key in ("environments", "oauth_callback_urls", "oauth_logout_urls") else (
-            bool if key == "system_event_emission_enabled"
-            else int if key in INT_SETTINGS else str
-        )
+        expected = expected_type(key)
         if expected is bool:
             if not isinstance(value, bool):
                 errors.append(f"{path}: '{key}' must be a bool (got {type(value).__name__} {value!r}).")
@@ -389,6 +391,16 @@ APIGW_THROTTLE_QUOTA_DEFAULT = 10000
 CONTROL_PLANE_RATE = 50
 CONTROL_PLANE_BURST = 100
 
+# API Gateway applies the stage-wide `/*` throttle independently to every
+# method, so a stage's control-plane ceiling is its method count times the
+# per-method limit, not one shared 50-rps bucket. The counts below are the
+# operations in the OpenAPI contracts (api/openapi-oauth.yaml,
+# api/openapi-iam.yaml) minus POST /publish, which carries the dedicated
+# method-level throttle; scripts/tests/test_validate_config.py fails when
+# they drift from the contracts.
+OAUTH_CONTROL_PLANE_METHODS = 35
+IAM_CONTROL_PLANE_METHODS = 18
+
 
 def service_quota_value(subcommand, region, profile):
     cmd = [
@@ -426,7 +438,10 @@ def account_throttle_quota(region, profile, quota_fixture, skip_aws):
         return applied, None
     default = service_quota_value("get-aws-default-service-quota", region, profile)
     if default is not None:
-        return default, None
+        return default, (
+            f"could not read the account's applied API Gateway throttle quota "
+            f"({APIGW_THROTTLE_QUOTA_CODE}) — comparing against the AWS default of {default:,} rps"
+        )
     return APIGW_THROTTLE_QUOTA_DEFAULT, (
         f"could not read the account API Gateway throttle quota ({APIGW_THROTTLE_QUOTA_CODE}) — "
         f"comparing against the documented default of {APIGW_THROTTLE_QUOTA_DEFAULT:,} rps"
@@ -435,31 +450,37 @@ def account_throttle_quota(region, profile, quota_fixture, skip_aws):
 
 def throttle_budget(cfg, quota):
     """Warn (never fail) when one stage at its publish limit plus every
-    stage's control-plane limit exceeds the account throttle; always note the
+    stage's control-plane limit exceeds the account rate, or the publish
+    burst alone exceeds the estimated account burst; always note the
     all-stages totals."""
-    stages = 2 * len(cfg["environments"])
+    envs = len(cfg["environments"])
+    stages = 2 * envs
     rate = cfg["publish_throttle_rate_limit"]
     burst = cfg["publish_throttle_burst_limit"]
     burst_quota = quota // 2
-    one_stage_rate = rate + CONTROL_PLANE_RATE * stages
-    one_stage_burst = burst + CONTROL_PLANE_BURST * stages
+    methods = OAUTH_CONTROL_PLANE_METHODS + IAM_CONTROL_PLANE_METHODS
+    control_rate = methods * CONTROL_PLANE_RATE * envs
+    control_burst = methods * CONTROL_PLANE_BURST * envs
+    one_stage_rate = rate + control_rate
     if one_stage_rate > quota:
         warn(
-            f"one stage at its publish throttle can exceed the account API Gateway rate quota: "
-            f"publish_throttle_rate_limit ({rate:,}) + {CONTROL_PLANE_RATE} rps x {stages} stages "
-            f"= {one_stage_rate:,} rps > account quota of {quota:,} rps. Lower the publish throttle "
-            "or request a quota increase."
-        )
-    if one_stage_burst > burst_quota:
-        warn(
-            f"one stage at its publish throttle can exceed the account API Gateway burst: "
-            f"publish_throttle_burst_limit ({burst:,}) + {CONTROL_PLANE_BURST} x {stages} stages "
-            f"= {one_stage_burst:,} burst > estimated account burst of {burst_quota:,}. "
+            f"one stage at its publish throttle plus every stage's control-plane limit can exceed "
+            f"the account API Gateway rate quota: publish_throttle_rate_limit ({rate:,}) + "
+            f"{methods} throttled control-plane methods x {CONTROL_PLANE_RATE} rps "
+            f"x {envs} environments = {one_stage_rate:,} rps > account quota of {quota:,} rps. "
             "Lower the publish throttle or request a quota increase."
+        )
+    if burst > burst_quota:
+        warn(
+            f"the publish burst alone can exceed the estimated account API Gateway burst: "
+            f"publish_throttle_burst_limit ({burst:,}) > estimated account burst of {burst_quota:,}. "
+            f"Lower the publish throttle burst or request a quota increase. (The control-plane "
+            f"burst ceiling of {control_burst:,} already exceeds the estimate, so the burst check "
+            "covers the publish setting alone.)"
         )
     note(
         f"throttle budget: all {stages} stages at their limits total "
-        f"{(rate + CONTROL_PLANE_RATE) * stages:,} rps and {(burst + CONTROL_PLANE_BURST) * stages:,} burst "
+        f"{stages * rate + control_rate:,} rps and {stages * burst + control_burst:,} burst "
         f"against an account quota of {quota:,} rps and an estimated burst of {burst_quota:,} "
         "(the burst is an estimate — AWS derives the account burst from the rate; other APIs in "
         "the account are not counted)"
@@ -545,8 +566,8 @@ def render_stages_block(envs):
                 "      MethodSettings:",
                 '        - ResourcePath: "/*"',
                 '          HttpMethod: "*"',
-                "          ThrottlingBurstLimit: 100",
-                "          ThrottlingRateLimit: 50",
+                f"          ThrottlingBurstLimit: {CONTROL_PLANE_BURST}",
+                f"          ThrottlingRateLimit: {CONTROL_PLANE_RATE}",
                 '        - ResourcePath: "/~1publish"',
                 "          HttpMethod: POST",
                 "          ThrottlingBurstLimit: { Ref: PublishThrottleBurstLimit }",
