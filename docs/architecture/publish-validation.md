@@ -54,7 +54,9 @@ Admission performs every check that it can complete synchronously. Two
 delivery-time failures remain:
 
 - A domain might be disabled between admission and delivery. Delivery
-  rechecks the domain status.
+  rechecks the domain status. Both halves share a per-instance liveness
+  cache (see §4), so a disable takes effect within the configured liveness
+  window — five minutes by default — rather than on the next request.
 - Amazon EventBridge might return a transient failure. The queue retains
   the event for retry.
 
@@ -116,7 +118,16 @@ Admission checks each request in the following order:
    nothing.
 3. **Domain liveness (`404`).** The domain must exist and be `ACTIVE`. A
    disabled domain rejects all publishes—this is how platform operators drain
-   a domain without touching bindings.
+   a domain without touching bindings. Admission reuses a confirmed-`ACTIVE`
+   result for at most the liveness window (`domain_liveness_cache_seconds`,
+   default 300 seconds, 0 reads every request); the cache never bypasses
+   authorization, never stores an `INACTIVE` or missing result, and a store
+   error is never cached. The underlying read is strongly consistent, so a
+   fresh confirmation cannot trail a disable that has just happened. A
+   domain-store outage still returns `503`, as does a domain read that takes
+   the whole window or longer (its `ACTIVE` answer may already trail a
+   disable), while an `INACTIVE` domain returns `404`. The consequence: disabling a domain takes effect within
+   the window, while re-enabling takes effect on the next publish.
 4. **Schema resolution (`404`).** The latest version of `{org}-{domain}@{eventName}`
    is resolved from the stage-selected environment's registry. The schema is
    the contract the payload is about to be checked against; without it there is
@@ -145,9 +156,9 @@ Use the status code to distinguish invalid requests from platform failures.
 |--------|---------|---------------------------|
 | `400` | The request body is malformed, or the generated entry would exceed the EventBridge size limit | Fix the request shape or reduce the payload size |
 | `403` | No publisher binding for this principal on this domain | Ask the platform team for a binding |
-| `404` | Domain missing/inactive, or no schema for this event in this environment | Check domain status; register the schema first |
+| `404` | Domain missing/inactive, or no schema for this event in this environment | Check domain status; register the schema first. A cached ACTIVE confirmation can admit publishes for up to the liveness window after a disable; delivery re-checks under the same window, so those events can still arrive. Once delivery observes the domain is no longer ACTIVE it reports the queued messages for retry — they dead-letter after the receive budget, or deliver after a re-enable — rather than being discarded |
 | `422` | The payload violates the schema's latest version | Fix the payload (violations are listed in `message`) |
-| `503` | The platform could not *evaluate* the request (registry unreachable, stored schema unusable, queue write failed) | Retry with backoff—this is never a rejection |
+| `503` | The platform could not *evaluate* the request (registry unreachable, stored schema unusable, queue write failed, domain read slower than the liveness window) | Retry with backoff—this is never a rejection |
 
 Two distinctions determine how callers respond:
 
@@ -232,19 +243,57 @@ about the payload, not about the registry's current state.
 
 ## 8. What the delivery consumer still does
 
-"Delivery-only" does not mean "trusts blindly." Three responsibilities remain:
+"Delivery-only" does not mean "trusts blindly." These responsibilities remain:
 
 - **Domain liveness recheck.** A domain can be disabled in the seconds between
   admission and delivery; that transition must take effect for events already
   queued. This is the one synchronous check that cannot be moved to admission,
-  because the race is real.
+  because the race is real. Delivery shares the same per-instance liveness
+  cache semantics as admission: a confirmed-`ACTIVE` result is reused for at
+  most the liveness window, `INACTIVE` and missing domains are always
+  re-read, and store errors are never cached. The window starts when the
+  confirming read begins, so a slow read cannot extend it, and a read that
+  takes the whole window or longer confirms nothing: its messages are
+  reported for retry. Delivery re-checks
+  expired confirmations again right before every send round, the first
+  included, because preparing the rest of the batch or a throttle backoff can
+  outlast a confirmation. The re-check and the send share the round's time
+  bound, and with a zero window the first round skips it because preparation
+  has just read the store. Admission likewise re-reads a confirmation that
+  expired during metadata and schema resolution before it enqueues.
 - **Envelope structural validation.** Before `PutEvents`, the constructed
   envelope is checked (positive version, non-empty identity, serializable,
   within the 256 KB entry limit for EventBridge). An invalid *generated* envelope
   means the platform's own code is broken—it is reported for retry, never
   partially delivered.
-- **Retry semantics, unchanged.** Transient `PutEvents` failures are reported
-  for retry; retries exhaust to the publish DLQ with all attributes intact.
+- **Batched `PutEvents` with per-entry outcomes.** Delivery groups each batch
+  by target bus into shared `PutEvents` requests—at most 10 entries and 256 KB
+  per request—sends the groups concurrently, and maps each result entry back
+  to its SQS message by index. Each entry is exactly the entry its event would
+  produce alone, and only messages whose entries were not accepted are
+  reported for retry. A whole-request failure reports every message of that
+  request.
+- **Throttle recovery.** EventBridge throttling (a request-level or
+  entry-level `ThrottlingException`) is first retried inside the invocation
+  with full-jitter backoff (100 ms base, 1 s cap, up to 3 retries, skipped
+  when fewer than 5 seconds remain before the invocation deadline). Each send
+  round, including the first, is bounded by the remaining time minus a
+  2-second response margin; a round that runs out reports its messages for
+  retry while the entries already accepted stay acknowledged. Messages
+  still throttled are then made visible again after a short exponential
+  backoff with jitter—`d/2 + jitter(0, d/2)` seconds with
+  `d = min(60, 2^(n-1))` for receive count `n`—via
+  `ChangeMessageVisibilityBatch`, instead of waiting out the full 30-second
+  visibility timeout. If the visibility call itself fails, the message falls
+  back to the standard timeout; nothing is lost. The call is also bounded by
+  the invocation's remaining time and skipped when none remains, so it can
+  never cost the invocation its response or the acknowledgements of already
+  accepted entries. The publish queue's
+  redrive budget is 25 receives, so even minimum-backoff redrives keep a
+  message alive for over 10 minutes of sustained throttling before the DLQ.
+- **Retry semantics for other failures, unchanged.** Non-throttle
+  `PutEvents` failures are reported for retry with the standard timing;
+  retries exhaust to the publish DLQ with all attributes intact.
   `publishedAt` derives from the SQS `SentTimestamp`, which is fixed when the
   message is first sent and survives every in-queue retry—so automatic
   retries always keep the original publish time. The one exception is a DLQ
@@ -252,6 +301,11 @@ about the payload, not about the registry's current state.
   the queue's admission-only write policy, the sanctioned re-drive path is
   re-publishing through `/publish`, which stamps a fresh ingest time by
   definition.
+
+The per-message `PublishDelivered` log line carries `queue_wait_ms` (queue
+acceptance to the delivery invocation's start) and `enqueue_to_delivery_ms`
+(queue acceptance to EventBridge acceptance), surfaced as the
+`PublishQueueWait` and `PublishEnqueueToDelivery` metrics.
 
 ## 9. Metadata in the admitted command (format 2)
 
@@ -372,7 +426,7 @@ graph LR
     admission -->|"schema:publish decision"| bindings[("konductor-authorization-bindings")]
     admission -->|"ACTIVE check"| domains[("domains")]
     admission -->|"latest schema (TTL cache,<br/>force-refresh before reject)"| registry["{org}-{env}-{domain}<br/>schema registry"]
-    admission -->|"202: principal envelope + Environment (stage)<br/>+ IdempotencyKey + SchemaVersion"| q["Publish Queue<br/>(DLQ after 3 receives)"]
+    admission -->|"202: principal envelope + Environment (stage)<br/>+ IdempotencyKey + SchemaVersion"| q["Publish Queue<br/>(DLQ after 25 receives)"]
     q --> consumer["publish-events Lambda<br/>(delivery-only, batch 10)"]
     consumer -->|"ACTIVE recheck"| domains
     consumer -->|"canonical envelope"| bus["{org}-{env}-{domain}<br/>event bus"]

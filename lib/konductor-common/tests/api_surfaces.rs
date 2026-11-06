@@ -363,11 +363,12 @@ fn publish_consumer_has_least_privilege_permissions() {
         [
             "dynamodb:GetItem",
             "events:PutEvents",
+            "sqs:ChangeMessageVisibility",
             "sqs:DeleteMessage",
             "sqs:GetQueueAttributes",
             "sqs:ReceiveMessage",
         ],
-        "publish consumer: domain-state read, org-scoped PutEvents, queue access"
+        "publish consumer: domain-state read, org-scoped PutEvents, queue access plus per-message visibility backoff on throttled redeliveries"
     );
 }
 
@@ -390,9 +391,10 @@ fn publish_admission_has_least_privilege_permissions() {
         [
             "dynamodb:GetItem",
             "schemas:DescribeSchema",
+            "sqs:GetQueueAttributes",
             "sqs:SendMessage",
         ],
-        "admission: domain-state read, schema read, publish-queue write"
+        "admission: domain-state read, schema read, publish-queue write, queue read for the cold-start pre-warm"
     );
 }
 
@@ -2037,7 +2039,7 @@ fn system_event_email_rules_are_conditioned_and_scoped() {
             &["SchemaPromotionFailed"],
         ),
     ];
-    for (logical_id, bus, source, detail_types) in cases {
+    for (logical_id, _bus, source, detail_types) in cases {
         let rule = resource(&doc, logical_id);
         assert_eq!(
             mapping(rule).get("Condition").map(text),

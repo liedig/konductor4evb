@@ -2,7 +2,8 @@
 //!
 //! Replaces the direct API Gateway → SQS integration. Each request is
 //! authorized (publisher binding via the grant engine), checked against an
-//! ACTIVE domain, resolved to the latest schema version in the stage-selected
+//! ACTIVE domain (a confirmation is reused for at most the configured
+//! liveness window), resolved to the latest schema version in the stage-selected
 //! environment's registry (through a per-instance TTL cache), and validated
 //! against that draft-4 document — all before the immutable command is
 //! enqueued for the delivery-only `publish-events` consumer.
@@ -23,6 +24,7 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
 use konductor_common::api;
+use konductor_common::domain_liveness::{Clock, DomainLivenessCache, Liveness};
 use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{EventEnvelope, SchemaName};
 use konductor_common::error::{
@@ -61,11 +63,13 @@ impl Clients {
     }
 }
 
-pub async fn handle<A: ResourceAuthorizer>(
+#[allow(clippy::too_many_arguments)]
+pub async fn handle<A: ResourceAuthorizer, C: Clock>(
     clients: &Clients,
     authorizer: &A,
     cache: &SchemaCache,
     validators: &ValidatorCache,
+    liveness: &DomainLivenessCache<C>,
     metadata: &MetadataAdmission,
     uuid_source: &dyn UuidSource,
     event: LambdaEvent<Value>,
@@ -97,6 +101,7 @@ pub async fn handle<A: ResourceAuthorizer>(
                 authorizer,
                 cache,
                 validators,
+                liveness,
                 metadata,
                 uuid_source,
                 payload,
@@ -115,11 +120,12 @@ pub async fn handle<A: ResourceAuthorizer>(
 // The argument list mirrors the deployment wiring; bundling the platform
 // collaborators would hide which store serves which concern.
 #[allow(clippy::too_many_arguments)]
-async fn admit<A: ResourceAuthorizer>(
+async fn admit<A: ResourceAuthorizer, C: Clock>(
     clients: &Clients,
     authorizer: &A,
     cache: &SchemaCache,
     validators: &ValidatorCache,
+    liveness: &DomainLivenessCache<C>,
     metadata: &MetadataAdmission,
     uuid_source: &dyn UuidSource,
     payload: &Value,
@@ -138,7 +144,9 @@ async fn admit<A: ResourceAuthorizer>(
         "publish admission request received"
     );
 
-    if let Err(response) = authorize_publish(clients, authorizer, &request, principal).await {
+    if let Err(response) =
+        authorize_publish(clients, authorizer, liveness, &request, principal).await
+    {
         return Ok(response);
     }
 
@@ -221,6 +229,10 @@ async fn admit<A: ResourceAuthorizer>(
             Err(response) => return Ok(response),
         },
     };
+
+    if let Err(response) = reconfirm_before_enqueue(clients, liveness, &request.domain).await {
+        return Ok(response);
+    }
 
     let command = AdmittedCommand {
         request: &request,
@@ -403,9 +415,10 @@ fn parse_publish_request(payload: &Value) -> Result<(PublishRequest, Value), Val
 /// unknown/inactive domain. A domain-store outage is a platform-side
 /// evaluation failure, not an answer about the domain: retryable 503, never
 /// a 404/500.
-async fn authorize_publish<A: ResourceAuthorizer>(
+async fn authorize_publish<A: ResourceAuthorizer, C: Clock>(
     clients: &Clients,
     authorizer: &A,
+    liveness: &DomainLivenessCache<C>,
     request: &PublishRequest,
     principal: &TrustedPrincipal,
 ) -> Result<(), Value> {
@@ -426,12 +439,37 @@ async fn authorize_publish<A: ResourceAuthorizer>(
         ));
     }
 
-    match require_active_domain(clients, &request.domain).await {
+    domain_liveness_rejection(clients, liveness, &request.domain).await
+}
+
+/// Metadata and schema resolution can outlast the liveness confirmation
+/// taken at authorization; re-reading an expired one before enqueueing keeps
+/// admission inside the disable bound. A fresh confirmation costs no read,
+/// and a zero window has already read the store for this request.
+async fn reconfirm_before_enqueue<C: Clock>(
+    clients: &Clients,
+    liveness: &DomainLivenessCache<C>,
+    domain: &str,
+) -> Result<(), Value> {
+    if !liveness.reuses_confirmations() {
+        return Ok(());
+    }
+    domain_liveness_rejection(clients, liveness, domain).await
+}
+
+/// 404 for an unknown/inactive domain, retryable 503 when the domain store
+/// cannot answer.
+async fn domain_liveness_rejection<C: Clock>(
+    clients: &Clients,
+    liveness: &DomainLivenessCache<C>,
+    domain: &str,
+) -> Result<(), Value> {
+    match require_active_domain(clients, liveness, domain).await {
         Ok(()) => Ok(()),
         Err(ControlPlaneError::DynamoDb(detail)) => {
             tracing::error!(
                 metric = "PublishUnavailable",
-                domain = request.domain,
+                domain,
                 error = detail,
                 "domain store unavailable"
             );
@@ -868,32 +906,84 @@ async fn fetch_latest_schema(
     Ok(LatestSchema { content, version })
 }
 
-async fn require_active_domain(
+/// Warms the DynamoDB and SQS connection pools during Lambda init so the
+/// first real publish does not pay the connection-establishment cost. Both
+/// calls are best-effort: errors are swallowed and the whole warmup gives up
+/// after two seconds.
+pub async fn prewarm(clients: &Clients) {
+    let warm_domains = async {
+        if let Ok(table) = env::var("DOMAINS_TABLE") {
+            if let Err(e) = clients
+                .ddb
+                .get_item()
+                .table_name(table)
+                .key("domainName", s("#warmup"))
+                .send()
+                .await
+            {
+                tracing::debug!(error = %e, "prewarm domain read failed; continuing init");
+            }
+        }
+    };
+    let warm_queue = async {
+        if let Ok(queue_url) = env::var("PUBLISH_QUEUE_URL") {
+            if let Err(e) = clients
+                .sqs
+                .get_queue_attributes()
+                .queue_url(queue_url)
+                .send()
+                .await
+            {
+                tracing::debug!(error = %e, "prewarm queue read failed; continuing init");
+            }
+        }
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::join!(warm_domains, warm_queue);
+    })
+    .await;
+}
+
+/// Re-checks domain liveness, reusing a fresh `ACTIVE` confirmation from the
+/// cache. `INACTIVE` and missing domains are never cached, so a re-enabled
+/// domain admits on its next publish. A store failure propagates as
+/// `DynamoDb` (503) and is never cached. The read is strongly consistent, so
+/// a fresh confirmation cannot trail a disable.
+async fn require_active_domain<C: Clock>(
     clients: &Clients,
+    liveness: &DomainLivenessCache<C>,
     domain_name: &str,
 ) -> Result<(), ControlPlaneError> {
     let table = env::var("DOMAINS_TABLE")
         .map_err(|_| ControlPlaneError::DynamoDb("DOMAINS_TABLE not set".to_string()))?;
-    let output = clients
-        .ddb
-        .get_item()
-        .table_name(table)
-        .key("domainName", s(domain_name))
-        .send()
-        .await
-        .map_err(|e| ControlPlaneError::DynamoDb(e.into_service_error().to_string()))?;
-
-    let status = output
-        .item
-        .as_ref()
-        .and_then(|item| get_s(item, "status"))
-        .unwrap_or_default();
-    if status.parse::<DomainStatus>() != Ok(DomainStatus::Active) {
-        return Err(ControlPlaneError::DomainNotFound {
+    let liveness = liveness
+        .confirm_active(domain_name, || async {
+            let output = clients
+                .ddb
+                .get_item()
+                .table_name(&table)
+                .key("domainName", s(domain_name))
+                .consistent_read(true)
+                .send()
+                .await
+                .map_err(|e| ControlPlaneError::DynamoDb(e.into_service_error().to_string()))?;
+            let status = output
+                .item
+                .as_ref()
+                .and_then(|item| get_s(item, "status"))
+                .unwrap_or_default();
+            Ok(status.parse::<DomainStatus>() == Ok(DomainStatus::Active))
+        })
+        .await?;
+    match liveness {
+        Liveness::Active => Ok(()),
+        Liveness::NotActive => Err(ControlPlaneError::DomainNotFound {
             domain_name: domain_name.to_string(),
-        });
+        }),
+        Liveness::Unconfirmed => Err(ControlPlaneError::DynamoDb(
+            "the domain read outlasted the liveness window".to_string(),
+        )),
     }
-    Ok(())
 }
 
 fn stage_of(payload: &Value) -> Result<String, ControlPlaneError> {
@@ -1257,6 +1347,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(body)),
@@ -1284,6 +1375,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1308,6 +1400,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1336,6 +1429,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1363,6 +1457,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1392,6 +1487,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"amount": 9.5})))),
@@ -1433,6 +1529,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(body)),
@@ -1459,6 +1556,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1493,6 +1591,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1526,6 +1625,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1549,6 +1649,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[]),
             &FixedUuidSource,
             event(payload),
@@ -1593,6 +1694,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(iam_event(publish_body(json!({"orderId": 1})))),
@@ -1629,6 +1731,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1658,6 +1761,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[&legacy_pointer_rule()]),
             &FixedUuidSource,
             event(oauth_event(big)),
@@ -1693,6 +1797,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[]),
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1738,6 +1843,7 @@ mod tests {
                 &authorizer,
                 &cache,
                 &validators(),
+                &no_liveness_cache(),
                 &metadata(&[&legacy_pointer_rule()]),
                 &FixedUuidSource,
                 event(oauth_event(body)),
@@ -1775,6 +1881,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata,
             &FixedUuidSource,
             event(oauth_event(body_one)),
@@ -1786,6 +1893,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata,
             &FixedUuidSource,
             event(oauth_event(body_two)),
@@ -1825,6 +1933,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata,
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1853,6 +1962,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata,
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 1})))),
@@ -1912,6 +2022,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata,
             &FixedUuidSource,
             event(oauth_event(body_one)),
@@ -1923,6 +2034,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata,
             &FixedUuidSource,
             event(oauth_event(body_two)),
@@ -2058,6 +2170,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata_client,
             &FixedUuidSource,
             event(oauth_event(body)),
@@ -2115,6 +2228,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata_client,
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 123})))),
@@ -2154,6 +2268,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata_client,
             &BrokenUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 123})))),
@@ -2207,6 +2322,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata_client,
             &FixedUuidSource,
             event(oauth_event(publish_body(json!({"orderId": 123})))),
@@ -2250,6 +2366,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata_client,
             &FixedUuidSource,
             event(oauth_event(publish_body(blob))),
@@ -2294,6 +2411,7 @@ mod tests {
                 &authorizer,
                 &cache(),
                 &validators(),
+                &no_liveness_cache(),
                 &metadata_client,
                 &uuid_source,
                 event(oauth_event(body.clone())),
@@ -2336,6 +2454,7 @@ mod tests {
             &authorizer,
             &cache(),
             &validators(),
+            &no_liveness_cache(),
             &metadata(&[]),
             &FixedUuidSource,
             event(oauth_event(body)),
@@ -2344,5 +2463,467 @@ mod tests {
         .unwrap();
 
         assert_eq!(status(&resp), 400);
+    }
+
+    #[derive(Clone)]
+    struct ManualClock(std::sync::Arc<std::sync::Mutex<std::time::Instant>>);
+
+    impl ManualClock {
+        fn new() -> Self {
+            Self(std::sync::Arc::new(std::sync::Mutex::new(
+                std::time::Instant::now(),
+            )))
+        }
+
+        fn advance(&self, delta: std::time::Duration) {
+            *self.0.lock().unwrap() += delta;
+        }
+    }
+
+    impl Clock for ManualClock {
+        fn now(&self) -> std::time::Instant {
+            *self.0.lock().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_expired_confirmation_is_rechecked_before_enqueueing() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let clock = ManualClock::new();
+        let liveness =
+            DomainLivenessCache::with_clock(std::time::Duration::from_secs(1), clock.clone());
+        let domain_output = |status: &'static str| {
+            move || {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("domainName", s("orders"))
+                    .item("status", s(status))
+                    .build()
+            }
+        };
+        let domain = mock!(aws_sdk_dynamodb::Client::get_item)
+            .sequence()
+            .output(domain_output("ACTIVE"))
+            .output(domain_output("INACTIVE"))
+            .build();
+        let slow_schema_fetch =
+            mock!(aws_sdk_schemas::Client::describe_schema).then_output(move || {
+                clock.advance(std::time::Duration::from_secs(2));
+                aws_sdk_schemas::operation::describe_schema::DescribeSchemaOutput::builder()
+                    .schema_version("3")
+                    .content(RELAXED_SCHEMA)
+                    .build()
+            });
+        let send = send_message_rule("key-1", "oauth", "3");
+        let clients = clients(
+            RuleMode::MatchAny,
+            std::slice::from_ref(&domain),
+            &[slow_schema_fetch],
+            std::slice::from_ref(&send),
+        );
+
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &liveness,
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            status(&resp),
+            404,
+            "the confirmation expired during validation and the domain was disabled meanwhile"
+        );
+        assert_eq!(
+            send.num_calls(),
+            0,
+            "nothing is enqueued past the disable bound"
+        );
+        assert_eq!(
+            domain.num_calls(),
+            2,
+            "the expired confirmation was re-read before enqueueing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_domain_read_that_outlasts_the_window_is_retryable_and_enqueues_nothing() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let clock = ManualClock::new();
+        let liveness =
+            DomainLivenessCache::with_clock(std::time::Duration::from_secs(1), clock.clone());
+        let slow_domain_read = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            clock.advance(std::time::Duration::from_secs(2));
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("domainName", s("orders"))
+                .item("status", s("ACTIVE"))
+                .build()
+        });
+        let send = send_message_rule("key-1", "oauth", "3");
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[slow_domain_read],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            std::slice::from_ref(&send),
+        );
+
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &liveness,
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            status(&resp),
+            503,
+            "an ACTIVE answer older than the window cannot authorize the enqueue"
+        );
+        assert_eq!(send.num_calls(), 0);
+    }
+
+    fn no_liveness_cache() -> DomainLivenessCache {
+        DomainLivenessCache::new(std::time::Duration::ZERO)
+    }
+
+    fn oauth_event_for_teams(body: Value, team_groups: &str) -> Value {
+        let mut event = oauth_event(body);
+        event["requestContext"]["authorizer"]["teamGroups"] = json!(team_groups);
+        event
+    }
+
+    #[tokio::test]
+    async fn a_warm_liveness_confirmation_skips_the_domain_read() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let domain = active_domain_rule();
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[domain.clone()],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            &[send_message_rule("key-1", "oauth", "3")],
+        );
+        let liveness = DomainLivenessCache::new(std::time::Duration::from_secs(300));
+
+        for _ in 0..2 {
+            let mut body = publish_body(json!({"orderId": 123}));
+            body["idempotencyKey"] = json!("key-1");
+            let resp = handle(
+                &clients,
+                &authorizer,
+                &cache(),
+                &validators(),
+                &liveness,
+                &metadata(&[&legacy_pointer_rule()]),
+                &FixedUuidSource,
+                event(oauth_event(body)),
+            )
+            .await
+            .unwrap();
+            assert_eq!(status(&resp), 202);
+        }
+
+        assert_eq!(
+            domain.num_calls(),
+            1,
+            "the second publish reuses the confirmation"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_inactive_result_is_not_reused_so_re_enable_admits_the_next_publish() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let inactive = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("domainName", s("orders"))
+                .item("status", s("INACTIVE"))
+                .build()
+        });
+        let clients = clients(
+            RuleMode::Sequential,
+            &[inactive, active_domain_rule()],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            &[send_message_rule("key-1", "oauth", "3")],
+        );
+        let liveness = DomainLivenessCache::new(std::time::Duration::from_secs(300));
+
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let first = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &liveness,
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body.clone())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status(&first), 404);
+
+        let second = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &liveness,
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            status(&second),
+            202,
+            "a re-enabled domain is read again and admitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_zero_liveness_window_reads_the_domain_on_every_publish() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let domain = active_domain_rule();
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[domain.clone()],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            &[send_message_rule("key-1", "oauth", "3")],
+        );
+        let liveness = DomainLivenessCache::new(std::time::Duration::ZERO);
+
+        for _ in 0..2 {
+            let mut body = publish_body(json!({"orderId": 123}));
+            body["idempotencyKey"] = json!("key-1");
+            let resp = handle(
+                &clients,
+                &authorizer,
+                &cache(),
+                &validators(),
+                &liveness,
+                &metadata(&[&legacy_pointer_rule()]),
+                &FixedUuidSource,
+                event(oauth_event(body)),
+            )
+            .await
+            .unwrap();
+            assert_eq!(status(&resp), 202);
+        }
+
+        assert_eq!(
+            domain.num_calls(),
+            2,
+            "a zero window reads on every publish"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_liveness_read_is_strongly_consistent() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let consistent_reads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = consistent_reads.clone();
+        let domain = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                recorded.lock().unwrap().push(req.consistent_read());
+                req.table_name() == Some("domains-test")
+            })
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("domainName", s("orders"))
+                    .item("status", s("ACTIVE"))
+                    .build()
+            });
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[domain],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            &[send_message_rule("key-1", "oauth", "3")],
+        );
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &DomainLivenessCache::new(std::time::Duration::ZERO),
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status(&resp), 202);
+        assert_eq!(
+            *consistent_reads.lock().unwrap(),
+            vec![Some(true)],
+            "a liveness read seeds the cache, so it must not trail a disable"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cached_active_confirmation_does_not_bypass_authorization() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let domain = active_domain_rule();
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[domain.clone()],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            &[send_message_rule("key-1", "oauth", "3")],
+        );
+        let liveness = DomainLivenessCache::new(std::time::Duration::from_secs(300));
+
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let admitted = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &liveness,
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body.clone())),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status(&admitted), 202);
+
+        let denied = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &liveness,
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event_for_teams(body, "[\"team-other\"]")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            status(&denied),
+            403,
+            "cached liveness never grants a publisher binding"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_domain_store_failure_without_a_reusable_confirmation_returns_503() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let store_down = mock!(aws_sdk_dynamodb::Client::get_item).then_error(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemError::generic(
+                aws_sdk_dynamodb::error::ErrorMetadata::builder()
+                    .message("unavailable")
+                    .build(),
+            )
+        });
+        let clients = clients(RuleMode::MatchAny, &[store_down], &[], &[]);
+        let liveness = DomainLivenessCache::new(std::time::Duration::from_secs(300));
+
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &liveness,
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            status(&resp),
+            503,
+            "a store failure is never cached and never queued"
+        );
+    }
+
+    fn warmup_item_rule() -> Rule {
+        mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| {
+                req.table_name() == Some("domains-test")
+                    && req.key().and_then(|k| k.get("domainName")) == Some(&s("#warmup"))
+            })
+            .then_output(|| aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder().build())
+    }
+
+    fn queue_attributes_rule() -> Rule {
+        mock!(aws_sdk_sqs::Client::get_queue_attributes)
+            .match_requests(|req| req.queue_url() == Some(QUEUE_URL))
+            .then_output(|| {
+                aws_sdk_sqs::operation::get_queue_attributes::GetQueueAttributesOutput::builder()
+                    .build()
+            })
+    }
+
+    #[tokio::test]
+    async fn prewarm_touches_the_domains_table_and_the_publish_queue() {
+        set_env();
+        let warmup = warmup_item_rule();
+        let queue = queue_attributes_rule();
+        let clients = clients(RuleMode::MatchAny, &[warmup.clone()], &[], &[queue.clone()]);
+
+        prewarm(&clients).await;
+
+        assert_eq!(
+            warmup.num_calls(),
+            1,
+            "prewarm reads the sentinel domain item"
+        );
+        assert_eq!(queue.num_calls(), 1, "prewarm reads the queue attributes");
+    }
+
+    #[tokio::test]
+    async fn prewarm_swallows_service_errors() {
+        set_env();
+        let warmup = mock!(aws_sdk_dynamodb::Client::get_item).then_error(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemError::generic(
+                aws_sdk_dynamodb::error::ErrorMetadata::builder()
+                    .message("unavailable")
+                    .build(),
+            )
+        });
+        let queue = mock!(aws_sdk_sqs::Client::get_queue_attributes).then_error(|| {
+            aws_sdk_sqs::operation::get_queue_attributes::GetQueueAttributesError::generic(
+                aws_sdk_sqs::error::ErrorMetadata::builder()
+                    .message("unavailable")
+                    .build(),
+            )
+        });
+        let clients = clients(RuleMode::MatchAny, &[warmup.clone()], &[], &[queue.clone()]);
+
+        prewarm(&clients).await;
+
+        assert_eq!(warmup.num_calls(), 1);
+        assert_eq!(queue.num_calls(), 1);
     }
 }
