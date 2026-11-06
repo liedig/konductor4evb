@@ -2,24 +2,31 @@
 //! entries bound for the same bus share one request, requests for different
 //! buses go out concurrently, and each failed entry maps back to its SQS
 //! message by index. Each request records its own EventBridge acceptance
-//! time, so a slow request never inflates another's latency metrics.
-//! Throttled entries are retried inside the invocation with jittered backoff;
-//! entries still throttled are rescheduled with a short per-message
-//! visibility backoff that grows with the receive count, then reported for
-//! retry. The visibility change is time-bounded by the invocation's
-//! remaining time and skipped when none remains, so it can never cost the
-//! invocation its response or the acknowledgements of accepted entries.
+//! time, so a slow request never inflates another's latency metrics. Every
+//! send round is bounded by the invocation's remaining time minus a response
+//! reserve, so a slow round reports its messages for retry instead of
+//! letting the invocation time out with its accepted entries unreported.
+//! Before a resend, entries whose liveness confirmation expired are
+//! re-checked, so a resend cannot deliver past a disable that landed while
+//! the first send was in flight. Throttled entries are retried inside the
+//! invocation with jittered backoff; entries still throttled are
+//! rescheduled with a short per-message visibility backoff that grows with
+//! the receive count, then reported for retry. The visibility change is
+//! time-bounded by the invocation's remaining time and skipped when none
+//! remains, so it can never cost the invocation its response or the
+//! acknowledgements of accepted entries.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use aws_sdk_eventbridge::error::ProvideErrorMetadata;
 use aws_sdk_eventbridge::types::PutEventsRequestEntry;
 
 use konductor_common::backoff::{retry_delay, visibility_backoff, JitterSource};
+use konductor_common::domain_liveness::{Clock, DomainLivenessCache};
 use konductor_common::envelope::chunk_put_events_entries;
 
-use crate::handler::{Clients, PreparedEntry};
+use crate::handler::{require_active_domain, Clients, PreparedEntry};
 
 /// How many times throttled entries are resent inside the invocation after
 /// the first send.
@@ -27,6 +34,11 @@ const MAX_IN_INVOCATION_RETRIES: u32 = 3;
 
 /// No retry starts when the invocation has less than this much time left.
 const RETRY_TIME_MARGIN: Duration = Duration::from_secs(5);
+
+/// Time every send round leaves free for recording outcomes and returning
+/// the response, so a round can never spend the invocation's last moment on
+/// a `PutEvents` request whose answer would arrive too late to matter.
+const RESPONSE_TIME_MARGIN: Duration = Duration::from_secs(2);
 
 const THROTTLING_CODE: &str = "ThrottlingException";
 
@@ -47,6 +59,7 @@ pub(crate) struct ChunkOutcome {
 }
 
 /// The delivery result of one queue message.
+#[derive(Debug, PartialEq)]
 pub(crate) enum DeliveryOutcome {
     Delivered {
         sent_timestamp_ms: i64,
@@ -62,12 +75,12 @@ pub(crate) enum DeliveryOutcome {
 }
 
 /// Groups prepared entries by bus, chunks each group within the `PutEvents`
-/// entry-count and size limits, and sends every chunk concurrently.
-/// Throttled entries are retried in the invocation while time remains;
-/// entries still throttled are rescheduled with a visibility backoff and
-/// reported for retry.
-pub(crate) async fn deliver(
+/// entry-count and size limits, and sends every chunk concurrently. Each
+/// round is time-bounded by the remaining invocation budget, and a resend
+/// first re-checks the liveness of the entries' domains.
+pub(crate) async fn deliver<C: Clock>(
     clients: &Clients,
+    liveness: &DomainLivenessCache<C>,
     jitter: &dyn JitterSource,
     prepared: Vec<PreparedEntry>,
     remaining: &dyn Fn() -> Duration,
@@ -76,22 +89,45 @@ pub(crate) async fn deliver(
     let mut outcomes = Vec::new();
     let mut retries = 0;
     loop {
+        let round_ids: Vec<String> = pending
+            .iter()
+            .map(|entry| entry.message_id.clone())
+            .collect();
+        let send_budget = remaining().saturating_sub(RESPONSE_TIME_MARGIN);
         let mut throttled = Vec::new();
-        let (chunk_outcomes, lost) = send_chunks(clients, pending).await;
-        for (message_id, error) in lost {
-            outcomes.push(DeliveryOutcome::Failed { message_id, error });
-        }
-        for outcome in chunk_outcomes {
-            match outcome.result {
-                EntrySendResult::Accepted => outcomes.push(DeliveryOutcome::Delivered {
-                    sent_timestamp_ms: outcome.entry.sent_timestamp_ms,
-                    accepted_ms: outcome.accepted_ms,
-                }),
-                EntrySendResult::Throttled => throttled.push(outcome.entry),
-                EntrySendResult::Failed(error) => outcomes.push(DeliveryOutcome::Failed {
-                    message_id: outcome.entry.message_id,
-                    error,
-                }),
+        match tokio::time::timeout(send_budget, send_chunks(clients, pending)).await {
+            Ok((chunk_outcomes, lost)) => {
+                for (message_id, error) in lost {
+                    outcomes.push(DeliveryOutcome::Failed { message_id, error });
+                }
+                for outcome in chunk_outcomes {
+                    match outcome.result {
+                        EntrySendResult::Accepted => outcomes.push(DeliveryOutcome::Delivered {
+                            sent_timestamp_ms: outcome.entry.sent_timestamp_ms,
+                            accepted_ms: outcome.accepted_ms,
+                        }),
+                        EntrySendResult::Throttled => throttled.push(outcome.entry),
+                        EntrySendResult::Failed(error) => outcomes.push(DeliveryOutcome::Failed {
+                            message_id: outcome.entry.message_id,
+                            error,
+                        }),
+                    }
+                }
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    metric = "PublishDeliveryRetry",
+                    "the invocation ran out of time during the send; reporting the round for retry"
+                );
+                outcomes.extend(
+                    round_ids
+                        .into_iter()
+                        .map(|message_id| DeliveryOutcome::Failed {
+                            message_id,
+                            error: "the invocation ran out of time during the send".to_string(),
+                        }),
+                );
+                return outcomes;
             }
         }
         if throttled.is_empty() {
@@ -110,12 +146,72 @@ pub(crate) async fn deliver(
         }
         retries += 1;
         tokio::time::sleep(retry_delay(jitter, retries)).await;
-        pending = throttled;
+        let (live, expired) = keep_entries_with_live_domains(clients, liveness, throttled).await;
+        outcomes.extend(expired);
+        if live.is_empty() {
+            return outcomes;
+        }
+        pending = live;
     }
 }
 
+/// Re-runs the liveness check for each distinct domain among the entries
+/// about to be resent. `confirm_active` re-reads exactly the expired
+/// confirmations, so this costs nothing while confirmations are fresh, and
+/// it stops a resend from delivering past a disable that landed while the
+/// first send was in flight. Entries whose domain is no longer active — or
+/// whose check failed — are reported for retry instead of resent.
+async fn keep_entries_with_live_domains<C: Clock>(
+    clients: &Clients,
+    liveness: &DomainLivenessCache<C>,
+    entries: Vec<PreparedEntry>,
+) -> (Vec<PreparedEntry>, Vec<DeliveryOutcome>) {
+    let Ok(table) = std::env::var("DOMAINS_TABLE") else {
+        tracing::error!(
+            metric = "PublishDeliveryRetry",
+            "DOMAINS_TABLE not set; reporting the resend for retry"
+        );
+        return (
+            Vec::new(),
+            entries
+                .into_iter()
+                .map(|entry| DeliveryOutcome::Failed {
+                    message_id: entry.message_id,
+                    error: "DOMAINS_TABLE not set before the resend".to_string(),
+                })
+                .collect(),
+        );
+    };
+    let mut live = Vec::with_capacity(entries.len());
+    let mut expired = Vec::new();
+    let mut denied: HashSet<String> = HashSet::new();
+    for entry in entries {
+        if denied.contains(&entry.domain) {
+            expired.push(DeliveryOutcome::Failed {
+                message_id: entry.message_id,
+                error: format!("domain '{}' is not ACTIVE or does not exist", entry.domain),
+            });
+            continue;
+        }
+        match require_active_domain(clients, liveness, &table, &entry.domain).await {
+            Ok(()) => live.push(entry),
+            Err(e) => {
+                denied.insert(entry.domain.clone());
+                expired.push(DeliveryOutcome::Failed {
+                    message_id: entry.message_id,
+                    error: format!("{e:#}"),
+                });
+            }
+        }
+    }
+    (live, expired)
+}
+
 fn chunk_by_bus(entries: Vec<PreparedEntry>) -> Vec<Vec<PreparedEntry>> {
-    let mut by_bus: HashMap<String, Vec<(usize, PreparedEntry)>> = HashMap::new();
+    // Sorted by bus name, so the order in which requests are spawned — and
+    // therefore which one is polled first — is deterministic across runs.
+    let mut by_bus: std::collections::BTreeMap<String, Vec<(usize, PreparedEntry)>> =
+        std::collections::BTreeMap::new();
     for entry in entries {
         by_bus
             .entry(entry.envelope.event_bus_name.clone())

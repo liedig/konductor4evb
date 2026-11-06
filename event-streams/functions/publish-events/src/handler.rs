@@ -47,7 +47,7 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
 use konductor_common::backoff::JitterSource;
-use konductor_common::domain_liveness::DomainLivenessCache;
+use konductor_common::domain_liveness::{Clock, DomainLivenessCache};
 use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{put_events_entry_bytes, EventEnvelope, SchemaName};
 use konductor_common::models::DomainStatus;
@@ -74,13 +74,15 @@ impl Clients {
 }
 
 /// A record that passed preparation and is ready to send: its envelope, its
-/// serialized detail, its measured entry size, and the SQS fields retry
-/// handling and latency reporting need.
+/// serialized detail, its measured entry size, the domain its liveness was
+/// confirmed for, and the SQS fields retry handling and latency reporting
+/// need.
 pub(crate) struct PreparedEntry {
     pub(crate) message_id: String,
     pub(crate) receipt_handle: Option<String>,
     pub(crate) receive_count: u32,
     pub(crate) sent_timestamp_ms: i64,
+    pub(crate) domain: String,
     pub(crate) envelope: EventEnvelope,
     pub(crate) detail_json: String,
     pub(crate) size_bytes: usize,
@@ -100,10 +102,10 @@ fn delivery_latency(
     )
 }
 
-pub async fn handle(
+pub async fn handle<C: Clock>(
     clients: &Clients,
     validators: &ValidatorCache,
-    liveness: &DomainLivenessCache,
+    liveness: &DomainLivenessCache<C>,
     jitter: &dyn JitterSource,
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
@@ -123,7 +125,7 @@ pub async fn handle(
         )
     };
     failed.extend(record_outcomes(
-        send::deliver(clients, jitter, prepared, &remaining).await,
+        send::deliver(clients, liveness, jitter, prepared, &remaining).await,
         invocation_started_ms,
     ));
 
@@ -137,10 +139,10 @@ pub async fn handle(
 
 /// Parses, re-checks, and prepares every record, collecting per-message
 /// failures for SQS retry alongside the entries ready to send.
-async fn prepare_all(
+async fn prepare_all<C: Clock>(
     clients: &Clients,
     validators: &ValidatorCache,
-    liveness: &DomainLivenessCache,
+    liveness: &DomainLivenessCache<C>,
     records: &[Value],
 ) -> (Vec<PreparedEntry>, Vec<String>) {
     let mut prepared = Vec::with_capacity(records.len());
@@ -219,16 +221,20 @@ fn record_outcomes(
 /// failure is a per-message failure reported for SQS retry; admission
 /// guarantees only valid, authorized commands are ever enqueued, so there is
 /// no acknowledge-without-delivery path left here.
-async fn prepare(
+async fn prepare<C: Clock>(
     clients: &Clients,
     validators: &ValidatorCache,
-    liveness: &DomainLivenessCache,
+    liveness: &DomainLivenessCache<C>,
     record: &Value,
 ) -> Result<PreparedEntry> {
     let message = parse::parse_message(record)?;
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let resolver = NamespaceResolver::default_pattern();
+    let domain = match &message.record {
+        ParsedRecord::Legacy(legacy) => legacy.request.domain.clone(),
+        ParsedRecord::Versioned { command } => command.body.domain.clone(),
+    };
 
     let envelope = match &message.record {
         ParsedRecord::Legacy(legacy) => {
@@ -239,8 +245,7 @@ async fn prepare(
                 format = "legacy",
                 "publish command received"
             );
-            require_active_domain(clients, liveness, &domains_table, &legacy.request.domain)
-                .await?;
+            require_active_domain(clients, liveness, &domains_table, &domain).await?;
             let schema_name = SchemaName::for_domain(
                 &resolver.namespace(&organization, &legacy.request.domain),
                 &legacy.request.event_name,
@@ -264,7 +269,7 @@ async fn prepare(
                 metadata_revision = command.admission.metadata.metadata_revision,
                 "publish command received"
             );
-            require_active_domain(clients, liveness, &domains_table, &command.body.domain).await?;
+            require_active_domain(clients, liveness, &domains_table, &domain).await?;
             let envelope = composed_envelope(command, message.published_at)?;
             validate_composed_metadata(validators, command, &envelope)?;
             envelope
@@ -284,6 +289,7 @@ async fn prepare(
         receipt_handle: message.receipt_handle,
         receive_count: message.receive_count,
         sent_timestamp_ms: message.published_at.timestamp_millis(),
+        domain,
         envelope,
         detail_json,
         size_bytes,
@@ -332,9 +338,9 @@ fn validate_composed_metadata(
 /// domain delivers on its next message. A store failure propagates and the
 /// message is reported for retry. The read is strongly consistent, so a
 /// fresh confirmation cannot trail a disable.
-async fn require_active_domain(
+pub(crate) async fn require_active_domain<C: Clock>(
     clients: &Clients,
-    liveness: &DomainLivenessCache,
+    liveness: &DomainLivenessCache<C>,
     table: &str,
     domain_name: &str,
 ) -> Result<()> {
@@ -1960,29 +1966,38 @@ mod tests {
         set_env();
         let slow_put = mock!(aws_sdk_eventbridge::Client::put_events)
             .match_requests(|req| req.entries()[0].event_bus_name() == Some("acme-prod-slow-bus"))
-            .then_output(|| {
-                std::thread::sleep(Duration::from_millis(300));
-                put_events_success_output(1)
-            });
+            .then_output(|| put_events_success_output(1));
         let fast_put = mock!(aws_sdk_eventbridge::Client::put_events)
-            .match_requests(|req| req.entries()[0].event_bus_name() == Some("acme-prod-fast-bus"))
+            .match_requests(|req| req.entries()[0].event_bus_name() == Some("acme-prod-swift-bus"))
             .then_output(|| put_events_success_output(1));
         let clients = Clients {
             ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, &[]),
             eb: mock_client!(
                 aws_sdk_eventbridge,
                 RuleMode::MatchAny,
-                &[slow_put, fast_put]
+                &[slow_put, fast_put],
+                |conf| conf.http_client(SlowBusHttpClient::delaying("acme-prod-slow-bus"))
             ),
             sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
         };
 
         let outcomes = send::deliver(
             &clients,
+            &no_liveness_cache(),
             &ZeroJitter,
             vec![
-                prepared_entry_for("msg-slow", "acme-prod-slow-bus", 1_785_407_400_100),
-                prepared_entry_for("msg-fast", "acme-prod-fast-bus", 1_785_407_400_200),
+                prepared_entry_for(
+                    "msg-slow",
+                    "acme-prod-slow-bus",
+                    1_785_407_400_100,
+                    "orders",
+                ),
+                prepared_entry_for(
+                    "msg-fast",
+                    "acme-prod-swift-bus",
+                    1_785_407_400_200,
+                    "orders",
+                ),
             ],
             &|| Duration::from_secs(30),
         )
@@ -2007,7 +2022,68 @@ mod tests {
         );
     }
 
-    fn prepared_entry_for(message_id: &str, event_bus_name: &str, sent_ms: i64) -> PreparedEntry {
+    /// Holds back responses for one bus with an async sleep in the HTTP
+    /// layer. Mock rule closures run under the interceptor's rules mutex, so
+    /// a delay there would also stall every concurrent request.
+    #[derive(Debug, Clone)]
+    struct SlowBusHttpClient {
+        inner: aws_sdk_eventbridge::config::SharedHttpClient,
+        slow_bus: &'static str,
+    }
+
+    impl SlowBusHttpClient {
+        fn delaying(slow_bus: &'static str) -> Self {
+            Self {
+                inner: aws_smithy_mocks::create_mock_http_client(),
+                slow_bus,
+            }
+        }
+    }
+
+    impl aws_smithy_runtime_api::client::http::HttpClient for SlowBusHttpClient {
+        fn http_connector(
+            &self,
+            settings: &aws_smithy_runtime_api::client::http::HttpConnectorSettings,
+            components: &aws_smithy_runtime_api::client::runtime_components::RuntimeComponents,
+        ) -> aws_smithy_runtime_api::client::http::SharedHttpConnector {
+            aws_smithy_runtime_api::client::http::SharedHttpConnector::new(SlowBusConnector {
+                inner: self.inner.http_connector(settings, components),
+                slow_bus: self.slow_bus,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct SlowBusConnector {
+        inner: aws_smithy_runtime_api::client::http::SharedHttpConnector,
+        slow_bus: &'static str,
+    }
+
+    impl aws_smithy_runtime_api::client::http::HttpConnector for SlowBusConnector {
+        fn call(
+            &self,
+            request: aws_smithy_runtime_api::client::orchestrator::HttpRequest,
+        ) -> aws_smithy_runtime_api::client::http::HttpConnectorFuture {
+            let is_slow = request
+                .body()
+                .bytes()
+                .is_some_and(|body| String::from_utf8_lossy(body).contains(self.slow_bus));
+            let inner = self.inner.clone();
+            aws_smithy_runtime_api::client::http::HttpConnectorFuture::new(async move {
+                if is_slow {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+                inner.call(request).await
+            })
+        }
+    }
+
+    fn prepared_entry_for(
+        message_id: &str,
+        event_bus_name: &str,
+        sent_ms: i64,
+        domain: &str,
+    ) -> PreparedEntry {
         let envelope = EventEnvelope::new(
             "acme-orders".to_string(),
             "OrderNotification".to_string(),
@@ -2025,6 +2101,7 @@ mod tests {
             receipt_handle: None,
             receive_count: 1,
             sent_timestamp_ms: sent_ms,
+            domain: domain.to_string(),
             envelope,
             detail_json: "{}".to_string(),
             size_bytes: 100,
@@ -2095,6 +2172,173 @@ mod tests {
             visibility.num_calls(),
             0,
             "with no invocation time left there is no budget for a visibility change; the standard timeout applies"
+        );
+    }
+
+    #[derive(Clone)]
+    struct ManualClock(std::sync::Arc<std::sync::Mutex<std::time::Instant>>);
+
+    impl ManualClock {
+        fn new() -> Self {
+            Self(std::sync::Arc::new(std::sync::Mutex::new(
+                std::time::Instant::now(),
+            )))
+        }
+
+        fn advance(&self, delta: Duration) {
+            *self.0.lock().unwrap() += delta;
+        }
+    }
+
+    impl Clock for ManualClock {
+        fn now(&self) -> std::time::Instant {
+            *self.0.lock().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_resend_rechecks_an_expired_liveness_confirmation() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        clock.advance(Duration::from_secs(2));
+        let throttled = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| throttled_entry_output(1));
+        let rechecked = any_domain_rule("INACTIVE");
+        let clients = Clients {
+            ddb: mock_client!(
+                aws_sdk_dynamodb,
+                RuleMode::MatchAny,
+                std::slice::from_ref(&rechecked)
+            ),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                RuleMode::MatchAny,
+                std::slice::from_ref(&throttled)
+            ),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![prepared_entry_for(
+                "msg-t",
+                "acme-prod-orders-event-bus",
+                1_785_407_400_100,
+                "orders",
+            )],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        assert_eq!(
+            outcomes,
+            vec![send::DeliveryOutcome::Failed {
+                message_id: "msg-t".to_string(),
+                error: "domain 'orders' is not ACTIVE or does not exist".to_string(),
+            }],
+            "the resend must not run once the confirmation expired and the domain is disabled"
+        );
+        assert_eq!(
+            throttled.num_calls(),
+            1,
+            "only the first send happened; the resend was blocked at the recheck"
+        );
+        assert_eq!(
+            rechecked.num_calls(),
+            1,
+            "the expired confirmation was re-read, not served from the cache"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_send_round_past_its_time_budget_reports_the_round_instead_of_timing_out() {
+        set_env();
+        let mixed = mock!(aws_sdk_eventbridge::Client::put_events).then_output(|| {
+            aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                .failed_entry_count(1)
+                .entries(ok_entry("evt-1"))
+                .entries(
+                    aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                        .error_code("ThrottlingException")
+                        .error_message("rate exceeded")
+                        .build(),
+                )
+                .build()
+        });
+        let slow = mock!(aws_sdk_eventbridge::Client::put_events).then_output(|| {
+            std::thread::sleep(Duration::from_secs(5));
+            put_events_success_output(1)
+        });
+        let clients = Clients {
+            ddb: mock_client!(
+                aws_sdk_dynamodb,
+                RuleMode::MatchAny,
+                &[any_domain_rule("ACTIVE")]
+            ),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                RuleMode::Sequential,
+                &[mixed.clone(), slow.clone()]
+            ),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+
+        let outcomes = send::deliver(
+            &clients,
+            &no_liveness_cache(),
+            &ZeroJitter,
+            vec![
+                prepared_entry_for(
+                    "msg-ok",
+                    "acme-prod-orders-event-bus",
+                    1_785_407_400_100,
+                    "orders",
+                ),
+                prepared_entry_for(
+                    "msg-t",
+                    "acme-prod-orders-event-bus",
+                    1_785_407_400_200,
+                    "orders",
+                ),
+            ],
+            &|| Duration::from_millis(5_500),
+        )
+        .await;
+
+        let mut delivered = 0;
+        for outcome in &outcomes {
+            match outcome {
+                send::DeliveryOutcome::Delivered {
+                    sent_timestamp_ms, ..
+                } => {
+                    assert_eq!(*sent_timestamp_ms, 1_785_407_400_100);
+                    delivered += 1;
+                }
+                send::DeliveryOutcome::Failed { message_id, error } => {
+                    assert_eq!(message_id, "msg-t");
+                    assert_eq!(error, "the invocation ran out of time during the send");
+                }
+                send::DeliveryOutcome::Throttled { .. } => {
+                    panic!("a timed-out round is reported for retry, not rescheduled")
+                }
+            }
+        }
+        assert_eq!(
+            delivered, 1,
+            "the entry accepted before the budget ran out is still reported as delivered"
+        );
+        assert_eq!(mixed.num_calls(), 1);
+        assert_eq!(
+            slow.num_calls(),
+            1,
+            "the retry round started, and its answer was abandoned at the budget"
         );
     }
 }

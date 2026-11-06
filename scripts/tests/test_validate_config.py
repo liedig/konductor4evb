@@ -216,6 +216,43 @@ class PublishPathSettingsTest(unittest.TestCase):
         cfg["domain_liveness_cache_seconds"] = 0
         self.assertEqual(vc.validate_publish_path(cfg), [])
 
+    def test_bounds_follow_the_template_parameters(self):
+        template = vc.TEMPLATE_PATH.read_text().replace(
+            "    MinValue: 0\n    MaxValue: 900\n",
+            "    MinValue: 0\n    MaxValue: 600\n",
+        )
+        errors = vc.validate_publish_path(
+            self.valid_cfg(domain_liveness_cache_seconds=700), template
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("domain_liveness_cache_seconds", errors[0])
+        self.assertIn("0-600", errors[0])
+
+    def test_bounds_match_the_template_read_as_yaml(self):
+        import yaml
+
+        class CfnLoader(yaml.SafeLoader):
+            pass
+
+        CfnLoader.add_multi_constructor("!", lambda loader, suffix, node: None)
+        parameters = yaml.load(vc.TEMPLATE_PATH.read_text(), Loader=CfnLoader)["Parameters"]
+        bounds = vc.publish_path_bounds()
+        self.assertEqual(set(bounds), set(self.SETTINGS))
+        for key, (parameter, _) in self.SETTINGS.items():
+            with self.subTest(setting=key):
+                expected = (parameters[parameter]["MinValue"], parameters[parameter].get("MaxValue"))
+                self.assertEqual(bounds[key], expected)
+
+    def test_a_publish_parameter_without_a_minimum_is_reported(self):
+        template = vc.TEMPLATE_PATH.read_text().replace(
+            "    Default: 50\n    MinValue: 2\n", "    Default: 50\n"
+        )
+        with self.assertRaisesRegex(ValueError, "PublishDeliveryMaxConcurrency"):
+            vc.publish_path_bounds(template)
+        errors = vc.validate_publish_path(self.valid_cfg(), template)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("PublishDeliveryMaxConcurrency", errors[0])
+
 
 class ThrottleBudgetTest(unittest.TestCase):
     """The throttle budget check warns (never fails) when one stage at its
@@ -364,30 +401,47 @@ class ControlPlaneMethodCountTest(unittest.TestCase):
     throttle applies to every method independently. The counts must track the
     OpenAPI contracts, which define each stage's methods."""
 
-    def test_method_bucket_constants_match_the_openapi_contracts(self):
+    def test_method_counts_match_the_contracts_read_as_yaml(self):
         import yaml
 
         methods = ("get", "post", "put", "patch", "delete", "head", "options")
-        contracts = (
-            ("api/openapi-oauth.yaml", vc.OAUTH_CONTROL_PLANE_METHODS),
-            ("api/openapi-iam.yaml", vc.IAM_CONTROL_PLANE_METHODS),
-        )
-        repo_root = MODULE.resolve().parent.parent
-        for name, constant in contracts:
-            with self.subTest(contract=name):
-                doc = yaml.safe_load((repo_root / name).read_text())
+        for contract in vc.CONTROL_PLANE_CONTRACTS:
+            with self.subTest(contract=contract.name):
+                text = contract.read_text()
+                doc = yaml.safe_load(text)
                 operations = [
                     method
                     for path, item in doc["paths"].items()
                     for method in item
                     if method in methods and not (path == "/publish" and method == "post")
                 ]
-                self.assertEqual(
-                    len(operations),
-                    constant,
-                    f"{name} control-plane operation count drifted; update the "
-                    "OAUTH_CONTROL_PLANE_METHODS / IAM_CONTROL_PLANE_METHODS constants",
-                )
+                self.assertEqual(vc.control_plane_method_count(text), len(operations))
+
+    def test_the_count_tracks_contract_changes(self):
+        contract = (
+            "openapi: \"3.0.1\"\n"
+            "paths:\n"
+            "  /domains:\n"
+            "    parameters:\n"
+            "      - name: x\n"
+            "    get:\n"
+            "      summary: list\n"
+            "    post:\n"
+            "      summary: register\n"
+            "  /publish:\n"
+            "    post:\n"
+            "      summary: publish\n"
+            "    options:\n"
+            "      summary: cors\n"
+            "components:\n"
+            "  schemas:\n"
+            "    get:\n"
+            "      type: object\n"
+        )
+        self.assertEqual(vc.control_plane_method_count(contract), 3)
+
+    def test_the_budget_counts_every_contract_method(self):
+        self.assertEqual(vc.control_plane_methods(), 35 + 18)
 
 if __name__ == "__main__":
     unittest.main()

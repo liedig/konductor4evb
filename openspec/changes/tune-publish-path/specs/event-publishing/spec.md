@@ -101,6 +101,12 @@ When EventBridge throttles delivery, the consumer SHALL retry the throttled entr
 - **THEN** their messages SHALL keep the queue's standard visibility timeout
 - **AND THEN** the invocation SHALL still return its response, acknowledging every accepted entry and reporting the throttled messages for retry
 
+#### Scenario: A slow send round keeps the invocation's response
+
+- **WHEN** a `PutEvents` round is still running as the invocation nears its deadline
+- **THEN** that round's messages SHALL be reported for retry
+- **AND THEN** the invocation SHALL still return its response, acknowledging every entry accepted in earlier rounds
+
 #### Scenario: Sustained throttling does not dead-letter valid events
 
 - **WHEN** EventBridge throttles delivery continuously for 10 minutes
@@ -125,6 +131,12 @@ Admission and delivery SHALL each reuse a confirmation that a domain is `ACTIVE`
 - **WHEN** a platform admin disables a domain at time t0
 - **THEN** every publish request admitted after t0 plus the window SHALL instead receive `404 Not Found`
 - **AND THEN** every message for that domain processed by delivery after t0 plus the window SHALL be reported for retry without being sent, following the existing retry and DLQ handling
+
+#### Scenario: A throttle retry re-checks a lapsed confirmation
+
+- **WHEN** delivery holds throttled entries for an in-invocation retry and the domain's `ACTIVE` confirmation lapses during the backoff
+- **THEN** delivery SHALL read the domain store again before resending them
+- **AND THEN** entries for a domain that is no longer `ACTIVE` SHALL be reported for retry without being sent
 
 #### Scenario: Negative results are never reused
 

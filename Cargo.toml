@@ -77,6 +77,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 aws-smithy-mocks = "0.3"
+aws-smithy-runtime-api = { version = "1", features = ["client"] }
 uuid = { version = "1", features = ["v4", "v5"] }
 urlencoding = "2"
 jsonschema = { version = "0.60", default-features = false }

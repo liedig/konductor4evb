@@ -27,6 +27,7 @@ aws-sdk-dynamodb = { workspace = true, features = ["test-util"] }
 aws-sdk-eventbridge = { workspace = true, features = ["test-util"] }
 aws-sdk-sqs = { workspace = true, features = ["test-util"] }
 aws-smithy-mocks = { workspace = true }
+aws-smithy-runtime-api = { workspace = true }
 
 [lints]
 workspace = true

@@ -22,16 +22,19 @@ Older rationale is available through the [decision index](docs/decisions/README.
   `make validate-config` now warns — without failing — when the configured
   publish throttle plus the control-plane ceiling (API Gateway applies the
   stage throttle to every method independently, so the ceiling is counted
-  per method bucket) no longer fits the account's API Gateway throttle
-  quota. Admission and delivery share an ACTIVE-only domain liveness cache
+  per method bucket, read from the OpenAPI contracts) no longer fits the
+  account's API Gateway throttle quota; it checks the five new settings
+  against the template parameters' own bounds. Admission and delivery share an ACTIVE-only domain liveness cache
   (`domain_liveness_cache_seconds`, default 300) backed by strongly
   consistent domain reads, so disabling a domain now stops publishing within
   that window instead of on the next request, and admission pre-warms its
   DynamoDB and SQS connections during init. Delivery batches same-bus events
   into shared `PutEvents` requests with per-entry failure mapping, retries
-  throttled entries inside the invocation and then re-shows them with an
-  exponential visibility backoff that is bounded by the remaining invocation
-  time, and its concurrency is bounded by the event source mapping
+  throttled entries inside the invocation (re-checking domain liveness
+  before each resend) and then re-shows them with an exponential visibility
+  backoff, bounds every send round and visibility change by the remaining
+  invocation time so a slow request cannot cost the batch its
+  acknowledgements, and its concurrency is bounded by the event source mapping
   (`publish_delivery_max_concurrency`, default 50). Admission's reserved
   concurrency is now optional (`publish_admission_concurrency_cap`, default
   0 for uncapped), and the publish queue's `maxReceiveCount` rises from 3 to

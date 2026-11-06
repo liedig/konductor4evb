@@ -250,7 +250,10 @@ about the payload, not about the registry's current state.
   because the race is real. Delivery shares the same per-instance liveness
   cache semantics as admission: a confirmed-`ACTIVE` result is reused for at
   most the liveness window, `INACTIVE` and missing domains are always
-  re-read, and store errors are never cached.
+  re-read, and store errors are never cached. The window starts when the
+  confirming read begins, so a slow read cannot extend it, and entries held
+  back for an in-invocation throttle retry are re-checked before they are
+  resent, because the backoff can outlast the confirmation.
 - **Envelope structural validation.** Before `PutEvents`, the constructed
   envelope is checked (positive version, non-empty identity, serializable,
   within the 256 KB entry limit for EventBridge). An invalid *generated* envelope
@@ -266,7 +269,10 @@ about the payload, not about the registry's current state.
 - **Throttle recovery.** EventBridge throttling (a request-level or
   entry-level `ThrottlingException`) is first retried inside the invocation
   with full-jitter backoff (100 ms base, 1 s cap, up to 3 retries, skipped
-  when fewer than 5 seconds remain before the invocation deadline). Messages
+  when fewer than 5 seconds remain before the invocation deadline). Each send
+  round, including the first, is bounded by the remaining time minus a
+  2-second response margin; a round that runs out reports its messages for
+  retry while the entries already accepted stay acknowledged. Messages
   still throttled are then made visible again after a short exponential
   backoff with jitter—`d/2 + jitter(0, d/2)` seconds with
   `d = min(60, 2^(n-1))` for receive count `n`—via

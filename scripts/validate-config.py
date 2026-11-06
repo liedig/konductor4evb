@@ -22,6 +22,9 @@ import sys
 import tomllib
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TEMPLATE_PATH = REPO_ROOT / "konductor-core-stack.yaml"
+
 ORGANIZATION_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,41}[a-z0-9])$")
 ENVIRONMENT_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 NAMESPACE_CHARSET_RE = re.compile(r"^([a-z0-9-]|\{org\}|\{env\}|\{domain\})+$")
@@ -240,21 +243,77 @@ def validate_prerequisites(cfg):
     return errors
 
 
-# Publish-path capacity bounds mirror the template parameter bounds; a cap of
-# 0 means uncapped admission and a liveness window of 0 means a read per
-# request (docs/reference/configuration.md).
-PUBLISH_PATH_BOUNDS = {
-    "publish_throttle_rate_limit": (1, None),
-    "publish_throttle_burst_limit": (0, None),
-    "publish_admission_concurrency_cap": (0, None),
-    "publish_delivery_max_concurrency": (2, 1000),
-    "domain_liveness_cache_seconds": (0, 900),
-}
+# Publish-path capacity bounds come from the template parameters' MinValue and
+# MaxValue, so the preflight cannot accept what the deploy rejects; a cap of 0
+# means uncapped admission and a liveness window of 0 means a read per request
+# (docs/reference/configuration.md).
+PUBLISH_PATH_SETTINGS = (
+    "publish_throttle_rate_limit",
+    "publish_throttle_burst_limit",
+    "publish_admission_concurrency_cap",
+    "publish_delivery_max_concurrency",
+    "domain_liveness_cache_seconds",
+)
+
+TOP_LEVEL_KEY_RE = re.compile(r"^([^\s#][^:]*):")
+TEMPLATE_PARAMETER_RE = re.compile(r"^  (\w+):\s*$")
+TEMPLATE_BOUND_RE = re.compile(r"^    (MinValue|MaxValue): (-?\d+)\s*$")
 
 
-def validate_publish_path(cfg):
+def top_level_section(text, name):
+    """The lines of one top-level YAML mapping section."""
+    lines = []
+    inside = False
+    for line in text.splitlines():
+        key = TOP_LEVEL_KEY_RE.match(line)
+        if key:
+            inside = key.group(1) == name
+            continue
+        if inside:
+            lines.append(line)
+    return lines
+
+
+def template_parameter_bounds(template_text):
+    """parameter name -> {"MinValue": int, "MaxValue": int} for every bound
+    the template's Parameters section declares."""
+    bounds = {}
+    parameter = None
+    for line in top_level_section(template_text, "Parameters"):
+        name = TEMPLATE_PARAMETER_RE.match(line)
+        if name:
+            parameter = bounds.setdefault(name.group(1), {})
+            continue
+        bound = TEMPLATE_BOUND_RE.match(line)
+        if bound and parameter is not None:
+            parameter[bound.group(1)] = int(bound.group(2))
+    return bounds
+
+
+def publish_path_bounds(template_text=None):
+    """config key -> (minimum, maximum or None) from the template."""
+    if template_text is None:
+        template_text = TEMPLATE_PATH.read_text()
+    declared = template_parameter_bounds(template_text)
+    bounds = {}
+    for key in PUBLISH_PATH_SETTINGS:
+        parameter = SETTINGS[key][0]
+        limits = declared.get(parameter, {})
+        if "MinValue" not in limits:
+            raise ValueError(
+                f"{TEMPLATE_PATH.name} parameter {parameter} declares no MinValue"
+            )
+        bounds[key] = (limits["MinValue"], limits.get("MaxValue"))
+    return bounds
+
+
+def validate_publish_path(cfg, template_text=None):
+    try:
+        bounds = publish_path_bounds(template_text)
+    except ValueError as exc:
+        return [str(exc)]
     errors = []
-    for key, (low, high) in PUBLISH_PATH_BOUNDS.items():
+    for key, (low, high) in bounds.items():
         value = cfg.get(key)
         if not isinstance(value, int) or isinstance(value, bool):
             continue  # load_config already reported the type error
@@ -393,13 +452,37 @@ CONTROL_PLANE_BURST = 100
 
 # API Gateway applies the stage-wide `/*` throttle independently to every
 # method, so a stage's control-plane ceiling is its method count times the
-# per-method limit, not one shared 50-rps bucket. The counts below are the
-# operations in the OpenAPI contracts (api/openapi-oauth.yaml,
-# api/openapi-iam.yaml) minus POST /publish, which carries the dedicated
-# method-level throttle; scripts/tests/test_validate_config.py fails when
-# they drift from the contracts.
-OAUTH_CONTROL_PLANE_METHODS = 35
-IAM_CONTROL_PLANE_METHODS = 18
+# per-method limit, not one shared 50-rps bucket. The method count is read
+# from the OpenAPI contracts that define each stage's methods, minus
+# POST /publish, which carries the dedicated method-level throttle.
+CONTROL_PLANE_CONTRACTS = (
+    REPO_ROOT / "api" / "openapi-oauth.yaml",
+    REPO_ROOT / "api" / "openapi-iam.yaml",
+)
+OPENAPI_PATH_RE = re.compile(r"^  (/\S*):\s*$")
+OPENAPI_OPERATION_RE = re.compile(r"^    (get|put|post|delete|patch|head|options):\s*$")
+
+
+def control_plane_method_count(contract_text):
+    """Operations under the contract's paths section, excluding POST /publish."""
+    count = 0
+    path = None
+    for line in top_level_section(contract_text, "paths"):
+        path_match = OPENAPI_PATH_RE.match(line)
+        if path_match:
+            path = path_match.group(1)
+            continue
+        operation = OPENAPI_OPERATION_RE.match(line)
+        if operation and not (path == "/publish" and operation.group(1) == "post"):
+            count += 1
+    return count
+
+
+def control_plane_methods():
+    return sum(
+        control_plane_method_count(contract.read_text())
+        for contract in CONTROL_PLANE_CONTRACTS
+    )
 
 
 def service_quota_value(subcommand, region, profile):
@@ -458,7 +541,7 @@ def throttle_budget(cfg, quota):
     rate = cfg["publish_throttle_rate_limit"]
     burst = cfg["publish_throttle_burst_limit"]
     burst_quota = quota // 2
-    methods = OAUTH_CONTROL_PLANE_METHODS + IAM_CONTROL_PLANE_METHODS
+    methods = control_plane_methods()
     control_rate = methods * CONTROL_PLANE_RATE * envs
     control_burst = methods * CONTROL_PLANE_BURST * envs
     one_stage_rate = rate + control_rate
@@ -495,9 +578,6 @@ def throttle_budget(cfg, quota):
 # than included via Fn::Transform: a Resources-level AWS::Include failed
 # changeset creation ("S3 object's content should be valid Yaml/JSON") in the
 # full template, so the deploy-time render edits the template directly.
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE_PATH = REPO_ROOT / "konductor-core-stack.yaml"
 
 AUTHORING_STAGE_RE = re.compile(
     r"^(\s*)StageName: \S+(\s*# konductor:authoring-stage\s*)$", re.M

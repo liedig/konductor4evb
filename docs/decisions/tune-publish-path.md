@@ -48,7 +48,7 @@ Five levers, all operator-tunable through the
    plus every stage's control-plane ceiling exceeds the account rate. API
    Gateway applies the stage-wide `/*` throttle independently to every
    method, so the control-plane ceiling is the method count (53 per
-   environment across the two API contracts, kept in sync by tests) times
+   environment, counted from the two OpenAPI contracts at validation time) times
    50 rps, not one shared 50-rps bucket per stage. The burst warning isolates
    the publish setting (`B > Q/2`), because the control-plane burst ceiling
    already exceeds the estimated account burst for even one environment and
@@ -65,7 +65,10 @@ Five levers, all operator-tunable through the
    cached; INACTIVE and missing domains are always re-read, so re-enabling a
    domain works on the next publish. The reads are strongly consistent, so a
    fresh confirmation cannot trail a disable that has just happened and the
-   bounded-disable contract holds from the read itself. Store errors
+   bounded-disable contract holds from the read itself. A confirmation's
+   window starts when its read begins, so a slow read cannot extend it, and
+   delivery re-checks a confirmation that lapsed during in-invocation
+   backoff before it resends throttled entries. Store errors
    propagate and are never cached. A cached confirmation never bypasses
    authorization, which runs first. Admission also pre-warms its DynamoDB
    and SQS connections during Lambda init with best-effort calls (2-second
@@ -85,8 +88,11 @@ Five levers, all operator-tunable through the
    throttles, which is the DLQ path this change exists to close).
 5. **Throttle recovery.** Throttled entries are retried inside the
    invocation with full-jitter backoff (100 ms base, 1 s cap, up to 3
-   retries, skipped when under 5 seconds remain before the deadline).
-   Messages still throttled get `ChangeMessageVisibilityBatch` with backoff
+   retries, skipped when under 5 seconds remain before the deadline). Every
+   send round, retries included, is bounded by the remaining time minus a
+   2-second response margin; a round that runs out reports its messages for
+   retry, so slow `PutEvents` calls cannot time out the invocation and lose
+   the acknowledgements of entries already accepted. Messages still throttled get `ChangeMessageVisibilityBatch` with backoff
    `d/2 + jitter(0, d/2)` where `d = min(60, 2^(n-1))` for receive count
    `n`, so retries spread out instead of waiting the full 30-second
    visibility timeout. Each visibility call is bounded by the invocation's
