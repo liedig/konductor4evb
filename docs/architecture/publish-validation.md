@@ -251,9 +251,13 @@ about the payload, not about the registry's current state.
   cache semantics as admission: a confirmed-`ACTIVE` result is reused for at
   most the liveness window, `INACTIVE` and missing domains are always
   re-read, and store errors are never cached. The window starts when the
-  confirming read begins, so a slow read cannot extend it, and entries held
-  back for an in-invocation throttle retry are re-checked before they are
-  resent, because the backoff can outlast the confirmation.
+  confirming read begins, so a slow read cannot extend it. Delivery re-checks
+  expired confirmations again right before every send round, the first
+  included, because preparing the rest of the batch or a throttle backoff can
+  outlast a confirmation. The re-check and the send share the round's time
+  bound, and with a zero window the first round skips it because preparation
+  has just read the store. Admission likewise re-reads a confirmation that
+  expired during metadata and schema resolution before it enqueues.
 - **Envelope structural validation.** Before `PutEvents`, the constructed
   envelope is checked (positive version, non-empty identity, serializable,
   within the 256 KB entry limit for EventBridge). An invalid *generated* envelope

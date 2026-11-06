@@ -24,7 +24,7 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
 use konductor_common::api;
-use konductor_common::domain_liveness::DomainLivenessCache;
+use konductor_common::domain_liveness::{Clock, DomainLivenessCache};
 use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{EventEnvelope, SchemaName};
 use konductor_common::error::{
@@ -64,12 +64,12 @@ impl Clients {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn handle<A: ResourceAuthorizer>(
+pub async fn handle<A: ResourceAuthorizer, C: Clock>(
     clients: &Clients,
     authorizer: &A,
     cache: &SchemaCache,
     validators: &ValidatorCache,
-    liveness: &DomainLivenessCache,
+    liveness: &DomainLivenessCache<C>,
     metadata: &MetadataAdmission,
     uuid_source: &dyn UuidSource,
     event: LambdaEvent<Value>,
@@ -120,12 +120,12 @@ pub async fn handle<A: ResourceAuthorizer>(
 // The argument list mirrors the deployment wiring; bundling the platform
 // collaborators would hide which store serves which concern.
 #[allow(clippy::too_many_arguments)]
-async fn admit<A: ResourceAuthorizer>(
+async fn admit<A: ResourceAuthorizer, C: Clock>(
     clients: &Clients,
     authorizer: &A,
     cache: &SchemaCache,
     validators: &ValidatorCache,
-    liveness: &DomainLivenessCache,
+    liveness: &DomainLivenessCache<C>,
     metadata: &MetadataAdmission,
     uuid_source: &dyn UuidSource,
     payload: &Value,
@@ -229,6 +229,10 @@ async fn admit<A: ResourceAuthorizer>(
             Err(response) => return Ok(response),
         },
     };
+
+    if let Err(response) = reconfirm_before_enqueue(clients, liveness, &request.domain).await {
+        return Ok(response);
+    }
 
     let command = AdmittedCommand {
         request: &request,
@@ -411,10 +415,10 @@ fn parse_publish_request(payload: &Value) -> Result<(PublishRequest, Value), Val
 /// unknown/inactive domain. A domain-store outage is a platform-side
 /// evaluation failure, not an answer about the domain: retryable 503, never
 /// a 404/500.
-async fn authorize_publish<A: ResourceAuthorizer>(
+async fn authorize_publish<A: ResourceAuthorizer, C: Clock>(
     clients: &Clients,
     authorizer: &A,
-    liveness: &DomainLivenessCache,
+    liveness: &DomainLivenessCache<C>,
     request: &PublishRequest,
     principal: &TrustedPrincipal,
 ) -> Result<(), Value> {
@@ -435,12 +439,37 @@ async fn authorize_publish<A: ResourceAuthorizer>(
         ));
     }
 
-    match require_active_domain(clients, liveness, &request.domain).await {
+    domain_liveness_rejection(clients, liveness, &request.domain).await
+}
+
+/// Metadata and schema resolution can outlast the liveness confirmation
+/// taken at authorization; re-reading an expired one before enqueueing keeps
+/// admission inside the disable bound. A fresh confirmation costs no read,
+/// and a zero window has already read the store for this request.
+async fn reconfirm_before_enqueue<C: Clock>(
+    clients: &Clients,
+    liveness: &DomainLivenessCache<C>,
+    domain: &str,
+) -> Result<(), Value> {
+    if !liveness.reuses_confirmations() {
+        return Ok(());
+    }
+    domain_liveness_rejection(clients, liveness, domain).await
+}
+
+/// 404 for an unknown/inactive domain, retryable 503 when the domain store
+/// cannot answer.
+async fn domain_liveness_rejection<C: Clock>(
+    clients: &Clients,
+    liveness: &DomainLivenessCache<C>,
+    domain: &str,
+) -> Result<(), Value> {
+    match require_active_domain(clients, liveness, domain).await {
         Ok(()) => Ok(()),
         Err(ControlPlaneError::DynamoDb(detail)) => {
             tracing::error!(
                 metric = "PublishUnavailable",
-                domain = request.domain,
+                domain,
                 error = detail,
                 "domain store unavailable"
             );
@@ -920,9 +949,9 @@ pub async fn prewarm(clients: &Clients) {
 /// domain admits on its next publish. A store failure propagates as
 /// `DynamoDb` (503) and is never cached. The read is strongly consistent, so
 /// a fresh confirmation cannot trail a disable.
-async fn require_active_domain(
+async fn require_active_domain<C: Clock>(
     clients: &Clients,
-    liveness: &DomainLivenessCache,
+    liveness: &DomainLivenessCache<C>,
     domain_name: &str,
 ) -> Result<(), ControlPlaneError> {
     let table = env::var("DOMAINS_TABLE")
@@ -2431,6 +2460,95 @@ mod tests {
         .unwrap();
 
         assert_eq!(status(&resp), 400);
+    }
+
+    #[derive(Clone)]
+    struct ManualClock(std::sync::Arc<std::sync::Mutex<std::time::Instant>>);
+
+    impl ManualClock {
+        fn new() -> Self {
+            Self(std::sync::Arc::new(std::sync::Mutex::new(
+                std::time::Instant::now(),
+            )))
+        }
+
+        fn advance(&self, delta: std::time::Duration) {
+            *self.0.lock().unwrap() += delta;
+        }
+    }
+
+    impl Clock for ManualClock {
+        fn now(&self) -> std::time::Instant {
+            *self.0.lock().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn an_expired_confirmation_is_rechecked_before_enqueueing() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let clock = ManualClock::new();
+        let liveness =
+            DomainLivenessCache::with_clock(std::time::Duration::from_secs(1), clock.clone());
+        let domain_output = |status: &'static str| {
+            move || {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("domainName", s("orders"))
+                    .item("status", s(status))
+                    .build()
+            }
+        };
+        let domain = mock!(aws_sdk_dynamodb::Client::get_item)
+            .sequence()
+            .output(domain_output("ACTIVE"))
+            .output(domain_output("INACTIVE"))
+            .build();
+        let slow_schema_fetch =
+            mock!(aws_sdk_schemas::Client::describe_schema).then_output(move || {
+                clock.advance(std::time::Duration::from_secs(2));
+                aws_sdk_schemas::operation::describe_schema::DescribeSchemaOutput::builder()
+                    .schema_version("3")
+                    .content(RELAXED_SCHEMA)
+                    .build()
+            });
+        let send = send_message_rule("key-1", "oauth", "3");
+        let clients = clients(
+            RuleMode::MatchAny,
+            std::slice::from_ref(&domain),
+            &[slow_schema_fetch],
+            std::slice::from_ref(&send),
+        );
+
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &liveness,
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            status(&resp),
+            404,
+            "the confirmation expired during validation and the domain was disabled meanwhile"
+        );
+        assert_eq!(
+            send.num_calls(),
+            0,
+            "nothing is enqueued past the disable bound"
+        );
+        assert_eq!(
+            domain.num_calls(),
+            2,
+            "the expired confirmation was re-read before enqueueing"
+        );
     }
 
     fn no_liveness_cache() -> DomainLivenessCache {

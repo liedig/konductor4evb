@@ -30,8 +30,9 @@ Older rationale is available through the [decision index](docs/decisions/README.
   that window instead of on the next request, and admission pre-warms its
   DynamoDB and SQS connections during init. Delivery batches same-bus events
   into shared `PutEvents` requests with per-entry failure mapping, retries
-  throttled entries inside the invocation (re-checking domain liveness
-  before each resend) and then re-shows them with an exponential visibility
+  throttled entries inside the invocation (re-checking expired domain
+  liveness before every send, as admission does before enqueueing) and then
+  re-shows them with an exponential visibility
   backoff, bounds every send round and visibility change by the remaining
   invocation time so a slow request cannot cost the batch its
   acknowledgements, and its concurrency is bounded by the event source mapping

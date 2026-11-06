@@ -43,6 +43,7 @@ use std::env;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use aws_sdk_eventbridge::types::PutEventsRequestEntry;
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
@@ -73,18 +74,17 @@ impl Clients {
     }
 }
 
-/// A record that passed preparation and is ready to send: its envelope, its
-/// serialized detail, its measured entry size, the domain its liveness was
-/// confirmed for, and the SQS fields retry handling and latency reporting
-/// need.
+/// A record that passed preparation and is ready to send: the `PutEvents`
+/// entry built once from its envelope (so the detail is serialized exactly
+/// once), the entry's measured size, the domain its liveness was confirmed
+/// for, and the SQS fields retry handling and latency reporting need.
 pub(crate) struct PreparedEntry {
     pub(crate) message_id: String,
     pub(crate) receipt_handle: Option<String>,
     pub(crate) receive_count: u32,
     pub(crate) sent_timestamp_ms: i64,
     pub(crate) domain: String,
-    pub(crate) envelope: EventEnvelope,
-    pub(crate) detail_json: String,
+    pub(crate) request_entry: PutEventsRequestEntry,
     pub(crate) size_bytes: usize,
 }
 
@@ -284,14 +284,19 @@ async fn prepare<C: Clock>(
         &envelope.event_bus_name,
         &detail_json,
     );
+    let request_entry = PutEventsRequestEntry::builder()
+        .event_bus_name(envelope.event_bus_name)
+        .source(envelope.source)
+        .detail_type(envelope.detail_type)
+        .detail(detail_json)
+        .build();
     Ok(PreparedEntry {
         message_id: message.message_id,
         receipt_handle: message.receipt_handle,
         receive_count: message.receive_count,
         sent_timestamp_ms: message.published_at.timestamp_millis(),
         domain,
-        envelope,
-        detail_json,
+        request_entry,
         size_bytes,
     })
 }
@@ -1976,7 +1981,10 @@ mod tests {
                 aws_sdk_eventbridge,
                 RuleMode::MatchAny,
                 &[slow_put, fast_put],
-                |conf| conf.http_client(SlowBusHttpClient::delaying("acme-prod-slow-bus"))
+                |conf| conf.http_client(DelayedHttpClient::delaying(
+                    "acme-prod-slow-bus",
+                    Duration::from_millis(300)
+                ))
             ),
             sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
         };
@@ -2022,56 +2030,62 @@ mod tests {
         );
     }
 
-    /// Holds back responses for one bus with an async sleep in the HTTP
-    /// layer. Mock rule closures run under the interceptor's rules mutex, so
-    /// a delay there would also stall every concurrent request.
+    /// Holds back responses to requests whose body contains `needle` with an
+    /// async sleep in the HTTP layer. Mock rule closures run under the
+    /// interceptor's rules mutex, so a delay there would also stall every
+    /// concurrent request.
     #[derive(Debug, Clone)]
-    struct SlowBusHttpClient {
+    struct DelayedHttpClient {
         inner: aws_sdk_eventbridge::config::SharedHttpClient,
-        slow_bus: &'static str,
+        needle: &'static str,
+        delay: Duration,
     }
 
-    impl SlowBusHttpClient {
-        fn delaying(slow_bus: &'static str) -> Self {
+    impl DelayedHttpClient {
+        fn delaying(needle: &'static str, delay: Duration) -> Self {
             Self {
                 inner: aws_smithy_mocks::create_mock_http_client(),
-                slow_bus,
+                needle,
+                delay,
             }
         }
     }
 
-    impl aws_smithy_runtime_api::client::http::HttpClient for SlowBusHttpClient {
+    impl aws_smithy_runtime_api::client::http::HttpClient for DelayedHttpClient {
         fn http_connector(
             &self,
             settings: &aws_smithy_runtime_api::client::http::HttpConnectorSettings,
             components: &aws_smithy_runtime_api::client::runtime_components::RuntimeComponents,
         ) -> aws_smithy_runtime_api::client::http::SharedHttpConnector {
-            aws_smithy_runtime_api::client::http::SharedHttpConnector::new(SlowBusConnector {
+            aws_smithy_runtime_api::client::http::SharedHttpConnector::new(DelayedConnector {
                 inner: self.inner.http_connector(settings, components),
-                slow_bus: self.slow_bus,
+                needle: self.needle,
+                delay: self.delay,
             })
         }
     }
 
     #[derive(Debug)]
-    struct SlowBusConnector {
+    struct DelayedConnector {
         inner: aws_smithy_runtime_api::client::http::SharedHttpConnector,
-        slow_bus: &'static str,
+        needle: &'static str,
+        delay: Duration,
     }
 
-    impl aws_smithy_runtime_api::client::http::HttpConnector for SlowBusConnector {
+    impl aws_smithy_runtime_api::client::http::HttpConnector for DelayedConnector {
         fn call(
             &self,
             request: aws_smithy_runtime_api::client::orchestrator::HttpRequest,
         ) -> aws_smithy_runtime_api::client::http::HttpConnectorFuture {
-            let is_slow = request
+            let delay = request
                 .body()
                 .bytes()
-                .is_some_and(|body| String::from_utf8_lossy(body).contains(self.slow_bus));
+                .is_some_and(|body| String::from_utf8_lossy(body).contains(self.needle))
+                .then_some(self.delay);
             let inner = self.inner.clone();
             aws_smithy_runtime_api::client::http::HttpConnectorFuture::new(async move {
-                if is_slow {
-                    tokio::time::sleep(Duration::from_millis(300)).await;
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
                 }
                 inner.call(request).await
             })
@@ -2084,26 +2098,18 @@ mod tests {
         sent_ms: i64,
         domain: &str,
     ) -> PreparedEntry {
-        let envelope = EventEnvelope::new(
-            "acme-orders".to_string(),
-            "OrderNotification".to_string(),
-            event_bus_name.to_string(),
-            4,
-            format!("key-{message_id}"),
-            chrono::DateTime::parse_from_rfc3339("2026-07-30T10:30:00.123Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc),
-            json!({}),
-        )
-        .unwrap();
         PreparedEntry {
             message_id: message_id.to_string(),
             receipt_handle: None,
             receive_count: 1,
             sent_timestamp_ms: sent_ms,
             domain: domain.to_string(),
-            envelope,
-            detail_json: "{}".to_string(),
+            request_entry: PutEventsRequestEntry::builder()
+                .event_bus_name(event_bus_name)
+                .source("acme-orders")
+                .detail_type("OrderNotification")
+                .detail("{}")
+                .build(),
             size_bytes: 100,
         }
     }
@@ -2205,9 +2211,10 @@ mod tests {
             .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
             .await
             .unwrap();
-        clock.advance(Duration::from_secs(2));
-        let throttled = mock!(aws_sdk_eventbridge::Client::put_events)
-            .then_output(|| throttled_entry_output(1));
+        let throttled = mock!(aws_sdk_eventbridge::Client::put_events).then_output(move || {
+            clock.advance(Duration::from_secs(2));
+            throttled_entry_output(1)
+        });
         let rechecked = any_domain_rule("INACTIVE");
         let clients = Clients {
             ddb: mock_client!(
@@ -2339,6 +2346,135 @@ mod tests {
             slow.num_calls(),
             1,
             "the retry round started, and its answer was abandoned at the budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_confirmation_is_rechecked_before_the_first_send() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        clock.advance(Duration::from_secs(2));
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let rechecked = any_domain_rule("INACTIVE");
+        let clients = clients_with_sqs(vec![rechecked.clone()], vec![put.clone()], vec![]);
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![prepared_entry_for(
+                "msg-1",
+                "acme-prod-orders-event-bus",
+                1_785_407_400_100,
+                "orders",
+            )],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        assert_eq!(
+            outcomes,
+            vec![send::DeliveryOutcome::Failed {
+                message_id: "msg-1".to_string(),
+                error: "domain 'orders' is not ACTIVE or does not exist".to_string(),
+            }],
+            "a confirmation that expired while the batch was prepared is re-read before sending"
+        );
+        assert_eq!(put.num_calls(), 0);
+        assert_eq!(rechecked.num_calls(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_slow_liveness_recheck_reports_the_round_instead_of_timing_out() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        let mixed_then_expire =
+            mock!(aws_sdk_eventbridge::Client::put_events).then_output(move || {
+                clock.advance(Duration::from_secs(2));
+                aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                    .failed_entry_count(1)
+                    .entries(ok_entry("evt-1"))
+                    .entries(
+                        aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                            .error_code("ThrottlingException")
+                            .error_message("rate exceeded")
+                            .build(),
+                    )
+                    .build()
+            });
+        let clients = Clients {
+            ddb: mock_client!(
+                aws_sdk_dynamodb,
+                RuleMode::MatchAny,
+                &[any_domain_rule("ACTIVE")],
+                |conf| conf.http_client(DelayedHttpClient::delaying(
+                    "domains-test",
+                    Duration::from_secs(10)
+                ))
+            ),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                RuleMode::MatchAny,
+                std::slice::from_ref(&mixed_then_expire)
+            ),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+        let deadline = std::time::Instant::now() + Duration::from_millis(5_500);
+        let started = std::time::Instant::now();
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![
+                prepared_entry_for(
+                    "msg-ok",
+                    "acme-prod-orders-event-bus",
+                    1_785_407_400_100,
+                    "orders",
+                ),
+                prepared_entry_for(
+                    "msg-t",
+                    "acme-prod-orders-event-bus",
+                    1_785_407_400_200,
+                    "orders",
+                ),
+            ],
+            &move || deadline.saturating_duration_since(std::time::Instant::now()),
+        )
+        .await;
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the recheck is bounded by the round's budget, not the slow read"
+        );
+        assert_eq!(
+            outcomes,
+            vec![
+                send::DeliveryOutcome::Delivered {
+                    sent_timestamp_ms: 1_785_407_400_100,
+                    accepted_ms: match outcomes.first() {
+                        Some(send::DeliveryOutcome::Delivered { accepted_ms, .. }) => *accepted_ms,
+                        _ => 0,
+                    },
+                },
+                send::DeliveryOutcome::Failed {
+                    message_id: "msg-t".to_string(),
+                    error: "the invocation ran out of time during the send".to_string(),
+                },
+            ],
+            "the accepted entry keeps its outcome and the unchecked resend is reported for retry"
         );
     }
 }

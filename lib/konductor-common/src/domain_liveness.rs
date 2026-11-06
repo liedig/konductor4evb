@@ -88,6 +88,13 @@ impl<C: Clock> DomainLivenessCache<C> {
         Ok(active)
     }
 
+    /// Whether confirmations are reused at all. With a zero window every
+    /// check already reads the store, so a caller's extra "has my
+    /// confirmation expired?" check before committing has nothing to add.
+    pub fn reuses_confirmations(&self) -> bool {
+        !self.window.is_zero()
+    }
+
     fn entries(&self) -> MutexGuard<'_, HashMap<String, Instant>> {
         self.confirmed_active_at
             .lock()

@@ -6,9 +6,10 @@
 //! send round is bounded by the invocation's remaining time minus a response
 //! reserve, so a slow round reports its messages for retry instead of
 //! letting the invocation time out with its accepted entries unreported.
-//! Before a resend, entries whose liveness confirmation expired are
-//! re-checked, so a resend cannot deliver past a disable that landed while
-//! the first send was in flight. Throttled entries are retried inside the
+//! Before each round, entries whose liveness confirmation expired are
+//! re-checked inside the same time bound, so neither the first send nor a
+//! resend can deliver past a disable that landed while the batch was being
+//! prepared or the previous round was in flight. Throttled entries are retried inside the
 //! invocation with jittered backoff; entries still throttled are
 //! rescheduled with a short per-message visibility backoff that grows with
 //! the receive count, then reported for retry. The visibility change is
@@ -76,8 +77,10 @@ pub(crate) enum DeliveryOutcome {
 
 /// Groups prepared entries by bus, chunks each group within the `PutEvents`
 /// entry-count and size limits, and sends every chunk concurrently. Each
-/// round is time-bounded by the remaining invocation budget, and a resend
-/// first re-checks the liveness of the entries' domains.
+/// round first re-checks the liveness of the entries' domains, and the
+/// re-check and the send together are bounded by the remaining invocation
+/// budget. With a zero liveness window the first round skips the re-check,
+/// because preparation has just read the store for every record.
 pub(crate) async fn deliver<C: Clock>(
     clients: &Clients,
     liveness: &DomainLivenessCache<C>,
@@ -93,10 +96,21 @@ pub(crate) async fn deliver<C: Clock>(
             .iter()
             .map(|entry| entry.message_id.clone())
             .collect();
-        let send_budget = remaining().saturating_sub(RESPONSE_TIME_MARGIN);
+        let round_budget = remaining().saturating_sub(RESPONSE_TIME_MARGIN);
+        let recheck = retries > 0 || liveness.reuses_confirmations();
+        let round = async {
+            let (live, rejected) = if recheck {
+                keep_entries_with_live_domains(clients, liveness, pending).await
+            } else {
+                (pending, Vec::new())
+            };
+            let (chunk_outcomes, lost) = send_chunks(clients, live).await;
+            (rejected, chunk_outcomes, lost)
+        };
         let mut throttled = Vec::new();
-        match tokio::time::timeout(send_budget, send_chunks(clients, pending)).await {
-            Ok((chunk_outcomes, lost)) => {
+        match tokio::time::timeout(round_budget, round).await {
+            Ok((rejected, chunk_outcomes, lost)) => {
+                outcomes.extend(rejected);
                 for (message_id, error) in lost {
                     outcomes.push(DeliveryOutcome::Failed { message_id, error });
                 }
@@ -146,21 +160,15 @@ pub(crate) async fn deliver<C: Clock>(
         }
         retries += 1;
         tokio::time::sleep(retry_delay(jitter, retries)).await;
-        let (live, expired) = keep_entries_with_live_domains(clients, liveness, throttled).await;
-        outcomes.extend(expired);
-        if live.is_empty() {
-            return outcomes;
-        }
-        pending = live;
+        pending = throttled;
     }
 }
 
-/// Re-runs the liveness check for each distinct domain among the entries
-/// about to be resent. `confirm_active` re-reads exactly the expired
-/// confirmations, so this costs nothing while confirmations are fresh, and
-/// it stops a resend from delivering past a disable that landed while the
-/// first send was in flight. Entries whose domain is no longer active — or
-/// whose check failed — are reported for retry instead of resent.
+/// Re-runs the liveness check once for each distinct domain among the
+/// entries about to be sent. `confirm_active` re-reads exactly the expired
+/// confirmations, so this costs nothing while confirmations are fresh.
+/// Entries whose domain is no longer active — or whose check failed — are
+/// reported for retry instead of sent.
 async fn keep_entries_with_live_domains<C: Clock>(
     clients: &Clients,
     liveness: &DomainLivenessCache<C>,
@@ -169,7 +177,7 @@ async fn keep_entries_with_live_domains<C: Clock>(
     let Ok(table) = std::env::var("DOMAINS_TABLE") else {
         tracing::error!(
             metric = "PublishDeliveryRetry",
-            "DOMAINS_TABLE not set; reporting the resend for retry"
+            "DOMAINS_TABLE not set; reporting the round for retry"
         );
         return (
             Vec::new(),
@@ -177,7 +185,7 @@ async fn keep_entries_with_live_domains<C: Clock>(
                 .into_iter()
                 .map(|entry| DeliveryOutcome::Failed {
                     message_id: entry.message_id,
-                    error: "DOMAINS_TABLE not set before the resend".to_string(),
+                    error: "DOMAINS_TABLE not set before the send".to_string(),
                 })
                 .collect(),
         );
@@ -185,7 +193,12 @@ async fn keep_entries_with_live_domains<C: Clock>(
     let mut live = Vec::with_capacity(entries.len());
     let mut expired = Vec::new();
     let mut denied: HashSet<String> = HashSet::new();
+    let mut confirmed: HashSet<String> = HashSet::new();
     for entry in entries {
+        if confirmed.contains(&entry.domain) {
+            live.push(entry);
+            continue;
+        }
         if denied.contains(&entry.domain) {
             expired.push(DeliveryOutcome::Failed {
                 message_id: entry.message_id,
@@ -194,7 +207,10 @@ async fn keep_entries_with_live_domains<C: Clock>(
             continue;
         }
         match require_active_domain(clients, liveness, &table, &entry.domain).await {
-            Ok(()) => live.push(entry),
+            Ok(()) => {
+                confirmed.insert(entry.domain.clone());
+                live.push(entry);
+            }
             Err(e) => {
                 denied.insert(entry.domain.clone());
                 expired.push(DeliveryOutcome::Failed {
@@ -214,7 +230,13 @@ fn chunk_by_bus(entries: Vec<PreparedEntry>) -> Vec<Vec<PreparedEntry>> {
         std::collections::BTreeMap::new();
     for entry in entries {
         by_bus
-            .entry(entry.envelope.event_bus_name.clone())
+            .entry(
+                entry
+                    .request_entry
+                    .event_bus_name()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
             .or_default()
             .push((entry.size_bytes, entry));
     }
@@ -272,14 +294,7 @@ async fn send_chunk(
 ) -> Vec<ChunkOutcome> {
     let entries: Vec<PutEventsRequestEntry> = chunk
         .iter()
-        .map(|entry| {
-            PutEventsRequestEntry::builder()
-                .event_bus_name(&entry.envelope.event_bus_name)
-                .source(&entry.envelope.source)
-                .detail_type(&entry.envelope.detail_type)
-                .detail(&entry.detail_json)
-                .build()
-        })
+        .map(|entry| entry.request_entry.clone())
         .collect();
     let response = eb.put_events().set_entries(Some(entries)).send().await;
     let accepted_ms = chrono::Utc::now().timestamp_millis();

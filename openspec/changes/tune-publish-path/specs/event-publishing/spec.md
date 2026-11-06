@@ -132,11 +132,17 @@ Admission and delivery SHALL each reuse a confirmation that a domain is `ACTIVE`
 - **THEN** every publish request admitted after t0 plus the window SHALL instead receive `404 Not Found`
 - **AND THEN** every message for that domain processed by delivery after t0 plus the window SHALL be reported for retry without being sent, following the existing retry and DLQ handling
 
-#### Scenario: A throttle retry re-checks a lapsed confirmation
+#### Scenario: A lapsed confirmation is re-checked before sending
 
-- **WHEN** delivery holds throttled entries for an in-invocation retry and the domain's `ACTIVE` confirmation lapses during the backoff
-- **THEN** delivery SHALL read the domain store again before resending them
+- **WHEN** a domain's `ACTIVE` confirmation lapses while delivery prepares the rest of the batch or waits out a throttle backoff
+- **THEN** delivery SHALL read the domain store again before that send round
 - **AND THEN** entries for a domain that is no longer `ACTIVE` SHALL be reported for retry without being sent
+
+#### Scenario: A lapsed confirmation is re-checked before enqueueing
+
+- **WHEN** a domain's `ACTIVE` confirmation lapses while admission resolves metadata and the schema
+- **THEN** admission SHALL read the domain store again before enqueueing
+- **AND THEN** it SHALL return `404 Not Found` without enqueueing when the domain is no longer `ACTIVE`
 
 #### Scenario: Negative results are never reused
 
