@@ -44,3 +44,5 @@ By signing off, you certify that you wrote the contribution or otherwise have th
 ## Review and merging
 
 Pull requests to `main` need a code owner's approval, with every review conversation resolved, and the jobs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) must pass. Each pull request is merged as one squashed commit that uses the pull request title as its subject, so give the pull request a Conventional Commits title. The rules are defined as rulesets in [`.github/rulesets/`](.github/rulesets/).
+
+When a pull request is merged, every issue its body references — with a closing keyword such as `fixes #N` or a bare `#N` mention — is closed automatically with a comment naming the pull request, so reference issue numbers deliberately. References that point to other pull requests, unknown numbers, or other repositories are skipped.
