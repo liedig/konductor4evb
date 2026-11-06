@@ -45,25 +45,45 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Repository-qualified references use owner/repo#N. Rewrite the ones
+          # naming this repository to the bare form and drop foreign ones:
+          # GitHub reads those as cross-repository, and this token cannot act
+          # on them. Without this, "Depends on other/project#45" would close
+          # this repository's #45.
+          ESCAPED_REPO=${REPO//./\\.}
+          NORMALIZED=$(printf '%s' "$PR_BODY" \
+            | sed -E "s|${ESCAPED_REPO}#([0-9]+)|#\1|g; s|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+||g")
+
+          # One reference pattern shared by both extractions: hash references
+          # and same-repository issue URLs.
+          REFS="#[0-9]+|https://github\\.com/${ESCAPED_REPO}/issues/[0-9]+"
+
           # A line carrying a closing keyword ("fixes #1, closes #2") marks
-          # every issue number on it as an explicit resolution target.
-          KEYWORD_REFS=$(printf '%s' "$PR_BODY" \
+          # every reference on it, hash or issue URL, as an explicit
+          # resolution target.
+          KEYWORD_REFS=$(printf '%s' "$NORMALIZED" \
             | grep -iE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b' \
-            | grep -oE '#[0-9]+' | grep -oE '[0-9]+$' | sort -un || true)
+            | grep -oE "$REFS" | grep -oE '[0-9]+$' | sort -un || true)
 
           # Bare mentions count too: the PR template has no Closes field, so a
-          # plain #N is how associations usually get made. Same-repository
-          # issue URLs are accepted; other repositories' issues are out of
-          # the token's reach and never match.
-          MENTION_REFS=$(printf '%s' "$PR_BODY" \
-            | grep -oE "#[0-9]+|https://github\.com/${REPO}/issues/[0-9]+" \
-            | grep -oE '[0-9]+$' | sort -un || true)
+          # plain #N is how associations usually get made.
+          MENTION_REFS=$(printf '%s' "$NORMALIZED" \
+            | grep -oE "$REFS" | grep -oE '[0-9]+$' | sort -un || true)
 
+          FAILED=0
           for N in $MENTION_REFS; do
             # /issues/{n} also resolves pull request numbers; a reference to
-            # another PR must not be treated as an issue.
-            if ! ISSUE=$(gh api "repos/${REPO}/issues/${N}" 2>/dev/null); then
-              echo "#${N}: no such issue, skipping"
+            # another PR must not be treated as an issue. Only a confirmed
+            # 404 may skip; a transient read failure must not silently drop
+            # the resolution, so it is recorded and fails the job below.
+            if ! ISSUE=$(gh api "repos/${REPO}/issues/${N}" 2>&1); then
+              if grep -q 'HTTP 404' <<<"$ISSUE"; then
+                echo "#${N}: no such issue, skipping"
+              else
+                echo "#${N}: lookup failed:" >&2
+                echo "$ISSUE" >&2
+                FAILED=1
+              fi
               continue
             fi
             if [ "$(jq -r 'has("pull_request")' <<<"$ISSUE")" = "true" ]; then
@@ -83,11 +103,21 @@ jobs:
               continue
             fi
 
-            MARKER="Resolved by #${PR_NUMBER}"
-            if gh api --paginate "repos/${REPO}/issues/${N}/comments" | jq -r '.[].body' | grep -qF "$MARKER"; then
+            COMMENT="Resolved by #${PR_NUMBER} (merged into \`${BASE_REF}\`)."
+            # Full-line match: a prefix search would take "Resolved by #180"
+            # as proof that #18's comment exists. And no grep -q: under
+            # pipefail its early exit SIGPIPEs upstream jq/gh, and the failed
+            # pipeline would read as "no marker" and post a duplicate.
+            if ! EXISTING=$(gh api --paginate "repos/${REPO}/issues/${N}/comments" 2>&1); then
+              echo "#${N}: could not list comments:" >&2
+              echo "$EXISTING" >&2
+              FAILED=1
+              continue
+            fi
+            if jq -r '.[].body' <<<"$EXISTING" | grep -Fx "$COMMENT" > /dev/null; then
               echo "#${N}: reference comment already present"
             else
-              gh api "repos/${REPO}/issues/${N}/comments" -f body="${MARKER} (merged into \`${BASE_REF}\`)." > /dev/null
+              gh api "repos/${REPO}/issues/${N}/comments" -f body="$COMMENT" > /dev/null
               echo "#${N}: commented"
             fi
 
@@ -96,3 +126,7 @@ jobs:
               echo "#${N}: closed as completed"
             fi
           done
+
+          # Every issue was attempted; failed reads fail the job now so a
+          # workflow re-run retries from a complete picture.
+          exit $FAILED

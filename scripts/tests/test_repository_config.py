@@ -432,6 +432,27 @@ class IssueResolutionWorkflowTest(unittest.TestCase):
     def test_script_checks_existing_comments_before_posting(self):
         self.assertGreaterEqual(self.script.count("/comments"), 2)
 
+    def test_script_ignores_foreign_repository_qualified_references(self):
+        # "Depends on other/project#45" must not touch this repository's #45.
+        self.assertIn("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+", self.script)
+
+    def test_keyword_detection_covers_issue_urls(self):
+        # "Fixes https://github.com/<repo>/issues/45" is an explicit target;
+        # the keyword and mention paths share one reference pattern.
+        self.assertGreaterEqual(self.script.count('grep -oE "$REFS"'), 2)
+
+    def test_marker_match_is_a_full_line_match_without_early_exit(self):
+        # "Resolved by #180" must not suppress #18's comment, and grep -q
+        # would SIGPIPE the upstream pipeline into a false "no marker".
+        self.assertIn('grep -Fx "$COMMENT"', self.script)
+        self.assertNotIn("grep -qF", self.script)
+
+    def test_script_distinguishes_missing_issues_from_failed_reads(self):
+        # A 404 skips the reference; a transient failure fails the job so a
+        # re-run retries instead of silently dropping the resolution.
+        self.assertIn("HTTP 404", self.script)
+        self.assertIn("exit $FAILED", self.script)
+
 
 if __name__ == "__main__":
     unittest.main()
