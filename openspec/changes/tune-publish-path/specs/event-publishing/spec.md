@@ -165,6 +165,11 @@ Admission and delivery SHALL each reuse a confirmation that a domain is `ACTIVE`
 - **WHEN** admission needs a domain read because no confirmation is reusable, and the domain store fails
 - **THEN** the API SHALL return `503 Service Unavailable` and SHALL NOT queue the event
 
+#### Scenario: A read slower than the window confirms nothing
+
+- **WHEN** the window is above 0 and a domain read answers `ACTIVE` only after the whole window has passed
+- **THEN** admission SHALL return `503 Service Unavailable` without queueing the event, and delivery SHALL report the message for retry without sending it
+
 ### Requirement: Publish latency observability
 
 The platform SHALL publish metrics for admission latency, the time an admitted event waits in the publish queue, and the time from queue acceptance to EventBridge acceptance. It SHALL alarm when the publish DLQ holds messages, when the oldest queued publish message exceeds an age threshold, and when delivery keeps reporting publish messages for retry. These metrics SHALL NOT carry payload data, principals, or tokens.

@@ -86,7 +86,7 @@ Each failure is then one of three outcomes:
 The new `konductor_common::domain_liveness` module provides `DomainLivenessCache`:
 
 - **Storage:** a process-local `Mutex<HashMap<String, Instant>>` that records when each domain was last confirmed `ACTIVE`, with the window as a `Duration`.
-- **API:** `confirm_active(domain, fetch)` returns the cached confirmation when it is younger than the window. Otherwise it calls `fetch`, which reads the domain and reports whether it is `ACTIVE`. It stores only positive results, timestamped when the read began so a slow read cannot extend the window, and passes through the caller's error type, so admission keeps `ControlPlaneError` (404 or 503) and delivery keeps `anyhow`.
+- **API:** `confirm_active(domain, fetch)` returns the cached confirmation when it is younger than the window. Otherwise it calls `fetch`, which reads the domain and reports whether it is `ACTIVE`. It stores only positive results, timestamped when the read began so a slow read cannot extend the window. A positive read that takes the whole window or longer returns `Unconfirmed` and is not stored, so no caller commits on an answer that may trail a disable; a zero window reuses nothing, so there the read itself is the answer. It passes through the caller's error type, so admission keeps `ControlPlaneError` (404 or 503) and delivery keeps `anyhow`.
 - **Window 0:** a window of 0 never stores anything, so every check reads the domain.
 - **Consistency:** the underlying `GetItem` uses strongly consistent reads in both handlers, so a fresh `ACTIVE` confirmation cannot trail a disable that has just happened; the bounded-disable window starts from a true state.
 - **Testing:** an injectable time source makes window expiry testable without sleeping.

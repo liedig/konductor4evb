@@ -48,7 +48,7 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
 use konductor_common::backoff::JitterSource;
-use konductor_common::domain_liveness::{Clock, DomainLivenessCache};
+use konductor_common::domain_liveness::{Clock, DomainLivenessCache, Liveness};
 use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{put_events_entry_bytes, EventEnvelope, SchemaName};
 use konductor_common::models::DomainStatus;
@@ -349,7 +349,7 @@ pub(crate) async fn require_active_domain<C: Clock>(
     table: &str,
     domain_name: &str,
 ) -> Result<()> {
-    let active = liveness
+    let liveness = liveness
         .confirm_active(domain_name, || async {
             let output = clients
                 .ddb
@@ -367,10 +367,15 @@ pub(crate) async fn require_active_domain<C: Clock>(
             Ok(status.parse::<DomainStatus>() == Ok(DomainStatus::Active))
         })
         .await?;
-    if !active {
-        anyhow::bail!("domain '{domain_name}' is not ACTIVE or does not exist");
+    match liveness {
+        Liveness::Active => Ok(()),
+        Liveness::NotActive => {
+            anyhow::bail!("domain '{domain_name}' is not ACTIVE or does not exist")
+        }
+        Liveness::Unconfirmed => anyhow::bail!(
+            "domain '{domain_name}' could not be confirmed ACTIVE within the liveness window"
+        ),
     }
-    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -2476,5 +2481,51 @@ mod tests {
             ],
             "the accepted entry keeps its outcome and the unchecked resend is reported for retry"
         );
+    }
+
+    #[tokio::test]
+    async fn a_domain_read_that_outlasts_the_window_does_not_authorize_the_send() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        clock.advance(Duration::from_secs(2));
+        let read_clock = clock.clone();
+        let slow_domain_read = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            read_clock.advance(Duration::from_secs(2));
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("status", s("ACTIVE"))
+                .build()
+        });
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let clients = clients_with_sqs(vec![slow_domain_read], vec![put.clone()], vec![]);
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![prepared_entry_for(
+                "msg-1",
+                "acme-prod-orders-event-bus",
+                1_785_407_400_100,
+                "orders",
+            )],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        assert_eq!(
+            outcomes,
+            vec![send::DeliveryOutcome::Failed {
+                message_id: "msg-1".to_string(),
+                error: "domain 'orders' could not be confirmed ACTIVE within the liveness window"
+                    .to_string(),
+            }]
+        );
+        assert_eq!(put.num_calls(), 0);
     }
 }

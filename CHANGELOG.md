@@ -31,7 +31,8 @@ Older rationale is available through the [decision index](docs/decisions/README.
   DynamoDB and SQS connections during init. Delivery batches same-bus events
   into shared `PutEvents` requests with per-entry failure mapping, retries
   throttled entries inside the invocation (re-checking expired domain
-  liveness before every send, as admission does before enqueueing) and then
+  liveness before every send, as admission does before enqueueing, and never
+  trusting a domain read slower than the window) and then
   re-shows them with an exponential visibility
   backoff, bounds every send round and visibility change by the remaining
   invocation time so a slow request cannot cost the batch its
