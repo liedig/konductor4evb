@@ -1,0 +1,132 @@
+name: Issues
+
+# When a pull request targeting the default branch is merged, comment on every
+# issue its body references — via a closing keyword ("fixes #N") or a bare #N
+# mention — with a link to the PR, then close the issue as completed.
+#
+# pull_request_target runs in the base repository's context: under plain
+# pull_request, a merged fork PR would still hold a read-only token and the
+# comment/close calls would fail. Safe here because the job never checks out
+# or executes PR code; it reads only event-payload metadata.
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+
+# Serialize per PR: a re-run must observe the previous run's comments for the
+# duplicate check below to work.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve referenced issues
+    # Mirror GitHub's native keyword auto-close, which fires only for merges
+    # into the default branch; a stacked PR merged into a feature branch must
+    # not resolve issues early.
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comment on and close referenced issues
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # The body is attacker-controlled for fork PRs: it travels via env,
+          # never ${{ }} interpolation into the script (injection).
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          # Repository-qualified references use owner/repo#N. Rewrite the ones
+          # naming this repository to the bare form and drop foreign ones:
+          # GitHub reads those as cross-repository, and this token cannot act
+          # on them. Without this, "Depends on other/project#45" would close
+          # this repository's #45.
+          ESCAPED_REPO=${REPO//./\\.}
+          NORMALIZED=$(printf '%s' "$PR_BODY" \
+            | sed -E "s|${ESCAPED_REPO}#([0-9]+)|#\1|g; s|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+||g")
+
+          # One reference pattern shared by both extractions: hash references
+          # and same-repository issue URLs.
+          REFS="#[0-9]+|https://github\\.com/${ESCAPED_REPO}/issues/[0-9]+"
+
+          # A line carrying a closing keyword ("fixes #1, closes #2") marks
+          # every reference on it, hash or issue URL, as an explicit
+          # resolution target.
+          KEYWORD_REFS=$(printf '%s' "$NORMALIZED" \
+            | grep -iE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b' \
+            | grep -oE "$REFS" | grep -oE '[0-9]+$' | sort -un || true)
+
+          # Bare mentions count too: the PR template has no Closes field, so a
+          # plain #N is how associations usually get made.
+          MENTION_REFS=$(printf '%s' "$NORMALIZED" \
+            | grep -oE "$REFS" | grep -oE '[0-9]+$' | sort -un || true)
+
+          FAILED=0
+          for N in $MENTION_REFS; do
+            # /issues/{n} also resolves pull request numbers; a reference to
+            # another PR must not be treated as an issue. Only a confirmed
+            # 404 may skip; a transient read failure must not silently drop
+            # the resolution, so it is recorded and fails the job below.
+            if ! ISSUE=$(gh api "repos/${REPO}/issues/${N}" 2>&1); then
+              if grep -q 'HTTP 404' <<<"$ISSUE"; then
+                echo "#${N}: no such issue, skipping"
+              else
+                echo "#${N}: lookup failed:" >&2
+                echo "$ISSUE" >&2
+                FAILED=1
+              fi
+              continue
+            fi
+            if [ "$(jq -r 'has("pull_request")' <<<"$ISSUE")" = "true" ]; then
+              echo "#${N}: is a pull request, skipping"
+              continue
+            fi
+            STATE=$(jq -r .state <<<"$ISSUE")
+
+            KEYWORD=false
+            if printf '%s\n' "$KEYWORD_REFS" | grep -qx "$N"; then KEYWORD=true; fi
+
+            # GitHub's native auto-close may have won the race for a keyword
+            # target; it still gets the reference comment. A bare mention of
+            # an already-closed issue is left alone.
+            if [ "$STATE" != "open" ] && [ "$KEYWORD" = "false" ]; then
+              echo "#${N}: already ${STATE} and only mentioned, skipping"
+              continue
+            fi
+
+            COMMENT="Resolved by #${PR_NUMBER} (merged into \`${BASE_REF}\`)."
+            # Full-line match: a prefix search would take "Resolved by #180"
+            # as proof that #18's comment exists. And no grep -q: under
+            # pipefail its early exit SIGPIPEs upstream jq/gh, and the failed
+            # pipeline would read as "no marker" and post a duplicate.
+            if ! EXISTING=$(gh api --paginate "repos/${REPO}/issues/${N}/comments" 2>&1); then
+              echo "#${N}: could not list comments:" >&2
+              echo "$EXISTING" >&2
+              FAILED=1
+              continue
+            fi
+            if jq -r '.[].body' <<<"$EXISTING" | grep -Fx "$COMMENT" > /dev/null; then
+              echo "#${N}: reference comment already present"
+            else
+              gh api "repos/${REPO}/issues/${N}/comments" -f body="$COMMENT" > /dev/null
+              echo "#${N}: commented"
+            fi
+
+            if [ "$STATE" = "open" ]; then
+              gh api -X PATCH "repos/${REPO}/issues/${N}" -f state=closed -f state_reason=completed > /dev/null
+              echo "#${N}: closed as completed"
+            fi
+          done
+
+          # Every issue was attempted; failed reads fail the job now so a
+          # workflow re-run retries from a complete picture.
+          exit $FAILED

@@ -7,6 +7,14 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Resolve referenced issues when a pull request merges. A new
+  `.github/workflows/issues.yml` workflow comments `Resolved by #<PR>` on
+  every issue the pull request body references — by closing keyword
+  (`fixes #N`) or bare `#N` mention — and closes it as completed.
+  References to pull requests, unknown numbers, and other repositories'
+  issues are skipped, and re-runs never comment twice. Bare mentions
+  count, so reference issue numbers deliberately. See
+  [the decision](docs/decisions/resolve-issues-on-merge.md).
 - Add `konductor-sdk`, a pre-alpha Python SDK (Python 3.11+) for the
   application APIs: synchronous `publish`, `subscribe`, `unsubscribe`, and
   `describe_subscription` against the OAuth API with a Cognito access token

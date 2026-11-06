@@ -381,5 +381,78 @@ class MainIntegrityRulesetTest(unittest.TestCase):
         self.assertIs(self.rules["required_status_checks"]["strict_required_status_checks_policy"], False)
 
 
+class IssueResolutionWorkflowTest(unittest.TestCase):
+    """issues.yml resolves issues referenced by a merged pull request."""
+
+    def setUp(self):
+        self.workflow = load_workflow("issues.yml")
+        (self.job,) = self.workflow["jobs"].values()
+        (self.step,) = [step for step in self.job["steps"] if "run" in step]
+        self.script = self.step["run"]
+
+    def test_triggers_only_when_a_pull_request_is_closed(self):
+        # pull_request_target, not pull_request: a merged fork PR must still
+        # hold a token that can write issues.
+        triggers = workflow_triggers(self.workflow)
+
+        self.assertEqual(set(triggers), {"pull_request_target"})
+        self.assertEqual(triggers["pull_request_target"]["types"], ["closed"])
+
+    def test_job_runs_only_for_merges_into_the_default_branch(self):
+        condition = " ".join(self.job["if"].split())
+
+        self.assertIn("github.event.pull_request.merged == true", condition)
+        self.assertIn("github.event.pull_request.base.ref == github.event.repository.default_branch", condition)
+
+    def test_token_can_only_write_issues(self):
+        self.assertEqual(self.workflow["permissions"], {"contents": "read", "issues": "write"})
+
+    def test_no_step_checks_out_the_pull_request(self):
+        for step in self.job["steps"]:
+            self.assertNotIn("checkout", step.get("uses", ""))
+
+    def test_pr_body_is_passed_via_environment_not_interpolated(self):
+        # The body is attacker-controlled for fork PRs; interpolating it into
+        # the script would be an injection vector.
+        self.assertEqual(self.step["env"]["PR_BODY"], "${{ github.event.pull_request.body }}")
+        self.assertNotIn("pull_request.body", self.script)
+
+    def test_script_detects_closing_keywords_and_bare_mentions(self):
+        self.assertIn("close[sd]?|fix(e[sd])?|resolve[sd]?", self.script)
+        self.assertIn("#[0-9]+", self.script)
+
+    def test_script_distinguishes_issues_from_pull_requests(self):
+        self.assertIn('has("pull_request")', self.script)
+
+    def test_script_comments_with_the_resolving_pr_and_closes_as_completed(self):
+        self.assertIn("Resolved by #", self.script)
+        self.assertIn("state=closed", self.script)
+        self.assertIn("state_reason=completed", self.script)
+
+    def test_script_checks_existing_comments_before_posting(self):
+        self.assertGreaterEqual(self.script.count("/comments"), 2)
+
+    def test_script_ignores_foreign_repository_qualified_references(self):
+        # "Depends on other/project#45" must not touch this repository's #45.
+        self.assertIn("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[0-9]+", self.script)
+
+    def test_keyword_detection_covers_issue_urls(self):
+        # "Fixes https://github.com/<repo>/issues/45" is an explicit target;
+        # the keyword and mention paths share one reference pattern.
+        self.assertGreaterEqual(self.script.count('grep -oE "$REFS"'), 2)
+
+    def test_marker_match_is_a_full_line_match_without_early_exit(self):
+        # "Resolved by #180" must not suppress #18's comment, and grep -q
+        # would SIGPIPE the upstream pipeline into a false "no marker".
+        self.assertIn('grep -Fx "$COMMENT"', self.script)
+        self.assertNotIn("grep -qF", self.script)
+
+    def test_script_distinguishes_missing_issues_from_failed_reads(self):
+        # A 404 skips the reference; a transient failure fails the job so a
+        # re-run retries instead of silently dropping the resolution.
+        self.assertIn("HTTP 404", self.script)
+        self.assertIn("exit $FAILED", self.script)
+
+
 if __name__ == "__main__":
     unittest.main()

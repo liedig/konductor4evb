@@ -58,6 +58,7 @@ before treating an older claim as a current requirement.
 ## Contributors and the console
 
 - [Initial test foundation](unit-test-foundation.md)
+- [Merged pull requests resolve referenced issues](resolve-issues-on-merge.md)
 - [CI templates and original Gitflow decision](github-ci-templates.md)
 - [Trunk-based branching, superseding Gitflow](trunk-based-branching.md)
 - [Branch rulesets, label file, and issue forms](branch-rulesets-and-issue-forms.md)
