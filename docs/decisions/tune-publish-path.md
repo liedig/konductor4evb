@@ -66,9 +66,12 @@ Five levers, all operator-tunable through the
    domain works on the next publish. The reads are strongly consistent, so a
    fresh confirmation cannot trail a disable that has just happened and the
    bounded-disable contract holds from the read itself. A confirmation's
-   window starts when its read begins, so a slow read cannot extend it, and
-   delivery re-checks a confirmation that lapsed during in-invocation
-   backoff before it resends throttled entries. Store errors
+   window starts when its read begins, so a slow read cannot extend it.
+   Admission re-checks before enqueueing and delivery before every send
+   round; each re-check reads the store only for a confirmation that expired
+   while the request was validated, the batch was prepared, or a throttle
+   backoff ran. With a zero window every request and batch already reads at
+   its start, so only the resend re-check reads again. Store errors
    propagate and are never cached. A cached confirmation never bypasses
    authorization, which runs first. Admission also pre-warms its DynamoDB
    and SQS connections during Lambda init with best-effort calls (2-second
