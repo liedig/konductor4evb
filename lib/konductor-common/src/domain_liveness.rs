@@ -1,8 +1,8 @@
 //! Process-local cache of positive domain-liveness confirmations for the
 //! publish path. Only `ACTIVE` confirmations are remembered, each for at most
-//! the configured window; `INACTIVE` and missing domains always hit the
-//! domain store, so a re-enabled or newly provisioned domain works on the
-//! very next publish.
+//! the configured window counted from the start of the confirming read;
+//! `INACTIVE` and missing domains always hit the domain store, so a
+//! re-enabled or newly provisioned domain works on the very next publish.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
@@ -65,7 +65,9 @@ impl<C: Clock> DomainLivenessCache<C> {
     /// reads the domain store and returns `Ok(true)` only for an `ACTIVE`
     /// domain; its error type passes through unchanged so callers keep their
     /// own mapping (for example a 404 or 503 response). Only positive
-    /// results are stored.
+    /// results are stored, and the window starts when the read begins —
+    /// not when its response arrives — so a slow read cannot extend the
+    /// disable bound by its own latency.
     pub async fn confirm_active<E, F, Fut>(&self, domain: &str, fetch: F) -> Result<bool, E>
     where
         F: FnOnce() -> Fut,
@@ -78,9 +80,10 @@ impl<C: Clock> DomainLivenessCache<C> {
                 }
             }
         }
+        let observed_at = self.clock.now();
         let active = fetch().await?;
         if active && !self.window.is_zero() {
-            self.entries().insert(domain.to_string(), self.clock.now());
+            self.entries().insert(domain.to_string(), observed_at);
         }
         Ok(active)
     }
@@ -183,6 +186,31 @@ mod tests {
             calls.load(Ordering::SeqCst),
             2,
             "the confirmation expired one second past the window"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_window_starts_before_the_fetch() {
+        let clock = ManualClock::new();
+        let cache = DomainLivenessCache::with_clock(Duration::from_secs(5), clock.clone());
+        let calls = AtomicUsize::new(0);
+
+        let slow_read = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            clock.advance(Duration::from_secs(3));
+            Ok::<_, String>(true)
+        };
+        assert!(cache.confirm_active("orders", slow_read).await.unwrap());
+        clock.advance(Duration::from_millis(2_500));
+        assert!(cache
+            .confirm_active("orders", counting_fetch(&calls, true))
+            .await
+            .unwrap());
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the window runs from the read's start, so a slow read cannot extend the disable bound"
         );
     }
 

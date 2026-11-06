@@ -216,8 +216,8 @@ dedicated method-level throttle on every environment stage of both APIs
 independently to **every method**, not as one shared bucket per stage, so a
 stage's control-plane ceiling is its method count times 50 rps. With the
 current contracts that is 53 buckets per environment (35 control-plane
-methods on the OAuth surface, 18 on the IAM surface; the validator reads
-these counts and its tests keep them in sync with the contracts). With E
+methods on the OAuth surface, 18 on the IAM surface; the validator counts
+the operations in the OpenAPI contracts each time it runs). With E
 environments (S = 2 × E stages), `make validate-config` checks the budget at
 deploy time:
 
