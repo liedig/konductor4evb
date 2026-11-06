@@ -1,6 +1,7 @@
 //! Process-local cache of positive domain-liveness confirmations for the
 //! publish path. Only `ACTIVE` confirmations are remembered, each for at most
-//! the configured window counted from the start of the confirming read;
+//! the configured window counted from the start of the confirming read, and
+//! a read that outlasts the window confirms nothing;
 //! `INACTIVE` and missing domains always hit the domain store, so a
 //! re-enabled or newly provisioned domain works on the very next publish.
 
@@ -11,6 +12,19 @@ use std::time::{Duration, Instant};
 /// Window applied when `DOMAIN_LIVENESS_CACHE_SECONDS` is unset or cannot be
 /// parsed: five minutes.
 pub const DEFAULT_DOMAIN_LIVENESS_WINDOW: Duration = Duration::from_secs(300);
+
+/// The answer to a liveness check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Liveness {
+    /// The domain is confirmed `ACTIVE` within the window.
+    Active,
+    /// The domain is `INACTIVE` or does not exist.
+    NotActive,
+    /// The store answered `ACTIVE`, but the read took longer than the window,
+    /// so the answer may already trail a disable. Callers must not commit on
+    /// it; the result is not cached.
+    Unconfirmed,
+}
 
 /// Time source for the cache. Production uses [`SystemClock`]; tests advance
 /// a manual clock instead of sleeping.
@@ -67,8 +81,10 @@ impl<C: Clock> DomainLivenessCache<C> {
     /// own mapping (for example a 404 or 503 response). Only positive
     /// results are stored, and the window starts when the read begins —
     /// not when its response arrives — so a slow read cannot extend the
-    /// disable bound by its own latency.
-    pub async fn confirm_active<E, F, Fut>(&self, domain: &str, fetch: F) -> Result<bool, E>
+    /// disable bound by its own latency. A positive read that takes the whole
+    /// window or longer is [`Liveness::Unconfirmed`] and is not stored; with
+    /// a zero window nothing is reused, so the read itself is the answer.
+    pub async fn confirm_active<E, F, Fut>(&self, domain: &str, fetch: F) -> Result<Liveness, E>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<bool, E>>,
@@ -76,16 +92,22 @@ impl<C: Clock> DomainLivenessCache<C> {
         if !self.window.is_zero() {
             if let Some(confirmed_at) = self.entries().get(domain) {
                 if self.clock.now().saturating_duration_since(*confirmed_at) < self.window {
-                    return Ok(true);
+                    return Ok(Liveness::Active);
                 }
             }
         }
         let observed_at = self.clock.now();
-        let active = fetch().await?;
-        if active && !self.window.is_zero() {
-            self.entries().insert(domain.to_string(), observed_at);
+        if !fetch().await? {
+            return Ok(Liveness::NotActive);
         }
-        Ok(active)
+        if self.window.is_zero() {
+            return Ok(Liveness::Active);
+        }
+        if self.clock.now().saturating_duration_since(observed_at) >= self.window {
+            return Ok(Liveness::Unconfirmed);
+        }
+        self.entries().insert(domain.to_string(), observed_at);
+        Ok(Liveness::Active)
     }
 
     /// Whether confirmations are reused at all. With a zero window every
@@ -152,14 +174,20 @@ mod tests {
         let cache = DomainLivenessCache::new(Duration::from_secs(300));
         let calls = AtomicUsize::new(0);
 
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -174,20 +202,29 @@ mod tests {
         let cache = DomainLivenessCache::with_clock(Duration::from_secs(300), clock.clone());
         let calls = AtomicUsize::new(0);
 
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
         clock.advance(Duration::from_secs(299));
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
         clock.advance(Duration::from_secs(2));
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -207,12 +244,18 @@ mod tests {
             clock.advance(Duration::from_secs(3));
             Ok::<_, String>(true)
         };
-        assert!(cache.confirm_active("orders", slow_read).await.unwrap());
+        assert_eq!(
+            cache.confirm_active("orders", slow_read).await.unwrap(),
+            Liveness::Active
+        );
         clock.advance(Duration::from_millis(2_500));
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -226,28 +269,40 @@ mod tests {
         let cache = DomainLivenessCache::new(Duration::from_secs(300));
         let calls = AtomicUsize::new(0);
 
-        assert!(!cache
-            .confirm_active("orders", counting_fetch(&calls, false))
-            .await
-            .unwrap());
-        assert!(!cache
-            .confirm_active("orders", counting_fetch(&calls, false))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, false))
+                .await
+                .unwrap(),
+            Liveness::NotActive
+        );
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, false))
+                .await
+                .unwrap(),
+            Liveness::NotActive
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
             "negative results always hit the store"
         );
 
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             3,
@@ -260,14 +315,20 @@ mod tests {
         let cache = DomainLivenessCache::new(Duration::ZERO);
         let calls = AtomicUsize::new(0);
 
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -289,10 +350,13 @@ mod tests {
         assert_eq!(err, "store down");
 
         let calls = AtomicUsize::new(0);
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             1,
@@ -305,23 +369,81 @@ mod tests {
         let cache = DomainLivenessCache::new(Duration::from_secs(300));
         let calls = AtomicUsize::new(0);
 
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
-        assert!(cache
-            .confirm_active("payments", counting_fetch(&calls, true))
-            .await
-            .unwrap());
-        assert!(cache
-            .confirm_active("orders", counting_fetch(&calls, true))
-            .await
-            .unwrap());
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
+        assert_eq!(
+            cache
+                .confirm_active("payments", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
 
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,
             "each domain is confirmed independently"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_read_that_outlasts_the_window_is_unconfirmed_and_not_cached() {
+        let clock = ManualClock::new();
+        let cache = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        let calls = AtomicUsize::new(0);
+
+        let slower_than_the_window = || async {
+            calls.fetch_add(1, Ordering::SeqCst);
+            clock.advance(Duration::from_secs(2));
+            Ok::<_, String>(true)
+        };
+        assert_eq!(
+            cache
+                .confirm_active("orders", slower_than_the_window)
+                .await
+                .unwrap(),
+            Liveness::Unconfirmed,
+            "an ACTIVE answer older than the window may already trail a disable"
+        );
+        assert_eq!(
+            cache
+                .confirm_active("orders", counting_fetch(&calls, true))
+                .await
+                .unwrap(),
+            Liveness::Active
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the unconfirmed answer was not cached"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_zero_window_accepts_a_slow_read() {
+        let clock = ManualClock::new();
+        let cache = DomainLivenessCache::with_clock(Duration::ZERO, clock.clone());
+
+        let slow_read = || async {
+            clock.advance(Duration::from_secs(2));
+            Ok::<_, String>(true)
+        };
+        assert_eq!(
+            cache.confirm_active("orders", slow_read).await.unwrap(),
+            Liveness::Active,
+            "with no reuse, the read itself is the check"
         );
     }
 

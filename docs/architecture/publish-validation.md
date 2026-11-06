@@ -124,8 +124,9 @@ Admission checks each request in the following order:
    authorization, never stores an `INACTIVE` or missing result, and a store
    error is never cached. The underlying read is strongly consistent, so a
    fresh confirmation cannot trail a disable that has just happened. A
-   domain-store outage still returns `503`, while an `INACTIVE` domain
-   returns `404`. The consequence: disabling a domain takes effect within
+   domain-store outage still returns `503`, as does a domain read that takes
+   the whole window or longer (its `ACTIVE` answer may already trail a
+   disable), while an `INACTIVE` domain returns `404`. The consequence: disabling a domain takes effect within
    the window, while re-enabling takes effect on the next publish.
 4. **Schema resolution (`404`).** The latest version of `{org}-{domain}@{eventName}`
    is resolved from the stage-selected environment's registry. The schema is
@@ -157,7 +158,7 @@ Use the status code to distinguish invalid requests from platform failures.
 | `403` | No publisher binding for this principal on this domain | Ask the platform team for a binding |
 | `404` | Domain missing/inactive, or no schema for this event in this environment | Check domain status; register the schema first. A cached ACTIVE confirmation can admit publishes for up to the liveness window after a disable; delivery re-checks under the same window, so those events can still arrive. Once delivery observes the domain is no longer ACTIVE it reports the queued messages for retry — they dead-letter after the receive budget, or deliver after a re-enable — rather than being discarded |
 | `422` | The payload violates the schema's latest version | Fix the payload (violations are listed in `message`) |
-| `503` | The platform could not *evaluate* the request (registry unreachable, stored schema unusable, queue write failed) | Retry with backoff—this is never a rejection |
+| `503` | The platform could not *evaluate* the request (registry unreachable, stored schema unusable, queue write failed, domain read slower than the liveness window) | Retry with backoff—this is never a rejection |
 
 Two distinctions determine how callers respond:
 
@@ -251,7 +252,9 @@ about the payload, not about the registry's current state.
   cache semantics as admission: a confirmed-`ACTIVE` result is reused for at
   most the liveness window, `INACTIVE` and missing domains are always
   re-read, and store errors are never cached. The window starts when the
-  confirming read begins, so a slow read cannot extend it. Delivery re-checks
+  confirming read begins, so a slow read cannot extend it, and a read that
+  takes the whole window or longer confirms nothing: its messages are
+  reported for retry. Delivery re-checks
   expired confirmations again right before every send round, the first
   included, because preparing the rest of the batch or a throttle backoff can
   outlast a confirmation. The re-check and the send share the round's time

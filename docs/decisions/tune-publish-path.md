@@ -66,8 +66,10 @@ Five levers, all operator-tunable through the
    domain works on the next publish. The reads are strongly consistent, so a
    fresh confirmation cannot trail a disable that has just happened and the
    bounded-disable contract holds from the read itself. A confirmation's
-   window starts when its read begins, so a slow read cannot extend it.
-   Admission re-checks before enqueueing and delivery before every send
+   window starts when its read begins, so a slow read cannot extend it, and
+   a read that takes the whole window or longer confirms nothing (admission
+   answers `503`, delivery reports the message for retry), because its
+   `ACTIVE` answer may already trail a disable. Admission re-checks before enqueueing and delivery before every send
    round; each re-check reads the store only for a confirmation that expired
    while the request was validated, the batch was prepared, or a throttle
    backoff ran. With a zero window every request and batch already reads at

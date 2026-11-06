@@ -24,7 +24,7 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
 use konductor_common::api;
-use konductor_common::domain_liveness::{Clock, DomainLivenessCache};
+use konductor_common::domain_liveness::{Clock, DomainLivenessCache, Liveness};
 use konductor_common::dynamodb::{get_s, s};
 use konductor_common::envelope::{EventEnvelope, SchemaName};
 use konductor_common::error::{
@@ -956,7 +956,7 @@ async fn require_active_domain<C: Clock>(
 ) -> Result<(), ControlPlaneError> {
     let table = env::var("DOMAINS_TABLE")
         .map_err(|_| ControlPlaneError::DynamoDb("DOMAINS_TABLE not set".to_string()))?;
-    let active = liveness
+    let liveness = liveness
         .confirm_active(domain_name, || async {
             let output = clients
                 .ddb
@@ -975,12 +975,15 @@ async fn require_active_domain<C: Clock>(
             Ok(status.parse::<DomainStatus>() == Ok(DomainStatus::Active))
         })
         .await?;
-    if !active {
-        return Err(ControlPlaneError::DomainNotFound {
+    match liveness {
+        Liveness::Active => Ok(()),
+        Liveness::NotActive => Err(ControlPlaneError::DomainNotFound {
             domain_name: domain_name.to_string(),
-        });
+        }),
+        Liveness::Unconfirmed => Err(ControlPlaneError::DynamoDb(
+            "the domain read outlasted the liveness window".to_string(),
+        )),
     }
-    Ok(())
 }
 
 fn stage_of(payload: &Value) -> Result<String, ControlPlaneError> {
@@ -2549,6 +2552,51 @@ mod tests {
             2,
             "the expired confirmation was re-read before enqueueing"
         );
+    }
+
+    #[tokio::test]
+    async fn a_domain_read_that_outlasts_the_window_is_retryable_and_enqueues_nothing() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let clock = ManualClock::new();
+        let liveness =
+            DomainLivenessCache::with_clock(std::time::Duration::from_secs(1), clock.clone());
+        let slow_domain_read = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            clock.advance(std::time::Duration::from_secs(2));
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("domainName", s("orders"))
+                .item("status", s("ACTIVE"))
+                .build()
+        });
+        let send = send_message_rule("key-1", "oauth", "3");
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[slow_domain_read],
+            &[describe_rule(RELAXED_SCHEMA, "3")],
+            std::slice::from_ref(&send),
+        );
+
+        let mut body = publish_body(json!({"orderId": 123}));
+        body["idempotencyKey"] = json!("key-1");
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &liveness,
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(body)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            status(&resp),
+            503,
+            "an ACTIVE answer older than the window cannot authorize the enqueue"
+        );
+        assert_eq!(send.num_calls(), 0);
     }
 
     fn no_liveness_cache() -> DomainLivenessCache {
