@@ -41,8 +41,10 @@ Older rationale is available through the [decision index](docs/decisions/README.
   concurrency is now optional (`publish_admission_concurrency_cap`, default
   0 for uncapped), and the publish queue's `maxReceiveCount` rises from 3 to
   25 so sustained EventBridge throttling no longer dead-letters valid
-  events. New `PublishQueueWait` and `PublishEnqueueToDelivery` metrics
-  (each measured against its own request's EventBridge acceptance time) and
+  events. New metrics cover each leg of the path:
+  `PublishAdmissionLatency` (admission request time), `PublishQueueWait`
+  (enqueue to delivery invocation start), and `PublishEnqueueToDelivery`
+  (enqueue to the request's own EventBridge acceptance time).
   `konductor-publish-dlq-depth-alarm` / `konductor-publish-queue-age-alarm`
   / `konductor-publish-delivery-retry-alarm` alarms cover the queue and the
   extended retry window. See the

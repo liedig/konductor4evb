@@ -254,12 +254,12 @@ about the payload, not about the registry's current state.
   re-read, and store errors are never cached. The window starts when the
   confirming read begins, so a slow read cannot extend it, and a read that
   takes the whole window or longer confirms nothing: its messages are
-  reported for retry. Delivery re-checks
-  expired confirmations again right before every send round, the first
-  included, because preparing the rest of the batch or a throttle backoff can
-  outlast a confirmation. The re-check and the send share the round's time
-  bound, and with a zero window the first round skips it because preparation
-  has just read the store. Admission likewise re-reads a confirmation that
+  reported for retry. Delivery re-confirms each
+  chunk's domains immediately before its `PutEvents` request is dispatched,
+  because preparing the rest of the batch, checking another domain, or a
+  throttle backoff can outlast a confirmation. The re-check and the send
+  share the round's time bound, and with a zero window the first round skips
+  it because preparation has just read the store. Admission likewise re-reads a confirmation that
   expired during metadata and schema resolution before it enqueues.
 - **Envelope structural validation.** Before `PutEvents`, the constructed
   envelope is checked (positive version, non-empty identity, serializable,
@@ -276,19 +276,22 @@ about the payload, not about the registry's current state.
 - **Throttle recovery.** EventBridge throttling (a request-level or
   entry-level `ThrottlingException`) is first retried inside the invocation
   with full-jitter backoff (100 ms base, 1 s cap, up to 3 retries, skipped
-  when fewer than 5 seconds remain before the invocation deadline). Each send
-  round, including the first, is bounded by the remaining time minus a
-  2-second response margin; a round that runs out reports its messages for
-  retry while the entries already accepted stay acknowledged. Messages
+  when fewer than 5 seconds remain before the invocation deadline). SDK-level
+  retries are disabled (one attempt per request), so a delayed automatic
+  retry cannot publish past a domain's disable window without a liveness
+  re-check. Each send round, including the first, is bounded by the remaining
+  time minus a 2-second response margin, and a round with no budget left
+  sends nothing; either way the round's messages are reported for retry
+  while the entries already accepted stay acknowledged. Messages
   still throttled are then made visible again after a short exponential
   backoff with jitter—`d/2 + jitter(0, d/2)` seconds with
   `d = min(60, 2^(n-1))` for receive count `n`—via
   `ChangeMessageVisibilityBatch`, instead of waiting out the full 30-second
   visibility timeout. If the visibility call itself fails, the message falls
-  back to the standard timeout; nothing is lost. The call is also bounded by
-  the invocation's remaining time and skipped when none remains, so it can
-  never cost the invocation its response or the acknowledgements of already
-  accepted entries. The publish queue's
+  back to the standard timeout; nothing is lost. The call is also bounded
+  by the invocation's remaining time minus the same response margin and
+  skipped when none remains, so it can never cost the invocation its
+  response or the acknowledgements of already accepted entries. The publish queue's
   redrive budget is 25 receives, so even minimum-backoff redrives keep a
   message alive for over 10 minutes of sustained throttling before the DLQ.
 - **Retry semantics for other failures, unchanged.** Non-throttle

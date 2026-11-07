@@ -134,7 +134,7 @@
   - **`docs/operations/configure-platform.md`:** where to set them, what the throttle budget warning and note mean, and that the quota lookup needs `servicequotas:GetServiceQuota` and `servicequotas:GetAWSDefaultServiceQuota`.
   - **`docs/operations/service-quotas.md`:** the publish path's remaining limits (account Lambda concurrency, the account API Gateway throttle shared by every stage, and the `PutEvents` quota); the throttle budget math (one stage's publish limit plus every stage's control-plane limit, and the all-stages total, against the rate and the estimated half-rate burst), including subtracting other workloads in the account; sizing guidance for the publish throttle, delivery concurrency, and the admission cap against the Schemas rate; and the outdated "self-throttles the stage to 50 rps / 100 burst" row.
   - **`docs/guides/publishing-events.md`:** where `429` now comes from.
-  - **`docs/reference/documentation-discrepancies.md`:** a D32 entry for the undercounted per-instance activation burst in `service-quotas.md`, reported rather than silently fixed.
+  - **`docs/reference/documentation-discrepancies.md`:** a D33 entry for the undercounted per-instance activation burst in `service-quotas.md`, reported rather than silently fixed.
 
   Verify with `mkdocs build --strict`.
 
@@ -145,5 +145,5 @@
 
 ## Workflow follow-up
 
-- Re-run the issue #6 load profile against a dev deployment. Record the median and p99 enqueue-to-delivery times, admission throttles, and DLQ arrivals in the decision record's Evidence. Revisit the `PublishDeliveryMaxConcurrency` default and the queue-age threshold (design.md Open Questions).
+- [x] Re-ran the issue #6 load profile against a dev deployment. Median and p99 enqueue-to-delivery times, admission throttles, and DLQ arrivals are recorded in the decision record's Evidence; the `PublishDeliveryMaxConcurrency` default and the queue-age threshold both held (design.md Open Questions).
 - Archive the change after review requirements are satisfied, then verify the archived specs.

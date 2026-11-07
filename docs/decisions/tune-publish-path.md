@@ -4,7 +4,7 @@
 
 - Recorded date: 2026-11-02
 - Change ID: `tune-publish-path`
-- Status: recorded decision; code and template evidence named below. Live re-benchmark is follow-up work.
+- Status: recorded decision; code, template, and live re-benchmark evidence named below.
 
 ## Context
 
@@ -69,11 +69,17 @@ Five levers, all operator-tunable through the
    window starts when its read begins, so a slow read cannot extend it, and
    a read that takes the whole window or longer confirms nothing (admission
    answers `503`, delivery reports the message for retry), because its
-   `ACTIVE` answer may already trail a disable. Admission re-checks before enqueueing and delivery before every send
-   round; each re-check reads the store only for a confirmation that expired
-   while the request was validated, the batch was prepared, or a throttle
-   backoff ran. With a zero window every request and batch already reads at
-   its start, so only the resend re-check reads again. Store errors
+   `ACTIVE` answer may already trail a disable. Admission re-checks before enqueueing and delivery re-confirms each
+   chunk's domains immediately before its `PutEvents` request is
+   dispatched; each check reads the store only for a confirmation that
+   expired while the request was validated, the batch was prepared, another
+   domain was checked, or a throttle backoff ran. With a zero window every
+   request and batch already reads at its start, so only resends re-read.
+   Both admission's `SendMessage` and delivery's `PutEvents` run with
+   SDK-level retries disabled (one attempt per call), because a delayed
+   automatic retry would skip the liveness re-check; transient failures
+   surface to the caller (admission 503) or the retry loop (delivery), both
+   of which re-check. Store errors
    propagate and are never cached. A cached confirmation never bypasses
    authorization, which runs first. Admission also pre-warms its DynamoDB
    and SQS connections during Lambda init with best-effort calls (2-second
@@ -101,9 +107,10 @@ Five levers, all operator-tunable through the
    `d/2 + jitter(0, d/2)` where `d = min(60, 2^(n-1))` for receive count
    `n`, so retries spread out instead of waiting the full 30-second
    visibility timeout. Each visibility call is bounded by the invocation's
-   remaining time and skipped when none remains, so the best-effort change
-   can never cost the batch its response or the acknowledgements of already
-   accepted entries; the standard timeout is the fallback. The publish
+   remaining time minus the same 2-second response margin and skipped when
+   none remains, so the best-effort change can never cost the batch its
+   response or the acknowledgements of already accepted entries; the
+   standard timeout is the fallback. The publish
    queue's `maxReceiveCount` rises from 3 to
    25, so even minimum-backoff redrives keep a message alive for over 600
    seconds of sustained throttling before the DLQ. *Rejected alternatives:*

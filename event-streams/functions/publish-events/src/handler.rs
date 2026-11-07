@@ -442,7 +442,9 @@ mod tests {
     }
 
     fn sqs_event(records: Vec<Value>) -> LambdaEvent<Value> {
-        LambdaEvent::new(json!({"Records": records}), Default::default())
+        // A real invocation always carries a deadline; the default context's
+        // zero deadline would saturate every time budget to zero.
+        sqs_event_with_deadline(records, deadline_in_30s())
     }
 
     fn failures(response: &Value) -> Vec<&str> {
@@ -1895,8 +1897,8 @@ mod tests {
         assert_eq!(failures(&response), ["msg-t"]);
         assert_eq!(
             put.num_calls(),
-            12,
-            "four sends (first plus three retries), each with the SDK's standard three-attempt retry on request-level throttling"
+            4,
+            "four sends (first plus three in-invocation retries), one HTTP attempt each: opaque SDK retries are disabled so liveness is re-checked between rounds"
         );
         assert_eq!(visibility.num_calls(), 1);
     }
@@ -2184,6 +2186,27 @@ mod tests {
             0,
             "with no invocation time left there is no budget for a visibility change; the standard timeout applies"
         );
+    }
+
+    #[tokio::test]
+    async fn a_send_round_with_no_time_budget_sends_nothing_and_reports_the_batch_for_retry() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let clients = clients_with_sqs(vec![active_domain_rule()], vec![put.clone()], vec![]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(vec![record(admitted_attributes())], past_deadline()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-1"]);
+        assert_eq!(put.num_calls(), 0, "no PutEvents without a time budget");
     }
 
     #[derive(Clone)]
@@ -2527,5 +2550,74 @@ mod tests {
             }]
         );
         assert_eq!(put.num_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_confirmation_that_lapses_before_its_chunks_turn_is_rechecked_at_dispatch() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("payments", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        clock.advance(Duration::from_millis(700));
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        clock.advance(Duration::from_millis(300));
+        let read_clock = clock.clone();
+        let payments_reread = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| {
+                req.key().and_then(|k| k.get("domainName")) == Some(&s("payments"))
+            })
+            .then_output(move || {
+                read_clock.advance(Duration::from_millis(900));
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("status", s("ACTIVE"))
+                    .build()
+            });
+        let orders_reread = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.key().and_then(|k| k.get("domainName")) == Some(&s("orders")))
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("status", s("INACTIVE"))
+                    .build()
+            });
+        let orders_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries()[0].event_bus_name() == Some("zzz-orders-bus"))
+            .then_output(|| put_events_success_output(1));
+        let payments_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries()[0].event_bus_name() == Some("aaa-payments-bus"))
+            .then_output(|| put_events_success_output(1));
+        let clients = clients_with_sqs(
+            vec![payments_reread, orders_reread],
+            vec![orders_put.clone(), payments_put.clone()],
+            vec![],
+        );
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![
+                prepared_entry_for("msg-o", "zzz-orders-bus", 1_000, "orders"),
+                prepared_entry_for("msg-p", "aaa-payments-bus", 1_000, "payments"),
+            ],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        assert_eq!(payments_put.num_calls(), 1);
+        assert_eq!(
+            orders_put.num_calls(),
+            0,
+            "orders' confirmation lapsed while payments was re-read, so its chunk re-checks at dispatch"
+        );
+        assert!(outcomes.iter().any(|outcome| matches!(
+            outcome,
+            send::DeliveryOutcome::Failed { message_id, .. } if message_id == "msg-o"
+        )));
     }
 }

@@ -4,22 +4,24 @@
 //! message by index. Each request records its own EventBridge acceptance
 //! time, so a slow request never inflates another's latency metrics. Every
 //! send round is bounded by the invocation's remaining time minus a response
-//! reserve, so a slow round reports its messages for retry instead of
-//! letting the invocation time out with its accepted entries unreported.
-//! Before each round, entries whose liveness confirmation expired are
-//! re-checked inside the same time bound, so neither the first send nor a
-//! resend can deliver past a disable that landed while the batch was being
-//! prepared or the previous round was in flight. Throttled entries are retried inside the
-//! invocation with jittered backoff; entries still throttled are
-//! rescheduled with a short per-message visibility backoff that grows with
-//! the receive count, then reported for retry. The visibility change is
-//! time-bounded by the invocation's remaining time and skipped when none
-//! remains, so it can never cost the invocation its response or the
-//! acknowledgements of accepted entries.
+//! reserve, and a round with no budget left sends nothing, so a slow round
+//! reports its messages for retry instead of letting the invocation time out
+//! with its accepted entries unreported. Each chunk re-confirms its domains
+//! immediately before its request is dispatched, inside the round's time
+//! bound, so neither the first send nor a resend can deliver past a disable
+//! that landed while the batch was being prepared or another domain was
+//! being checked. Throttled entries are retried inside the invocation with
+//! jittered backoff; entries still throttled are rescheduled with a short
+//! per-message visibility backoff that grows with the receive count, then
+//! reported for retry. The visibility change is bounded by the remaining
+//! time minus the same response reserve and skipped when none remains, so it
+//! can never cost the invocation its response or the acknowledgements of
+//! accepted entries.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use aws_sdk_eventbridge::config::retry::RetryConfig;
 use aws_sdk_eventbridge::error::ProvideErrorMetadata;
 use aws_sdk_eventbridge::types::PutEventsRequestEntry;
 
@@ -77,10 +79,10 @@ pub(crate) enum DeliveryOutcome {
 
 /// Groups prepared entries by bus, chunks each group within the `PutEvents`
 /// entry-count and size limits, and sends every chunk concurrently. Each
-/// round first re-checks the liveness of the entries' domains, and the
-/// re-check and the send together are bounded by the remaining invocation
-/// budget. With a zero liveness window the first round skips the re-check,
-/// because preparation has just read the store for every record.
+/// chunk re-checks the liveness of its entries' domains immediately before
+/// the request is dispatched, inside the round's time budget. With a zero
+/// liveness window the first round skips the re-check, because preparation
+/// has just read the store for every record.
 pub(crate) async fn deliver<C: Clock>(
     clients: &Clients,
     liveness: &DomainLivenessCache<C>,
@@ -97,20 +99,26 @@ pub(crate) async fn deliver<C: Clock>(
             .map(|entry| entry.message_id.clone())
             .collect();
         let round_budget = remaining().saturating_sub(RESPONSE_TIME_MARGIN);
+        if round_budget.is_zero() {
+            tracing::warn!(
+                metric = "PublishDeliveryRetry",
+                "no invocation time left for a send round; reporting the round for retry"
+            );
+            outcomes.extend(
+                round_ids
+                    .into_iter()
+                    .map(|message_id| DeliveryOutcome::Failed {
+                        message_id,
+                        error: "the invocation ran out of time before the send round".to_string(),
+                    }),
+            );
+            return outcomes;
+        }
         let recheck = retries > 0 || liveness.reuses_confirmations();
-        let round = async {
-            let (live, rejected) = if recheck {
-                keep_entries_with_live_domains(clients, liveness, pending).await
-            } else {
-                (pending, Vec::new())
-            };
-            let (chunk_outcomes, lost) = send_chunks(clients, live).await;
-            (rejected, chunk_outcomes, lost)
-        };
+        let round = async { send_chunks(clients, liveness, pending, recheck).await };
         let mut throttled = Vec::new();
         match tokio::time::timeout(round_budget, round).await {
-            Ok((rejected, chunk_outcomes, lost)) => {
-                outcomes.extend(rejected);
+            Ok((chunk_outcomes, lost)) => {
                 for (message_id, error) in lost {
                     outcomes.push(DeliveryOutcome::Failed { message_id, error });
                 }
@@ -164,16 +172,20 @@ pub(crate) async fn deliver<C: Clock>(
     }
 }
 
-/// Re-runs the liveness check once for each distinct domain among the
-/// entries about to be sent. `confirm_active` re-reads exactly the expired
-/// confirmations, so this costs nothing while confirmations are fresh.
-/// Entries whose domain is no longer active — or whose check failed — are
-/// reported for retry instead of sent.
+/// Confirms every entry's domain immediately before its chunk's request is
+/// dispatched. `confirm_active` re-reads exactly the expired confirmations,
+/// so this costs nothing while confirmations are fresh. Entries whose domain
+/// is no longer active — or whose check failed — fail instead of sending.
 async fn keep_entries_with_live_domains<C: Clock>(
     clients: &Clients,
     liveness: &DomainLivenessCache<C>,
     entries: Vec<PreparedEntry>,
-) -> (Vec<PreparedEntry>, Vec<DeliveryOutcome>) {
+) -> (Vec<PreparedEntry>, Vec<ChunkOutcome>) {
+    let reject = |entry: PreparedEntry, error: String| ChunkOutcome {
+        entry,
+        result: EntrySendResult::Failed(error),
+        accepted_ms: chrono::Utc::now().timestamp_millis(),
+    };
     let Ok(table) = std::env::var("DOMAINS_TABLE") else {
         tracing::error!(
             metric = "PublishDeliveryRetry",
@@ -183,15 +195,12 @@ async fn keep_entries_with_live_domains<C: Clock>(
             Vec::new(),
             entries
                 .into_iter()
-                .map(|entry| DeliveryOutcome::Failed {
-                    message_id: entry.message_id,
-                    error: "DOMAINS_TABLE not set before the send".to_string(),
-                })
+                .map(|entry| reject(entry, "DOMAINS_TABLE not set before the send".to_string()))
                 .collect(),
         );
     };
     let mut live = Vec::with_capacity(entries.len());
-    let mut expired = Vec::new();
+    let mut rejected = Vec::new();
     let mut denied: HashSet<String> = HashSet::new();
     let mut confirmed: HashSet<String> = HashSet::new();
     for entry in entries {
@@ -200,10 +209,8 @@ async fn keep_entries_with_live_domains<C: Clock>(
             continue;
         }
         if denied.contains(&entry.domain) {
-            expired.push(DeliveryOutcome::Failed {
-                message_id: entry.message_id,
-                error: format!("domain '{}' is not ACTIVE or does not exist", entry.domain),
-            });
+            let error = format!("domain '{}' is not ACTIVE or does not exist", entry.domain);
+            rejected.push(reject(entry, error));
             continue;
         }
         match require_active_domain(clients, liveness, &table, &entry.domain).await {
@@ -213,14 +220,11 @@ async fn keep_entries_with_live_domains<C: Clock>(
             }
             Err(e) => {
                 denied.insert(entry.domain.clone());
-                expired.push(DeliveryOutcome::Failed {
-                    message_id: entry.message_id,
-                    error: format!("{e:#}"),
-                });
+                rejected.push(reject(entry, format!("{e:#}")));
             }
         }
     }
-    (live, expired)
+    (live, rejected)
 }
 
 fn chunk_by_bus(entries: Vec<PreparedEntry>) -> Vec<Vec<PreparedEntry>> {
@@ -246,18 +250,33 @@ fn chunk_by_bus(entries: Vec<PreparedEntry>) -> Vec<Vec<PreparedEntry>> {
         .collect()
 }
 
-/// Sends every chunk concurrently. A task that fails to complete (panic or
-/// cancellation) takes its chunk's entries with it, so the message ids are
-/// recorded before spawning and returned alongside the outcomes; the caller
-/// reports them for retry rather than letting the event source mapping
-/// delete them unreported.
-async fn send_chunks(
+/// Sends every chunk concurrently, confirming each chunk's domains
+/// immediately before its request is dispatched, so a confirmation never
+/// outlives its window across other domains' awaited reads. A task that
+/// fails to complete (panic or cancellation) takes its chunk's entries with
+/// it, so the message ids are recorded before spawning and returned alongside
+/// the outcomes; the caller reports them for retry rather than letting the
+/// event source mapping delete them unreported.
+async fn send_chunks<C: Clock>(
     clients: &Clients,
+    liveness: &DomainLivenessCache<C>,
     prepared: Vec<PreparedEntry>,
+    recheck: bool,
 ) -> (Vec<ChunkOutcome>, Vec<(String, String)>) {
     let mut set = tokio::task::JoinSet::new();
     let mut chunk_ids: HashMap<tokio::task::Id, Vec<String>> = HashMap::new();
+    let mut outcomes = Vec::new();
     for chunk in chunk_by_bus(prepared) {
+        let chunk = if recheck {
+            let (live, rejected) = keep_entries_with_live_domains(clients, liveness, chunk).await;
+            outcomes.extend(rejected);
+            live
+        } else {
+            chunk
+        };
+        if chunk.is_empty() {
+            continue;
+        }
         let eb = clients.eb.clone();
         let ids = chunk
             .iter()
@@ -266,7 +285,6 @@ async fn send_chunks(
         let task = set.spawn(async move { send_chunk(&eb, chunk).await });
         chunk_ids.insert(task.id(), ids);
     }
-    let mut outcomes = Vec::new();
     let mut lost = Vec::new();
     while let Some(joined) = set.join_next_with_id().await {
         match joined {
@@ -296,7 +314,19 @@ async fn send_chunk(
         .iter()
         .map(|entry| entry.request_entry.clone())
         .collect();
-    let response = eb.put_events().set_entries(Some(entries)).send().await;
+    // Opaque SDK retries are disabled: a delayed automatic retry could
+    // publish past a domain's disable window. Retries belong to the
+    // invocation's round loop, which re-checks liveness between rounds.
+    let response = eb
+        .put_events()
+        .set_entries(Some(entries))
+        .customize()
+        .config_override(
+            aws_sdk_eventbridge::config::Builder::default()
+                .retry_config(RetryConfig::standard().with_max_attempts(1)),
+        )
+        .send()
+        .await;
     let accepted_ms = chrono::Utc::now().timestamp_millis();
     match response {
         Ok(output) => {
@@ -387,9 +417,10 @@ fn visibility_entry(
 
 /// Reschedules still-throttled messages with a short per-message visibility
 /// backoff instead of the queue's full visibility timeout. Each batch call
-/// is time-bounded by the invocation's remaining time and skipped when none
-/// remains, so the best-effort change can never cost the invocation its
-/// response or the acknowledgements of already accepted entries. The
+/// is bounded by the invocation's remaining time minus the response reserve
+/// and skipped when none remains, so the best-effort change can never cost
+/// the invocation its response or the acknowledgements of already accepted
+/// entries. The
 /// messages are still reported for retry; the event source mapping leaves
 /// the visibility of failed messages alone, so a shorter timeout holds. Any
 /// failure here only falls back to the standard timing — no message is lost.
@@ -419,17 +450,21 @@ async fn shorten_visibility(
     }
 }
 
+fn visibility_budget(remaining: Duration) -> Duration {
+    remaining.saturating_sub(RESPONSE_TIME_MARGIN)
+}
+
 /// Sends one batch of visibility changes inside the invocation's remaining
-/// time. `false` means the invocation has no time left — not for this batch
-/// nor any later one — so the caller stops and the standard visibility
-/// timeout applies.
+/// time minus the response reserve. `false` means no time outside the
+/// reserve is left — not for this batch nor any later one — so the caller
+/// stops and the standard visibility timeout applies.
 async fn send_within_remaining_time(
     clients: &Clients,
     queue_url: &str,
     entries: Vec<aws_sdk_sqs::types::ChangeMessageVisibilityBatchRequestEntry>,
     remaining: &dyn Fn() -> Duration,
 ) -> bool {
-    let budget = remaining();
+    let budget = visibility_budget(remaining());
     if budget.is_zero() {
         tracing::warn!(
             "no invocation time left for a visibility change; the standard visibility timeout applies"
@@ -475,5 +510,19 @@ async fn send_visibility_batch(
             error = %e,
             "ChangeMessageVisibilityBatch failed; the standard visibility timeout applies"
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_visibility_budget_reserves_the_response_margin() {
+        assert_eq!(
+            visibility_budget(Duration::from_secs(5)),
+            Duration::from_secs(3)
+        );
+        assert!(visibility_budget(Duration::from_secs(1)).is_zero());
     }
 }

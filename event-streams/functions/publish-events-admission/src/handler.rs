@@ -20,6 +20,7 @@
 use std::env;
 use std::time::Instant;
 
+use aws_sdk_sqs::config::retry::RetryConfig;
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
@@ -605,7 +606,18 @@ async fn queue_admitted(
         send = send.message_attributes(name, attribute);
     }
 
-    match send.send().await {
+    // Opaque SDK retries are disabled: the liveness check precedes this
+    // call, and a delayed automatic retry could enqueue past a disable. A
+    // failure is a 503; the caller's own retry re-runs the check.
+    match send
+        .customize()
+        .config_override(
+            aws_sdk_sqs::config::Builder::default()
+                .retry_config(RetryConfig::standard().with_max_attempts(1)),
+        )
+        .send()
+        .await
+    {
         Ok(output) => {
             let message_id = output.message_id.unwrap_or_default();
             tracing::info!(
@@ -1634,6 +1646,46 @@ mod tests {
         .unwrap();
 
         assert_eq!(status(&resp), 503);
+    }
+
+    #[tokio::test]
+    async fn a_throttled_enqueue_is_a_single_attempt_503() {
+        set_env();
+        let authorizer = InMemoryGrantEngine::new(vec![publisher_binding("team-orders", "orders")]);
+        let send_error = mock!(aws_sdk_sqs::Client::send_message).then_error(|| {
+            aws_sdk_sqs::operation::send_message::SendMessageError::generic(
+                aws_sdk_sqs::error::ErrorMetadata::builder()
+                    .code("ThrottlingException")
+                    .message("rate exceeded")
+                    .build(),
+            )
+        });
+        let clients = clients(
+            RuleMode::MatchAny,
+            &[active_domain_rule()],
+            &[describe_rule(STRICT_SCHEMA, "3")],
+            &[send_error.clone()],
+        );
+
+        let resp = handle(
+            &clients,
+            &authorizer,
+            &cache(),
+            &validators(),
+            &no_liveness_cache(),
+            &metadata(&[&legacy_pointer_rule()]),
+            &FixedUuidSource,
+            event(oauth_event(publish_body(json!({"orderId": 1})))),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(status(&resp), 503);
+        assert_eq!(
+            send_error.num_calls(),
+            1,
+            "opaque SDK retries are disabled; a caller's retry re-runs the liveness check"
+        );
     }
 
     #[tokio::test]
