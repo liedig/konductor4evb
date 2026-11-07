@@ -7,6 +7,15 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Clear 18 of the 20 open Dependabot alerts in the web console's dependency
+  tree. `nuxt` rises to ^4.6.4 (five advisories across nuxt,
+  `@nuxt/vite-builder`, and `@nuxt/nitro-server`) and pulls in node-forge
+  1.4.3 (eleven advisories); new security pins move `glob` to 14.0.2 and
+  `minimatch` to 11.0.1, with `eslint-plugin-import-x` 4.18.0 pinned for
+  minimatch 11 compatibility. Every affected package is build-time tooling —
+  the console ships as a static SPA. The two alerts without a fixed release
+  (node-forge CVE-2026-85393, deepmerge CVE-2026-93753) stay open as tracked
+  debt.
 - Resolve referenced issues when a pull request merges. A new
   `.github/workflows/issues.yml` workflow comments `Resolved by #<PR>` on
   every issue the pull request body references — by closing keyword
