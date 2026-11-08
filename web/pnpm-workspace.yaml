@@ -1,6 +1,10 @@
 # Security pins for vulnerable transitive packages (Dependabot alerts); drop each
-# once the dependency tree resolves a fixed version on its own. node-forge and
-# deepmerge have no fixed release and are not listed here.
+# once the dependency tree resolves a fixed version on its own. deepmerge and
+# node-forge's CVE-2026-85393 have no fixed release and are not listed here.
+# Two entries serve those pins rather than alerts of their own:
+# eslint-plugin-import-x 4.18.0 is a compatibility pin (4.17.1 imports makeRe,
+# which minimatch 11 removed), and minimumReleaseAgeExclude lets that fresh
+# release install under pnpm's default supply-chain release-age policy.
 overrides:
   shell-quote: 1.12.0
   brace-expansion@2: 2.1.7
@@ -9,6 +13,9 @@ overrides:
   vite@8: 8.3.5
   serialize-javascript: 7.1.4
   postcss-selector-parser: 7.1.6
+  glob: 14.0.2
+  minimatch: 11.0.1
+  eslint-plugin-import-x: 4.18.0
 onlyBuiltDependencies:
   - esbuild
   - unrs-resolver
@@ -16,3 +23,5 @@ allowBuilds:
   esbuild: true
   unrs-resolver: true
   vue-demi: true
+minimumReleaseAgeExclude:
+  - eslint-plugin-import-x@4.18.0
