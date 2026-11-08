@@ -101,8 +101,9 @@ Five levers, all operator-tunable through the
    invocation with full-jitter backoff (100 ms base, 1 s cap, up to 3
    retries, skipped when under 5 seconds remain before the deadline).
    Preparation runs under the same governance: a record's parse, liveness
-   read, and envelope build starts only while more than 3 seconds remain
-   (the response margin plus a 1-second send floor); a record that misses
+   read, and envelope build starts only while the response margin delivery
+   shares plus a 1-second send allowance remains (3 seconds in total); a
+   record that misses
    the floor is reported for retry unprepared so slow store reads cannot
    starve the send rounds of the entries already prepared. Every
    send round, retries included, is bounded by the remaining time minus a

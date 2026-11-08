@@ -41,7 +41,7 @@ const RETRY_TIME_MARGIN: Duration = Duration::from_secs(5);
 /// Time every send round leaves free for recording outcomes and returning
 /// the response, so a round can never spend the invocation's last moment on
 /// a `PutEvents` request whose answer would arrive too late to matter.
-const RESPONSE_TIME_MARGIN: Duration = Duration::from_secs(2);
+pub(crate) const RESPONSE_TIME_MARGIN: Duration = Duration::from_secs(2);
 
 const THROTTLING_CODE: &str = "ThrottlingException";
 

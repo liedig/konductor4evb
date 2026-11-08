@@ -137,10 +137,10 @@ pub async fn handle<C: Clock>(
     }))
 }
 
-/// Remaining invocation time below which preparation stops: the two-second
-/// response reserve plus a one-second floor for the send round the prepared
-/// entries join, so slow reads cannot starve every send.
-const PREP_TIME_FLOOR: Duration = Duration::from_secs(3);
+/// Remaining invocation time below which preparation stops: the response
+/// reserve delivery shares plus a one-second allowance for the send round
+/// the prepared entries join, so slow reads cannot starve every send.
+const PREP_TIME_FLOOR: Duration = Duration::from_secs(send::RESPONSE_TIME_MARGIN.as_secs() + 1);
 
 /// Parses, re-checks, and prepares every record, collecting per-message
 /// failures for SQS retry alongside the entries ready to send. Records that
@@ -2188,6 +2188,38 @@ mod tests {
             failed,
             ["msg-3"],
             "the record that misses the floor is reported for retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_round_with_no_time_budget_reports_the_prepared_entry_without_sending() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| throttled_entry_output(1));
+        let clients = clients(vec![], vec![put.clone()]);
+
+        let outcomes = send::deliver(
+            &clients,
+            &no_liveness_cache(),
+            &ZeroJitter,
+            vec![prepared_entry_for(
+                "msg-1",
+                "acme-prod-orders-event-bus",
+                1_785_407_400_100,
+                "orders",
+            )],
+            &|| Duration::ZERO,
+        )
+        .await;
+
+        assert_eq!(put.num_calls(), 0, "a round with no budget sends nothing");
+        assert_eq!(
+            outcomes,
+            vec![send::DeliveryOutcome::Failed {
+                message_id: "msg-1".to_string(),
+                error: "the invocation ran out of time before the send round".to_string(),
+            }],
+            "the prepared entry is reported for retry by the send guard"
         );
     }
 
