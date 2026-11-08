@@ -36,7 +36,9 @@ Older rationale is available through the [decision index](docs/decisions/README.
   re-shows them with an exponential visibility
   backoff, bounds every send round and visibility change by the remaining
   invocation time so a slow request cannot cost the batch its
-  acknowledgements, and its concurrency is bounded by the event source mapping
+  acknowledgements, and stops preparing records once less than the response
+  margin plus a one-second send floor remains, reporting the rest for retry
+  so prepared entries still send; its concurrency is bounded by the event source mapping
   (`publish_delivery_max_concurrency`, default 50). Admission's reserved
   concurrency is now optional (`publish_admission_concurrency_cap`, default
   0 for uncapped), and the publish queue's `maxReceiveCount` rises from 3 to

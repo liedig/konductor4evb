@@ -230,7 +230,11 @@ class PublishPathTemplateTest(unittest.TestCase):
         props = filters.get("PublishDeliveryRetryFilter")
         self.assertIsNotNone(props, "no metric filter counts scheduled publish delivery retries")
         self.assertEqual(props["LogGroupName"], {"Ref": "PublishEventsLogGroup"})
-        self.assertEqual(props["FilterPattern"], '{ $.fields.metric = "PublishDeliveryRetry" }')
+        self.assertEqual(
+            props["FilterPattern"],
+            '{ $.fields.metric = "PublishDeliveryRetry" && $.fields.message_id = "*" }',
+            "only per-message retry logs count; batch-level diagnostics carry no message_id",
+        )
         transformation = props["MetricTransformations"][0]
         self.assertEqual(transformation["MetricNamespace"], "Konductor/EventStreams")
         self.assertEqual(transformation["MetricName"], "PublishDeliveryRetry")

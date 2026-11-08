@@ -2197,13 +2197,15 @@ Resources:
 
   # Counts every message delivery reports for retry (throttled, failed, or
   # rejected before send) so the retry alarm above can see the extended
-  # retry window the queue-age metric cannot. No dimensions: cardinality
-  # stays flat; no payload, principal, or token data.
+  # retry window the queue-age metric cannot. Per-message logs only: the
+  # batch-level diagnostics carry no message_id and stay out of the count.
+  # No dimensions: cardinality stays flat; no payload, principal, or token
+  # data.
   PublishDeliveryRetryFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
       LogGroupName: !Ref PublishEventsLogGroup
-      FilterPattern: '{ $.fields.metric = "PublishDeliveryRetry" }'
+      FilterPattern: '{ $.fields.metric = "PublishDeliveryRetry" && $.fields.message_id = "*" }'
       MetricTransformations:
         - MetricName: PublishDeliveryRetry
           MetricNamespace: Konductor/EventStreams

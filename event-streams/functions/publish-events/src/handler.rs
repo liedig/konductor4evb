@@ -117,13 +117,13 @@ pub async fn handle<C: Clock>(
         .and_then(|r| r.as_array())
         .context("missing Records array")?;
 
-    let (prepared, mut failed) = prepare_all(clients, validators, liveness, records).await;
-
     let remaining = move || {
         Duration::from_millis(
             deadline_ms.saturating_sub(chrono::Utc::now().timestamp_millis().max(0) as u64),
         )
     };
+    let (prepared, mut failed) =
+        prepare_all(clients, validators, liveness, records, &remaining).await;
     failed.extend(record_outcomes(
         send::deliver(clients, liveness, jitter, prepared, &remaining).await,
         invocation_started_ms,
@@ -137,13 +137,21 @@ pub async fn handle<C: Clock>(
     }))
 }
 
+/// Remaining invocation time below which preparation stops: the two-second
+/// response reserve plus a one-second floor for the send round the prepared
+/// entries join, so slow reads cannot starve every send.
+const PREP_TIME_FLOOR: Duration = Duration::from_secs(3);
+
 /// Parses, re-checks, and prepares every record, collecting per-message
-/// failures for SQS retry alongside the entries ready to send.
+/// failures for SQS retry alongside the entries ready to send. Records that
+/// miss PREP_TIME_FLOOR are reported for retry so the prepared ones still
+/// get their send round.
 async fn prepare_all<C: Clock>(
     clients: &Clients,
     validators: &ValidatorCache,
     liveness: &DomainLivenessCache<C>,
     records: &[Value],
+    remaining: &dyn Fn() -> Duration,
 ) -> (Vec<PreparedEntry>, Vec<String>) {
     let mut prepared = Vec::with_capacity(records.len());
     let mut failed: Vec<String> = Vec::new();
@@ -156,20 +164,39 @@ async fn prepare_all<C: Clock>(
             tracing::error!("skipping SQS record without messageId");
             continue;
         };
+        if remaining() <= PREP_TIME_FLOOR {
+            report_unprepared(message_id, &mut failed);
+            continue;
+        }
         match prepare(clients, validators, liveness, record).await {
             Ok(entry) => prepared.push(entry),
-            Err(error) => {
-                tracing::error!(
-                    metric = "PublishDeliveryRetry",
-                    error = %error,
-                    message_id,
-                    "publish processing failed; reporting for retry"
-                );
-                failed.push(message_id);
-            }
+            Err(error) => report_prep_failure(error, message_id, &mut failed),
         }
     }
     (prepared, failed)
+}
+
+fn report_unprepared(message_id: String, failed: &mut Vec<String>) {
+    tracing::error!(
+        metric = "PublishDeliveryRetry",
+        message_id,
+        "invocation time floor reached during preparation; reporting for retry"
+    );
+    failed.push(message_id);
+}
+
+fn report_prep_failure<E: std::fmt::Display>(
+    error: E,
+    message_id: String,
+    failed: &mut Vec<String>,
+) {
+    tracing::error!(
+        metric = "PublishDeliveryRetry",
+        error = %error,
+        message_id,
+        "publish processing failed; reporting for retry"
+    );
+    failed.push(message_id);
 }
 
 /// Logs each delivery outcome and returns the message ids to report for
@@ -510,10 +537,7 @@ mod tests {
     async fn a_send_task_failure_reports_the_chunk_messages_for_retry_instead_of_losing_them() {
         set_env();
         let clients = clients(vec![active_domain_rule()], vec![]);
-        let evt = LambdaEvent::new(
-            json!({"Records": [legacy_record("msg-1", "key-1", "orders", json!({}))]}),
-            Default::default(),
-        );
+        let evt = sqs_event(vec![legacy_record("msg-1", "key-1", "orders", json!({}))]);
 
         let resp = handle(
             &clients,
@@ -1723,8 +1747,8 @@ mod tests {
         (chrono::Utc::now().timestamp_millis() + 30_000) as u64
     }
 
-    fn deadline_in_3s() -> u64 {
-        (chrono::Utc::now().timestamp_millis() + 3_000) as u64
+    fn deadline_in_4s() -> u64 {
+        (chrono::Utc::now().timestamp_millis() + 4_000) as u64
     }
 
     fn past_deadline() -> u64 {
@@ -2122,6 +2146,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn preparation_stops_at_the_time_floor_and_reports_the_rest_for_retry() {
+        set_env();
+        let clients = clients(vec![active_domain_rule()], vec![]);
+        let records = vec![
+            legacy_record("msg-1", "key-1", "orders", json!({})),
+            legacy_record("msg-2", "key-2", "orders", json!({})),
+            legacy_record("msg-3", "key-3", "orders", json!({})),
+        ];
+        let budgets = std::sync::Mutex::new(std::collections::VecDeque::from([
+            Duration::from_secs(10),
+            Duration::from_secs(6),
+            Duration::from_secs(2),
+        ]));
+        let remaining = || {
+            budgets
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Duration::ZERO)
+        };
+
+        let (prepared, failed) = prepare_all(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &records[..],
+            &remaining,
+        )
+        .await;
+
+        assert_eq!(
+            prepared
+                .iter()
+                .map(|entry| entry.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["msg-1", "msg-2"],
+            "records before the floor are prepared"
+        );
+        assert_eq!(
+            failed,
+            ["msg-3"],
+            "the record that misses the floor is reported for retry"
+        );
+    }
+
+    #[tokio::test]
     async fn no_retry_starts_when_the_invocation_is_out_of_time() {
         set_env();
         let put = mock!(aws_sdk_eventbridge::Client::put_events)
@@ -2139,7 +2209,7 @@ mod tests {
             &validators(),
             &no_liveness_cache(),
             &ZeroJitter,
-            sqs_event_with_deadline(vec![throttle_record("msg-t", 2)], deadline_in_3s()),
+            sqs_event_with_deadline(vec![throttle_record("msg-t", 2)], deadline_in_4s()),
         )
         .await
         .unwrap();

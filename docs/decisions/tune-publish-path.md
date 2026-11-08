@@ -99,7 +99,12 @@ Five levers, all operator-tunable through the
    throttles, which is the DLQ path this change exists to close).
 5. **Throttle recovery.** Throttled entries are retried inside the
    invocation with full-jitter backoff (100 ms base, 1 s cap, up to 3
-   retries, skipped when under 5 seconds remain before the deadline). Every
+   retries, skipped when under 5 seconds remain before the deadline).
+   Preparation runs under the same governance: a record's parse, liveness
+   read, and envelope build starts only while more than 3 seconds remain
+   (the response margin plus a 1-second send floor); a record that misses
+   the floor is reported for retry unprepared so slow store reads cannot
+   starve the send rounds of the entries already prepared. Every
    send round, retries included, is bounded by the remaining time minus a
    2-second response margin; a round that runs out reports its messages for
    retry, so slow `PutEvents` calls cannot time out the invocation and lose
@@ -125,7 +130,9 @@ Latency observability comes with the change: the `PublishDelivered` log gains
 surfaced as the `PublishQueueWait` and `PublishEnqueueToDelivery` metrics,
 and new alarms fire on publish DLQ depth, on the oldest queued message
 exceeding 300 seconds, and on delivery reporting messages for retry
-continuously for ten minutes (the `PublishDeliveryRetry` metric; SQS stops
+continuously for ten minutes (the `PublishDeliveryRetry` metric, one data
+point per message reported for retry — batch-level diagnostics carry no
+message_id and stay out of the count; SQS stops
 counting repeatedly received messages in the age metric after three
 receives, so the retry alarm covers the window between the age alarm's
 blind spot and the DLQ).

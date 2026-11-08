@@ -266,6 +266,11 @@ about the payload, not about the registry's current state.
   within the 256 KB entry limit for EventBridge). An invalid *generated* envelope
   means the platform's own code is broken—it is reported for retry, never
   partially delivered.
+- **Preparation time floor.** Each record's parse, liveness read, and
+  envelope build runs only while more than three seconds of invocation time
+  remain (the two-second response reserve plus a one-second send floor). A
+  record that misses the floor is reported for retry unprepared, so slow
+  store reads cannot starve the send rounds of the entries already prepared.
 - **Batched `PutEvents` with per-entry outcomes.** Delivery groups each batch
   by target bus into shared `PutEvents` requests—at most 10 entries and 256 KB
   per request—sends the groups concurrently, and maps each result entry back
