@@ -1,7 +1,7 @@
 //! Delivery-only publish consumer: reads admitted publish commands from SQS,
 //! re-checks the domain is ACTIVE, builds the canonical envelope stamped with
-//! the admission-resolved schema version, and calls PutEvents on the domain
-//! bus.
+//! the admission-resolved schema version, and delivers entries to domain
+//! buses in shared `PutEvents` requests.
 //!
 //! Every admission decision (authorization, schema resolution, payload
 //! validation) already happened synchronously in the publish-events-admission
@@ -19,29 +19,49 @@
 //! value regeneration — and validates the composed metadata block (frozen
 //! values plus the late-bound `publishedAt`) against the carried schema.
 //!
-//! Retry semantics: every failure (malformed envelope, missing or
+//! Delivery: each batch is prepared per record (parse, liveness re-check,
+//! envelope build, carried-metadata validation), grouped by target bus, and
+//! sent concurrently in `PutEvents` requests bounded by EventBridge's
+//! entry-count and size limits. A failed entry maps back to its SQS message
+//! by index. A domain's `ACTIVE` confirmation is reused for at most the
+//! configured liveness window; `INACTIVE` and missing domains are always
+//! re-read.
+//!
+//! Retry semantics: throttled entries are retried inside the invocation with
+//! jittered backoff; entries still throttled are rescheduled with a short
+//! per-message visibility backoff that grows with the receive count and are
+//! reported for retry. Every other failure (malformed envelope, missing or
 //! inconsistent fields, inactive or missing domain, envelope validation,
-//! PutEvents failure) is a processing failure reported for SQS retry with
-//! the same immutable message.
+//! non-throttle PutEvents failure) is a processing failure reported for SQS
+//! retry with the standard visibility timeout and the same immutable
+//! message.
+
+mod parse;
+mod send;
 
 use std::env;
-use std::time::Instant;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use aws_sdk_eventbridge::types::PutEventsRequestEntry;
 use lambda_runtime::{Error, LambdaEvent};
 use serde_json::{json, Value};
 
+use konductor_common::backoff::JitterSource;
+use konductor_common::domain_liveness::{Clock, DomainLivenessCache, Liveness};
 use konductor_common::dynamodb::{get_s, s};
-use konductor_common::envelope::{published_at_from_sent_timestamp, EventEnvelope, SchemaName};
-use konductor_common::models::{DomainStatus, PublishRequest};
+use konductor_common::envelope::{put_events_entry_bytes, EventEnvelope, SchemaName};
+use konductor_common::models::DomainStatus;
 use konductor_common::namespace::NamespaceResolver;
-use konductor_common::principal_context::sqs_attribute_map;
-use konductor_common::publish_queue::{AdmittedCommand, VersionedAdmission};
+use konductor_common::publish_queue::VersionedAdmission;
 use konductor_common::schema_validation::ValidatorCache;
+
+use parse::ParsedRecord;
 
 pub struct Clients {
     pub ddb: aws_sdk_dynamodb::Client,
     pub eb: aws_sdk_eventbridge::Client,
+    pub sqs: aws_sdk_sqs::Client,
 }
 
 impl Clients {
@@ -49,123 +69,263 @@ impl Clients {
         Self {
             ddb: aws_sdk_dynamodb::Client::new(config),
             eb: aws_sdk_eventbridge::Client::new(config),
+            sqs: aws_sdk_sqs::Client::new(config),
         }
     }
 }
 
-pub async fn handle(
+/// A record that passed preparation and is ready to send: the `PutEvents`
+/// entry built once from its envelope (so the detail is serialized exactly
+/// once), the entry's measured size, the domain its liveness was confirmed
+/// for, and the SQS fields retry handling and latency reporting need.
+pub(crate) struct PreparedEntry {
+    pub(crate) message_id: String,
+    pub(crate) receipt_handle: Option<String>,
+    pub(crate) receive_count: u32,
+    pub(crate) sent_timestamp_ms: i64,
+    pub(crate) domain: String,
+    pub(crate) request_entry: PutEventsRequestEntry,
+    pub(crate) size_bytes: usize,
+}
+
+/// The two publish-path latencies, both measured from the queue's
+/// `SentTimestamp`: how long the message waited before this invocation
+/// started, and how long queue-to-EventBridge acceptance took in total.
+fn delivery_latency(
+    sent_timestamp_ms: i64,
+    invocation_started_ms: i64,
+    accepted_ms: i64,
+) -> (i64, i64) {
+    (
+        invocation_started_ms - sent_timestamp_ms,
+        accepted_ms - sent_timestamp_ms,
+    )
+}
+
+pub async fn handle<C: Clock>(
     clients: &Clients,
     validators: &ValidatorCache,
+    liveness: &DomainLivenessCache<C>,
+    jitter: &dyn JitterSource,
     event: LambdaEvent<Value>,
 ) -> Result<Value, Error> {
+    let invocation_started_ms = chrono::Utc::now().timestamp_millis();
+    let deadline_ms = event.context.deadline;
     let records = event
         .payload
         .get("Records")
         .and_then(|r| r.as_array())
         .context("missing Records array")?;
 
-    let mut batch_item_failures = Vec::new();
+    let remaining = move || {
+        Duration::from_millis(
+            deadline_ms.saturating_sub(chrono::Utc::now().timestamp_millis().max(0) as u64),
+        )
+    };
+    let (prepared, mut failed) =
+        prepare_all(clients, validators, liveness, records, &remaining).await;
+    failed.extend(record_outcomes(
+        send::deliver(clients, liveness, jitter, prepared, &remaining).await,
+        invocation_started_ms,
+    ));
 
+    Ok(json!({
+        "batchItemFailures": failed
+            .into_iter()
+            .map(|id| json!({ "itemIdentifier": id }))
+            .collect::<Vec<_>>()
+    }))
+}
+
+/// Remaining invocation time below which preparation stops: the response
+/// reserve delivery shares plus a one-second allowance for the send round
+/// the prepared entries join, so slow reads cannot starve every send.
+const PREP_TIME_FLOOR: Duration = Duration::from_secs(send::RESPONSE_TIME_MARGIN.as_secs() + 1);
+
+/// Parses, re-checks, and prepares every record, collecting per-message
+/// failures for SQS retry alongside the entries ready to send. Records that
+/// miss PREP_TIME_FLOOR are reported for retry so the prepared ones still
+/// get their send round.
+async fn prepare_all<C: Clock>(
+    clients: &Clients,
+    validators: &ValidatorCache,
+    liveness: &DomainLivenessCache<C>,
+    records: &[Value],
+    remaining: &dyn Fn() -> Duration,
+) -> (Vec<PreparedEntry>, Vec<String>) {
+    let mut prepared = Vec::with_capacity(records.len());
+    let mut failed: Vec<String> = Vec::new();
     for record in records {
-        let Some(message_id) = record.get("messageId").and_then(|v| v.as_str()) else {
+        let Some(message_id) = record
+            .get("messageId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+        else {
             tracing::error!("skipping SQS record without messageId");
             continue;
         };
-
-        if let Err(e) = process_record(clients, validators, record).await {
-            tracing::error!(error = %e, message_id, "publish processing failed; reporting for retry");
-            batch_item_failures.push(json!({ "itemIdentifier": message_id }));
+        if remaining() <= PREP_TIME_FLOOR {
+            report_unprepared(message_id, &mut failed);
+            continue;
+        }
+        match prepare(clients, validators, liveness, record).await {
+            Ok(entry) => prepared.push(entry),
+            Err(error) => report_prep_failure(error, message_id, &mut failed),
         }
     }
-
-    Ok(json!({ "batchItemFailures": batch_item_failures }))
+    (prepared, failed)
 }
 
-/// Err reports the record for SQS retry; admission guarantees only valid,
-/// authorized commands are ever enqueued, so there is no acknowledge-without-
-/// delivery path left here.
-async fn process_record(
+fn report_unprepared(message_id: String, failed: &mut Vec<String>) {
+    tracing::error!(
+        metric = "PublishDeliveryRetry",
+        message_id,
+        "invocation time floor reached during preparation; reporting for retry"
+    );
+    failed.push(message_id);
+}
+
+fn report_prep_failure<E: std::fmt::Display>(
+    error: E,
+    message_id: String,
+    failed: &mut Vec<String>,
+) {
+    tracing::error!(
+        metric = "PublishDeliveryRetry",
+        error = %error,
+        message_id,
+        "publish processing failed; reporting for retry"
+    );
+    failed.push(message_id);
+}
+
+/// Logs each delivery outcome and returns the message ids to report for
+/// retry: throttled entries (already rescheduled with backoff) and failures.
+fn record_outcomes(
+    outcomes: Vec<send::DeliveryOutcome>,
+    invocation_started_ms: i64,
+) -> Vec<String> {
+    let mut failed = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            send::DeliveryOutcome::Delivered {
+                sent_timestamp_ms,
+                accepted_ms,
+            } => {
+                let (queue_wait_ms, enqueue_to_delivery_ms) =
+                    delivery_latency(sent_timestamp_ms, invocation_started_ms, accepted_ms);
+                tracing::info!(
+                    metric = "PublishDelivered",
+                    queue_wait_ms,
+                    enqueue_to_delivery_ms,
+                    "event published to domain bus"
+                );
+            }
+            send::DeliveryOutcome::Throttled { message_id } => {
+                tracing::warn!(
+                    metric = "PublishDeliveryRetry",
+                    message_id,
+                    "delivery throttled; message rescheduled with backoff"
+                );
+                failed.push(message_id);
+            }
+            send::DeliveryOutcome::Failed { message_id, error } => {
+                tracing::error!(
+                    metric = "PublishDeliveryRetry",
+                    message_id,
+                    error = %error,
+                    "delivery failed; reporting for retry"
+                );
+                failed.push(message_id);
+            }
+        }
+    }
+    failed
+}
+
+/// Prepare phase: parse, liveness re-check, envelope build, and the carried
+/// metadata validation, exactly as the serial path did per record. Any
+/// failure is a per-message failure reported for SQS retry; admission
+/// guarantees only valid, authorized commands are ever enqueued, so there is
+/// no acknowledge-without-delivery path left here.
+async fn prepare<C: Clock>(
     clients: &Clients,
     validators: &ValidatorCache,
+    liveness: &DomainLivenessCache<C>,
     record: &Value,
-) -> Result<()> {
-    let started = Instant::now();
+) -> Result<PreparedEntry> {
+    let message = parse::parse_message(record)?;
     let organization = env::var("ORGANIZATION").context("ORGANIZATION not set")?;
     let domains_table = env::var("DOMAINS_TABLE").context("DOMAINS_TABLE not set")?;
     let resolver = NamespaceResolver::default_pattern();
+    let domain = match &message.record {
+        ParsedRecord::Legacy(legacy) => legacy.request.domain.clone(),
+        ParsedRecord::Versioned { command } => command.body.domain.clone(),
+    };
 
-    match parse_record(record)? {
+    let envelope = match &message.record {
         ParsedRecord::Legacy(legacy) => {
-            deliver_legacy(clients, &resolver, &organization, &domains_table, legacy).await?
+            tracing::info!(
+                metric = "PublishReceived",
+                domain = legacy.request.domain,
+                environment = legacy.environment,
+                format = "legacy",
+                "publish command received"
+            );
+            require_active_domain(clients, liveness, &domains_table, &domain).await?;
+            let schema_name = SchemaName::for_domain(
+                &resolver.namespace(&organization, &legacy.request.domain),
+                &legacy.request.event_name,
+            );
+            EventEnvelope::new(
+                schema_name.source,
+                schema_name.detail_type,
+                resolver.event_bus_name(&legacy.environment, &organization, &legacy.request.domain),
+                legacy.schema_version,
+                legacy.idempotency_key.clone(),
+                message.published_at,
+                legacy.request.data.clone(),
+            )?
         }
-        ParsedRecord::Versioned {
-            published_at,
-            command,
-        } => deliver_versioned(clients, validators, &domains_table, command, published_at).await?,
-    }
+        ParsedRecord::Versioned { command } => {
+            tracing::info!(
+                metric = "PublishReceived",
+                domain = command.body.domain,
+                environment = command.admission.environment,
+                format = "2",
+                metadata_revision = command.admission.metadata.metadata_revision,
+                "publish command received"
+            );
+            require_active_domain(clients, liveness, &domains_table, &domain).await?;
+            let envelope = composed_envelope(command, message.published_at)?;
+            validate_composed_metadata(validators, command, &envelope)?;
+            envelope
+        }
+    };
 
-    tracing::info!(
-        metric = "PublishDelivered",
-        latency_ms = started.elapsed().as_secs_f64() * 1000.0,
-        "event published to domain bus"
+    let detail_json =
+        serde_json::to_string(&envelope.detail).context("envelope not serializable")?;
+    let size_bytes = put_events_entry_bytes(
+        &envelope.source,
+        &envelope.detail_type,
+        &envelope.event_bus_name,
+        &detail_json,
     );
-    Ok(())
-}
-
-/// The legacy path, byte-for-byte as before the dual-format rollout: the
-/// three-field metadata output and the identity carried in SQS attributes.
-async fn deliver_legacy(
-    clients: &Clients,
-    resolver: &NamespaceResolver,
-    organization: &str,
-    domains_table: &str,
-    legacy: LegacyDelivery,
-) -> Result<()> {
-    tracing::info!(
-        metric = "PublishReceived",
-        domain = legacy.request.domain,
-        environment = legacy.environment,
-        format = "legacy",
-        "publish command received"
-    );
-    require_active_domain(clients, domains_table, &legacy.request.domain).await?;
-    let schema_name = SchemaName::for_domain(
-        &resolver.namespace(organization, &legacy.request.domain),
-        &legacy.request.event_name,
-    );
-    let envelope = EventEnvelope::new(
-        schema_name.source.clone(),
-        schema_name.detail_type.clone(),
-        resolver.event_bus_name(&legacy.environment, organization, &legacy.request.domain),
-        legacy.schema_version,
-        legacy.idempotency_key,
-        legacy.published_at,
-        legacy.request.data.clone(),
-    )?;
-    put_event(clients, &envelope).await
-}
-
-/// The format-2 path: delivery uses exactly what the message records and
-/// validates the composed metadata against the carried contract.
-async fn deliver_versioned(
-    clients: &Clients,
-    validators: &ValidatorCache,
-    domains_table: &str,
-    command: Box<VersionedAdmission>,
-    published_at: chrono::DateTime<chrono::Utc>,
-) -> Result<()> {
-    tracing::info!(
-        metric = "PublishReceived",
-        domain = command.body.domain,
-        environment = command.admission.environment,
-        format = "2",
-        metadata_revision = command.admission.metadata.metadata_revision,
-        "publish command received"
-    );
-    require_active_domain(clients, domains_table, &command.body.domain).await?;
-    let envelope = composed_envelope(&command, published_at)?;
-    validate_composed_metadata(validators, &command, &envelope)?;
-    put_event(clients, &envelope).await
+    let request_entry = PutEventsRequestEntry::builder()
+        .event_bus_name(envelope.event_bus_name)
+        .source(envelope.source)
+        .detail_type(envelope.detail_type)
+        .detail(detail_json)
+        .build();
+    Ok(PreparedEntry {
+        message_id: message.message_id,
+        receipt_handle: message.receipt_handle,
+        receive_count: message.receive_count,
+        sent_timestamp_ms: message.published_at.timestamp_millis(),
+        domain,
+        request_entry,
+        size_bytes,
+    })
 }
 
 /// Builds the new-format envelope from exactly what the message records:
@@ -205,150 +365,45 @@ fn validate_composed_metadata(
         .map_err(|e| anyhow::anyhow!("composed metadata failed its carried contract: {e}"))
 }
 
-/// The legacy delivery: identity travels in SQS attributes, metadata
-/// output is the original three built-in fields.
-struct LegacyDelivery {
-    environment: String,
-    idempotency_key: String,
-    schema_version: i64,
-    published_at: chrono::DateTime<chrono::Utc>,
-    request: PublishRequest,
-}
-
-enum ParsedRecord {
-    Legacy(LegacyDelivery),
-    Versioned {
-        published_at: chrono::DateTime<chrono::Utc>,
-        command: Box<VersionedAdmission>,
-    },
-}
-
-fn parse_record(record: &Value) -> Result<ParsedRecord> {
-    let attributes = sqs_attribute_map(record);
-    let sent_timestamp = record
-        .get("attributes")
-        .and_then(|a| a.get("SentTimestamp"))
-        .and_then(|v| v.as_str())
-        .context("missing SQS SentTimestamp attribute")?;
-    let published_at = published_at_from_sent_timestamp(sent_timestamp)?;
-
-    let body_str = record
-        .get("body")
-        .and_then(|b| b.as_str())
-        .context("missing SQS record body")?;
-    match AdmittedCommand::parse(body_str) {
-        Ok(AdmittedCommand::Legacy(message)) => Ok(ParsedRecord::Legacy(LegacyDelivery {
-            environment: required_attribute(&attributes, "Environment")?,
-            idempotency_key: required_attribute(&attributes, "IdempotencyKey")?,
-            schema_version: required_attribute(&attributes, "SchemaVersion")?
-                .parse::<i64>()
-                .context("SchemaVersion attribute is not a number")?,
-            published_at,
-            request: message.body,
-        })),
-        Ok(AdmittedCommand::Versioned(command)) => {
-            check_immutable_consistency(&attributes, &command)?;
-            Ok(ParsedRecord::Versioned {
-                published_at,
-                command,
-            })
-        }
-        Err(e) => Err(anyhow::anyhow!(e.to_string())),
-    }
-}
-
-/// The SQS routing attributes are stamped at admission alongside the body.
-/// A format-2 message whose attributes disagree with its recorded identity
-/// fails closed: the message is internally inconsistent and no path may
-/// guess which half is right.
-fn check_immutable_consistency(
-    attributes: &std::collections::HashMap<String, String>,
-    command: &VersionedAdmission,
+/// Re-checks domain liveness, reusing a fresh `ACTIVE` confirmation from the
+/// cache. `INACTIVE` and missing domains are never cached, so a re-enabled
+/// domain delivers on its next message. A store failure propagates and the
+/// message is reported for retry. The read is strongly consistent, so a
+/// fresh confirmation cannot trail a disable.
+pub(crate) async fn require_active_domain<C: Clock>(
+    clients: &Clients,
+    liveness: &DomainLivenessCache<C>,
+    table: &str,
+    domain_name: &str,
 ) -> Result<()> {
-    let pairs = [
-        ("Environment", command.admission.environment.clone()),
-        ("IdempotencyKey", command.admission.idempotency_key.clone()),
-        (
-            "SchemaVersion",
-            command.admission.schema_version.to_string(),
-        ),
-    ];
-    for (name, expected) in pairs {
-        let actual = required_attribute(attributes, name)?;
-        if actual != expected {
-            anyhow::bail!(
-                "message attribute {name} '{actual}' disagrees with the recorded admission value '{expected}'"
-            );
+    let liveness = liveness
+        .confirm_active(domain_name, || async {
+            let output = clients
+                .ddb
+                .get_item()
+                .table_name(table)
+                .key("domainName", s(domain_name))
+                .consistent_read(true)
+                .send()
+                .await
+                .context("failed to get domain record")?;
+            let Some(item) = output.item else {
+                return Ok::<bool, anyhow::Error>(false);
+            };
+            let status = get_s(&item, "status").unwrap_or_default();
+            Ok(status.parse::<DomainStatus>() == Ok(DomainStatus::Active))
+        })
+        .await?;
+    match liveness {
+        Liveness::Active => Ok(()),
+        Liveness::NotActive => {
+            anyhow::bail!("domain '{domain_name}' is not ACTIVE or does not exist")
         }
+        Liveness::Unconfirmed => anyhow::bail!(
+            "domain '{domain_name}' could not be confirmed ACTIVE within the liveness window"
+        ),
     }
-    Ok(())
 }
-
-fn required_attribute(
-    attributes: &std::collections::HashMap<String, String>,
-    name: &'static str,
-) -> Result<String> {
-    attributes
-        .get(name)
-        .filter(|v| !v.is_empty())
-        .cloned()
-        .with_context(|| format!("missing message attribute {name}"))
-}
-
-async fn require_active_domain(clients: &Clients, table: &str, domain_name: &str) -> Result<()> {
-    let output = clients
-        .ddb
-        .get_item()
-        .table_name(table)
-        .key("domainName", s(domain_name))
-        .send()
-        .await
-        .context("failed to get domain record")?;
-
-    let Some(item) = output.item else {
-        anyhow::bail!("domain '{domain_name}' not found");
-    };
-    let status = get_s(&item, "status").unwrap_or_default();
-    if status.parse::<DomainStatus>() != Ok(DomainStatus::Active) {
-        anyhow::bail!("domain '{domain_name}' is not ACTIVE (status '{status}')");
-    }
-    Ok(())
-}
-
-async fn put_event(clients: &Clients, envelope: &EventEnvelope) -> Result<()> {
-    let detail = serde_json::to_string(&envelope.detail).context("envelope not serializable")?;
-    let put_started = Instant::now();
-    let result = clients
-        .eb
-        .put_events()
-        .entries(
-            aws_sdk_eventbridge::types::PutEventsRequestEntry::builder()
-                .event_bus_name(&envelope.event_bus_name)
-                .source(&envelope.source)
-                .detail_type(&envelope.detail_type)
-                .detail(detail)
-                .build(),
-        )
-        .send()
-        .await
-        .map_err(|e| anyhow::anyhow!("PutEvents failed: {}", e.into_service_error()))?;
-
-    if result.failed_entry_count > 0 {
-        let reason = result
-            .entries()
-            .first()
-            .and_then(|e| e.error_message.clone())
-            .unwrap_or_default();
-        tracing::warn!(
-            metric = "PublishPutEventsRejected",
-            latency_ms = put_started.elapsed().as_secs_f64() * 1000.0,
-            "EventBridge rejected the entry"
-        );
-        anyhow::bail!("PutEvents rejected the entry: {reason}");
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +414,13 @@ mod tests {
     fn set_env() {
         std::env::set_var("ORGANIZATION", "acme");
         std::env::set_var("DOMAINS_TABLE", "domains-test");
+        std::env::set_var("PUBLISH_QUEUE_URL", "https://sqs.test/publish-queue");
+    }
+
+    use std::time::Duration;
+
+    fn no_liveness_cache() -> DomainLivenessCache {
+        DomainLivenessCache::new(Duration::ZERO)
     }
 
     fn validators() -> ValidatorCache {
@@ -407,7 +469,9 @@ mod tests {
     }
 
     fn sqs_event(records: Vec<Value>) -> LambdaEvent<Value> {
-        LambdaEvent::new(json!({"Records": records}), Default::default())
+        // A real invocation always carries a deadline; the default context's
+        // zero deadline would saturate every time budget to zero.
+        sqs_event_with_deadline(records, deadline_in_30s())
     }
 
     fn failures(response: &Value) -> Vec<&str> {
@@ -465,7 +529,40 @@ mod tests {
         Clients {
             ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, &ddb_rules),
             eb: mock_client!(aws_sdk_eventbridge, RuleMode::MatchAny, &eb_rules),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
         }
+    }
+
+    #[tokio::test]
+    async fn a_send_task_failure_reports_the_chunk_messages_for_retry_instead_of_losing_them() {
+        set_env();
+        let clients = clients(vec![active_domain_rule()], vec![]);
+        let evt = sqs_event(vec![legacy_record("msg-1", "key-1", "orders", json!({}))]);
+
+        let resp = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            evt,
+        )
+        .await
+        .unwrap();
+
+        let failed: Vec<&str> = resp["batchItemFailures"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item["itemIdentifier"].as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            failed,
+            vec!["msg-1"],
+            "a crashed send task must still report its messages for SQS retry"
+        );
     }
 
     #[tokio::test]
@@ -476,6 +573,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![record(admitted_attributes())]),
         )
         .await
@@ -501,6 +600,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![record(admitted_attributes())]),
         )
         .await
@@ -520,6 +621,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![record(admitted_attributes())]),
         )
         .await
@@ -543,6 +646,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![record(admitted_attributes())]),
         )
         .await
@@ -570,6 +675,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![record(admitted_attributes())]),
         )
         .await
@@ -589,9 +696,15 @@ mod tests {
             .filter(|(k, _)| *k != "SchemaVersion")
             .collect();
 
-        let response = handle(&clients, &validators(), sqs_event(vec![record(broken)]))
-            .await
-            .unwrap();
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(vec![record(broken)]),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(failures(&response), ["msg-1"]);
     }
@@ -605,9 +718,15 @@ mod tests {
             .filter(|(k, _)| *k != "Environment")
             .collect();
 
-        let response = handle(&clients, &validators(), sqs_event(vec![record(broken)]))
-            .await
-            .unwrap();
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(vec![record(broken)]),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(failures(&response), ["msg-1"]);
     }
@@ -711,6 +830,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![versioned_record(
                 versioned_body(),
                 admitted_attributes(),
@@ -753,6 +874,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![versioned_record(body, admitted_attributes())]),
         )
         .await
@@ -768,28 +891,30 @@ mod tests {
         // frozen values and the recorded business schema version verbatim —
         // subscription version matching stays anchored to what admission
         // validated. At-least-once means the duplicate is expected; there is
-        // no cross-request deduplication to assert.
+        // no cross-request deduplication to assert. Both records target the
+        // same bus, so they share one request with byte-identical entries.
         let rule = mock!(aws_sdk_eventbridge::Client::put_events)
             .match_requests(|req| {
+                if req.entries().len() != 2 {
+                    return false;
+                }
                 let detail: Value =
                     serde_json::from_str(req.entries()[0].detail().unwrap()).unwrap();
-                detail["metadata"]["traceId"] == json!("trace-abc")
+                req.entries()[0].detail() == req.entries()[1].detail()
+                    && detail["metadata"]["traceId"] == json!("trace-abc")
                     && detail["metadata"]["requestSequence"] == json!(7)
                     && detail["metadata"]["metadataRevision"] == json!(2)
                     && detail["metadata"]["schemaVersion"] == json!(4)
                     && detail["metadata"]["publishedAt"] == json!("2026-07-30T10:30:00.123Z")
             })
-            .then_output(|| {
-                aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
-                    .failed_entry_count(0)
-                    .entries(ok_entry("evt-replay"))
-                    .build()
-            });
+            .then_output(|| put_events_success_output(2));
         let clients = clients(vec![active_domain_rule()], vec![rule.clone()]);
 
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![
                 versioned_record_named("msg-a", versioned_body(), admitted_attributes()),
                 versioned_record_named("msg-b", versioned_body(), admitted_attributes()),
@@ -801,7 +926,7 @@ mod tests {
         assert!(failures(&response).is_empty());
         assert_eq!(
             rule.num_calls(),
-            2,
+            1,
             "the replayed message is delivered again with identical frozen values"
         );
     }
@@ -827,6 +952,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![versioned_record(
                 versioned_body(),
                 admitted_attributes(),
@@ -870,6 +997,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![versioned_record(
                 versioned_body(),
                 admitted_attributes(),
@@ -884,17 +1013,23 @@ mod tests {
     #[tokio::test]
     async fn sqs_retries_reuse_frozen_values_without_configuration_reads() {
         set_env();
-        // One MatchAny rule accepts both deliveries: the retry's composed
-        // detail must be byte-identical, frozen values included. The only
-        // DDB rule is the domain liveness read — delivery has no metadata
-        // configuration path at all.
-        let put = composed_put_events_rule();
+        // Both records carry the same admitted command: the composed
+        // details must be byte-identical, frozen values included, and they
+        // share one PutEvents request. The only DDB rule is the domain
+        // liveness read — delivery has no metadata configuration path at all.
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                req.entries().len() == 2 && req.entries()[0].detail() == req.entries()[1].detail()
+            })
+            .then_output(|| put_events_success_output(2));
         let clients = clients(vec![active_domain_rule()], vec![put.clone()]);
         let same_record = versioned_record(versioned_body(), admitted_attributes());
 
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![same_record.clone(), same_record]),
         )
         .await
@@ -903,8 +1038,8 @@ mod tests {
         assert!(failures(&response).is_empty());
         assert_eq!(
             put.num_calls(),
-            2,
-            "both deliveries carry the identical composed detail"
+            1,
+            "both deliveries carry the identical composed detail in one shared request"
         );
     }
 
@@ -921,6 +1056,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![versioned_record(versioned_body(), inconsistent)]),
         )
         .await
@@ -941,6 +1078,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![versioned_record(versioned_body(), broken)]),
         )
         .await
@@ -961,6 +1100,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![versioned_record(body, admitted_attributes())]),
         )
         .await
@@ -984,6 +1125,8 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![versioned_record(body, admitted_attributes())]),
         )
         .await
@@ -1002,11 +1145,1581 @@ mod tests {
         let response = handle(
             &clients,
             &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
             sqs_event(vec![versioned_record(body, admitted_attributes())]),
         )
         .await
         .unwrap();
 
         assert_eq!(failures(&response), ["msg-2"]);
+    }
+    fn record_with_id(
+        message_id: &str,
+        body: Value,
+        attributes: Vec<(&'static str, String)>,
+    ) -> Value {
+        let message_attributes: serde_json::Map<String, Value> = attributes
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string(),
+                    json!({"stringValue": v, "dataType": "String"}),
+                )
+            })
+            .collect();
+        json!({
+            "messageId": message_id,
+            "body": body.to_string(),
+            "messageAttributes": Value::Object(message_attributes),
+            "attributes": {"SentTimestamp": SENT_MS},
+        })
+    }
+
+    fn legacy_record(message_id: &str, idempotency_key: &str, domain: &str, data: Value) -> Value {
+        let attributes: Vec<(&'static str, String)> = admitted_attributes()
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k,
+                    if k == "IdempotencyKey" {
+                        idempotency_key.to_string()
+                    } else {
+                        v
+                    },
+                )
+            })
+            .collect();
+        record_with_id(
+            message_id,
+            json!({
+                "callerAccountId": "111122223333",
+                "body": {"domain": domain, "eventName": "OrderNotification", "data": data}
+            }),
+            attributes,
+        )
+    }
+
+    fn any_domain_rule(status: &'static str) -> Rule {
+        mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("status", s(status))
+                .build()
+        })
+    }
+
+    fn put_events_success_output(
+        entry_count: usize,
+    ) -> aws_sdk_eventbridge::operation::put_events::PutEventsOutput {
+        aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+            .failed_entry_count(0)
+            .set_entries(Some(
+                (0..entry_count)
+                    .map(|i| {
+                        aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                            .event_id(format!("evt-{i}"))
+                            .build()
+                    })
+                    .collect(),
+            ))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn ten_records_for_one_bus_share_a_single_put_events_request() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                if req.entries().len() != 10 {
+                    return false;
+                }
+                req.entries().iter().enumerate().all(|(i, entry)| {
+                    if entry.event_bus_name() != Some("acme-prod-orders-event-bus")
+                        || entry.source() != Some("acme-orders")
+                        || entry.detail_type() != Some("OrderNotification")
+                    {
+                        return false;
+                    }
+                    let detail: Value = serde_json::from_str(entry.detail().unwrap()).unwrap();
+                    detail["metadata"]["schemaVersion"] == json!(4)
+                        && detail["metadata"]["idempotencyKey"] == json!(format!("key-{i}"))
+                        && detail["metadata"]["publishedAt"] == json!("2026-07-30T10:30:00.123Z")
+                        && detail["data"] == json!({"orderId": i})
+                })
+            })
+            .then_output(|| put_events_success_output(10));
+        let clients = clients(vec![any_domain_rule("ACTIVE")], vec![put.clone()]);
+
+        let records = (0..10)
+            .map(|i| {
+                legacy_record(
+                    &format!("msg-{i}"),
+                    &format!("key-{i}"),
+                    "orders",
+                    json!({"orderId": i}),
+                )
+            })
+            .collect();
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(records),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+        assert_eq!(
+            put.num_calls(),
+            1,
+            "one bus of fitting entries shares one PutEvents request"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_and_format_two_records_share_one_request() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                if req.entries().len() != 2 {
+                    return false;
+                }
+                let legacy: Value =
+                    serde_json::from_str(req.entries()[0].detail().unwrap()).unwrap();
+                let versioned: Value =
+                    serde_json::from_str(req.entries()[1].detail().unwrap()).unwrap();
+                legacy["metadata"].get("metadataRevision").is_none()
+                    && legacy["metadata"]["schemaVersion"] == json!(4)
+                    && versioned["metadata"]["metadataRevision"] == json!(2)
+                    && versioned["metadata"]["traceId"] == json!("trace-abc")
+                    && versioned["metadata"]["schemaVersion"] == json!(4)
+            })
+            .then_output(|| put_events_success_output(2));
+        let clients = clients(vec![any_domain_rule("ACTIVE")], vec![put]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(vec![
+                legacy_record("msg-legacy", "key-1", "orders", json!({"orderId": 123})),
+                versioned_record_named("msg-v2", versioned_body(), admitted_attributes()),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+    }
+
+    #[tokio::test]
+    async fn different_buses_are_sent_as_independent_requests() {
+        set_env();
+        let orders_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                req.entries().len() == 1
+                    && req.entries()[0].event_bus_name() == Some("acme-prod-orders-event-bus")
+                    && req.entries()[0].source() == Some("acme-orders")
+            })
+            .then_output(|| put_events_success_output(1));
+        let payments_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                req.entries().len() == 1
+                    && req.entries()[0].event_bus_name() == Some("acme-prod-payments-event-bus")
+                    && req.entries()[0].source() == Some("acme-payments")
+            })
+            .then_output(|| put_events_success_output(1));
+        let clients = clients(
+            vec![any_domain_rule("ACTIVE")],
+            vec![orders_put.clone(), payments_put.clone()],
+        );
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(vec![
+                legacy_record("msg-orders", "key-o", "orders", json!({})),
+                legacy_record("msg-payments", "key-p", "payments", json!({})),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+        assert_eq!(orders_put.num_calls(), 1);
+        assert_eq!(payments_put.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_same_bus_group_is_split_by_size() {
+        set_env();
+        let two = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries().len() == 2)
+            .then_output(|| put_events_success_output(2));
+        let one = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| {
+                req.entries().len() == 1
+                    && req.entries()[0].event_bus_name() == Some("acme-prod-orders-event-bus")
+            })
+            .then_output(|| put_events_success_output(1));
+        let clients = clients(
+            vec![any_domain_rule("ACTIVE")],
+            vec![two.clone(), one.clone()],
+        );
+
+        let records = (0..3)
+            .map(|i| {
+                legacy_record(
+                    &format!("msg-{i}"),
+                    &format!("key-{i}"),
+                    "orders",
+                    json!({"blob": "x".repeat(100_000)}),
+                )
+            })
+            .collect();
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(records),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+        assert_eq!(two.num_calls(), 1, "two ~100 KB entries fit one request");
+        assert_eq!(
+            one.num_calls(),
+            1,
+            "the third entry overflows into its own request"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_partial_put_events_failure_reports_exactly_the_failed_entries_messages() {
+        set_env();
+        let failed_entry = || {
+            aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                .error_code("InternalFailure")
+                .error_message("boom")
+                .build()
+        };
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries().len() == 4)
+            .then_output(move || {
+                aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                    .failed_entry_count(2)
+                    .set_entries(Some(vec![
+                        ok_entry("evt-0"),
+                        failed_entry(),
+                        ok_entry("evt-2"),
+                        failed_entry(),
+                    ]))
+                    .build()
+            });
+        let clients = clients(vec![any_domain_rule("ACTIVE")], vec![put]);
+
+        let records = (0..4)
+            .map(|i| {
+                legacy_record(
+                    &format!("msg-{i}"),
+                    &format!("key-{i}"),
+                    "orders",
+                    json!({}),
+                )
+            })
+            .collect();
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(records),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            failures(&response),
+            ["msg-1", "msg-3"],
+            "failures map back by entry index"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_and_inactive_records_are_reported_while_the_rest_deliver() {
+        set_env();
+        let inactive_payments = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| {
+                req.key().and_then(|k| k.get("domainName")) == Some(&s("payments"))
+            })
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("status", s("INACTIVE"))
+                    .build()
+            });
+        let clients = clients(
+            vec![active_domain_rule(), inactive_payments],
+            vec![put_events_rule()],
+        );
+        let malformed: Vec<(&'static str, String)> = admitted_attributes()
+            .into_iter()
+            .filter(|(k, _)| *k != "SchemaVersion")
+            .collect();
+
+        let response = handle(&clients, &validators(), &no_liveness_cache(), &ZeroJitter, sqs_event(vec![
+                record_with_id(
+                    "msg-ok",
+                    json!({
+                        "callerAccountId": "111122223333",
+                        "body": {"domain": "orders", "eventName": "OrderNotification", "data": {"orderId": 123, "amount": 99.5}}
+                    }),
+                    admitted_attributes(),
+                ),
+                record_with_id(
+                    "msg-malformed",
+                    json!({
+                        "callerAccountId": "111122223333",
+                        "body": {"domain": "orders", "eventName": "OrderNotification", "data": {}}
+                    }),
+                    malformed,
+                ),
+                legacy_record("msg-inactive", "key-inactive", "payments", json!({})),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-malformed", "msg-inactive"]);
+    }
+
+    #[tokio::test]
+    async fn a_whole_request_sdk_error_reports_every_message_of_that_request() {
+        set_env();
+        let eb_error = mock!(aws_sdk_eventbridge::Client::put_events).then_error(|| {
+            aws_sdk_eventbridge::operation::put_events::PutEventsError::generic(
+                aws_sdk_eventbridge::error::ErrorMetadata::builder()
+                    .code("InternalFailure")
+                    .message("boom")
+                    .build(),
+            )
+        });
+        let clients = clients(vec![any_domain_rule("ACTIVE")], vec![eb_error]);
+
+        let records = (0..3)
+            .map(|i| {
+                legacy_record(
+                    &format!("msg-{i}"),
+                    &format!("key-{i}"),
+                    "orders",
+                    json!({}),
+                )
+            })
+            .collect();
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(records),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-0", "msg-1", "msg-2"]);
+    }
+
+    #[tokio::test]
+    async fn two_records_for_one_domain_share_a_single_liveness_read() {
+        set_env();
+        let ddb = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("status", s("ACTIVE"))
+                .build()
+        });
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries().len() == 2)
+            .then_output(|| put_events_success_output(2));
+        let clients = clients(vec![ddb.clone()], vec![put]);
+        let liveness = DomainLivenessCache::new(Duration::from_secs(300));
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &liveness,
+            &ZeroJitter,
+            sqs_event(vec![
+                legacy_record("msg-a", "key-a", "orders", json!({})),
+                legacy_record("msg-b", "key-b", "orders", json!({})),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+        assert_eq!(ddb.num_calls(), 1, "one liveness read per domain per batch");
+    }
+
+    #[tokio::test]
+    async fn a_warm_liveness_cache_serves_the_next_invocation_without_a_read() {
+        set_env();
+        let ddb = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("status", s("ACTIVE"))
+                .build()
+        });
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let clients = clients(vec![ddb.clone()], vec![put]);
+        let liveness = DomainLivenessCache::new(Duration::from_secs(300));
+
+        for id in ["msg-a", "msg-b"] {
+            let response = handle(
+                &clients,
+                &validators(),
+                &liveness,
+                &ZeroJitter,
+                sqs_event(vec![legacy_record(id, "key-a", "orders", json!({}))]),
+            )
+            .await
+            .unwrap();
+            assert!(failures(&response).is_empty());
+        }
+
+        assert_eq!(
+            ddb.num_calls(),
+            1,
+            "the second invocation reuses the confirmation"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_inactive_result_is_not_reused() {
+        set_env();
+        let inactive = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("status", s("INACTIVE"))
+                .build()
+        });
+        let active = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("status", s("ACTIVE"))
+                .build()
+        });
+        let ddb = mock_client!(aws_sdk_dynamodb, RuleMode::Sequential, &[inactive, active]);
+        let put = mock_client!(
+            aws_sdk_eventbridge,
+            RuleMode::MatchAny,
+            &[mock!(aws_sdk_eventbridge::Client::put_events)
+                .then_output(|| put_events_success_output(1))]
+        );
+        let clients = Clients {
+            ddb,
+            eb: put,
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+        let liveness = DomainLivenessCache::new(Duration::from_secs(300));
+
+        let first = handle(
+            &clients,
+            &validators(),
+            &liveness,
+            &ZeroJitter,
+            sqs_event(vec![legacy_record("msg-a", "key-a", "orders", json!({}))]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(failures(&first), ["msg-a"]);
+
+        let second = handle(
+            &clients,
+            &validators(),
+            &liveness,
+            &ZeroJitter,
+            sqs_event(vec![legacy_record("msg-b", "key-b", "orders", json!({}))]),
+        )
+        .await
+        .unwrap();
+        assert!(
+            failures(&second).is_empty(),
+            "a re-enabled domain reads again and delivers"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_zero_window_reads_the_domain_for_every_batch() {
+        set_env();
+        let ddb = mock!(aws_sdk_dynamodb::Client::get_item).then_output(|| {
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("status", s("ACTIVE"))
+                .build()
+        });
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let clients = clients(vec![ddb.clone()], vec![put]);
+        let liveness = DomainLivenessCache::new(Duration::ZERO);
+
+        for id in ["msg-a", "msg-b"] {
+            let response = handle(
+                &clients,
+                &validators(),
+                &liveness,
+                &ZeroJitter,
+                sqs_event(vec![legacy_record(id, "key-a", "orders", json!({}))]),
+            )
+            .await
+            .unwrap();
+            assert!(failures(&response).is_empty());
+        }
+
+        assert_eq!(ddb.num_calls(), 2, "a zero window reads on every batch");
+    }
+
+    #[tokio::test]
+    async fn the_liveness_read_is_strongly_consistent() {
+        set_env();
+        let consistent_reads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = consistent_reads.clone();
+        let ddb = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(move |req| {
+                recorded.lock().unwrap().push(req.consistent_read());
+                req.table_name() == Some("domains-test")
+            })
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("status", s("ACTIVE"))
+                    .build()
+            });
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let clients = clients(vec![ddb], vec![put]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event(vec![legacy_record("msg-c", "key-c", "orders", json!({}))]),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+        assert_eq!(
+            *consistent_reads.lock().unwrap(),
+            vec![Some(true)],
+            "a liveness read seeds the cache, so it must not trail a disable"
+        );
+    }
+    struct ZeroJitter;
+
+    impl JitterSource for ZeroJitter {
+        fn up_to(&self, _max: Duration) -> Duration {
+            Duration::ZERO
+        }
+    }
+
+    fn throttle_record(message_id: &str, receive_count: u32) -> Value {
+        let mut record = legacy_record(
+            message_id,
+            &format!("key-{message_id}"),
+            "orders",
+            json!({}),
+        );
+        record["receiptHandle"] = json!(format!("receipt-{message_id}"));
+        record["attributes"]["ApproximateReceiveCount"] = json!(receive_count.to_string());
+        record
+    }
+
+    fn sqs_event_with_deadline(records: Vec<Value>, deadline_ms: u64) -> LambdaEvent<Value> {
+        let mut context = lambda_runtime::Context::default();
+        context.deadline = deadline_ms;
+        LambdaEvent::new(json!({"Records": records}), context)
+    }
+
+    fn deadline_in_30s() -> u64 {
+        (chrono::Utc::now().timestamp_millis() + 30_000) as u64
+    }
+
+    fn deadline_in_4s() -> u64 {
+        (chrono::Utc::now().timestamp_millis() + 4_000) as u64
+    }
+
+    fn past_deadline() -> u64 {
+        (chrono::Utc::now().timestamp_millis() - 1_000) as u64
+    }
+
+    fn throttled_entry_output(
+        entry_count: usize,
+    ) -> aws_sdk_eventbridge::operation::put_events::PutEventsOutput {
+        aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+            .failed_entry_count(entry_count as i32)
+            .set_entries(Some(
+                (0..entry_count)
+                    .map(|_| {
+                        aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                            .error_code("ThrottlingException")
+                            .error_message("rate exceeded")
+                            .build()
+                    })
+                    .collect(),
+            ))
+            .build()
+    }
+
+    fn throttling_error() -> aws_sdk_eventbridge::operation::put_events::PutEventsError {
+        aws_sdk_eventbridge::operation::put_events::PutEventsError::generic(
+            aws_sdk_eventbridge::error::ErrorMetadata::builder()
+                .code("ThrottlingException")
+                .message("rate exceeded")
+                .build(),
+        )
+    }
+
+    fn clients_with_sqs(
+        ddb_rules: Vec<Rule>,
+        eb_rules: Vec<Rule>,
+        sqs_rules: Vec<Rule>,
+    ) -> Clients {
+        Clients {
+            ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, &ddb_rules),
+            eb: mock_client!(aws_sdk_eventbridge, RuleMode::MatchAny, &eb_rules),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &sqs_rules),
+        }
+    }
+
+    fn visibility_output(
+    ) -> aws_sdk_sqs::operation::change_message_visibility_batch::ChangeMessageVisibilityBatchOutput
+    {
+        aws_sdk_sqs::operation::change_message_visibility_batch::ChangeMessageVisibilityBatchOutput::builder()
+            .set_successful(Some(vec![]))
+            .set_failed(Some(vec![]))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn throttled_entries_accepted_on_retry_are_acknowledged_without_a_visibility_change() {
+        set_env();
+        let throttled = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| throttled_entry_output(1));
+        let accepted = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let clients = Clients {
+            ddb: mock_client!(
+                aws_sdk_dynamodb,
+                RuleMode::MatchAny,
+                &[any_domain_rule("ACTIVE")]
+            ),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                RuleMode::Sequential,
+                &[throttled.clone(), accepted.clone()]
+            ),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(vec![throttle_record("msg-t", 1)], deadline_in_30s()),
+        )
+        .await
+        .unwrap();
+
+        assert!(failures(&response).is_empty());
+        assert_eq!(throttled.num_calls(), 1);
+        assert_eq!(
+            accepted.num_calls(),
+            1,
+            "the in-invocation retry delivered the entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn still_throttled_messages_get_a_visibility_backoff_and_are_reported() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| throttled_entry_output(2));
+        let visibility = mock!(aws_sdk_sqs::Client::change_message_visibility_batch)
+            .match_requests(|req| {
+                if req.queue_url() != Some("https://sqs.test/publish-queue") {
+                    return false;
+                }
+                let entries = req.entries();
+                if entries.len() != 2 {
+                    return false;
+                }
+                let timeout_of = |id: &str| {
+                    entries
+                        .iter()
+                        .find(|e| e.id() == id)
+                        .and_then(|e| e.visibility_timeout())
+                };
+                timeout_of("msg-a") == Some(1) && timeout_of("msg-b") == Some(2)
+            })
+            .then_output(|| visibility_output());
+        let clients = clients_with_sqs(
+            vec![any_domain_rule("ACTIVE")],
+            vec![put.clone()],
+            vec![visibility.clone()],
+        );
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(
+                vec![throttle_record("msg-a", 1), throttle_record("msg-b", 3)],
+                deadline_in_30s(),
+            ),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-a", "msg-b"]);
+        assert_eq!(
+            put.num_calls(),
+            4,
+            "the first send plus three in-invocation retries"
+        );
+        assert_eq!(visibility.num_calls(), 1, "one batched visibility change");
+    }
+
+    #[tokio::test]
+    async fn a_request_level_throttle_takes_the_same_recovery_path() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events).then_error(|| throttling_error());
+        let visibility = mock!(aws_sdk_sqs::Client::change_message_visibility_batch)
+            .match_requests(|req| req.entries().len() == 1 && req.entries()[0].id() == "msg-t")
+            .then_output(|| visibility_output());
+        let clients = clients_with_sqs(
+            vec![any_domain_rule("ACTIVE")],
+            vec![put.clone()],
+            vec![visibility.clone()],
+        );
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(vec![throttle_record("msg-t", 2)], deadline_in_30s()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-t"]);
+        assert_eq!(
+            put.num_calls(),
+            4,
+            "four sends (first plus three in-invocation retries), one HTTP attempt each: opaque SDK retries are disabled so liveness is re-checked between rounds"
+        );
+        assert_eq!(visibility.num_calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_non_throttle_entry_error_is_reported_without_a_visibility_change() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events).then_output(|| {
+            aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                .failed_entry_count(1)
+                .entries(
+                    aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                        .error_code("InternalFailure")
+                        .error_message("boom")
+                        .build(),
+                )
+                .build()
+        });
+        let clients = clients_with_sqs(vec![any_domain_rule("ACTIVE")], vec![put.clone()], vec![]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(vec![throttle_record("msg-t", 1)], deadline_in_30s()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-t"]);
+        assert_eq!(
+            put.num_calls(),
+            1,
+            "non-throttle failures are not retried in the invocation"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_visibility_change_still_reports_the_message() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| throttled_entry_output(1));
+        let visibility = mock!(aws_sdk_sqs::Client::change_message_visibility_batch).then_error(|| {
+            aws_sdk_sqs::operation::change_message_visibility_batch::ChangeMessageVisibilityBatchError::generic(
+                aws_sdk_sqs::error::ErrorMetadata::builder().message("sqs down").build(),
+            )
+        });
+        let clients =
+            clients_with_sqs(vec![any_domain_rule("ACTIVE")], vec![put], vec![visibility]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(vec![throttle_record("msg-t", 1)], deadline_in_30s()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-t"]);
+    }
+
+    #[test]
+    fn latency_fields_measure_from_the_sent_timestamp() {
+        let (queue_wait_ms, enqueue_to_delivery_ms) = delivery_latency(1_000, 1_200, 1_450);
+        assert_eq!(queue_wait_ms, 200, "invocation start minus SentTimestamp");
+        assert_eq!(
+            enqueue_to_delivery_ms, 450,
+            "EventBridge acceptance minus SentTimestamp"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn each_request_records_its_own_acceptance_time() {
+        set_env();
+        let slow_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries()[0].event_bus_name() == Some("acme-prod-slow-bus"))
+            .then_output(|| put_events_success_output(1));
+        let fast_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries()[0].event_bus_name() == Some("acme-prod-swift-bus"))
+            .then_output(|| put_events_success_output(1));
+        let clients = Clients {
+            ddb: mock_client!(aws_sdk_dynamodb, RuleMode::MatchAny, &[]),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                RuleMode::MatchAny,
+                &[slow_put, fast_put],
+                |conf| conf.http_client(DelayedHttpClient::delaying(
+                    "acme-prod-slow-bus",
+                    Duration::from_millis(300)
+                ))
+            ),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+
+        let outcomes = send::deliver(
+            &clients,
+            &no_liveness_cache(),
+            &ZeroJitter,
+            vec![
+                prepared_entry_for(
+                    "msg-slow",
+                    "acme-prod-slow-bus",
+                    1_785_407_400_100,
+                    "orders",
+                ),
+                prepared_entry_for(
+                    "msg-fast",
+                    "acme-prod-swift-bus",
+                    1_785_407_400_200,
+                    "orders",
+                ),
+            ],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        let mut accepted: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        for outcome in outcomes {
+            if let send::DeliveryOutcome::Delivered {
+                sent_timestamp_ms,
+                accepted_ms,
+                ..
+            } = outcome
+            {
+                accepted.insert(sent_timestamp_ms, accepted_ms);
+            }
+        }
+        let fast = accepted[&1_785_407_400_200];
+        let slow = accepted[&1_785_407_400_100];
+        assert!(
+            fast + 150 <= slow,
+            "the fast request's acceptance ({fast}) must not inherit the slow request's completion time ({slow})"
+        );
+    }
+
+    /// Holds back responses to requests whose body contains `needle` with an
+    /// async sleep in the HTTP layer. Mock rule closures run under the
+    /// interceptor's rules mutex, so a delay there would also stall every
+    /// concurrent request.
+    #[derive(Debug, Clone)]
+    struct DelayedHttpClient {
+        inner: aws_sdk_eventbridge::config::SharedHttpClient,
+        needle: &'static str,
+        delay: Duration,
+    }
+
+    impl DelayedHttpClient {
+        fn delaying(needle: &'static str, delay: Duration) -> Self {
+            Self {
+                inner: aws_smithy_mocks::create_mock_http_client(),
+                needle,
+                delay,
+            }
+        }
+    }
+
+    impl aws_smithy_runtime_api::client::http::HttpClient for DelayedHttpClient {
+        fn http_connector(
+            &self,
+            settings: &aws_smithy_runtime_api::client::http::HttpConnectorSettings,
+            components: &aws_smithy_runtime_api::client::runtime_components::RuntimeComponents,
+        ) -> aws_smithy_runtime_api::client::http::SharedHttpConnector {
+            aws_smithy_runtime_api::client::http::SharedHttpConnector::new(DelayedConnector {
+                inner: self.inner.http_connector(settings, components),
+                needle: self.needle,
+                delay: self.delay,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct DelayedConnector {
+        inner: aws_smithy_runtime_api::client::http::SharedHttpConnector,
+        needle: &'static str,
+        delay: Duration,
+    }
+
+    impl aws_smithy_runtime_api::client::http::HttpConnector for DelayedConnector {
+        fn call(
+            &self,
+            request: aws_smithy_runtime_api::client::orchestrator::HttpRequest,
+        ) -> aws_smithy_runtime_api::client::http::HttpConnectorFuture {
+            let delay = request
+                .body()
+                .bytes()
+                .is_some_and(|body| String::from_utf8_lossy(body).contains(self.needle))
+                .then_some(self.delay);
+            let inner = self.inner.clone();
+            aws_smithy_runtime_api::client::http::HttpConnectorFuture::new(async move {
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
+                inner.call(request).await
+            })
+        }
+    }
+
+    fn prepared_entry_for(
+        message_id: &str,
+        event_bus_name: &str,
+        sent_ms: i64,
+        domain: &str,
+    ) -> PreparedEntry {
+        PreparedEntry {
+            message_id: message_id.to_string(),
+            receipt_handle: None,
+            receive_count: 1,
+            sent_timestamp_ms: sent_ms,
+            domain: domain.to_string(),
+            request_entry: PutEventsRequestEntry::builder()
+                .event_bus_name(event_bus_name)
+                .source("acme-orders")
+                .detail_type("OrderNotification")
+                .detail("{}")
+                .build(),
+            size_bytes: 100,
+        }
+    }
+
+    #[tokio::test]
+    async fn preparation_stops_at_the_time_floor_and_reports_the_rest_for_retry() {
+        set_env();
+        let clients = clients(vec![active_domain_rule()], vec![]);
+        let records = vec![
+            legacy_record("msg-1", "key-1", "orders", json!({})),
+            legacy_record("msg-2", "key-2", "orders", json!({})),
+            legacy_record("msg-3", "key-3", "orders", json!({})),
+        ];
+        let budgets = std::sync::Mutex::new(std::collections::VecDeque::from([
+            Duration::from_secs(10),
+            Duration::from_secs(6),
+            Duration::from_secs(2),
+        ]));
+        let remaining = || {
+            budgets
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(Duration::ZERO)
+        };
+
+        let (prepared, failed) = prepare_all(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &records[..],
+            &remaining,
+        )
+        .await;
+
+        assert_eq!(
+            prepared
+                .iter()
+                .map(|entry| entry.message_id.as_str())
+                .collect::<Vec<_>>(),
+            ["msg-1", "msg-2"],
+            "records before the floor are prepared"
+        );
+        assert_eq!(
+            failed,
+            ["msg-3"],
+            "the record that misses the floor is reported for retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_round_with_no_time_budget_reports_the_prepared_entry_without_sending() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| throttled_entry_output(1));
+        let clients = clients(vec![], vec![put.clone()]);
+
+        let outcomes = send::deliver(
+            &clients,
+            &no_liveness_cache(),
+            &ZeroJitter,
+            vec![prepared_entry_for(
+                "msg-1",
+                "acme-prod-orders-event-bus",
+                1_785_407_400_100,
+                "orders",
+            )],
+            &|| Duration::ZERO,
+        )
+        .await;
+
+        assert_eq!(put.num_calls(), 0, "a round with no budget sends nothing");
+        assert_eq!(
+            outcomes,
+            vec![send::DeliveryOutcome::Failed {
+                message_id: "msg-1".to_string(),
+                error: "the invocation ran out of time before the send round".to_string(),
+            }],
+            "the prepared entry is reported for retry by the send guard"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_retry_starts_when_the_invocation_is_out_of_time() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| throttled_entry_output(1));
+        let visibility = mock!(aws_sdk_sqs::Client::change_message_visibility_batch)
+            .then_output(|| visibility_output());
+        let clients = clients_with_sqs(
+            vec![any_domain_rule("ACTIVE")],
+            vec![put.clone()],
+            vec![visibility.clone()],
+        );
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(vec![throttle_record("msg-t", 2)], deadline_in_4s()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-t"]);
+        assert_eq!(
+            put.num_calls(),
+            1,
+            "no in-invocation retry under the time margin"
+        );
+        assert_eq!(
+            visibility.num_calls(),
+            1,
+            "the message still gets its backoff while time remains"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_out_of_time_invocation_skips_the_visibility_change_and_still_reports() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| throttled_entry_output(1));
+        let visibility = mock!(aws_sdk_sqs::Client::change_message_visibility_batch)
+            .then_output(|| visibility_output());
+        let clients = clients_with_sqs(
+            vec![any_domain_rule("ACTIVE")],
+            vec![put.clone()],
+            vec![visibility.clone()],
+        );
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(vec![throttle_record("msg-t", 2)], past_deadline()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-t"]);
+        assert_eq!(
+            visibility.num_calls(),
+            0,
+            "with no invocation time left there is no budget for a visibility change; the standard timeout applies"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_send_round_with_no_time_budget_sends_nothing_and_reports_the_batch_for_retry() {
+        set_env();
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let clients = clients_with_sqs(vec![active_domain_rule()], vec![put.clone()], vec![]);
+
+        let response = handle(
+            &clients,
+            &validators(),
+            &no_liveness_cache(),
+            &ZeroJitter,
+            sqs_event_with_deadline(vec![record(admitted_attributes())], past_deadline()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(failures(&response), ["msg-1"]);
+        assert_eq!(put.num_calls(), 0, "no PutEvents without a time budget");
+    }
+
+    #[derive(Clone)]
+    struct ManualClock(std::sync::Arc<std::sync::Mutex<std::time::Instant>>);
+
+    impl ManualClock {
+        fn new() -> Self {
+            Self(std::sync::Arc::new(std::sync::Mutex::new(
+                std::time::Instant::now(),
+            )))
+        }
+
+        fn advance(&self, delta: Duration) {
+            *self.0.lock().unwrap() += delta;
+        }
+    }
+
+    impl Clock for ManualClock {
+        fn now(&self) -> std::time::Instant {
+            *self.0.lock().unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_resend_rechecks_an_expired_liveness_confirmation() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        let throttled = mock!(aws_sdk_eventbridge::Client::put_events).then_output(move || {
+            clock.advance(Duration::from_secs(2));
+            throttled_entry_output(1)
+        });
+        let rechecked = any_domain_rule("INACTIVE");
+        let clients = Clients {
+            ddb: mock_client!(
+                aws_sdk_dynamodb,
+                RuleMode::MatchAny,
+                std::slice::from_ref(&rechecked)
+            ),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                RuleMode::MatchAny,
+                std::slice::from_ref(&throttled)
+            ),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![prepared_entry_for(
+                "msg-t",
+                "acme-prod-orders-event-bus",
+                1_785_407_400_100,
+                "orders",
+            )],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        assert_eq!(
+            outcomes,
+            vec![send::DeliveryOutcome::Failed {
+                message_id: "msg-t".to_string(),
+                error: "domain 'orders' is not ACTIVE or does not exist".to_string(),
+            }],
+            "the resend must not run once the confirmation expired and the domain is disabled"
+        );
+        assert_eq!(
+            throttled.num_calls(),
+            1,
+            "only the first send happened; the resend was blocked at the recheck"
+        );
+        assert_eq!(
+            rechecked.num_calls(),
+            1,
+            "the expired confirmation was re-read, not served from the cache"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_send_round_past_its_time_budget_reports_the_round_instead_of_timing_out() {
+        set_env();
+        let mixed = mock!(aws_sdk_eventbridge::Client::put_events).then_output(|| {
+            aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                .failed_entry_count(1)
+                .entries(ok_entry("evt-1"))
+                .entries(
+                    aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                        .error_code("ThrottlingException")
+                        .error_message("rate exceeded")
+                        .build(),
+                )
+                .build()
+        });
+        let slow = mock!(aws_sdk_eventbridge::Client::put_events).then_output(|| {
+            std::thread::sleep(Duration::from_secs(5));
+            put_events_success_output(1)
+        });
+        let clients = Clients {
+            ddb: mock_client!(
+                aws_sdk_dynamodb,
+                RuleMode::MatchAny,
+                &[any_domain_rule("ACTIVE")]
+            ),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                RuleMode::Sequential,
+                &[mixed.clone(), slow.clone()]
+            ),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+
+        let outcomes = send::deliver(
+            &clients,
+            &no_liveness_cache(),
+            &ZeroJitter,
+            vec![
+                prepared_entry_for(
+                    "msg-ok",
+                    "acme-prod-orders-event-bus",
+                    1_785_407_400_100,
+                    "orders",
+                ),
+                prepared_entry_for(
+                    "msg-t",
+                    "acme-prod-orders-event-bus",
+                    1_785_407_400_200,
+                    "orders",
+                ),
+            ],
+            &|| Duration::from_millis(5_500),
+        )
+        .await;
+
+        let mut delivered = 0;
+        for outcome in &outcomes {
+            match outcome {
+                send::DeliveryOutcome::Delivered {
+                    sent_timestamp_ms, ..
+                } => {
+                    assert_eq!(*sent_timestamp_ms, 1_785_407_400_100);
+                    delivered += 1;
+                }
+                send::DeliveryOutcome::Failed { message_id, error } => {
+                    assert_eq!(message_id, "msg-t");
+                    assert_eq!(error, "the invocation ran out of time during the send");
+                }
+                send::DeliveryOutcome::Throttled { .. } => {
+                    panic!("a timed-out round is reported for retry, not rescheduled")
+                }
+            }
+        }
+        assert_eq!(
+            delivered, 1,
+            "the entry accepted before the budget ran out is still reported as delivered"
+        );
+        assert_eq!(mixed.num_calls(), 1);
+        assert_eq!(
+            slow.num_calls(),
+            1,
+            "the retry round started, and its answer was abandoned at the budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_confirmation_is_rechecked_before_the_first_send() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        clock.advance(Duration::from_secs(2));
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let rechecked = any_domain_rule("INACTIVE");
+        let clients = clients_with_sqs(vec![rechecked.clone()], vec![put.clone()], vec![]);
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![prepared_entry_for(
+                "msg-1",
+                "acme-prod-orders-event-bus",
+                1_785_407_400_100,
+                "orders",
+            )],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        assert_eq!(
+            outcomes,
+            vec![send::DeliveryOutcome::Failed {
+                message_id: "msg-1".to_string(),
+                error: "domain 'orders' is not ACTIVE or does not exist".to_string(),
+            }],
+            "a confirmation that expired while the batch was prepared is re-read before sending"
+        );
+        assert_eq!(put.num_calls(), 0);
+        assert_eq!(rechecked.num_calls(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_slow_liveness_recheck_reports_the_round_instead_of_timing_out() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        let mixed_then_expire =
+            mock!(aws_sdk_eventbridge::Client::put_events).then_output(move || {
+                clock.advance(Duration::from_secs(2));
+                aws_sdk_eventbridge::operation::put_events::PutEventsOutput::builder()
+                    .failed_entry_count(1)
+                    .entries(ok_entry("evt-1"))
+                    .entries(
+                        aws_sdk_eventbridge::types::PutEventsResultEntry::builder()
+                            .error_code("ThrottlingException")
+                            .error_message("rate exceeded")
+                            .build(),
+                    )
+                    .build()
+            });
+        let clients = Clients {
+            ddb: mock_client!(
+                aws_sdk_dynamodb,
+                RuleMode::MatchAny,
+                &[any_domain_rule("ACTIVE")],
+                |conf| conf.http_client(DelayedHttpClient::delaying(
+                    "domains-test",
+                    Duration::from_secs(10)
+                ))
+            ),
+            eb: mock_client!(
+                aws_sdk_eventbridge,
+                RuleMode::MatchAny,
+                std::slice::from_ref(&mixed_then_expire)
+            ),
+            sqs: mock_client!(aws_sdk_sqs, RuleMode::MatchAny, &[]),
+        };
+        let deadline = std::time::Instant::now() + Duration::from_millis(5_500);
+        let started = std::time::Instant::now();
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![
+                prepared_entry_for(
+                    "msg-ok",
+                    "acme-prod-orders-event-bus",
+                    1_785_407_400_100,
+                    "orders",
+                ),
+                prepared_entry_for(
+                    "msg-t",
+                    "acme-prod-orders-event-bus",
+                    1_785_407_400_200,
+                    "orders",
+                ),
+            ],
+            &move || deadline.saturating_duration_since(std::time::Instant::now()),
+        )
+        .await;
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the recheck is bounded by the round's budget, not the slow read"
+        );
+        assert_eq!(
+            outcomes,
+            vec![
+                send::DeliveryOutcome::Delivered {
+                    sent_timestamp_ms: 1_785_407_400_100,
+                    accepted_ms: match outcomes.first() {
+                        Some(send::DeliveryOutcome::Delivered { accepted_ms, .. }) => *accepted_ms,
+                        _ => 0,
+                    },
+                },
+                send::DeliveryOutcome::Failed {
+                    message_id: "msg-t".to_string(),
+                    error: "the invocation ran out of time during the send".to_string(),
+                },
+            ],
+            "the accepted entry keeps its outcome and the unchecked resend is reported for retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_domain_read_that_outlasts_the_window_does_not_authorize_the_send() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        clock.advance(Duration::from_secs(2));
+        let read_clock = clock.clone();
+        let slow_domain_read = mock!(aws_sdk_dynamodb::Client::get_item).then_output(move || {
+            read_clock.advance(Duration::from_secs(2));
+            aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                .item("status", s("ACTIVE"))
+                .build()
+        });
+        let put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .then_output(|| put_events_success_output(1));
+        let clients = clients_with_sqs(vec![slow_domain_read], vec![put.clone()], vec![]);
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![prepared_entry_for(
+                "msg-1",
+                "acme-prod-orders-event-bus",
+                1_785_407_400_100,
+                "orders",
+            )],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        assert_eq!(
+            outcomes,
+            vec![send::DeliveryOutcome::Failed {
+                message_id: "msg-1".to_string(),
+                error: "domain 'orders' could not be confirmed ACTIVE within the liveness window"
+                    .to_string(),
+            }]
+        );
+        assert_eq!(put.num_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_confirmation_that_lapses_before_its_chunks_turn_is_rechecked_at_dispatch() {
+        set_env();
+        let clock = ManualClock::new();
+        let liveness = DomainLivenessCache::with_clock(Duration::from_secs(1), clock.clone());
+        liveness
+            .confirm_active("payments", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        clock.advance(Duration::from_millis(700));
+        liveness
+            .confirm_active("orders", || async { Ok::<_, anyhow::Error>(true) })
+            .await
+            .unwrap();
+        clock.advance(Duration::from_millis(300));
+        let read_clock = clock.clone();
+        let payments_reread = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| {
+                req.key().and_then(|k| k.get("domainName")) == Some(&s("payments"))
+            })
+            .then_output(move || {
+                read_clock.advance(Duration::from_millis(900));
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("status", s("ACTIVE"))
+                    .build()
+            });
+        let orders_reread = mock!(aws_sdk_dynamodb::Client::get_item)
+            .match_requests(|req| req.key().and_then(|k| k.get("domainName")) == Some(&s("orders")))
+            .then_output(|| {
+                aws_sdk_dynamodb::operation::get_item::GetItemOutput::builder()
+                    .item("status", s("INACTIVE"))
+                    .build()
+            });
+        let orders_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries()[0].event_bus_name() == Some("zzz-orders-bus"))
+            .then_output(|| put_events_success_output(1));
+        let payments_put = mock!(aws_sdk_eventbridge::Client::put_events)
+            .match_requests(|req| req.entries()[0].event_bus_name() == Some("aaa-payments-bus"))
+            .then_output(|| put_events_success_output(1));
+        let clients = clients_with_sqs(
+            vec![payments_reread, orders_reread],
+            vec![orders_put.clone(), payments_put.clone()],
+            vec![],
+        );
+
+        let outcomes = send::deliver(
+            &clients,
+            &liveness,
+            &ZeroJitter,
+            vec![
+                prepared_entry_for("msg-o", "zzz-orders-bus", 1_000, "orders"),
+                prepared_entry_for("msg-p", "aaa-payments-bus", 1_000, "payments"),
+            ],
+            &|| Duration::from_secs(30),
+        )
+        .await;
+
+        assert_eq!(payments_put.num_calls(), 1);
+        assert_eq!(
+            orders_put.num_calls(),
+            0,
+            "orders' confirmation lapsed while payments was re-read, so its chunk re-checks at dispatch"
+        );
+        assert!(outcomes.iter().any(|outcome| matches!(
+            outcome,
+            send::DeliveryOutcome::Failed { message_id, .. } if message_id == "msg-o"
+        )));
     }
 }

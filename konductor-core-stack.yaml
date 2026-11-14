@@ -93,6 +93,53 @@ Parameters:
     Default: "http://localhost:3000/logout"
     Description: >
       Allowed OAuth sign-out (logout) URLs for the interactive app client.
+  PublishThrottleRateLimit:
+    Type: Number
+    Default: 2000
+    MinValue: 1
+    Description: >
+      Dedicated POST /publish throttle (requests per second) on every
+      environment stage of both control-plane APIs. Method-level, so every
+      other route keeps the stage-wide 50 rps / burst 100. Stage and method
+      throttles are ceilings against the account API Gateway throttle, not
+      reservations; validation warns when a raised value no longer fits the
+      account quota.
+  PublishThrottleBurstLimit:
+    Type: Number
+    Default: 1000
+    MinValue: 0
+    Description: >
+      Burst allowance paired with PublishThrottleRateLimit on every
+      environment stage of both control-plane APIs.
+  PublishAdmissionConcurrencyCap:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    Description: >
+      Optional reserved concurrency for the publish admission function. 0
+      (the default) means uncapped: admission draws from the account's
+      unreserved Lambda concurrency pool. A positive value isolates admission
+      from — and bounds its impact on — the shared pool.
+  PublishDeliveryMaxConcurrency:
+    Type: Number
+    Default: 50
+    MinValue: 2
+    MaxValue: 1000
+    Description: >
+      Maximum concurrent invocations of the publish delivery consumer,
+      enforced through the SQS event source mapping's ScalingConfig so
+      saturated delivery leaves messages queued instead of raising their
+      receive counts. 2-1000 is the AWS range.
+  DomainLivenessCacheSeconds:
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 900
+    Description: >
+      Seconds admission and delivery may reuse a confirmation that a domain
+      is ACTIVE before reading the domain store again. Disabling a domain
+      stops publishing within this window; 0 disables reuse (a read on every
+      request). Capped at 900 so a disable always takes effect promptly.
 
 Globals:
   Function:
@@ -121,6 +168,7 @@ Conditions:
     Fn::And:
       - !Not [!Equals [!Ref NotificationSenderEmail, ""]]
       - !Not [!Equals [!Ref PlatformOperatorEmail, ""]]
+  HasPublishAdmissionConcurrencyCap: !Not [!Equals [!Ref PublishAdmissionConcurrencyCap, 0]]
 
 Resources:
   # ---- Platform tooling ----
@@ -577,9 +625,11 @@ Resources:
     Properties:
       QueueName: !Sub "konductor-publish-queue"
       VisibilityTimeout: 30
+      # 25 receives with delivery's exponential visibility backoff cover 10+
+      # minutes of sustained EventBridge throttling before dead-lettering.
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt PublishDlq.Arn
-        maxReceiveCount: 3
+        maxReceiveCount: 25
 
   # Admission is the only legitimate writer: a queued command is proof of
   # validation, so any other principal able to SendMessage could inject
@@ -643,6 +693,59 @@ Resources:
       Dimensions:
         - Name: QueueName
           Value: !GetAtt SubscriptionsDlq.QueueName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  PublishDlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-publish-dlq-depth-alarm"
+      AlarmDescription: Publish commands permanently failed — re-drive by re-publishing through /publish
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt PublishDlq.QueueName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  PublishQueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-publish-queue-age-alarm"
+      AlarmDescription: Oldest publish message over 5 minutes — delivery is not keeping up (sustained EventBridge throttling or a downstream outage)
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt PublishQueue.QueueName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 300
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # SQS excludes repeatedly received, undeleted messages from
+  # ApproximateAgeOfOldestMessage after three receives, so a small batch
+  # stuck in EventBridge throttling can outlive the age alarm above without
+  # tripping it. This alarm counts the retry log lines delivery itself emits,
+  # covering the whole extended retry window up to the DLQ alarm.
+  PublishDeliveryRetryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "konductor-publish-delivery-retry-alarm"
+      AlarmDescription: Publish delivery kept reporting messages for retry for ten minutes — sustained EventBridge throttling, an inactive domain, or poison messages; the queue-age metric cannot see repeatedly received messages on standard queues
+      Namespace: Konductor/EventStreams
+      MetricName: PublishDeliveryRetry
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 2
@@ -960,6 +1063,10 @@ Resources:
           HttpMethod: "*"
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
+        - ResourcePath: "/~1publish"
+          HttpMethod: POST
+          ThrottlingBurstLimit: !Ref PublishThrottleBurstLimit
+          ThrottlingRateLimit: !Ref PublishThrottleRateLimit
       Auth:
         DefaultAuthorizer: OAuthRequestAuthorizer
         Authorizers:
@@ -1003,6 +1110,10 @@ Resources:
           HttpMethod: "*"
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
+        - ResourcePath: "/~1publish"
+          HttpMethod: POST
+          ThrottlingBurstLimit: !Ref PublishThrottleBurstLimit
+          ThrottlingRateLimit: !Ref PublishThrottleRateLimit
       Auth:
         DefaultAuthorizer: AWS_IAM
       DefinitionBody:
@@ -1039,6 +1150,10 @@ Resources:
           HttpMethod: "*"
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
+        - ResourcePath: "/~1publish"
+          HttpMethod: POST
+          ThrottlingBurstLimit: { Ref: PublishThrottleBurstLimit }
+          ThrottlingRateLimit: { Ref: PublishThrottleRateLimit }
 
   KonductorIamApiStagingStage:
     Type: AWS::ApiGateway::Stage
@@ -1057,6 +1172,10 @@ Resources:
           HttpMethod: "*"
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
+        - ResourcePath: "/~1publish"
+          HttpMethod: POST
+          ThrottlingBurstLimit: { Ref: PublishThrottleBurstLimit }
+          ThrottlingRateLimit: { Ref: PublishThrottleRateLimit }
 
   KonductorOAuthApiProdStage:
     Type: AWS::ApiGateway::Stage
@@ -1075,6 +1194,10 @@ Resources:
           HttpMethod: "*"
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
+        - ResourcePath: "/~1publish"
+          HttpMethod: POST
+          ThrottlingBurstLimit: { Ref: PublishThrottleBurstLimit }
+          ThrottlingRateLimit: { Ref: PublishThrottleRateLimit }
 
   KonductorIamApiProdStage:
     Type: AWS::ApiGateway::Stage
@@ -1093,6 +1216,10 @@ Resources:
           HttpMethod: "*"
           ThrottlingBurstLimit: 100
           ThrottlingRateLimit: 50
+        - ResourcePath: "/~1publish"
+          HttpMethod: POST
+          ThrottlingBurstLimit: { Ref: PublishThrottleBurstLimit }
+          ThrottlingRateLimit: { Ref: PublishThrottleRateLimit }
   # konductor:rendered-stages-end
 
   # ---- Cognito Identity (interactive OAuth foundation) ----
@@ -1918,6 +2045,10 @@ Resources:
       FunctionName: !Sub "konductor-publish-events"
       CodeUri: ./event-streams/functions/publish-events
       Handler: bootstrap
+      Environment:
+        Variables:
+          PUBLISH_QUEUE_URL: !Ref PublishQueue
+          DOMAIN_LIVENESS_CACHE_SECONDS: !Ref DomainLivenessCacheSeconds
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -1927,8 +2058,10 @@ Resources:
             - Effect: Allow
               Action: [events:PutEvents]
               Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${Organization}-*"
+            # sqs:ChangeMessageVisibility also authorizes the Batch variant
+            # delivery uses to back off throttled messages.
             - Effect: Allow
-              Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+              Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes, sqs:ChangeMessageVisibility]
               Resource: !GetAtt PublishQueue.Arn
       Events:
         SqsTrigger:
@@ -1936,6 +2069,8 @@ Resources:
           Properties:
             Queue: !GetAtt PublishQueue.Arn
             BatchSize: 10
+            ScalingConfig:
+              MaximumConcurrency: !Ref PublishDeliveryMaxConcurrency
             FunctionResponseTypes:
               - ReportBatchItemFailures
 
@@ -1956,10 +2091,11 @@ Resources:
       FunctionName: !Sub "konductor-publish-events-admission"
       CodeUri: ./event-streams/functions/publish-events-admission
       Handler: bootstrap
-      # Caps admission concurrency so a publish surge cannot exhaust account
-      # Lambda concurrency or hammer the Schemas API; 100 is generous for the
-      # hot path given cache-served publishes complete in single-digit ms.
-      ReservedConcurrentExecutions: 100
+      # Uncapped by default: reserved concurrency is subtracted from the
+      # account's shared pool even while idle. The cap applies only when the
+      # operator sets one — 0 cannot mean "cap at 0" because a Lambda reserved
+      # concurrency of 0 would throttle every invocation.
+      ReservedConcurrentExecutions: !If [HasPublishAdmissionConcurrencyCap, !Ref PublishAdmissionConcurrencyCap, !Ref AWS::NoValue]
       Environment:
         Variables:
           BINDINGS_TABLE: !Ref AuthorizationBindingsTable
@@ -1967,6 +2103,7 @@ Resources:
           PUBLISH_QUEUE_URL: !Ref PublishQueue
           SCHEMA_CACHE_TTL_MS: "60000"
           METADATA_TABLE: !Ref MetadataConfigurationTable
+          DOMAIN_LIVENESS_CACHE_SECONDS: !Ref DomainLivenessCacheSeconds
       Policies:
         - !Ref BindingsTableReadPolicy
         - !Ref EntitlementsTableReadPolicy
@@ -1981,8 +2118,9 @@ Resources:
               Resource:
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:registry/${Organization}-*"
                 - !Sub "arn:aws:schemas:${AWS::Region}:${AWS::AccountId}:schema/${Organization}-*"
+            # GetQueueAttributes backs the init pre-warm (QueueArn read).
             - Effect: Allow
-              Action: [sqs:SendMessage]
+              Action: [sqs:SendMessage, sqs:GetQueueAttributes]
               Resource: !GetAtt PublishQueue.Arn
       Events:
         OAuthPublish:
@@ -2023,6 +2161,55 @@ Resources:
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+
+  # Publish-path latency from structured log fields — no payload, principal,
+  # or token data. No dimensions, so cardinality stays flat per metric;
+  # per-domain breakdowns come from Logs Insights on the same log lines.
+  PublishAdmissionLatencyFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref PublishEventsAdmissionLogGroup
+      FilterPattern: '{ $.fields.metric = "AdmissionAccepted" }'
+      MetricTransformations:
+        - MetricName: PublishAdmissionLatency
+          MetricNamespace: Konductor/EventStreams
+          MetricValue: "$.fields.latency_ms"
+
+  PublishQueueWaitFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref PublishEventsLogGroup
+      FilterPattern: '{ $.fields.metric = "PublishDelivered" }'
+      MetricTransformations:
+        - MetricName: PublishQueueWait
+          MetricNamespace: Konductor/EventStreams
+          MetricValue: "$.fields.queue_wait_ms"
+
+  PublishEnqueueToDeliveryFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref PublishEventsLogGroup
+      FilterPattern: '{ $.fields.metric = "PublishDelivered" }'
+      MetricTransformations:
+        - MetricName: PublishEnqueueToDelivery
+          MetricNamespace: Konductor/EventStreams
+          MetricValue: "$.fields.enqueue_to_delivery_ms"
+
+  # Counts every message delivery reports for retry (throttled, failed, or
+  # rejected before send) so the retry alarm above can see the extended
+  # retry window the queue-age metric cannot. Per-message logs only: the
+  # batch-level diagnostics carry no message_id and stay out of the count.
+  # No dimensions: cardinality stays flat; no payload, principal, or token
+  # data.
+  PublishDeliveryRetryFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref PublishEventsLogGroup
+      FilterPattern: '{ $.fields.metric = "PublishDeliveryRetry" && $.fields.message_id = "*" }'
+      MetricTransformations:
+        - MetricName: PublishDeliveryRetry
+          MetricNamespace: Konductor/EventStreams
+          MetricValue: "1"
 
   # ---- Publisher Schema Administration (append-only) ----
   SchemaAdminLogGroup:

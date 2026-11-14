@@ -24,6 +24,43 @@ Older rationale is available through the [decision index](docs/decisions/README.
   issues are skipped, and re-runs never comment twice. Bare mentions
   count, so reference issue numbers deliberately. See
   [the decision](docs/decisions/resolve-issues-on-merge.md).
+- Tune the publish path end to end (`tune-publish-path`). `POST /publish`
+  gains a dedicated method-level API Gateway throttle on every stage
+  (`publish_throttle_rate_limit` 2,000 rps and `publish_throttle_burst_limit`
+  1,000 by default; every other route keeps 50 rps / 100 burst), and
+  `make validate-config` now warns — without failing — when the configured
+  publish throttle plus the control-plane ceiling (API Gateway applies the
+  stage throttle to every method independently, so the ceiling is counted
+  per method bucket, read from the OpenAPI contracts) no longer fits the
+  account's API Gateway throttle quota; it checks the five new settings
+  against the template parameters' own bounds. Admission and delivery share an ACTIVE-only domain liveness cache
+  (`domain_liveness_cache_seconds`, default 300) backed by strongly
+  consistent domain reads, so disabling a domain now stops publishing within
+  that window instead of on the next request, and admission pre-warms its
+  DynamoDB and SQS connections during init. Delivery batches same-bus events
+  into shared `PutEvents` requests with per-entry failure mapping, retries
+  throttled entries inside the invocation (re-checking expired domain
+  liveness before every send, as admission does before enqueueing, and never
+  trusting a domain read slower than the window) and then
+  re-shows them with an exponential visibility
+  backoff, bounds every send round and visibility change by the remaining
+  invocation time so a slow request cannot cost the batch its
+  acknowledgements, and stops preparing records once less than the response
+  margin plus a one-second send floor remains, reporting the rest for retry
+  so prepared entries still send; its concurrency is bounded by the event source mapping
+  (`publish_delivery_max_concurrency`, default 50). Admission's reserved
+  concurrency is now optional (`publish_admission_concurrency_cap`, default
+  0 for uncapped), and the publish queue's `maxReceiveCount` rises from 3 to
+  25 so sustained EventBridge throttling no longer dead-letters valid
+  events. New metrics cover each leg of the path:
+  `PublishAdmissionLatency` (admission request time), `PublishQueueWait`
+  (enqueue to delivery invocation start), and `PublishEnqueueToDelivery`
+  (enqueue to the request's own EventBridge acceptance time).
+  `konductor-publish-dlq-depth-alarm` / `konductor-publish-queue-age-alarm`
+  / `konductor-publish-delivery-retry-alarm` alarms cover the queue and the
+  extended retry window. See the
+  [decision record](docs/decisions/tune-publish-path.md) and
+  [service quotas](docs/operations/service-quotas.md).
 - Add `konductor-sdk`, a pre-alpha Python SDK (Python 3.11+) for the
   application APIs: synchronous `publish`, `subscribe`, `unsubscribe`, and
   `describe_subscription` against the OAuth API with a Cognito access token

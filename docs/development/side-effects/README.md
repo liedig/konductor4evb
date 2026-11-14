@@ -42,8 +42,8 @@ The index summarizes the classification and rationale for each write path.
 | `subscriptions/unsubscribe.rs` | STAY | `fix-unsubscribe-execution-idempotency` |
 | `materialize-subscription-env` | ENVELOPE-DRIVEN | Not applicable |
 | `subscription-extender` | ENVELOPE-DRIVEN | Not applicable |
-| `publish-events` | ENVELOPE-DRIVEN | Not applicable |
-| `publish-events-admission` | STAY | Not applicable |
+| `publish-events` | ENVELOPE-DRIVEN (confirmed 2026-11-02, `tune-publish-path`: batching, throttle recovery, liveness cache) | Not applicable |
+| `publish-events-admission` | STAY (confirmed 2026-11-02, `tune-publish-path`: liveness cache and pre-warm are read-only) | Not applicable |
 | `schema-admin` | STAY | Not applicable |
 | `schema-promotions` POST/GET | STAY | Not applicable |
 | `entitlement-admin` | STAY | Not applicable |
