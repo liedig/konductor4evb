@@ -24,9 +24,9 @@
   "devDependencies": {
     "@nuxt/eslint": "^1.9.0",
     "@playwright/test": "^1.64.1",
-    "@tailwindcss/vite": "^4.1.12",
+    "@tailwindcss/vite": "^4.3.5",
     "eslint": "^10.14.0",
-    "tailwindcss": "^4.1.12",
+    "tailwindcss": "^4.3.5",
     "typescript": "^6.0.3",
     "vue-tsc": "^3.3.14"
   }
