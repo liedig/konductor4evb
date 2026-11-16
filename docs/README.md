@@ -6,6 +6,9 @@ Konductor for Amazon EventBridge manages event domains and cross-account routing
 Platform teams govern the infrastructure. Application teams publish events and
 subscribe to contracts without managing the platform's delivery resources.
 
+> **Beta status:** Konductor for Amazon EventBridge is currently in beta and is
+> **not production ready**. Do not use it for production workloads.
+
 ## How Konductor works
 
 Konductor runs in two kinds of AWS account:
