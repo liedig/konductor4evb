@@ -7,6 +7,10 @@ Older rationale is available through the [decision index](docs/decisions/README.
 
 ## Unreleased
 
+- Declare Konductor for Amazon EventBridge as beta and not production ready in
+  the repository README and on the published documentation landing page. Do
+  not use it for production workloads. See the
+  [beta status notice](README.md#konductor-for-amazon-eventbridge).
 - Clear 18 of the 20 open Dependabot alerts in the web console's dependency
   tree. `nuxt` rises to ^4.6.4 (five advisories across nuxt,
   `@nuxt/vite-builder`, and `@nuxt/nitro-server`) and pulls in node-forge
@@ -378,7 +382,7 @@ Older rationale is available through the [decision index](docs/decisions/README.
   site. Navigation follows the reader journey (setup, then domain
   onboarding, then reference), and new orientation pages cover platform
   configuration, domain prerequisites, and what an ACTIVE domain provides.
-  [Proposal](openspec/changes/publish-docs-site/proposal.md).
+  [Proposal](openspec/changes/archive/2026-11-16-publish-docs-site/proposal.md).
 - Fix the guardrail SCP resource selectors: bus and queue patterns no longer
   embed the deployer's account ID (`AWS::AccountId`), so the deny ceiling
   actually matches member-account resources. Redeploy `konductor-guardrails`

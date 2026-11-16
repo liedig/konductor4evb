@@ -797,3 +797,20 @@ validate the observed detail responses under
 nullable top-level fields, and omitted environment fields) against both
 surfaces and assert the surfaces agree. The Rust evidence cited above is
 unchanged: no handler, request schema, or route integration changed.
+
+## D32
+
+**The documentation-site requirement reversed the implemented audience
+navigation order.** The requirement promoted from the
+[`publish-docs-site` delta](../../openspec/changes/archive/2026-11-16-publish-docs-site/specs/documentation-site/spec.md)
+originally put platform-administrator setup before application-team guidance.
+The [implemented navigation](../../mkdocs.yml) and
+[documentation maintenance rules](../development/documentation.md#publish-to-the-documentation-site)
+put application teams first, including publishing and subscribing, followed by
+platform-administrator setup and operations. The implemented navigation and
+maintenance rules are authoritative for this ordering.
+
+**Documentation resolved 2026-11-16:** the
+[documentation-site requirement](../../openspec/specs/documentation-site/spec.md#requirement-reader-oriented-navigation-and-onboarding-paths)
+now matches the implemented application-team-first order. The archived delta
+retains its original wording as historical intent.

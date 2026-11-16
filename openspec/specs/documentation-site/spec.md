@@ -66,12 +66,12 @@ The site SHALL publish only the `docs/` documentation tree. The strategy-genre p
 
 ### Requirement: Reader-oriented navigation and onboarding paths
 
-The site navigation SHALL be declared explicitly in the site configuration and ordered by reader journey rather than alphabetically: an introduction first, then a platform-administrator setup path (capacity planning, platform configuration, installation and its smoke test, domain-account trust, users and access, installation troubleshooting), then a domain-team path (prerequisites, registration, approval, what an ACTIVE domain provides, ongoing management), followed by publishing and subscribing, operations, concepts, reference, and contributor material. The landing page SHALL explain what Konductor is and who each path is for before directing readers into it. The site SHALL provide orientation pages for platform configuration, domain prerequisites, and the outcome of successful provisioning, and the reference index SHALL explain what each reference page covers and when a reader needs it. Orientation pages SHALL link to the primary page for each procedure, field list, or table rather than copying it. Existing pages SHALL NOT be moved or renamed to achieve the ordering.
+The site navigation SHALL be declared explicitly in the site configuration and ordered by reader journey rather than alphabetically: an introduction first, then a domain-team path (prerequisites, registration, approval, what an ACTIVE domain provides, ongoing management), followed by publishing and subscribing, then a platform-administrator setup path (capacity planning, platform configuration, installation and its smoke test, domain-account trust, users and access, installation troubleshooting) and ongoing operations, followed by concepts, reference, and contributor material. The landing page SHALL explain what Konductor is and who each path is for before directing readers into it. The site SHALL provide orientation pages for platform configuration, domain prerequisites, and the outcome of successful provisioning, and the reference index SHALL explain what each reference page covers and when a reader needs it. Orientation pages SHALL link to the primary page for each procedure, field list, or table rather than copying it. Existing pages SHALL NOT be moved or renamed to achieve the ordering.
 
-#### Scenario: Setup leads the navigation
+#### Scenario: Audience paths lead the navigation
 
 - **WHEN** a visitor opens the site
-- **THEN** the navigation SHALL list the introduction, then the platform-administrator setup path, then the domain-team path, before operations, concepts, reference, and contributor sections
+- **THEN** the navigation SHALL list the introduction, then the domain-team path including publishing and subscribing, then the platform-administrator setup and operations path, before concepts, reference, and contributor sections
 - **AND** the setup path SHALL present capacity planning, platform configuration, installation, trust deployment, and access setup in that order
 
 #### Scenario: Domain team finds prerequisites and outcome
